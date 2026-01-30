@@ -1,0 +1,25 @@
+[project]
+name = "nexhealth-voice-agent-backend"
+version = "0.1.0"
+description = "FastAPI backend for a HIPAA-minded NexHealth voice agent"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110",
+  "httpx>=0.27",
+  "pydantic>=2.0",
+  "pydantic-settings>=2.2",
+  "uvicorn[standard]>=0.29",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.3",
+  "pyngrok>=7.1",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

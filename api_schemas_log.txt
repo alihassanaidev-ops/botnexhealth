@@ -1,0 +1,520 @@
+Generating API Schemas...
+
+
+--------------------------------------------------------------------------------
+API: List Locations
+METHOD: GET
+URL: https://nexhealth.info/locations?subdomain=silora-demo-practice&per_page=1
+--------------------------------------------------------------------------------
+RESPONSE:
+{
+  "code": true,
+  "description": "Note that following parameters are ignored: per_page.",
+  "error": null,
+  "data": [
+    {
+      "id": 19089,
+      "name": "Silora Demo Practice",
+      "subdomain": "silora-demo-practice",
+      "locations": [
+        {
+          "id": 339273,
+          "name": "Green River Dental",
+          "institution_id": 19089,
+          "street_address": "428 Broadway",
+          "street_address_2": null,
+          "city": "New York",
+          "state": "NY",
+          "zip_code": "10013",
+          "country_code": null,
+          "created_at": "2026-01-10T20:59:38.421Z",
+          "updated_at": "2026-01-10T21:00:19.846Z",
+          "latitude": -39.507273820691346,
+          "longitude": -69.03846686167185,
+          "phone_number": "2222222222",
+          "foreign_id": "0",
+          "foreign_id_type": "remote_db-dentrix-DataSource-30704",
+          "email": "green-river-dental+generated_institution_1768078777@nexhealth.com",
+          "tz": "America/New_York",
+          "last_sync_time": null,
+          "insert_appt_client": true,
+          "map_by_operatory": true,
+          "appt_types_map_by_operatory": false,
+          "set_availability_by_operatory": false,
+          "inactive": false,
+          "wlogo": "/missing.png",
+          "weight": 1
+        }
+      ]
+    }
+  ],
+  "count": 1
+}
+
+
+--------------------------------------------------------------------------------
+API: Search Patient
+METHOD: GET
+URL: https://nexhealth.info/patients?subdomain=silora-demo-practice&location_id=339273&per_page=1
+--------------------------------------------------------------------------------
+RESPONSE:
+{
+  "code": true,
+  "description": null,
+  "error": null,
+  "data": {
+    "patients": [
+      {
+        "id": 442745156,
+        "email": "Abbi.Goblogian.359.19089@example.com",
+        "first_name": "Abbi",
+        "middle_name": null,
+        "last_name": "Goblogian",
+        "name": "Abbi Goblogian",
+        "created_at": "2026-01-10T20:59:37.800Z",
+        "updated_at": "2026-01-10T20:59:37.800Z",
+        "institution_id": 19089,
+        "foreign_id": "7807e718-3914-4bdb-b449-c3c6448c64ef",
+        "foreign_id_type": "remote_db-dentrix-DataSource-30704",
+        "bio": {
+          "gender": "Female",
+          "phone_number": "8379955696",
+          "date_of_birth": "1978-12-27",
+          "verified_mobile": "8379955696"
+        },
+        "inactive": false,
+        "last_sync_time": null,
+        "guarantor_id": null,
+        "unsubscribe_sms": true,
+        "balance": {
+          "amount": "0.00",
+          "currency": "USD"
+        },
+        "billing_type": null,
+        "chart_id": null,
+        "preferred_language": null,
+        "preferred_locale": null,
+        "location_ids": [
+          339273
+        ],
+        "provider_id": null
+      }
+    ]
+  },
+  "count": 105
+}
+
+
+--------------------------------------------------------------------------------
+API: List Providers
+METHOD: GET
+URL: https://nexhealth.info/providers?subdomain=silora-demo-practice&location_id=339273&per_page=1
+--------------------------------------------------------------------------------
+RESPONSE:
+{
+  "code": true,
+  "description": null,
+  "error": null,
+  "data": [
+    {
+      "id": 442745132,
+      "email": "jonas.salk+339273_1@nexhealth.com",
+      "first_name": "Jonas",
+      "middle_name": null,
+      "last_name": "Salk",
+      "name": "Jonas Salk",
+      "created_at": "2026-01-10T20:59:39.907Z",
+      "updated_at": "2026-01-10T20:59:39.907Z",
+      "institution_id": 19089,
+      "foreign_id": "5855eeb3-0598-491c-a8bd-98b722542a75",
+      "foreign_id_type": "remote_db-dentrix-DataSource-30704",
+      "bio": {},
+      "inactive": false,
+      "last_sync_time": null,
+      "display_name": null,
+      "npi": "6068239114",
+      "tin": null,
+      "state_license": null,
+      "specialty_code": null,
+      "nexhealth_specialty": "Dentist",
+      "profile_url": "https://frontend.assets.nexhealth.com/nexassets/app/img/icon/avatar.svg",
+      "locations": [
+        {
+          "id": 339273,
+          "name": "Green River Dental",
+          "institution_id": 19089,
+          "street_address": "428 Broadway",
+          "street_address_2": null,
+          "city": "New York",
+          "state": "NY",
+          "zip_code": "10013",
+          "country_code": null,
+          "created_at": "2026-01-10T20:59:38.421Z",
+          "updated_at": "2026-01-10T21:00:19.846Z",
+          "latitude": -39.507273820691346,
+          "longitude": -69.03846686167185,
+          "phone_number": "2222222222",
+          "foreign_id": "0",
+          "foreign_id_type": "remote_db-dentrix-DataSource-30704",
+          "email": "green-river-dental+generated_institution_1768078777@nexhealth.com",
+          "tz": "America/New_York",
+          "last_sync_time": null,
+          "insert_appt_client": true,
+          "map_by_operatory": true,
+          "appt_types_map_by_operatory": false,
+          "set_availability_by_operatory": false,
+          "inactive": false,
+          "wlogo": "/missing.png",
+          "weight": 1
+        }
+      ],
+      "provider_requestables": [
+        {
+          "location_id": 339273
+        }
+      ]
+    }
+  ],
+  "count": 5
+}
+
+
+--------------------------------------------------------------------------------
+API: Create Patient
+METHOD: POST
+URL: https://nexhealth.info/patients?subdomain=silora-demo-practice&location_id=339273
+BODY: {
+  "provider": {
+    "provider_id": 442745132
+  },
+  "patient": {
+    "first_name": "Test",
+    "last_name": "RetellUser",
+    "email": "retell_test_5101@example.com",
+    "bio": {
+      "date_of_birth": "1990-01-01",
+      "phone_number": "5555555555",
+      "gender": "Female"
+    }
+  }
+}
+--------------------------------------------------------------------------------
+RESPONSE:
+{
+  "code": false,
+  "description": null,
+  "data": null,
+  "error": [
+    "A patient with that information already exists - id=447355829"
+  ]
+}
+
+
+--------------------------------------------------------------------------------
+API: Find Slots
+METHOD: GET
+URL: https://nexhealth.info/appointment_slots?subdomain=silora-demo-practice&lids[]=339273&start_date=2026-01-28&days=1&pids[]=442745132
+--------------------------------------------------------------------------------
+RESPONSE:
+{
+  "code": true,
+  "description": null,
+  "error": null,
+  "data": [
+    {
+      "lid": 339273,
+      "pid": 442745132,
+      "slots": [
+        {
+          "time": "2026-01-28T09:00:00.000-05:00",
+          "end_time": "2026-01-28T09:15:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T09:15:00.000-05:00",
+          "end_time": "2026-01-28T09:30:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T09:30:00.000-05:00",
+          "end_time": "2026-01-28T09:45:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T09:45:00.000-05:00",
+          "end_time": "2026-01-28T10:00:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T10:00:00.000-05:00",
+          "end_time": "2026-01-28T10:15:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T10:15:00.000-05:00",
+          "end_time": "2026-01-28T10:30:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T10:30:00.000-05:00",
+          "end_time": "2026-01-28T10:45:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T10:45:00.000-05:00",
+          "end_time": "2026-01-28T11:00:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T11:00:00.000-05:00",
+          "end_time": "2026-01-28T11:15:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T11:15:00.000-05:00",
+          "end_time": "2026-01-28T11:30:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T11:30:00.000-05:00",
+          "end_time": "2026-01-28T11:45:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T11:45:00.000-05:00",
+          "end_time": "2026-01-28T12:00:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T12:00:00.000-05:00",
+          "end_time": "2026-01-28T12:15:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T12:15:00.000-05:00",
+          "end_time": "2026-01-28T12:30:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T12:30:00.000-05:00",
+          "end_time": "2026-01-28T12:45:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T12:45:00.000-05:00",
+          "end_time": "2026-01-28T13:00:00.000-05:00",
+          "operatory_id": 226562
+        },
+        {
+          "time": "2026-01-28T13:00:00.000-05:00",
+          "end_time": "2026-01-28T13:15:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T13:15:00.000-05:00",
+          "end_time": "2026-01-28T13:30:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T13:30:00.000-05:00",
+          "end_time": "2026-01-28T13:45:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T13:45:00.000-05:00",
+          "end_time": "2026-01-28T14:00:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T14:00:00.000-05:00",
+          "end_time": "2026-01-28T14:15:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T14:15:00.000-05:00",
+          "end_time": "2026-01-28T14:30:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T14:30:00.000-05:00",
+          "end_time": "2026-01-28T14:45:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T14:45:00.000-05:00",
+          "end_time": "2026-01-28T15:00:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T15:00:00.000-05:00",
+          "end_time": "2026-01-28T15:15:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T15:15:00.000-05:00",
+          "end_time": "2026-01-28T15:30:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T15:30:00.000-05:00",
+          "end_time": "2026-01-28T15:45:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T15:45:00.000-05:00",
+          "end_time": "2026-01-28T16:00:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T16:00:00.000-05:00",
+          "end_time": "2026-01-28T16:15:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T16:15:00.000-05:00",
+          "end_time": "2026-01-28T16:30:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T16:30:00.000-05:00",
+          "end_time": "2026-01-28T16:45:00.000-05:00",
+          "operatory_id": 226563
+        },
+        {
+          "time": "2026-01-28T16:45:00.000-05:00",
+          "end_time": "2026-01-28T17:00:00.000-05:00",
+          "operatory_id": 226563
+        }
+      ]
+    }
+  ],
+  "count": 1
+}
+
+
+--------------------------------------------------------------------------------
+API: Book Appointment
+METHOD: POST
+URL: https://nexhealth.info/appointments?subdomain=silora-demo-practice&location_id=339273&notify_patient=false
+BODY: {
+  "appt": {
+    "start_time": "2026-01-28T09:00:00.000-05:00",
+    "patient_id": 447355829,
+    "provider_id": 442745132,
+    "location_id": 339273,
+    "operatory_id": 226562
+  }
+}
+--------------------------------------------------------------------------------
+RESPONSE:
+{
+  "code": true,
+  "description": "Appointment created",
+  "error": null,
+  "data": {
+    "appt": {
+      "id": 1232026135,
+      "patient_id": 447355829,
+      "provider_id": 442745132,
+      "provider_name": "Jonas Salk",
+      "start_time": "2026-01-28T14:00:00.000Z",
+      "confirmed": false,
+      "patient_missed": false,
+      "created_at": "2026-01-26T23:55:01.512Z",
+      "updated_at": "2026-01-26T23:55:01.512Z",
+      "note": null,
+      "end_time": "2026-01-28T14:15:00.000Z",
+      "unavailable": false,
+      "cancelled": false,
+      "timezone": "America/New_York",
+      "institution_id": 19089,
+      "appointment_type_id": null,
+      "checkin_at": null,
+      "location_id": 339273,
+      "foreign_id": null,
+      "foreign_id_type": "nex",
+      "misc": {
+        "is_booked_on_nexhealth": true,
+        "booked_by_api_user_id": 2619
+      },
+      "last_sync_time": null,
+      "patient_confirmed": false,
+      "created_by_user_id": 447355829,
+      "is_guardian": false,
+      "patient_confirmed_at": null,
+      "cancelled_at": null,
+      "is_new_clients_patient": null,
+      "confirmed_at": null,
+      "sooner_if_possible": false,
+      "operatory_id": 226562,
+      "deleted": false,
+      "checked_out": false,
+      "checked_out_at": null,
+      "referrer": null,
+      "is_past_patient": false,
+      "timezone_offset": "-05:00"
+    },
+    "stripe_client_secret": null
+  },
+  "count": null
+}
+
+
+--------------------------------------------------------------------------------
+API: Cancel Appointment
+METHOD: PATCH
+URL: https://nexhealth.info/appointments/1232026135?subdomain=silora-demo-practice
+BODY: {"appt":{"cancelled":true}}
+--------------------------------------------------------------------------------
+RESPONSE:
+{
+  "code": true,
+  "description": "Resource updated successfully.",
+  "error": null,
+  "data": {
+    "appt": {
+      "id": 1232026135,
+      "patient_id": 447355829,
+      "provider_id": 442745132,
+      "provider_name": "Jonas Salk",
+      "start_time": "2026-01-28T14:00:00.000Z",
+      "confirmed": false,
+      "patient_missed": false,
+      "created_at": "2026-01-26T23:55:01.512Z",
+      "updated_at": "2026-01-26T23:55:01.988Z",
+      "note": null,
+      "end_time": "2026-01-28T14:15:00.000Z",
+      "unavailable": false,
+      "cancelled": true,
+      "timezone": "America/New_York",
+      "institution_id": 19089,
+      "appointment_type_id": null,
+      "checkin_at": null,
+      "location_id": 339273,
+      "foreign_id": null,
+      "foreign_id_type": "nex",
+      "misc": {
+        "booked_by_api_user_id": 2619,
+        "is_booked_on_nexhealth": true
+      },
+      "last_sync_time": null,
+      "patient_confirmed": false,
+      "created_by_user_id": 447355829,
+      "is_guardian": false,
+      "patient_confirmed_at": null,
+      "cancelled_at": "2026-01-26T23:55:01.988Z",
+      "is_new_clients_patient": null,
+      "confirmed_at": null,
+      "sooner_if_possible": false,
+      "operatory_id": 226562,
+      "deleted": false,
+      "checked_out": false,
+      "checked_out_at": null,
+      "referrer": null,
+      "is_past_patient": false,
+      "timezone_offset": "-05:00"
+    },
+    "stripe_client_secret": null
+  },
+  "count": null
+}
