@@ -1,52 +1,144 @@
-## NexHealth Voice Agent Backend
+# BotNexHealth
 
-This repo is the starting point for a HIPAA-minded voice agent backend that integrates with the NexHealth Synchronizer API. It uses FastAPI for HTTP endpoints and a small client wrapper for NexHealth auth and requests.
+HIPAA-minded voice agent backend integrating **NexHealth** (scheduling/patient data) and **Retell AI** (voice agent) APIs.
 
-### Goals
-- Provide a secure backend for a voice agent that needs scheduling and patient data.
-- Centralize NexHealth authentication and rate-limit handling.
-- Keep PHI out of logs and enforce least-privilege access.
+## Features
 
-### Why FastAPI
-FastAPI gives async I/O, typed request models, and clean dependency injection. It is a good fit for a voice agent backend that will call NexHealth and potentially third-party services in the same request flow.
+- **NexHealth Integration**: Patient lookup, appointment scheduling, provider management
+- **Retell AI Integration**: Voice agent function handlers and webhooks
+- **Docker Deployment**: Production-ready with nginx reverse proxy and SSL
+- **HIPAA-minded Design**: No PHI logging, secrets management, TLS everywhere
 
-### Boilerplate decision
-We can proceed with a minimal in-house setup to stay focused and HIPAA-minded. If we later decide to adopt a template, the Benav Labs FastAPI boilerplate is a strong option to compare against our needs, especially if we want built-in auth, background jobs, and caching. See: https://github.com/benavlabs/FastAPI-boilerplate
+## Architecture
 
-### Running locally
-1. Create `.env` at the project root (see `docs/ENVIRONMENT.md`).
-2. Install deps and run:
-   - `python -m venv .venv && source .venv/bin/activate`
-   - `pip install -e ".[dev]"` (or just `pip install pyngrok`)
-   - `python src/app/main.py` (or `uvicorn src.app.main:app --reload`)
+```
+src/app/
+├── api/
+│   ├── routes/          # NexHealth REST endpoints
+│   ├── models.py        # Request/response models
+│   └── helpers.py       # API utilities
+├── nexhealth/           # NexHealth client and auth
+├── retell/
+│   ├── handlers.py      # Voice agent function handlers
+│   ├── webhooks.py      # Retell webhook endpoints
+│   └── functions.py     # Function registry
+├── config.py            # Settings and secrets management
+└── main.py              # FastAPI application
+```
 
-### Testing from Public Internet (Retell)
-1. Ensure `NGROK_AUTH_TOKEN` is set (optional, but recommended).
-2. Run the helper script:  
-   `python scripts/start_ngrok.py`
-3. Use the generated URL as your Agent's Base URL.
+## Quick Start
 
-### Endpoints
+### Local Development
 
-See [API Reference](docs/API_REFERENCE.md) for full details.
+```bash
+# 1. Clone and setup
+git clone https://github.com/alihassanaidev-ops/botnexhealth.git
+cd botnexhealth
 
-**Key Resources:**
-- `GET /api/v1/nexhealth/locations` - Find practices and subdomains
-- `GET /api/v1/nexhealth/patients` - Lookup patients
-- `GET /api/v1/nexhealth/appointment_slots` - Find booking availability
-- `GET /api/v1/nexhealth/appointments` - Manage bookings
-- `GET /api/v1/nexhealth/providers` - List doctors/providers
-- `GET /api/v1/nexhealth/appointment_types` - List visit types
+# 2. Create virtual environment
+python -m venv .venv && source .venv/bin/activate
 
-*Note: `institutions`, `availabilities`, and `operatories` endpoints are disabled for this Voice Agent implementation.*
+# 3. Install dependencies
+pip install -e ".[dev]"
 
-### HIPAA-minded defaults
-These are design notes, not legal advice.
-- Do not log PHI. Avoid request/response body logging.
-- Store API keys and tokens in env vars and in memory only.
-- Use TLS everywhere and restrict inbound access.
-- Ensure audit logging exists for access to patient data.
-- Enforce role-based access to backend endpoints.
-- Use encryption at rest for any persistent data.
+# 4. Configure environment
+cp .env.example .env
+# Edit .env with your API keys
 
-For more detail see `docs/PROJECT.md` and `docs/NEXHEALTH.md`.
+# 5. Run
+uvicorn src.app.main:app --reload
+```
+
+### Docker Deployment
+
+```bash
+# Development
+make dev
+
+# Production with SSL
+make prod
+```
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full deployment guide.
+
+## Configuration
+
+Create a `.env` file with:
+
+```env
+NEXHEALTH_API_KEY=your-nexhealth-api-key
+RETELL_API_SECRET=your-retell-api-secret
+ADMIN_API_KEY=your-admin-api-key
+APP_ENV=production
+LOG_LEVEL=info
+```
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NEXHEALTH_API_KEY` | Yes | NexHealth API key |
+| `RETELL_API_SECRET` | Yes | Retell webhook verification |
+| `ADMIN_API_KEY` | Yes | Admin endpoint authentication |
+| `APP_ENV` | No | Environment (local/production) |
+| `LOG_LEVEL` | No | Logging level (debug/info/warning/error) |
+
+## Retell Voice Agent Functions
+
+The following functions are available for Retell AI voice agents:
+
+| Function | Description |
+|----------|-------------|
+| `lookup_patient` | Search patients by name, email, phone, or DOB |
+| `create_patient` | Register new patient |
+| `find_appointment_slots` | Find available booking slots |
+| `book_appointment` | Book an appointment |
+| `cancel_appointment` | Cancel existing appointment |
+| `reschedule_appointment` | Cancel and rebook appointment |
+| `list_locations` | List practice locations |
+| `get_location_details` | Get location hours, address, etc. |
+| `list_providers` | List providers with appointment types |
+| `list_operatories` | List operatories/rooms |
+
+## API Endpoints
+
+### Health Checks
+- `GET /livez` - Liveness probe (no auth)
+- `GET /readyz` - Readiness probe (no auth)
+- `GET /health` - Detailed health status
+
+### NexHealth API (requires `X-API-Key`)
+- `GET /api/v1/nexhealth/locations` - List locations
+- `GET /api/v1/nexhealth/patients` - Search patients
+- `GET /api/v1/nexhealth/providers` - List providers
+- `GET /api/v1/nexhealth/appointment_slots` - Find availability
+- `POST /api/v1/nexhealth/appointments` - Book appointment
+
+### Retell Webhooks
+- `POST /api/v1/retell/webhook` - Voice agent function calls
+
+## HIPAA Considerations
+
+> These are design notes, not legal advice.
+
+- PHI is not logged (request/response body logging disabled)
+- API keys stored in environment variables or Docker secrets
+- TLS enforced in production
+- Admin endpoints require authentication
+- Audit logging for patient data access
+
+## Project Structure
+
+```
+botnexhealth/
+├── src/app/              # Application code
+├── docker/               # Docker configs (nginx)
+├── scripts/              # Deployment scripts
+├── docs/                 # Documentation
+├── docker-compose.yml    # Base compose file
+├── docker-compose.prod.yml   # Production overrides
+├── Dockerfile            # Multi-stage build
+└── Makefile              # Common commands
+```
+
+## Author
+
+Zulkaif <zulkaifahmed97@gmail.com>
