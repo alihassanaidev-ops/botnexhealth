@@ -237,11 +237,11 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
 async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
     """
     Find available appointment slots.
-    
+
     Args:
         args:
             - start_date: Date to start searching (YYYY-MM-DD) (required)
-            - days: Number of days to look ahead (default 3)
+            - days: Number of days to look ahead (default 7)
             - location_id: Location ID (required)
             - provider_id: Provider ID (optional)
             - appointment_type_id: Appointment Type ID (optional)
@@ -251,13 +251,13 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
     start_date = args.get("start_date")
     location_id = args.get("location_id")
     subdomain = args.get("subdomain")
-    
+
     if not start_date or not location_id or not subdomain:
         return {"error": "start_date, location_id, and subdomain are required."}
 
     client = await _get_nexhealth_client()
     settings = get_settings()
-    
+
     pids = []
     if args.get("provider_id"):
         pids = [args.get("provider_id")]
@@ -290,7 +290,7 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
     try:
         response = await slot_routes.list_appointment_slots(
             start_date=start_date,
-            days=args.get("days", 3),
+            days=args.get("days", 7),
             lids=[location_id],
             pids=pids,
             subdomain=args.get("subdomain"),
@@ -302,9 +302,9 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             slot_interval=None,
             overlapping_operatory_slots=False
         )
-        
+
         slots = response.get("data", [])
-        
+
         return {
             "slots_count": len(slots),
             "slots": slots,

@@ -5,8 +5,10 @@ import logging
 from fastapi import FastAPI
 
 from src.app.api.routes import router as api_router
+from src.app.api.routes import public_router
 from src.app.config import settings
 from src.app.retell.functions import router as retell_router
+from src.app.retell.webhooks import router as retell_webhook_router
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +26,13 @@ def create_app() -> FastAPI:
         version="0.1.0",
     )
 
+    # Public health check endpoints (no auth, for container probes)
+    app.include_router(public_router, tags=["Health"])
+
+    # API routes
     app.include_router(api_router, prefix="/api/v1")
     app.include_router(retell_router, prefix="/api/v1")
+    app.include_router(retell_webhook_router, prefix="/api/v1")
 
     @app.on_event("startup")
     async def startup() -> None:

@@ -1,0 +1,31 @@
+# =============================================================================
+# Docker Compose - SSL Configuration with Let's Encrypt
+# =============================================================================
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.ssl.yml up -d
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # Nginx with SSL
+  # ===========================================================================
+  nginx:
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+
+  # ===========================================================================
+  # Certbot - Auto Renewal
+  # ===========================================================================
+  certbot:
+    image: certbot/certbot:latest
+    container_name: botnexhealth-certbot
+    restart: unless-stopped
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    # Check for renewal every 12 hours, reload nginx after renewal
+    entrypoint: /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot --webroot-path=/var/www/certbot --quiet; sleep 12h & wait $${!}; done"

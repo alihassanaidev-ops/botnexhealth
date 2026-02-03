@@ -70,3 +70,21 @@ coverage.xml
 
 # Retell / Application specific
 retell-recordings/
+
+# Docker secrets (NEVER commit these!)
+secrets/
+*.secret
+*.key
+
+# Docker volumes
+data/
+
+# SSL certificates
+*.pem
+*.crt
+docker/nginx/ssl/
+certbot/conf/
+certbot/www/
+
+# Temporary scripts
+temp_script.py

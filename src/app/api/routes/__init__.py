@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from src.app.api.routes.base import router as base_router
+from src.app.api.routes.base import public_router
 
 # ============================================================================
 # Voice Agent - Keep These Routes
