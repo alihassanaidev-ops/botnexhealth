@@ -2,20 +2,24 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import CreateAppointmentRequest, CancelAppointmentRequest
 from src.app.api.routes.base import verify_admin_key
 from src.app.config import Settings
 from src.app.dependencies import get_nexhealth_client_dependency, get_settings
+from src.app.models.audit_log import AuditAction
 from src.app.nexhealth.client import NexHealthClient
+from src.app.services.audit_decorator import audited_api
 
 router = APIRouter(dependencies=[Depends(verify_admin_key)])
 
 
 @router.get("/appointments")
+@audited_api(AuditAction.READ_APPOINTMENT)
 async def list_appointments(
+    request: Request,
     start: str,
     end: str,
     subdomain: str | None = Query(None, description="Institution subdomain (required if not in settings)"),
@@ -68,7 +72,9 @@ async def list_appointments(
 
 
 @router.post("/appointments")
+@audited_api(AuditAction.BOOK_APPOINTMENT)
 async def book_appointment(
+    request: Request,
     body: CreateAppointmentRequest,
     subdomain: str | None = Query(None, description="Institution subdomain (required if not in settings)"),
     location_id: int | None = Query(None, description="Location ID (required if not in settings)"),
@@ -96,7 +102,9 @@ async def book_appointment(
 
 
 @router.patch("/appointments/{id}")
+@audited_api(AuditAction.CANCEL_APPOINTMENT, resource_key="id")
 async def cancel_appointment(
+    request: Request,
     id: int,
     body: CancelAppointmentRequest,
     subdomain: str | None = Query(None, description="Institution subdomain (required if not in settings)"),

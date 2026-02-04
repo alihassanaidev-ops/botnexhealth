@@ -164,6 +164,7 @@ def audited_api(
     action: AuditAction | str,
     actor: AuditActor | str = AuditActor.API_CLIENT,
     resource_extractor: Callable[..., str] | None = None,
+    resource_key: str | None = None,
 ) -> Callable[[F], F]:
     """
     Decorator for FastAPI route audit logging.
@@ -174,11 +175,12 @@ def audited_api(
         action: The audit action being performed
         actor: Who is performing the action
         resource_extractor: Optional function to extract resource from route args
+        resource_key: Simple key to extract from kwargs as resource (e.g., "id", "slug")
     
     Example:
         @router.get("/patients/{patient_id}")
-        @audited_api(AuditAction.READ_PATIENT, resource_extractor=lambda **kw: f"patient:{kw['patient_id']}")
-        async def get_patient(patient_id: int, ...):
+        @audited_api(AuditAction.READ_PATIENT, resource_key="patient_id")
+        async def get_patient(request: Request, patient_id: int, ...):
             ...
     """
     
@@ -197,6 +199,8 @@ def audited_api(
                     target_resource = resource_extractor(**kwargs)
                 except Exception:
                     pass
+            elif resource_key and resource_key in kwargs:
+                target_resource = f"{action}:{kwargs[resource_key]}"
             
             # Try to get IP from request if available
             ip_address = None

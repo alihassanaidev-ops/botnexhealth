@@ -2,20 +2,24 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import CreatePatientRequest, PatientDetailResponse, PatientListResponse
 from src.app.api.routes.base import verify_admin_key
 from src.app.config import Settings
 from src.app.dependencies import get_nexhealth_client_dependency, get_settings
+from src.app.models.audit_log import AuditAction
 from src.app.nexhealth.client import NexHealthClient
+from src.app.services.audit_decorator import audited_api
 
 router = APIRouter(dependencies=[Depends(verify_admin_key)])
 
 
 @router.get("/patients", response_model=PatientListResponse)
+@audited_api(AuditAction.READ_PATIENT, resource_key="name")
 async def list_patients(
+    request: Request,
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     location_id: int | None = Query(None, description="Used to scope the request to the specified location"),
     name: str | None = Query(None, description="Patient name"),
@@ -76,7 +80,9 @@ async def list_patients(
 
 
 @router.get("/patients/{id}", response_model=PatientDetailResponse)
+@audited_api(AuditAction.READ_PATIENT, resource_key="id")
 async def get_patient(
+    request: Request,
     id: int = Path(..., description="Id of the patient"),
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     include: list[str] | None = Query(None, alias="include[]", description="Resources to be included"),
@@ -100,7 +106,9 @@ async def get_patient(
 
 
 @router.post("/patients")
+@audited_api(AuditAction.CREATE_PATIENT)
 async def create_patient(
+    request: Request,
     body: CreatePatientRequest,
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     location_id: int | None = Query(None, description="Used to scope the request to the specified location"),
