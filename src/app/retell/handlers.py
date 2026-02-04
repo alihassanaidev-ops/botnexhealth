@@ -30,8 +30,33 @@ logger = logging.getLogger(__name__)
 
 
 async def _get_nexhealth_client():
-    """Get the global NexHealth client."""
+    """
+    Get NexHealth client - tenant-aware if in call context, otherwise global.
+    
+    During Retell function calls, this checks for tenant context and uses
+    tenant-specific credentials if available.
+    """
     from src.app.dependencies import get_nexhealth_client_dependency
+    from src.app.retell.functions import get_tenant_from_call_context
+    from src.app.nexhealth.client import NexHealthClient
+    from src.app.config import Settings, settings
+    
+    # Try to get tenant from call context
+    tenant = await get_tenant_from_call_context()
+    
+    if tenant and tenant.nexhealth_api_key:
+        # Create tenant-specific client
+        tenant_settings = Settings(
+            nexhealth_api_key=tenant.nexhealth_api_key,
+            nexhealth_subdomain=tenant.nexhealth_subdomain or settings.nexhealth_subdomain,
+            nexhealth_location_id=tenant.nexhealth_location_id or settings.nexhealth_location_id,
+        )
+        client = NexHealthClient(config=tenant_settings)
+        await client.__aenter__()
+        logger.info(f"Using tenant-specific NexHealth client for '{tenant.slug}'")
+        return client
+    
+    # Fall back to global client
     return await get_nexhealth_client_dependency()
 
 

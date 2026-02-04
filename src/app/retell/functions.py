@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -15,6 +15,9 @@ from src.app.retell.security import get_signature_dependency, hash_for_logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/retell", tags=["Retell AI"])
+
+# Current call context for tenant resolution
+_current_call_context: dict[str, Any] = {}
 
 # Registry of available functions
 _function_registry: dict[str, Callable[..., Coroutine[Any, Any, dict[str, Any]]]] = {}
@@ -34,6 +37,34 @@ def register_function(name: str):
         logger.info(f"Registered Retell function: {name}")
         return func
     return decorator
+
+
+def get_call_context() -> dict[str, Any]:
+    """Get current call context (set during function execution)."""
+    return _current_call_context.copy()
+
+
+async def get_tenant_from_call_context() -> Optional["Tenant"]:
+    """
+    Resolve tenant from current call context using agent_id.
+    
+    Call this from handlers to get tenant-specific configuration.
+    """
+    from src.app.services.tenant_service import TenantService
+    from src.app.database import get_db_session
+    
+    agent_id = _current_call_context.get("agent_id")
+    if not agent_id:
+        return None
+    
+    try:
+        async for session in get_db_session():
+            tenant_service = TenantService(session)
+            tenant = await tenant_service.get_by_retell_agent_id(agent_id)
+            return tenant
+    except Exception as e:
+        logger.warning(f"Failed to resolve tenant from agent_id {agent_id}: {e}")
+        return None
 
 
 def get_retell_secret() -> str | None:
@@ -93,13 +124,25 @@ async def handle_function_call(
                 detail=f"Unknown function: {request.function_name}",
             )
         
-        # Execute the function
-        result = await handler(request.args)
+        # Set call context for tenant resolution in handlers
+        global _current_call_context
+        _current_call_context = {
+            "call_id": request.call_id,
+            "agent_id": payload.get("agent_id"),  # Retell sends agent_id in payload
+            "args": request.args,
+        }
         
-        # Log success (no PHI in result logging)
-        logger.info(f"Function completed: call={call_id_hash}, function={request.function_name}")
-        
-        return FunctionCallResponse(result=result)
+        try:
+            # Execute the function
+            result = await handler(request.args)
+            
+            # Log success (no PHI in result logging)
+            logger.info(f"Function completed: call={call_id_hash}, function={request.function_name}")
+            
+            return FunctionCallResponse(result=result)
+        finally:
+            # Clear context after execution
+            _current_call_context = {}
         
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in function call: {e}")

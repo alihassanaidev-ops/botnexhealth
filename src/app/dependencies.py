@@ -119,3 +119,68 @@ async def require_admin_api_key(
             detail="Invalid admin API key"
         )
     return x_admin_api_key
+
+
+# =============================================================================
+# Tenant-Aware Dependencies
+# =============================================================================
+
+from fastapi import Request
+from typing import Optional
+
+
+async def get_current_tenant(request: Request) -> Optional["Tenant"]:
+    """
+    Get current tenant from request state (set by TenantMiddleware).
+    
+    Returns None if no tenant is set (public endpoints).
+    """
+    # Import here to avoid circular imports
+    from src.app.models.tenant import Tenant
+    
+    tenant = getattr(request.state, "tenant", None)
+    return tenant
+
+
+async def require_tenant(request: Request) -> "Tenant":
+    """
+    Require a tenant to be present in the request.
+    
+    Raises HTTPException 400 if no tenant found.
+    """
+    from src.app.models.tenant import Tenant
+    
+    tenant = await get_current_tenant(request)
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Tenant-Slug header is required for this endpoint"
+        )
+    return tenant
+
+
+async def get_tenant_nexhealth_client(request: Request) -> NexHealthClient:
+    """
+    Get a NexHealth client configured for the current tenant.
+    
+    If no tenant is set or tenant has no API key, falls back to global client.
+    """
+    tenant = await get_current_tenant(request)
+    
+    # If tenant has its own NexHealth API key, create a tenant-specific client
+    if tenant and tenant.nexhealth_api_key:
+        # Create a tenant-specific settings object
+        tenant_settings = Settings(
+            nexhealth_api_key=tenant.nexhealth_api_key,
+            nexhealth_subdomain=tenant.nexhealth_subdomain or settings.nexhealth_subdomain,
+            nexhealth_location_id=tenant.nexhealth_location_id or settings.nexhealth_location_id,
+        )
+        # Create a new client for this tenant
+        client = NexHealthClient(config=tenant_settings)
+        await client.__aenter__()
+        # Note: In production, you'd want to cache these clients per tenant
+        # For now, we create a new one per request (stateless approach)
+        return client
+    
+    # Fall back to global client
+    return await get_nexhealth_client_dependency()

@@ -55,14 +55,15 @@ class RetellWebhookEvent(BaseModel):
 
 
 # ============================================================================
-# GHL Client singleton
+# GHL Client - Tenant Aware
 # ============================================================================
 
+# Global client fallback
 _ghl_client: GHLClient | None = None
 
 
 def get_ghl_client() -> GHLClient | None:
-    """Get or create GHL client singleton."""
+    """Get global GHL client singleton (fallback when no tenant)."""
     global _ghl_client
     if _ghl_client is None and settings.ghl_api_key:
         _ghl_client = GHLClient(
@@ -70,6 +71,38 @@ def get_ghl_client() -> GHLClient | None:
             location_id=settings.ghl_location_id,
         )
     return _ghl_client
+
+
+async def get_tenant_ghl_client(agent_id: str | None) -> tuple[GHLClient | None, "Tenant | None"]:
+    """
+    Get GHL client for the tenant associated with the given agent_id.
+    
+    Returns (client, tenant) tuple. Falls back to global client if no tenant found.
+    """
+    from src.app.services.tenant_service import TenantService
+    from src.app.database import get_db_session
+    
+    tenant = None
+    
+    if agent_id:
+        try:
+            async for session in get_db_session():
+                tenant_service = TenantService(session)
+                tenant = await tenant_service.get_by_retell_agent_id(agent_id)
+                break
+        except Exception as e:
+            logger.warning(f"Failed to lookup tenant by agent_id {agent_id}: {e}")
+    
+    # If tenant has GHL config, create tenant-specific client
+    if tenant and tenant.ghl_api_key and tenant.ghl_location_id:
+        client = GHLClient(
+            api_key=tenant.ghl_api_key,
+            location_id=tenant.ghl_location_id,
+        )
+        return client, tenant
+    
+    # Fall back to global client
+    return get_ghl_client(), tenant
 
 
 # ============================================================================
@@ -105,11 +138,14 @@ async def handle_retell_webhook(request: Request) -> dict[str, str]:
             logger.info(f"Ignoring event type: {event.event}")
             return {"status": "ignored", "reason": f"Event type {event.event} not processed"}
 
-        # Check if GHL is configured
-        ghl_client = get_ghl_client()
+        # Get tenant-aware GHL client (resolves from agent_id)
+        ghl_client, tenant = await get_tenant_ghl_client(event.call.agent_id)
         if not ghl_client:
-            logger.warning("GHL not configured, skipping contact sync")
+            logger.warning("GHL not configured (no global or tenant config), skipping contact sync")
             return {"status": "skipped", "reason": "GHL not configured"}
+        
+        tenant_info = f" for tenant '{tenant.slug}'" if tenant else " (global config)"
+        logger.info(f"Using GHL client{tenant_info}")
 
         # Extract phone number (required)
         phone_number = event.call.from_number
