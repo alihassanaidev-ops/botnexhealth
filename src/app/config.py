@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     sikka_base_url: str = "https://api.sikkasoft.com"
     sikka_api_version: str = "v4"
 
+    # Database (Supabase PostgreSQL)
+    database_url: str | None = None
+    encryption_key: str | None = None
+
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
@@ -60,7 +64,7 @@ class Settings(BaseSettings):
     sikka_app_id_file: str | None = None
     sikka_app_secret_file: str | None = None
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @model_validator(mode="after")
     def load_secrets_from_files(self) -> "Settings":

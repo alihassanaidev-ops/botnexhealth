@@ -57,3 +57,13 @@ docker-compose*.yml
 # Misc
 .DS_Store
 Thumbs.db
+
+# Secrets (never include in images)
+secrets/
+.env
+
+# Agent files
+.gemini/
+
+# Render config (not needed in image)
+render.yaml

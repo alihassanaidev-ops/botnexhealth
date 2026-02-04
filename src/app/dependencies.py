@@ -97,3 +97,25 @@ def get_settings() -> Settings:
     """Dependency for application settings."""
     return settings
 
+
+# =============================================================================
+# Admin API Key Authentication
+# =============================================================================
+
+from fastapi import Header, HTTPException, status
+
+
+async def require_admin_api_key(
+    x_admin_api_key: str = Header(..., alias="x-admin-api-key")
+) -> str:
+    """
+    Validate admin API key from request header.
+    
+    Raises HTTPException 401 if key is missing or invalid.
+    """
+    if x_admin_api_key != settings.admin_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin API key"
+        )
+    return x_admin_api_key

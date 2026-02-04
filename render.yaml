@@ -1,0 +1,69 @@
+# =============================================================================
+# Render.com Deployment Configuration (HIPAA Compliant)
+# =============================================================================
+# This file defines the infrastructure as code for Render deployment.
+# Deploy by connecting your GitHub repo to Render or using render deploy.
+# =============================================================================
+
+version: "1"
+
+services:
+  # Main API service
+  - type: web
+    name: botnexhealth-api
+    runtime: docker
+    
+    # Docker configuration
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    
+    # Scaling
+    plan: starter  # Upgrade to "standard" or "pro" for production
+    numInstances: 1
+    
+    # Region (choose based on your users)
+    region: oregon  # Options: oregon, ohio, virginia, frankfurt, singapore
+    
+    # Health check
+    healthCheckPath: /livez
+    
+    # Auto-deploy on push
+    autoDeploy: true
+    
+    # Environment variables (set in Render dashboard for secrets)
+    envVars:
+      # App configuration
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      
+      # Database (using your external Supabase)
+      - key: DATABASE_URL
+        sync: false  # Set manually in Render dashboard
+      
+      # Secrets (set in Render dashboard - never in this file!)
+      - key: NEXHEALTH_API_KEY
+        sync: false
+      - key: RETELL_API_SECRET
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      
+      # Optional: GHL
+      - key: GHL_API_KEY
+        sync: false
+      - key: GHL_LOCATION_ID
+        sync: false
+
+# =============================================================================
+# Notes for HIPAA Compliance on Render:
+# =============================================================================
+# 1. Enable "HIPAA mode" in Render dashboard (requires Business plan)
+# 2. All secrets via Render Secret Environment Variables
+# 3. Enable audit logging in Render dashboard
+# 4. Use private networking if connecting to other Render services
+# 5. Review Render's BAA (Business Associate Agreement) requirements
+# =============================================================================

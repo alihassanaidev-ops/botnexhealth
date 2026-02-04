@@ -38,6 +38,10 @@ FROM python:3.11-slim-bookworm AS production
 RUN groupadd --gid 1000 appgroup && \
     useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
 
+# Install curl for health check
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy virtual environment from builder
@@ -65,8 +69,9 @@ USER appuser
 EXPOSE 8000
 
 # Health check (uses /livez endpoint - no auth required)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/livez', timeout=5)" || exit 1
+# Note: Render has its own health check, this is for local Docker
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl --fail http://localhost:8000/livez || exit 1
 
 # Default command: Gunicorn with Uvicorn workers for production
 CMD ["gunicorn", "src.app.main:app", \
