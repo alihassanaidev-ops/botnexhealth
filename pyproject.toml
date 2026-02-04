@@ -11,6 +11,12 @@ dependencies = [
   "uvicorn[standard]>=0.29",
   "retell-sdk>=4.0",
   "gunicorn>=21.0",
+  # Database (multi-tenant)
+  "sqlalchemy[asyncio]>=2.0",
+  "asyncpg>=0.29",
+  "greenlet>=3.0",
+  # Encryption (HIPAA)
+  "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]
