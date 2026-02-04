@@ -24,7 +24,9 @@ from src.app.api.routes import patients as patient_routes
 from src.app.api.routes import providers as provider_routes
 from src.app.api.routes import sikka as sikka_routes
 from src.app.dependencies import get_settings
+from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.retell.functions import register_function
+from src.app.services.audit_decorator import audited
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ async def _get_sikka_client():
 
 
 @register_function("lookup_patient")
+@audited(AuditAction.READ_PATIENT, resource_key="patient_id")
 async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     """
     Lookup a patient by name, email, phone, or date of birth.
@@ -267,6 +270,7 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("create_patient")
+@audited(AuditAction.CREATE_PATIENT, resource_from_result="patient_id")
 async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
     """
     Create a new patient.
@@ -429,6 +433,7 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("book_appointment")
+@audited(AuditAction.BOOK_APPOINTMENT, resource_from_result="appointment_id")
 async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """
     Book a new appointment.
@@ -500,6 +505,7 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("cancel_appointment")
+@audited(AuditAction.CANCEL_APPOINTMENT, resource_key="appointment_id")
 async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """
     Cancel an existing appointment.
@@ -546,6 +552,7 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("reschedule_appointment")
+@audited(AuditAction.RESCHEDULE_APPOINTMENT, resource_key="old_appointment_id")
 async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """
     Reschedule an appointment by cancelling the old one and booking a new one.

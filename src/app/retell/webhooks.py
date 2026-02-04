@@ -6,15 +6,29 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from src.app.config import settings
 from src.app.gohighlevel.client import GHLClient
+from src.app.retell.security import get_signature_dependency
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/retell", tags=["Retell Webhooks"])
+
+
+# ============================================================================
+# Signature Verification
+# ============================================================================
+
+def get_retell_secret() -> str | None:
+    """Get Retell secret from settings."""
+    return getattr(settings, "retell_api_secret", None)
+
+
+# Create signature verification dependency (same as functions.py)
+verify_webhook_signature = get_signature_dependency(get_retell_secret)
 
 
 # ============================================================================
@@ -111,25 +125,26 @@ async def get_tenant_ghl_client(agent_id: str | None) -> tuple[GHLClient | None,
 
 
 @router.post("/webhook")
-async def handle_retell_webhook(request: Request) -> dict[str, str]:
+async def handle_retell_webhook(
+    body: bytes = Depends(verify_webhook_signature),
+) -> dict[str, str]:
     """
     Handle Retell webhook events (call_analyzed, call_ended).
 
     This endpoint receives call data from Retell and forwards it to GoHighLevel
     for CRM integration. It creates/updates contacts with call details.
 
-    Note: This endpoint does NOT require Retell signature verification
-    because it's a custom webhook URL you configure in Retell dashboard,
-    not the function calling endpoint.
+    Security: Requires valid Retell signature (x-retell-signature header).
     """
     try:
-        body = await request.json()
+        # Parse the verified body (bytes -> dict)
+        payload = json.loads(body)
 
         # Log full payload for debugging (exclude transcript to reduce log size)
-        log_body = {k: v for k, v in body.get("call", {}).items() if k not in ["transcript", "transcript_object", "transcript_with_tool_calls"]}
-        logger.info(f"Retell webhook payload: event={body.get('event')}, call_data={json.dumps(log_body, default=str)}")
+        log_body = {k: v for k, v in payload.get("call", {}).items() if k not in ["transcript", "transcript_object", "transcript_with_tool_calls"]}
+        logger.info(f"Retell webhook payload: event={payload.get('event')}, call_data={json.dumps(log_body, default=str)}")
 
-        event = RetellWebhookEvent.model_validate(body)
+        event = RetellWebhookEvent.model_validate(payload)
 
         logger.info(f"Received Retell webhook: event={event.event}, call_id={event.call.call_id}")
 
