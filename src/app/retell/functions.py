@@ -63,7 +63,7 @@ async def handle_function_call(
     try:
         # Parse the verified body
         payload = json.loads(body)
-        logger.info(f"Retell Payload: {json.dumps(payload)}")  # DEBUG: Inspect structure
+        logger.debug(f"Retell Payload: {json.dumps(payload)}")
 
         # Allow specifying function name via query param (Standard Retell Pattern)
         # Retell often sends just { args: {...}, call_id: ... }

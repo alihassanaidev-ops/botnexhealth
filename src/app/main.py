@@ -38,15 +38,17 @@ def create_app() -> FastAPI:
     async def startup() -> None:
         """Application startup event."""
         logger.info(f"Starting application in {settings.app_env} environment")
-        from src.app.dependencies import init_nexhealth_client
+        from src.app.dependencies import init_nexhealth_client, init_sikka_client
         await init_nexhealth_client()
+        await init_sikka_client()
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
         """Application shutdown event."""
         logger.info("Shutting down application")
-        from src.app.dependencies import cleanup_nexhealth_client
+        from src.app.dependencies import cleanup_nexhealth_client, cleanup_sikka_client
         await cleanup_nexhealth_client()
+        await cleanup_sikka_client()
 
     return app
 

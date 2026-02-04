@@ -46,11 +46,19 @@ class Settings(BaseSettings):
     ghl_api_key: str | None = None
     ghl_location_id: str = "nUR2OnxPQh3aLQXrymf6"  # Default location
 
+    # Sikka API settings
+    sikka_app_id: str | None = None
+    sikka_app_secret: str | None = None
+    sikka_base_url: str = "https://api.sikkasoft.com"
+    sikka_api_version: str = "v4"
+
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
     admin_api_key_file: str | None = None
     ghl_api_key_file: str | None = None
+    sikka_app_id_file: str | None = None
+    sikka_app_secret_file: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -72,6 +80,14 @@ class Settings(BaseSettings):
         # GHL API Key
         if secret := read_secret_file(self.ghl_api_key_file):
             object.__setattr__(self, "ghl_api_key", secret)
+
+        # Sikka App ID
+        if secret := read_secret_file(self.sikka_app_id_file):
+            object.__setattr__(self, "sikka_app_id", secret)
+
+        # Sikka App Secret
+        if secret := read_secret_file(self.sikka_app_secret_file):
+            object.__setattr__(self, "sikka_app_secret", secret)
 
         # Validate required keys
         if not self.nexhealth_api_key:
@@ -101,6 +117,37 @@ class Settings(BaseSettings):
     def api_version(self) -> str:
         """Alias for nexhealth_api_version (implements AuthConfig protocol)."""
         return self.nexhealth_api_version
+
+
+class SikkaConfig:
+    """
+    Wrapper that implements Sikka AuthConfig protocol using Settings values.
+
+    This separates Sikka configuration from NexHealth while using the same Settings instance.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    @property
+    def app_id(self) -> str:
+        """Sikka Application ID."""
+        return self._settings.sikka_app_id or ""
+
+    @property
+    def app_secret(self) -> str:
+        """Sikka Application Secret Key."""
+        return self._settings.sikka_app_secret or ""
+
+    @property
+    def base_url(self) -> str:
+        """Sikka API base URL."""
+        return self._settings.sikka_base_url
+
+    @property
+    def api_version(self) -> str:
+        """Sikka API version."""
+        return self._settings.sikka_api_version
 
 
 def setup_logging(log_level: str = "info") -> None:

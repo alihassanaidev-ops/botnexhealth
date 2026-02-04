@@ -499,14 +499,19 @@ class CreatePatientRequest(BaseModel):
 
 class CreateAppointmentBody(BaseModel):
     """Appointment details for booking."""
+
     patient_id: int
     provider_id: int
     start_time: str
     operatory_id: int | None = None
     end_time: str | None = None
     appointment_type_id: int | None = None
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=128, description="Note written to EHR (max 128 chars)")
     referrer: str | None = None
+    descriptor_ids: list[int] | None = Field(
+        default=None,
+        description="EHR descriptor IDs (procedure codes) to sync with PMS",
+    )
     # For cancellation
     cancelled: bool | None = None
 
@@ -525,3 +530,49 @@ class CancelAppointmentBody(BaseModel):
 class CancelAppointmentRequest(BaseModel):
     """Request model for cancelling an appointment."""
     appt: CancelAppointmentBody
+
+
+# =============================================================================
+# Appointment Type Create/Update Models
+# =============================================================================
+
+
+class AppointmentTypeData(BaseModel):
+    """Appointment type data for create/update."""
+
+    name: str
+    minutes: int = Field(ge=5, description="Duration in minutes, increments of 5 recommended")
+    parent_type: str | None = Field(default="Institution", description="Institution or Location")
+    parent_id: int | None = Field(default=None, description="Required if parent_type is Location")
+    bookable_online: bool = Field(default=True, description="Allow online booking")
+    emr_appt_descriptor_ids: list[int] = Field(
+        default_factory=list, description="EMR descriptor IDs to link"
+    )
+
+
+class CreateAppointmentTypeRequest(BaseModel):
+    """Request model for creating an appointment type."""
+
+    location_id: int | None = Field(default=None, description="Location ID if location-specific")
+    appointment_type: AppointmentTypeData
+
+
+class UpdateAppointmentTypeData(BaseModel):
+    """Appointment type data for update (all fields optional)."""
+
+    name: str | None = None
+    minutes: int | None = Field(default=None, ge=5)
+    bookable_online: bool | None = None
+    emr_appt_descriptor_ids: list[int] | None = None
+
+
+class UpdateAppointmentTypeRequest(BaseModel):
+    """Request model for updating an appointment type."""
+
+    appointment_type: UpdateAppointmentTypeData
+
+
+class EmrApptDescriptorListResponse(NexHealthResponse):
+    """Response model for listing EMR appointment descriptors."""
+
+    data: list[EmrApptDescriptor]

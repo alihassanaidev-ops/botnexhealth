@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.app.api.helpers import fetch_all_pages, handle_nexhealth_request
 from src.app.api.models import (
     CancelAppointmentBody,
     CancelAppointmentRequest,
@@ -16,10 +17,12 @@ from src.app.api.models import (
     CreatePatientRequest,
 )
 from src.app.api.routes import appointment_slots as slot_routes
+from src.app.api.routes import appointment_types as appt_type_routes
 from src.app.api.routes import appointments as appt_routes
 from src.app.api.routes import locations as location_routes
 from src.app.api.routes import patients as patient_routes
 from src.app.api.routes import providers as provider_routes
+from src.app.api.routes import sikka as sikka_routes
 from src.app.dependencies import get_settings
 from src.app.retell.functions import register_function
 
@@ -32,7 +35,10 @@ async def _get_nexhealth_client():
     return await get_nexhealth_client_dependency()
 
 
-
+async def _get_sikka_client():
+    """Get the global Sikka client."""
+    from src.app.dependencies import get_sikka_client_dependency
+    return await get_sikka_client_dependency()
 
 
 # ============================================================================
@@ -51,11 +57,92 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
             - email: Patient email
             - phone_number: Patient phone number
             - date_of_birth: Patient DOB (YYYY-MM-DD)
-            - subdomain: Institution subdomain (optional)
-            - location_id: Location ID (optional)
+            - subdomain: Institution subdomain (optional, NexHealth only)
+            - location_id: Location ID (optional, NexHealth only)
+            - pms_provider: 'nexhealth' (default) or 'sikka'
+            - office_id: Practice Office ID (Sikka only)
+            - secret_key: Practice Secret Key (Sikka only)
     """
-    client = await _get_nexhealth_client()
     settings = get_settings()
+    pms_provider = args.get("pms_provider", "nexhealth").lower()
+    
+    # -------------------------------------------------------------------------
+    # Sikka Logic
+    # -------------------------------------------------------------------------
+    if pms_provider == "sikka":
+        client = await _get_sikka_client()
+        if not client:
+            return {"message": "Sikka integration is not enabled on this server."}
+            
+        office_id = args.get("office_id")
+        secret_key = args.get("secret_key")
+        if not office_id or not secret_key:
+             return {"message": "I need the practice Office ID and Secret Key to access Sikka records."}
+
+        # Filter args for Sikka (firstname, lastname, cell, email, etc.)
+        # Retell 'name' -> split to firstname/lastname? Or use 'search' param.
+        # Sikka 'search' param covers firstname, lastname, email, phone.
+        
+        search_term = args.get("name") or args.get("email") or args.get("phone_number")
+        
+        try:
+            # We use the 'search' param for broad matching if specific fields aren't perfect
+            # Or map specific fields if we want precision.
+            # Sikka route supports: firstname, lastname, cell, email, search
+            
+            # Simple approach: If phone provided, use 'cell' (best match). 
+            # If name provided, use 'search'.
+            
+            cell = args.get("phone_number")
+            email = args.get("email")
+            
+            response_model = await sikka_routes.list_patients(
+                client=client,
+                office_id=office_id,
+                secret_key=secret_key,
+                cell=cell,
+                email=email,
+                search=search_term if not cell and not email else None,
+                page=1,
+                per_page=5
+            )
+            
+            patients = response_model.patients  # SikkaPatientListResponse.patients (list of dicts)
+            count = response_model.count
+            
+            if count == 0:
+                return {"message": "No patients found in Sikka matching the criteria."}
+                
+            simplified_patients = []
+            for p in patients:
+                # Sikka patient dict structure (from manual test):
+                # { "patient_id": "33", "firstname": "test", "lastname": "reward", "email": ..., "cell": ... }
+                
+                simplified_patients.append({
+                    "id": p.get("patient_id"),
+                    "first_name": p.get("firstname"),
+                    "last_name": p.get("lastname"),
+                    "email": p.get("email"),
+                    "phone_number": p.get("cell"),
+                    "date_of_birth": p.get("birthdate"), # Format might be ISO datetime "1990-01-01T00:00:00"
+                    "source": "sikka"
+                })
+            
+            return {
+                "count": count,
+                "patients": simplified_patients,
+                "message": f"Found {count} patient(s) in Sikka."
+            }
+            
+        except Exception as e:
+            logger.error(f"Sikka patient lookup failed: {e}")
+            return {"message": f"I had trouble accessing Sikka records: {str(e)}"}
+
+    # -------------------------------------------------------------------------
+    # NexHealth Logic (Default)
+    # -------------------------------------------------------------------------
+    
+    client = await _get_nexhealth_client()
     
     # Filter args to valid params
     valid_params = ["name", "email", "phone_number", "date_of_birth", "subdomain", "location_id"]
@@ -262,29 +349,25 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
     if args.get("provider_id"):
         pids = [args.get("provider_id")]
     else:
-        # Auto-fetch providers logic preserved or simplified?
-        # Keeping logic to auto-fetch providers if none provided, as that's a key Voice Agent behavior
-         try:
-             prov_resp = await provider_routes.list_providers(
-                 location_id=location_id,
-                 subdomain=subdomain,
-                 settings=settings,
-                 client=client,
-                 ids=None,
-                 foreign_id=None,
-                 requestable=None,
-                 inactive=None,
-                 updated_since=None,
-                 include=None,
-                 page=1,
-                 per_page=100
-             )
-             # prov_resp is ProviderListResponse (dict)
-             providers = prov_resp.get("data", [])
-             fetched_pids = [p["id"] for p in providers if "id" in p]
-             if fetched_pids:
-                 pids = fetched_pids
-         except Exception as e:
+        # Auto-fetch ALL providers for the location using pagination
+        try:
+            async def fetch_providers(page: int, per_page: int) -> dict[str, Any]:
+                return await handle_nexhealth_request(
+                    client,
+                    "GET",
+                    "/providers",
+                    params={
+                        "subdomain": subdomain,
+                        "location_id": location_id,
+                        "page": page,
+                        "per_page": per_page,
+                    },
+                )
+
+            all_providers = await fetch_all_pages(fetch_providers, per_page=50, max_items=200)
+            pids = [p["id"] for p in all_providers if "id" in p]
+            logger.info(f"Auto-fetched {len(pids)} provider IDs for slot search")
+        except Exception as e:
             logger.warning(f"Failed to auto-fetch providers for slot search: {e}")
 
     try:
@@ -324,7 +407,7 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
 async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """
     Book a new appointment.
-    
+
     Args:
         args:
             - subdomain: Institution subdomain (required)
@@ -335,7 +418,8 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
             - start_time: Start time (ISO 8601) (required)
             - end_time: End time (ISO 8601) (optional)
             - appointment_type_id: Appointment Type ID (optional)
-            - note: Note for the appointment (optional)
+            - descriptor_ids: List of EHR descriptor IDs for PMS sync (optional)
+            - note: Note for the appointment (optional, max 128 chars)
     """
     logger.info(f"Book Appointment Args: {args}")
     required_fields = ["subdomain", "location_id", "patient_id", "provider_id", "start_time"]
@@ -354,8 +438,9 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
         operatory_id=args.get("operatory_id"),
         end_time=args.get("end_time"),
         appointment_type_id=args.get("appointment_type_id"),
+        descriptor_ids=args.get("descriptor_ids"),  # EHR procedure codes for PMS sync
         note=args.get("note"),
-        referrer=args.get("referrer")
+        referrer=args.get("referrer"),
     )
     request_body = CreateAppointmentRequest(appt=appt_body)
     
@@ -483,6 +568,57 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
 # ============================================================================
 
 
+@register_function("list_appointment_types")
+async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
+    """
+    List appointment types for a practice.
+    
+    Args:
+        args:
+            - subdomain: Institution subdomain (required)
+            - location_id: Location ID (optional)
+    """
+    subdomain = args.get("subdomain")
+    location_id = args.get("location_id")
+    if not subdomain:
+        return {"error": "subdomain is required."}
+        
+    client = await _get_nexhealth_client()
+    settings = get_settings()
+
+    try:
+        response = await appt_type_routes.list_appointment_types(
+            subdomain=subdomain,
+            location_id=location_id,
+            include=["descriptors"],
+            settings=settings,
+            client=client
+        )
+        
+        data = response.get("data", [])
+        simplified_types = []
+        for at in data:
+            # Extract descriptor IDs
+            descriptors = at.get("descriptors", [])
+            descriptor_ids = [d.get("id") for d in descriptors if d.get("id")]
+            
+            simplified_types.append({
+                "id": at.get("id"),
+                "name": at.get("name"),
+                "minutes": at.get("minutes"),
+                "descriptor_ids": descriptor_ids
+            })
+            
+        return {
+            "count": len(simplified_types),
+            "appointment_types": simplified_types,
+            "message": f"Found {len(simplified_types)} appointment types."
+        }
+    except Exception as e:
+        logger.error(f"Failed to list appointment types: {e}")
+        return {"error": str(e)}
+
+
 @register_function("get_location_details")
 async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
     """
@@ -497,10 +633,6 @@ async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "location_id is required."}
         
     client = await _get_nexhealth_client()
-    settings = get_settings()
-    
-    client = await _get_nexhealth_client()
-    # settings = get_settings() # Not needed for get_location route as per signature
 
     try:
         response_model = await location_routes.get_location(
@@ -585,12 +717,14 @@ async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
 @register_function("list_providers")
 async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
     """
-    List providers at a specific location.
-    
+    List ALL providers at a specific location.
+
+    Uses internal pagination to fetch all providers and return combined simplified list.
+
     Args:
         args:
             - location_id: Location ID (required)
-            - subdomain: Institution subdomain (optional)
+            - subdomain: Institution subdomain (required)
     """
     location_id = args.get("location_id")
     subdomain = args.get("subdomain")
@@ -598,36 +732,31 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "location_id and subdomain are required to list providers."}
 
     client = await _get_nexhealth_client()
-    settings = get_settings()
 
     try:
-        response_model = await provider_routes.list_providers(
-            location_id=location_id,
-            subdomain=args.get("subdomain"),
-            page=1,
-            per_page=10, # Reasonable default for voice
-            settings=settings,
-            client=client,
-            ids=None,
-            foreign_id=None,
-            requestable=None,
-            inactive=None,
-            updated_since=None,
-            include=["availabilities", "appointment_types"]  # Hardcoded to fetch appointment types
-        )
-        
-        # response_model is ProviderListResponse (dict in return)
-        data = response_model.get("data", [])
-        
-        # DEBUG: Log raw data to check if appointment_types are coming from NexHealth
-        logger.info(f"NexHealth Providers Response - Count: {len(data)}")
-        if data:
-            # Log first provider structure as sample
-            logger.info(f"Sample Provider Data: {data[0]}")
-        
-        
+        # Define fetch function for pagination helper
+        async def fetch_providers(page: int, per_page: int) -> dict[str, Any]:
+            return await handle_nexhealth_request(
+                client,
+                "GET",
+                "/providers",
+                params={
+                    "subdomain": subdomain,
+                    "location_id": location_id,
+                    "page": page,
+                    "per_page": per_page,
+                    "include[]": ["availabilities", "appointment_types"],
+                },
+            )
+
+        # Fetch all providers using pagination helper
+        all_providers = await fetch_all_pages(fetch_providers, per_page=50, max_items=200)
+
+        logger.info(f"Fetched {len(all_providers)} total providers for location {location_id}")
+
+        # Simplify provider data for voice agent
         simplified_providers = []
-        for p in data:
+        for p in all_providers:
             # Extract appointment types from availabilities
             appointment_types = []
             operatory_ids = []
@@ -637,7 +766,7 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
                 op_id = avail.get("operatory_id")
                 if op_id and op_id not in operatory_ids:
                     operatory_ids.append(op_id)
-                
+
                 # Extract appointment types
                 appt_types = avail.get("appointment_types", [])
                 for apt in appt_types:
@@ -648,22 +777,23 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
                             "id": apt.get("id"),
                             "name": apt.get("name"),
                             "minutes": apt.get("minutes"),
-                            "bookable_online": apt.get("bookable_online")
+                            "bookable_online": apt.get("bookable_online"),
                         })
-            
+
             simplified_providers.append({
                 "id": p.get("id"),
                 "name": p.get("name"),
+                "first_name": p.get("first_name"),
+                "last_name": p.get("last_name"),
                 "specialty": p.get("nexhealth_specialty"),
-                "npi": p.get("npi"),
                 "appointment_types": appointment_types,
-                "operatory_ids": operatory_ids
+                "operatory_ids": operatory_ids,
             })
-            
+
         return {
             "count": len(simplified_providers),
             "providers": simplified_providers,
-            "message": f"Found {len(simplified_providers)} provider(s)."
+            "message": f"Found {len(simplified_providers)} provider(s).",
         }
     except Exception as e:
         logger.error(f"Failed to list providers: {e}")

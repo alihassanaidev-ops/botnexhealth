@@ -56,9 +56,8 @@ class RetellSignatureVerifier:
             return False
 
         try:
-            # DEBUG LOGGING
             masked_key = f"{self._api_key[:4]}...{self._api_key[-4:]}" if self._api_key else "None"
-            logger.info(f"Verifying Retell Signature. Key: {masked_key}")
+            logger.debug(f"Verifying Retell Signature. Key: {masked_key}")
 
             # Strategy 1: Verify Raw Payload
             if retell_verify(payload, self._api_key, signature):
@@ -89,10 +88,6 @@ class RetellSignatureVerifier:
             return False
         except Exception as e:
             logger.error(f"Error during Retell signature verification: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Error during Retell signature verification: {e}")
-            logger.exception("Traceback:")
             return False
 
 
