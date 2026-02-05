@@ -199,20 +199,50 @@ def audited_api(
                     target_resource = resource_extractor(**kwargs)
                 except Exception:
                     pass
-            elif resource_key and resource_key in kwargs:
-                target_resource = f"{action}:{kwargs[resource_key]}"
+
             
-            # Try to get IP from request if available
+            # Try to get IP and Tenant from request if available
             ip_address = None
             tenant_id = None
-            for arg in args:
-                if hasattr(arg, "client") and hasattr(arg.client, "host"):
-                    ip_address = arg.client.host
-                if hasattr(arg, "state") and hasattr(arg.state, "tenant"):
-                    tenant = getattr(arg.state, "tenant", None)
+            
+            # Helper to extract context from object (Request or similar)
+            def extract_context(obj: Any) -> bool:
+                nonlocal ip_address, tenant_id
+                found = False
+                
+                # Check for Request object attributes
+                if hasattr(obj, "client") and hasattr(obj.client, "host"):
+                    ip_address = obj.client.host
+                    found = True
+                    
+                if hasattr(obj, "state") and hasattr(obj.state, "tenant"):
+                    tenant = getattr(obj.state, "tenant", None)
                     if tenant:
-                        tenant_id = tenant.id
+                        tenant_id = str(tenant.id)
+                        found = True
+                
+                return found
+
+            # Check positional args
+            for arg in args:
+                if extract_context(arg):
                     break
+            
+            # Check keyword args (FastAPI often passes deps as kwargs)
+            if not tenant_id:
+                for arg in kwargs.values():
+                    if extract_context(arg):
+                        break
+
+            # Handle resource key formatting
+            if resource_key and resource_key in kwargs:
+                val = kwargs[resource_key]
+                if val is not None:
+                    target_resource = f"{action.value if hasattr(action, 'value') else action}:{val}"
+                else:
+                    # If key exists but value is None (e.g. optional query param), 
+                    # use the action name as the resource (e.g. "READ_PATIENT:all")
+                    target_resource = f"{action.value if hasattr(action, 'value') else action}:all"
             
             safe_metadata = {
                 "request_id": request_id,
