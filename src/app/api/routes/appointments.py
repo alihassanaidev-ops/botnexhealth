@@ -9,15 +9,20 @@ from src.app.api.models import CreateAppointmentRequest, CancelAppointmentReques
 from src.app.api.routes.base import verify_admin_key
 from src.app.config import Settings
 from src.app.dependencies import get_nexhealth_client_dependency, get_settings
-from src.app.models.audit_log import AuditAction
+from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.nexhealth.client import NexHealthClient
-from src.app.services.audit_decorator import audited_api
+from src.app.services.audit_decorator import audit
 
 router = APIRouter(dependencies=[Depends(verify_admin_key)])
 
 
 @router.get("/appointments")
-@audited_api(AuditAction.READ_APPOINTMENT)
+@audit(
+    AuditAction.READ_APPOINTMENT, 
+    resource=lambda request, subdomain, location_id, start, end, **kwargs: 
+        f"appts:{subdomain}:{location_id}:{start}_{end}",
+    actor=AuditActor.API_CLIENT
+)
 async def list_appointments(
     request: Request,
     start: str,
@@ -72,7 +77,11 @@ async def list_appointments(
 
 
 @router.post("/appointments")
-@audited_api(AuditAction.BOOK_APPOINTMENT)
+@audit(
+    AuditAction.BOOK_APPOINTMENT, 
+    resource=lambda request, body, **kwargs: f"new_appt_for:{body.appt.patient_id}",
+    actor=AuditActor.API_CLIENT
+)
 async def book_appointment(
     request: Request,
     body: CreateAppointmentRequest,
@@ -102,7 +111,11 @@ async def book_appointment(
 
 
 @router.patch("/appointments/{id}")
-@audited_api(AuditAction.CANCEL_APPOINTMENT, resource_key="id")
+@audit(
+    AuditAction.CANCEL_APPOINTMENT, 
+    resource=lambda request, id, **kwargs: f"appointment:{id}",
+    actor=AuditActor.API_CLIENT
+)
 async def cancel_appointment(
     request: Request,
     id: int,

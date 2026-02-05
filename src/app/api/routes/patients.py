@@ -9,15 +9,20 @@ from src.app.api.models import CreatePatientRequest, PatientDetailResponse, Pati
 from src.app.api.routes.base import verify_admin_key
 from src.app.config import Settings
 from src.app.dependencies import get_nexhealth_client_dependency, get_settings
-from src.app.models.audit_log import AuditAction
+from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.nexhealth.client import NexHealthClient
-from src.app.services.audit_decorator import audited_api
+from src.app.services.audit_decorator import audit
 
 router = APIRouter(dependencies=[Depends(verify_admin_key)])
 
 
 @router.get("/patients", response_model=PatientListResponse)
-@audited_api(AuditAction.READ_PATIENT, resource_key="name")
+@audit(
+    AuditAction.SEARCH_PATIENTS, 
+    resource=lambda request, subdomain, location_id, name, email, phone_number, date_of_birth, **kwargs: 
+        f"criteria:name={name},email={email},phone={phone_number},dob={date_of_birth}",
+    actor=AuditActor.API_CLIENT
+)
 async def list_patients(
     request: Request,
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
@@ -46,7 +51,7 @@ async def list_patients(
     # Use provided params or fall back to settings
     subdomain = subdomain or settings.nexhealth_subdomain
     location_id = location_id or settings.nexhealth_location_id
-
+    
     if not subdomain or not location_id:
         raise HTTPException(
             status_code=400,
@@ -80,7 +85,11 @@ async def list_patients(
 
 
 @router.get("/patients/{id}", response_model=PatientDetailResponse)
-@audited_api(AuditAction.READ_PATIENT, resource_key="id")
+@audit(
+    AuditAction.READ_PATIENT, 
+    resource=lambda request, id, **kwargs: f"patient:{id}",
+    actor=AuditActor.API_CLIENT
+)
 async def get_patient(
     request: Request,
     id: int = Path(..., description="Id of the patient"),
@@ -106,7 +115,11 @@ async def get_patient(
 
 
 @router.post("/patients")
-@audited_api(AuditAction.CREATE_PATIENT)
+@audit(
+    AuditAction.CREATE_PATIENT, 
+    resource=lambda request, body, **kwargs: f"new_patient:{body.patient.first_name}_{body.patient.last_name}",
+    actor=AuditActor.API_CLIENT
+)
 async def create_patient(
     request: Request,
     body: CreatePatientRequest,

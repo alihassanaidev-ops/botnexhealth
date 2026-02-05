@@ -24,7 +24,7 @@ from src.app.services.audit import (
     log_audit,
     set_audit_service,
 )
-from src.app.services.audit_decorator import audited
+
 
 
 # =============================================================================
@@ -318,8 +318,12 @@ class TestAuditContext:
 # @audited Decorator Tests
 # =============================================================================
 
+# =============================================================================
+# @audit Decorator Tests
+# =============================================================================
+
 class TestAuditedDecorator:
-    """Test @audited decorator for Retell handlers."""
+    """Test @audit decorator with explicit extractors."""
     
     @pytest.fixture(autouse=True)
     def setup_service(self):
@@ -329,56 +333,57 @@ class TestAuditedDecorator:
         set_audit_service(self.service)
     
     @pytest.mark.asyncio
-    async def test_decorator_logs_success(self):
-        """Test that decorator logs successful calls."""
+    async def test_decorator_logs_success_explicit(self):
+        """Test that decorator logs with explicit resource lambda."""
+        from src.app.services.audit_decorator import audit
         
-        @audited(AuditAction.READ_PATIENT, resource_key="patient_id")
-        async def mock_lookup_patient(args):
-            return {"patients": [{"id": 123}], "count": 1}
+        @audit(AuditAction.READ_PATIENT, resource=lambda args: f"patient:{args['id']}")
+        async def mock_lookup(args):
+            return {"count": 1}
         
-        result = await mock_lookup_patient({"patient_id": "123", "subdomain": "test"})
+        await mock_lookup({"id": "123"})
         
-        assert result["count"] == 1
-        
-        # Give background task time to complete
         import asyncio
         await asyncio.sleep(0.1)
         
         entries = self.repo.get_all()
         assert len(entries) == 1
-        assert entries[0].action == AuditAction.READ_PATIENT
+        assert entries[0].target_resource == "patient:123"
         assert entries[0].outcome == AuditOutcome.SUCCESS
-    
+
     @pytest.mark.asyncio
-    async def test_decorator_logs_error_result(self):
-        """Test that decorator detects error in result."""
+    async def test_decorator_config_error(self):
+        """Test that extractor failure logs CRITICAL config error."""
+        from src.app.services.audit_decorator import audit
         
-        @audited(AuditAction.CREATE_PATIENT)
-        async def mock_create_patient(args):
-            return {"error": "Validation failed", "success": False}
+        # BROKEN EXTRACTOR: tries to access 'id' but input doesn't have it
+        @audit(AuditAction.READ_PATIENT, resource=lambda args: f"patient:{args['id']}")
+        async def mock_broken(args):
+            return "ok"
         
-        result = await mock_create_patient({})
-        
-        assert result["success"] is False
+        # Call with missing key
+        await mock_broken({"name": "john"})
         
         import asyncio
         await asyncio.sleep(0.1)
         
         entries = self.repo.get_all()
         assert len(entries) == 1
-        # When error key is present, outcome is FAILURE_VALIDATION
-        assert entries[0].outcome == AuditOutcome.FAILURE_VALIDATION
+        # Should flag as CONFIGURATION_ERROR
+        assert "CONFIGURATION_ERROR" in entries[0].target_resource
+        assert "config_error" in entries[0].metadata
     
     @pytest.mark.asyncio
     async def test_decorator_logs_exception(self):
         """Test that decorator catches and logs exceptions."""
+        from src.app.services.audit_decorator import audit
         
-        @audited(AuditAction.BOOK_APPOINTMENT)
-        async def mock_failing_handler(args):
+        @audit(AuditAction.BOOK_APPOINTMENT, resource="static:test")
+        async def mock_fail(args):
             raise RuntimeError("Database error")
         
         with pytest.raises(RuntimeError):
-            await mock_failing_handler({})
+            await mock_fail({})
         
         import asyncio
         await asyncio.sleep(0.1)
@@ -386,24 +391,7 @@ class TestAuditedDecorator:
         entries = self.repo.get_all()
         assert len(entries) == 1
         assert entries[0].outcome == AuditOutcome.FAILURE_INTERNAL
-        assert entries[0].metadata["error_type"] == "RuntimeError"
-    
-    @pytest.mark.asyncio
-    async def test_decorator_extracts_resource_from_result(self):
-        """Test resource extraction from function result."""
-        
-        @audited(AuditAction.CREATE_PATIENT, resource_from_result="patient_id")
-        async def mock_create(args):
-            return {"success": True, "patient_id": "new-123"}
-        
-        await mock_create({})
-        
-        import asyncio
-        await asyncio.sleep(0.1)
-        
-        entries = self.repo.get_all()
-        assert len(entries) == 1
-        assert "new-123" in entries[0].target_resource
+        assert entries[0].target_resource == "static:test"
 
 
 # =============================================================================

@@ -68,7 +68,7 @@ def test_book_appointment_missing_subdomain(mock_nh_client):
     # subdomain: str | None = Query(None)
     # But checks: 'if not subdomain: raise 400'
     assert response.status_code == 400
-    assert "Missing subdomain or location_id parameters" in response.json()["detail"]
+    assert "Missing subdomain or location_id. Provide as query params or configure in settings." in response.json()["detail"]
 
 def test_cancel_appointment_route(mock_nh_client):
     app = get_test_app(mock_nh_client)

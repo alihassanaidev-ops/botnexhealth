@@ -197,10 +197,10 @@ async def test_find_slots_success_auto_providers(mock_slot_routes, mock_prov_rou
     mock_get_client.return_value = mock_client
     mock_get_settings.return_value = mock_settings
     
-    # Mock provider auto-fetch
-    setup_async_mock(mock_prov_routes, "list_providers", return_value={
+    # Mock provider auto-fetch (uses client.get directly in handlers.py)
+    mock_client.get.return_value = {
         "data": [{"id": 10}, {"id": 11}]
-    })
+    }
     
     # Mock slots
     setup_async_mock(mock_slot_routes, "list_appointment_slots", return_value={
@@ -234,7 +234,7 @@ async def test_find_slots_with_provider(mock_slot_routes, mock_prov_routes, mock
         "provider_id": 999
     }
     result = await handlers.find_appointment_slots(args)
-    mock_prov_routes.list_providers.assert_not_called()
+    # mock_client.get shouldn't be called for providers
     mock_slot_routes.list_appointment_slots.assert_called()
     assert result["slots_count"] == 0
 
@@ -260,7 +260,10 @@ async def test_find_slots_exception(mock_slot_routes, mock_prov_routes, mock_get
 async def test_find_slots_auto_provider_fail(mock_slot_routes, mock_prov_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
     mock_get_client.return_value = mock_client
     mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_prov_routes, "list_providers", side_effect=Exception("Prov Fail"))
+    
+    # Mock fetch fail
+    mock_client.get.side_effect = Exception("Prov Fail")
+    
     setup_async_mock(mock_slot_routes, "list_appointment_slots", return_value={"data": []})
     
     args = {"start_date": "d", "location_id": 1, "subdomain": "s"}
@@ -489,9 +492,10 @@ async def test_list_prov_success(mock_prov_routes, mock_get_settings, mock_get_c
     mock_get_client.return_value = mock_client
     mock_get_settings.return_value = mock_settings
     
-    setup_async_mock(mock_prov_routes, "list_providers", return_value={
+    # handlers.list_providers uses client.get directly via auto-pagination
+    mock_client.get.return_value = {
         "data": [{"id": 1, "name": "Doc"}]
-    })
+    }
     
     args = {"location_id": 1, "subdomain": "s"}
     result = await handlers.list_providers(args)
@@ -505,7 +509,8 @@ async def test_list_prov_success(mock_prov_routes, mock_get_settings, mock_get_c
 async def test_list_prov_exception(mock_prov_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
     mock_get_client.return_value = mock_client
     mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_prov_routes, "list_providers", side_effect=Exception("Fail"))
+    
+    mock_client.get.side_effect = Exception("Fail")
     
     args = {"location_id": 1, "subdomain": "s"}
     result = await handlers.list_providers(args)

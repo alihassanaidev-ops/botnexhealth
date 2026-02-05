@@ -185,7 +185,7 @@ async def handle_retell_webhook(
             patient_dob = custom_data.get("Date of birth")
             patient_email = custom_data.get("Patient email")
 
-        # Send to GHL
+            # Send to GHL
         try:
             result = await ghl_client.upsert_contact_from_retell(
                 phone_number=phone_number,
@@ -200,6 +200,22 @@ async def handle_retell_webhook(
             )
 
             contact_id = result.get("contact", {}).get("id", "unknown")
+            
+            # Audit GHL Sync
+            from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
+            log_audit_background(
+                actor=AuditActor.RETELL_AGENT,  # or SYSTEM/GHL, but triggered by Retell webhook
+                action=AuditAction.SYNC_GHL_CONTACT,
+                target_resource=f"contact:{contact_id}",
+                outcome=AuditOutcome.SUCCESS,
+                metadata={
+                    "event_type": event.event,
+                    "call_id": event.call.call_id,
+                    "is_new": result.get("new", False)
+                },
+                tenant_id=tenant.id if tenant else None,
+            )
+            
             return {
                 "status": "success",
                 "ghl_contact_id": contact_id,
@@ -208,9 +224,39 @@ async def handle_retell_webhook(
 
         except Exception as e:
             logger.error(f"Failed to sync to GHL: {e}")
+            
+            # Audit GHL Sync Failure
+            from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
+            log_audit_background(
+                actor=AuditActor.RETELL_AGENT,
+                action=AuditAction.SYNC_GHL_CONTACT,
+                target_resource=f"phone:{phone_number}",
+                outcome=AuditOutcome.FAILURE_EXTERNAL_API,
+                metadata={
+                    "event_type": event.event,
+                    "call_id": event.call.call_id,
+                    "error": str(e)
+                },
+                tenant_id=tenant.id if tenant else None,
+            )
+            
             # Don't fail the webhook, just log the error
             return {"status": "error", "reason": str(e)}
 
     except Exception as e:
         logger.exception(f"Webhook processing error: {e}")
+        
+        # Audit Webhook Failure (General)
+        try:
+            from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
+            log_audit_background(
+                actor=AuditActor.RETELL_AGENT,
+                action=AuditAction.WEBHOOK_RECEIVED,
+                target_resource="webhook:retell",
+                outcome=AuditOutcome.FAILURE_INTERNAL,
+                metadata={"error": str(e)},
+            )
+        except Exception:
+            pass # Failsafe
+            
         raise HTTPException(status_code=400, detail=str(e))

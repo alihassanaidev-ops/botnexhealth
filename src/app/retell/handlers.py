@@ -26,7 +26,7 @@ from src.app.api.routes import sikka as sikka_routes
 from src.app.dependencies import get_settings
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.retell.functions import register_function
-from src.app.services.audit_decorator import audited
+from src.app.services.audit_decorator import audit
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,10 @@ async def _get_sikka_client():
 
 
 @register_function("lookup_patient")
-@audited(AuditAction.READ_PATIENT, resource_key="patient_id")
+@audit(
+    AuditAction.SEARCH_PATIENTS, 
+    resource=lambda args: f"criteria:name={args.get('name')},phone={args.get('phone_number')},email={args.get('email')}"
+)
 async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     """
     Lookup a patient by name, email, phone, or date of birth.
@@ -270,7 +273,18 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("create_patient")
-@audited(AuditAction.CREATE_PATIENT, resource_from_result="patient_id")
+# resource_from_result removed in favor of manual logic or just auditing the attempt.
+# Wait, for CREATE, we usually want the ID. 
+# Explicit logic: we can't get the ID from args (it doesn't exist yet).
+# So we audit the ATTRIBUTE (e.g. email) or we use a wrapper that inspects result?
+# The new 'audit' decorator doesn't support 'resource_from_result' because that was "magic".
+# But wait, we want the ID.
+# "Simple & Bulletproof" -> If you want the ID from the result, you should probably just call log_audit inside the function.
+# OR, we audit the ATTEMPT with the input data (which is safer anyway - knowing someone TRIED to create a patient for "John Doe" is important even if it failed).
+@audit(
+    AuditAction.CREATE_PATIENT, 
+    resource=lambda args: f"new_patient:{args.get('first_name')}_{args.get('last_name')}"
+)
 async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
     """
     Create a new patient.
@@ -350,6 +364,10 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("find_appointment_slots")
+@audit(
+    AuditAction.READ_APPOINTMENT_SLOTS, 
+    resource=lambda args: f"slots:{args.get('location_id')}:{args.get('start_date')}"
+)
 async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
     """
     Find available appointment slots.
@@ -433,7 +451,10 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("book_appointment")
-@audited(AuditAction.BOOK_APPOINTMENT, resource_from_result="appointment_id")
+@audit(
+    AuditAction.BOOK_APPOINTMENT, 
+    resource=lambda args: f"appt_for:{args.get('patient_id')}"
+)
 async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """
     Book a new appointment.
@@ -505,7 +526,10 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("cancel_appointment")
-@audited(AuditAction.CANCEL_APPOINTMENT, resource_key="appointment_id")
+@audit(
+    AuditAction.CANCEL_APPOINTMENT, 
+    resource=lambda args: f"appointment:{args.get('appointment_id')}"
+)
 async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """
     Cancel an existing appointment.
@@ -552,7 +576,10 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("reschedule_appointment")
-@audited(AuditAction.RESCHEDULE_APPOINTMENT, resource_key="old_appointment_id")
+@audit(
+    AuditAction.RESCHEDULE_APPOINTMENT, 
+    resource=lambda args: f"reschedule:old={args.get('old_appointment_id')}"
+)
 async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """
     Reschedule an appointment by cancelling the old one and booking a new one.
@@ -601,6 +628,10 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("list_appointment_types")
+@audit(
+    AuditAction.READ_APPOINTMENT_TYPES, 
+    resource=lambda args: f"appt_types:{args.get('location_id')}"
+)
 async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
     """
     List appointment types for a practice.
@@ -652,6 +683,10 @@ async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("get_location_details")
+@audit(
+    AuditAction.READ_LOCATIONS, 
+    resource=lambda args: f"location:{args.get('location_id')}"
+)
 async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
     """
     Get location details for FAQs (hours, address, etc).
@@ -699,6 +734,10 @@ async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("list_locations")
+@audit(
+    AuditAction.READ_LOCATIONS, 
+    resource="all_locations" # Static resource since it lists all
+)
 async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
     """
     List all available practice locations.
@@ -747,6 +786,10 @@ async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @register_function("list_providers")
+@audit(
+    AuditAction.READ_PROVIDERS, 
+    resource=lambda args: f"providers:{args.get('location_id')}"
+)
 async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
     """
     List ALL providers at a specific location.

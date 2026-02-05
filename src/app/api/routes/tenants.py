@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 
 from src.app.database import get_db_session
 from src.app.dependencies import require_admin_api_key
-from src.app.models.audit_log import AuditAction
-from src.app.services.audit_decorator import audited_api
+from src.app.models.audit_log import AuditAction, AuditActor
+from src.app.services.audit_decorator import audit
 from src.app.services.tenant_service import TenantService
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,11 @@ async def list_tenants(
 
 
 @router.post("", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
-@audited_api(AuditAction.TENANT_CREATE, resource_key="slug")
+@audit(
+    AuditAction.TENANT_CREATE, 
+    resource=lambda request, data, _: f"slug:{data.slug}",
+    actor=AuditActor.ADMIN 
+)
 async def create_tenant(
     request: Request,
     data: TenantCreate,
@@ -180,7 +184,11 @@ async def get_tenant(
 
 
 @router.patch("/{slug}", response_model=TenantResponse)
-@audited_api(AuditAction.TENANT_UPDATE, resource_key="slug")
+@audit(
+    AuditAction.TENANT_UPDATE, 
+    resource=lambda request, slug, data, _: f"slug:{slug}",
+    actor=AuditActor.ADMIN
+)
 async def update_tenant(
     request: Request,
     slug: str,
@@ -205,7 +213,11 @@ async def update_tenant(
 
 
 @router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
-@audited_api(AuditAction.TENANT_DELETE, resource_key="slug")
+@audit(
+    AuditAction.TENANT_DELETE, 
+    resource=lambda request, slug, hard, _: f"slug:{slug}",
+    actor=AuditActor.ADMIN
+)
 async def delete_tenant(
     request: Request,
     slug: str,
