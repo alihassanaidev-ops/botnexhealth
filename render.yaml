@@ -58,6 +58,59 @@ services:
       - key: GHL_LOCATION_ID
         sync: false
 
+  # Redis (Key Value Store)
+  - type: redis
+    name: botnexhealth-redis
+    region: oregon
+    plan: starter
+    ipAllowList: [] # internal only
+
+  # Background Worker
+  - type: worker
+    name: botnexhealth-worker
+    runtime: docker
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    
+    # Scaling
+    plan: starter
+    numInstances: 1
+    region: oregon
+
+    # Command
+    startCommand: celery -A src.app.worker worker --loglevel=info
+    
+    # Environment Variables
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      
+      # Connect to Redis (Key Value Store)
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: botnexhealth-redis
+          property: connectionString
+
+      # Inherit Secrets (Must match API service)
+      - key: DATABASE_URL
+        sync: false
+      - key: NEXHEALTH_API_KEY
+        sync: false
+      - key: RETELL_API_SECRET
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+
 # =============================================================================
 # Notes for HIPAA Compliance on Render:
 # =============================================================================
