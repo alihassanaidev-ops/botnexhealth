@@ -65,6 +65,9 @@ class AuditAction(str, Enum):
     TENANT_CREATE = "TENANT_CREATE"
     TENANT_UPDATE = "TENANT_UPDATE"
     TENANT_DELETE = "TENANT_DELETE"
+    
+    # Auth operations
+    LOGIN = "LOGIN"
 
 
 class AuditOutcome(str, Enum):

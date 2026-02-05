@@ -62,7 +62,13 @@ class Settings(BaseSettings):
     admin_api_key_file: str | None = None
     ghl_api_key_file: str | None = None
     sikka_app_id_file: str | None = None
+    sikka_app_id_file: str | None = None
     sikka_app_secret_file: str | None = None
+    
+    # Auth / JWT
+    jwt_secret: str = "unsafe-secret-key-change-me"  # For dev only
+    jwt_algorithm: str = "HS256"
+    jwt_secret_file: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -92,6 +98,10 @@ class Settings(BaseSettings):
         # Sikka App Secret
         if secret := read_secret_file(self.sikka_app_secret_file):
             object.__setattr__(self, "sikka_app_secret", secret)
+            
+        # JWT Secret
+        if secret := read_secret_file(self.jwt_secret_file):
+            object.__setattr__(self, "jwt_secret", secret)
 
         # Validate required keys
         if not self.nexhealth_api_key:
@@ -166,3 +176,8 @@ def setup_logging(log_level: str = "info") -> None:
 
 settings = Settings()
 setup_logging(settings.log_level)
+
+
+def get_settings() -> Settings:
+    """Get the global settings instance."""
+    return settings
