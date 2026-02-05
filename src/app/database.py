@@ -76,9 +76,9 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def create_tables() -> None:
-    """Create all tables in the database."""
+    """Create all tables in the database if they don't exist."""
     if not _engine:
         raise RuntimeError("Database not initialized. Call init_database() first.")
     
     async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(Base.metadata.create_all, checkfirst=True)
