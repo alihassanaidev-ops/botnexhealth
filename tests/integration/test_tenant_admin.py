@@ -1,0 +1,96 @@
+"""
+Integration tests for Tenant Admin creation.
+"""
+
+import pytest
+from httpx import AsyncClient
+from unittest.mock import AsyncMock, patch
+from src.app.models.user import UserRole
+
+# Mock data
+TENANT_SLUG = "test-tenant-admin"
+ADMIN_EMAIL = "newadmin@example.com"
+ADMIN_PASS = "securePass123"
+
+@pytest.mark.asyncio
+async def test_create_tenant_with_admin(async_client: AsyncClient):
+    """Test creating a tenant with an admin user."""
+    
+    # Payload
+    payload = {
+        "name": "Test Tenant With Admin",
+        "slug": TENANT_SLUG,
+        "admin_email": ADMIN_EMAIL,
+        "admin_password": ADMIN_PASS
+    }
+
+    # Mock DB session and Service calls
+    with patch("src.app.api.routes.tenants.get_db_session") as mock_db:
+        mock_session = AsyncMock()
+        mock_db.return_value.__aenter__.return_value = mock_session
+        
+        # Configure session.add to be synchronous and set ID
+        from unittest.mock import MagicMock
+        def side_effect_add(obj):
+             obj.id = "user-generated-id-123"
+
+        mock_session.add = MagicMock(side_effect=side_effect_add)
+        
+        # Mock TenantService
+        with patch("src.app.api.routes.tenants.TenantService") as MockService:
+            mock_service_instance = AsyncMock()
+            MockService.return_value = mock_service_instance
+            
+            # Setup return values
+            mock_service_instance.get_by_slug.return_value = None # No conflict
+            
+            mock_tenant = AsyncMock()
+            mock_tenant.id = "tenant-123"
+            mock_tenant.name = payload["name"]
+            mock_tenant.slug = payload["slug"]
+            mock_tenant.is_active = True
+            # Mock encrypted fields as None
+            mock_tenant.nexhealth_api_key_encrypted = None
+            mock_tenant.ghl_api_key_encrypted = None
+            mock_tenant.retell_api_secret_encrypted = None
+            mock_tenant.sikka_app_id_encrypted = None
+            mock_tenant.sikka_app_secret_encrypted = None
+            
+            # Other fields
+            mock_tenant.nexhealth_subdomain = None
+            mock_tenant.nexhealth_location_id = None
+            mock_tenant.ghl_location_id = None
+            mock_tenant.ghl_custom_fields = None
+            mock_tenant.retell_agent_id = None
+            mock_tenant.sikka_office_id = None
+
+            mock_service_instance.create.return_value = mock_tenant
+            
+            # Mock User check query
+            # session.execute is an async call that returns a Result object
+            # The Result object itself is SYNCHRONOUS, so we use MagicMock, not AsyncMock
+            from unittest.mock import MagicMock
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = None
+            
+            # When session.execute is awaited, it should return this synchronous mock_result
+            mock_session.execute.return_value = mock_result
+            
+            # Act
+            response = await async_client.post("/admin/tenants", json=payload)
+            
+            # Assert
+            assert response.status_code == 201
+            data = response.json()
+            
+            assert data["slug"] == TENANT_SLUG
+            assert data["name"] == "Test Tenant With Admin"
+            
+            # Verify User was added to session
+            # We check if session.add was called with a User object having correct role
+            assert mock_session.add.called
+            args, _ = mock_session.add.call_args
+            user_arg = args[0]
+            assert user_arg.email == ADMIN_EMAIL
+            assert user_arg.role == UserRole.TENANT.value
+            assert user_arg.tenant_id == "tenant-123"

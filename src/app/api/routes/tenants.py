@@ -11,7 +11,9 @@ from pydantic import BaseModel, Field
 from src.app.database import get_db_session
 from src.app.dependencies import require_admin_api_key
 from src.app.models.audit_log import AuditAction, AuditActor
+from src.app.models.user import User, UserRole
 from src.app.services.audit_decorator import audit
+from src.app.services.auth import AuthService
 from src.app.services.tenant_service import TenantService
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,10 @@ class TenantCreate(BaseModel):
     """Request body for creating a tenant."""
     name: str = Field(..., min_length=1, max_length=255)
     slug: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
+    
+    # Optional: Initial Admin User
+    admin_email: str | None = Field(None, description="Email for the initial tenant admin user")
+    admin_password: str | None = Field(None, min_length=8, description="Password for the initial tenant admin user")
     
     # NexHealth
     nexhealth_api_key: str | None = None
@@ -73,6 +79,14 @@ class TenantUpdate(BaseModel):
     sikka_office_id: str | None = None
 
 
+class TenantAdminResponse(BaseModel):
+    """Admin user details in tenant response."""
+    id: str
+    email: str
+    role: str
+    is_active: bool
+
+
 class TenantResponse(BaseModel):
     """Response model for tenant (no secrets)."""
     id: str
@@ -94,12 +108,24 @@ class TenantResponse(BaseModel):
     has_retell_secret: bool
     has_sikka_credentials: bool
     
+    # Optional: Created admin user
+    admin_user: TenantAdminResponse | None = None
+    
     class Config:
         from_attributes = True
 
 
-def tenant_to_response(tenant) -> TenantResponse:
+def tenant_to_response(tenant, admin_user=None) -> TenantResponse:
     """Convert Tenant model to response (no secrets exposed)."""
+    admin_resp = None
+    if admin_user:
+        admin_resp = TenantAdminResponse(
+            id=admin_user.id,
+            email=admin_user.email,
+            role=admin_user.role,
+            is_active=admin_user.is_active
+        )
+
     return TenantResponse(
         id=tenant.id,
         name=tenant.name,
@@ -118,6 +144,7 @@ def tenant_to_response(tenant) -> TenantResponse:
             tenant.sikka_app_id_encrypted is not None and 
             tenant.sikka_app_secret_encrypted is not None
         ),
+        admin_user=admin_resp
     )
 
 
@@ -148,9 +175,10 @@ async def create_tenant(
     data: TenantCreate,
     _: str = Depends(require_admin_api_key),
 ):
-    """Create a new tenant."""
+    """Create a new tenant, optionally with an initial admin user."""
     async with get_db_session() as session:
         service = TenantService(session)
+        auth_service = AuthService()  # For password hashing
         
         # Check if slug already exists
         existing = await service.get_by_slug(data.slug)
@@ -160,8 +188,41 @@ async def create_tenant(
                 detail=f"Tenant with slug '{data.slug}' already exists"
             )
         
-        tenant = await service.create(**data.model_dump())
-        return tenant_to_response(tenant)
+        # Prepare tenant data (exclude admin fields)
+        tenant_data = data.model_dump(exclude={"admin_email", "admin_password"})
+        
+        # Create tenant
+        tenant = await service.create(**tenant_data)
+        
+        # Create admin user if requested
+        admin_user = None
+        if data.admin_email and data.admin_password:
+            # Check if email is available (simple check, assume email unique globally for now)
+            # Ideally this should check User table but service methods might be limited
+            # We'll use direct session for this special case
+            from sqlalchemy import select
+            
+            existing_user = await session.execute(
+                select(User).where(User.email == data.admin_email)
+            )
+            if existing_user.scalar_one_or_none():
+                 raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"User with email '{data.admin_email}' already exists"
+                )
+
+            admin_user = User(
+                email=data.admin_email,
+                hashed_password=auth_service.get_password_hash(data.admin_password),
+                role=UserRole.TENANT.value,
+                tenant_id=tenant.id,
+                is_active=True
+            )
+            session.add(admin_user)
+            await session.flush() # Get ID
+            await session.commit() # Commit both tenant and user
+
+        return tenant_to_response(tenant, admin_user)
 
 
 @router.get("/{slug}", response_model=TenantResponse)

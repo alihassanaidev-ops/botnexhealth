@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,7 +20,7 @@ class UserRole(str, Enum):
     User roles for authorization.
     """
     ADMIN = "ADMIN"
-    STAFF = "STAFF"
+    TENANT = "TENANT"
 
 
 class User(Base):
@@ -31,7 +31,8 @@ class User(Base):
     - id: Unique identifier
     - email: User's email address (login credential)
     - hashed_password: Bcrypt hashed password
-    - role: User role (ADMIN, STAFF)
+    - role: User role (ADMIN, TENANT)
+    - tenant_id: Tenant this user belongs to (nullable for ADMIN)
     - is_active: Whether the user can log in
     - failed_login_attempts: For brute force protection
     - last_login_at: Timestamp of last successful login
@@ -59,8 +60,14 @@ class User(Base):
     
     role: Mapped[str] = mapped_column(
         String(50),
-        default=UserRole.STAFF.value,
+        default=UserRole.TENANT.value,
         nullable=False
+    )
+    
+    tenant_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tenants.id"),
+        nullable=True,
+        index=True
     )
     
     is_active: Mapped[bool] = mapped_column(
