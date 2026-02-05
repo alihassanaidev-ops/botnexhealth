@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from src.app.database import get_db_session
-from src.app.dependencies import require_admin_api_key
+from src.app.api.deps import get_current_admin
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.user import User, UserRole
 from src.app.services.audit_decorator import audit
@@ -156,7 +156,7 @@ def tenant_to_response(tenant, user=None) -> TenantResponse:
 @router.get("", response_model=list[TenantResponse])
 async def list_tenants(
     include_inactive: bool = False,
-    _: str = Depends(require_admin_api_key),
+    _: User = Depends(get_current_admin),
 ):
     """List all tenants."""
     async with get_db_session() as session:
@@ -174,7 +174,7 @@ async def list_tenants(
 async def create_tenant(
     request: Request,
     data: TenantCreate,
-    _: str = Depends(require_admin_api_key),
+    _: User = Depends(get_current_admin),
 ):
     """Create a new tenant, with an initial tenant user."""
     async with get_db_session() as session:
@@ -252,7 +252,7 @@ async def create_tenant(
 @router.get("/{slug}", response_model=TenantResponse)
 async def get_tenant(
     slug: str,
-    _: str = Depends(require_admin_api_key),
+    _: User = Depends(get_current_admin),
 ):
     """Get tenant by slug."""
     async with get_db_session() as session:
@@ -278,7 +278,7 @@ async def update_tenant(
     request: Request,
     slug: str,
     data: TenantUpdate,
-    _: str = Depends(require_admin_api_key),
+    _: User = Depends(get_current_admin),
 ):
     """Update tenant by slug."""
     async with get_db_session() as session:
@@ -307,7 +307,7 @@ async def delete_tenant(
     request: Request,
     slug: str,
     hard: bool = False,
-    _: str = Depends(require_admin_api_key),
+    _: User = Depends(get_current_admin),
 ):
     """
     Delete tenant by slug.

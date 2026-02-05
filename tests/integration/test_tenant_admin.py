@@ -5,7 +5,9 @@ Integration tests for Tenant Admin creation.
 import pytest
 from httpx import AsyncClient
 from unittest.mock import AsyncMock, patch
-from src.app.models.user import UserRole
+from src.app.models.user import User, UserRole
+from src.app.api.deps import get_current_admin
+from src.app.main import app
 
 # Mock data
 TENANT_SLUG = "test-tenant-admin"
@@ -25,10 +27,17 @@ async def test_create_tenant_with_user(async_client: AsyncClient):
         "name": "Test Tenant With User",
         "slug": TENANT_SLUG,
         "email": USER_EMAIL,
+        "email": USER_EMAIL,
         # "password": USER_PASS # Removed
     }
 
-    # Mock DB session and Service calls
+    # Mock Admin User for Auth Dependency
+    mock_admin_user = AsyncMock(spec=User)
+    mock_admin_user.role = UserRole.ADMIN.value
+    mock_admin_user.is_active = True
+
+    # Override dependency
+    app.dependency_overrides[get_current_admin] = lambda: mock_admin_user
     with patch("src.app.api.routes.tenants.get_db_session") as mock_db:
         mock_session = AsyncMock()
         mock_db.return_value.__aenter__.return_value = mock_session
@@ -121,3 +130,6 @@ async def test_create_tenant_with_user(async_client: AsyncClient):
             assert user_arg.role == UserRole.TENANT.value
             assert user_arg.tenant_id == "tenant-123"
             assert user_arg.hashed_password is None
+
+    # Clean up override
+    app.dependency_overrides = {}
