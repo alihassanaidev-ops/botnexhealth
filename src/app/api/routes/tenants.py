@@ -15,6 +15,7 @@ from src.app.models.user import User, UserRole
 from src.app.services.audit_decorator import audit
 from src.app.services.auth import AuthService
 from src.app.services.tenant_service import TenantService
+from src.app.services.supabase_service import SupabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,9 @@ class TenantCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     slug: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
     
-    # Optional: Initial Admin User
-    admin_email: str | None = Field(None, description="Email for the initial tenant admin user")
-    admin_password: str | None = Field(None, min_length=8, description="Password for the initial tenant admin user")
+    # Initial Tenant User (Mandatory)
+    email: str = Field(..., description="Email for the initial tenant user (used as username)")
+    # password: str = Field(..., min_length=8, description="Password for the initial tenant user")  # REMOVED for Supabase Invite Flow
     
     # NexHealth
     nexhealth_api_key: str | None = None
@@ -79,8 +80,8 @@ class TenantUpdate(BaseModel):
     sikka_office_id: str | None = None
 
 
-class TenantAdminResponse(BaseModel):
-    """Admin user details in tenant response."""
+class TenantUserResponse(BaseModel):
+    """User details in tenant response."""
     id: str
     email: str
     role: str
@@ -108,22 +109,22 @@ class TenantResponse(BaseModel):
     has_retell_secret: bool
     has_sikka_credentials: bool
     
-    # Optional: Created admin user
-    admin_user: TenantAdminResponse | None = None
+    # Optional: Created user
+    user: TenantUserResponse | None = None
     
     class Config:
         from_attributes = True
 
 
-def tenant_to_response(tenant, admin_user=None) -> TenantResponse:
+def tenant_to_response(tenant, user=None) -> TenantResponse:
     """Convert Tenant model to response (no secrets exposed)."""
-    admin_resp = None
-    if admin_user:
-        admin_resp = TenantAdminResponse(
-            id=admin_user.id,
-            email=admin_user.email,
-            role=admin_user.role,
-            is_active=admin_user.is_active
+    user_resp = None
+    if user:
+        user_resp = TenantUserResponse(
+            id=user.id,
+            email=user.email,
+            role=user.role,
+            is_active=user.is_active
         )
 
     return TenantResponse(
@@ -144,7 +145,7 @@ def tenant_to_response(tenant, admin_user=None) -> TenantResponse:
             tenant.sikka_app_id_encrypted is not None and 
             tenant.sikka_app_secret_encrypted is not None
         ),
-        admin_user=admin_resp
+        user=user_resp
     )
 
 
@@ -175,10 +176,11 @@ async def create_tenant(
     data: TenantCreate,
     _: str = Depends(require_admin_api_key),
 ):
-    """Create a new tenant, optionally with an initial admin user."""
+    """Create a new tenant, with an initial tenant user."""
     async with get_db_session() as session:
         service = TenantService(session)
-        auth_service = AuthService()  # For password hashing
+        # auth_service = AuthService()  # Not needed for password hashing anymore
+        supabase_service = SupabaseService()
         
         # Check if slug already exists
         existing = await service.get_by_slug(data.slug)
@@ -188,41 +190,63 @@ async def create_tenant(
                 detail=f"Tenant with slug '{data.slug}' already exists"
             )
         
-        # Prepare tenant data (exclude admin fields)
-        tenant_data = data.model_dump(exclude={"admin_email", "admin_password"})
+        # Prepare tenant data (exclude user fields)
+        # Prepare tenant data (exclude user fields)
+        tenant_data = data.model_dump(exclude={"email", "password", "nexhealth_api_key", "nexhealth_subdomain", "nexhealth_location_id", "ghl_api_key", "ghl_location_id", "ghl_custom_fields", "retell_agent_id", "retell_api_secret", "sikka_app_id", "sikka_app_secret", "sikka_office_id"}) # Exclude all optional fields explicitly or just user fields if create handles extras. 
+        # Actually original code excluded email and password. Since password is removed from model, we just convert.
+        # But wait, data.model_dump() will not have password if we removed it from model.
+        tenant_data = data.model_dump(exclude={"email"})
         
         # Create tenant
         tenant = await service.create(**tenant_data)
         
-        # Create admin user if requested
-        admin_user = None
-        if data.admin_email and data.admin_password:
-            # Check if email is available (simple check, assume email unique globally for now)
-            # Ideally this should check User table but service methods might be limited
-            # We'll use direct session for this special case
-            from sqlalchemy import select
-            
-            existing_user = await session.execute(
-                select(User).where(User.email == data.admin_email)
+        # Create initial user (Mandatory)
+        # Check if email is available (simple check, assume email unique globally for now)
+        # Ideally this should check User table but service methods might be limited
+        # We'll use direct session for this special case
+        from sqlalchemy import select
+        
+        existing_user = await session.execute(
+            select(User).where(User.email == data.email)
+        )
+        if existing_user.scalar_one_or_none():
+             raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"User with email '{data.email}' already exists"
             )
-            if existing_user.scalar_one_or_none():
-                 raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"User with email '{data.admin_email}' already exists"
-                )
 
-            admin_user = User(
-                email=data.admin_email,
-                hashed_password=auth_service.get_password_hash(data.admin_password),
-                role=UserRole.TENANT.value,
-                tenant_id=tenant.id,
-                is_active=True
+
+        # Invite User via Supabase
+        try:
+             supabase_service.invite_user(
+                email=data.email, 
+                tenant_id=tenant.id, 
+                role=UserRole.TENANT.value
             )
-            session.add(admin_user)
-            await session.flush() # Get ID
-            await session.commit() # Commit both tenant and user
+        except Exception as e:
+            # If supabase fails, we should probably rollback tenant creation?
+            # Or just proceed and let admin retry invite manually? 
+            # For now, we'll log it and proceed but maybe without a local user or with local user but no password set.
+            # Ideally we want atomic operation. Since Supabase is external, we can't fully transaction it.
+            # Best effort: If invite fails, we could raise error and rollback DB transaction.
+            logging.error(f"Supabase invite failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send Supabase invite"
+            )
 
-        return tenant_to_response(tenant, admin_user)
+        user = User(
+            email=data.email,
+            hashed_password=None, # Password set via Supabase
+            role=UserRole.TENANT.value,
+            tenant_id=tenant.id,
+            is_active=True
+        )
+        session.add(user)
+        await session.flush() # Get ID
+        await session.commit() # Commit both tenant and user
+
+        return tenant_to_response(tenant, user)
 
 
 @router.get("/{slug}", response_model=TenantResponse)

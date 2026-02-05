@@ -53,9 +53,9 @@ class User(Base):
         index=True
     )
     
-    hashed_password: Mapped[str] = mapped_column(
+    hashed_password: Mapped[str | None] = mapped_column(
         String(255),
-        nullable=False
+        nullable=True
     )
     
     role: Mapped[str] = mapped_column(

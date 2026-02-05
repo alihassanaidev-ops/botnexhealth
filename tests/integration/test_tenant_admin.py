@@ -9,19 +9,23 @@ from src.app.models.user import UserRole
 
 # Mock data
 TENANT_SLUG = "test-tenant-admin"
-ADMIN_EMAIL = "newadmin@example.com"
-ADMIN_PASS = "securePass123"
+USER_EMAIL = "newuser@example.com"
+USER_EMAIL = "newuser@example.com"
+# USER_PASS = "securePass123" # Removed
 
 @pytest.mark.asyncio
-async def test_create_tenant_with_admin(async_client: AsyncClient):
-    """Test creating a tenant with an admin user."""
+async def test_create_tenant_with_user(async_client: AsyncClient):
+    """Test creating a tenant with an initial user."""
     
     # Payload
     payload = {
-        "name": "Test Tenant With Admin",
+        "name": "Test Tenant With User",
         "slug": TENANT_SLUG,
-        "admin_email": ADMIN_EMAIL,
-        "admin_password": ADMIN_PASS
+        "email": USER_EMAIL,
+        "name": "Test Tenant With User",
+        "slug": TENANT_SLUG,
+        "email": USER_EMAIL,
+        # "password": USER_PASS # Removed
     }
 
     # Mock DB session and Service calls
@@ -76,21 +80,44 @@ async def test_create_tenant_with_admin(async_client: AsyncClient):
             # When session.execute is awaited, it should return this synchronous mock_result
             mock_session.execute.return_value = mock_result
             
-            # Act
-            response = await async_client.post("/admin/tenants", json=payload)
+            # When session.execute is awaited, it should return this synchronous mock_result
+            mock_session.execute.return_value = mock_result
+            
+            # Mock SupabaseService
+            with patch("src.app.api.routes.tenants.SupabaseService") as MockSupabaseService:
+                mock_supabase_instance = MockSupabaseService.return_value
+                mock_supabase_instance.invite_user.return_value = {"id": "supabase-user-id"}
+                
+                # Act
+                response = await async_client.post("/admin/tenants", json=payload)
+                
+                # Assert
+                # Verify Supabase invite was called
+                mock_supabase_instance.invite_user.assert_called_once()
+                call_args = mock_supabase_instance.invite_user.call_args
+                assert call_args.kwargs['email'] == USER_EMAIL
+                assert call_args.kwargs['tenant_id'] == "tenant-123"
+                assert call_args.kwargs['role'] == "TENANT"
             
             # Assert
             assert response.status_code == 201
             data = response.json()
             
             assert data["slug"] == TENANT_SLUG
-            assert data["name"] == "Test Tenant With Admin"
+            assert data["name"] == "Test Tenant With User"
+            
+            # Verify User fields
+            assert "user" in data
+            assert data["user"]["email"] == USER_EMAIL
+            assert data["user"]["role"] == "TENANT"
+            assert data["user"]["is_active"] is True
             
             # Verify User was added to session
             # We check if session.add was called with a User object having correct role
             assert mock_session.add.called
             args, _ = mock_session.add.call_args
             user_arg = args[0]
-            assert user_arg.email == ADMIN_EMAIL
+            assert user_arg.email == USER_EMAIL
             assert user_arg.role == UserRole.TENANT.value
             assert user_arg.tenant_id == "tenant-123"
+            assert user_arg.hashed_password is None

@@ -55,11 +55,16 @@ class Settings(BaseSettings):
     # Database (Supabase PostgreSQL)
     database_url: str | None = None
     encryption_key: str | None = None
+    
+    # Supabase Auth / Invite
+    supabase_url: str | None = None
+    supabase_service_role_key: str | None = None
 
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
     admin_api_key_file: str | None = None
+    supabase_service_role_key_file: str | None = None
     ghl_api_key_file: str | None = None
     sikka_app_id_file: str | None = None
     sikka_app_id_file: str | None = None
@@ -102,6 +107,10 @@ class Settings(BaseSettings):
         # JWT Secret
         if secret := read_secret_file(self.jwt_secret_file):
             object.__setattr__(self, "jwt_secret", secret)
+            
+        # Supabase Service Role Key
+        if secret := read_secret_file(self.supabase_service_role_key_file):
+            object.__setattr__(self, "supabase_service_role_key", secret)
 
         # Validate required keys
         if not self.nexhealth_api_key:
