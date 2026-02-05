@@ -44,7 +44,7 @@ class SupabaseService:
             role: Optional role to store in user metadata
         
         Returns:
-            Supabase response object
+            Supabase User object (or UserResponse)
         """
         if not self.client:
             raise RuntimeError("Supabase client is not initialized.")
@@ -67,3 +67,23 @@ class SupabaseService:
         except Exception as e:
             logger.error(f"Failed to invite user {email}: {e}")
             raise
+
+    def delete_user(self, user_id: str) -> bool:
+        """
+        Delete a user via Supabase Admin API.
+        Used for compensating transactions if local DB commit fails.
+        """
+        if not self.client:
+            logger.warning("Supabase client not initialized, cannot delete user.")
+            return False
+            
+        try:
+            logger.info(f"Deleting Supabase user {user_id} (Compensating Transaction)...")
+            self.client.auth.admin.delete_user(user_id)
+            logger.info(f"Successfully deleted Supabase user {user_id}")
+            return True
+        except Exception as e:
+            logger.critical(f"CRITICAL: Failed to delete Supabase user {user_id} during compensation: {e}")
+            # In a real system, you'd send this to Sentry/PagerDuty immediately
+            return False
+

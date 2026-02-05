@@ -95,7 +95,11 @@ async def test_create_tenant_with_user(async_client: AsyncClient):
             # Mock SupabaseService
             with patch("src.app.api.routes.tenants.SupabaseService") as MockSupabaseService:
                 mock_supabase_instance = MockSupabaseService.return_value
-                mock_supabase_instance.invite_user.return_value = {"id": "supabase-user-id"}
+                # Mock response structure: object with response.user.id
+                from unittest.mock import MagicMock
+                mock_response = MagicMock()
+                mock_response.user.id = "supabase-user-id"
+                mock_supabase_instance.invite_user.return_value = mock_response
                 
                 # Act
                 response = await async_client.post("/admin/tenants", json=payload)

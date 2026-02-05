@@ -217,12 +217,20 @@ async def create_tenant(
 
 
         # Invite User via Supabase
+        supabase_user_id = None
         try:
-             supabase_service.invite_user(
+             response = supabase_service.invite_user(
                 email=data.email, 
                 tenant_id=tenant.id, 
                 role=UserRole.TENANT.value
             )
+             # Extract user ID from response if possible
+             # Supabase response -> UserResponse(user=User(...))
+             if hasattr(response, 'user') and hasattr(response.user, 'id'):
+                 supabase_user_id = response.user.id
+             elif isinstance(response, dict) and 'id' in response: # Fallback for mock/dict
+                 supabase_user_id = response['id']
+                 
         except Exception as e:
             # If supabase fails, we should probably rollback tenant creation?
             # Or just proceed and let admin retry invite manually? 
@@ -243,8 +251,21 @@ async def create_tenant(
             is_active=True
         )
         session.add(user)
-        await session.flush() # Get ID
-        await session.commit() # Commit both tenant and user
+        
+        try:
+            await session.commit() # Commit both tenant and user
+        except Exception as e:
+            logger.error(f"Failed to commit tenant creation to DB: {e}")
+            
+            # Compensating Transaction: Delete orphaned Supabase user
+            if supabase_user_id:
+                logger.warning(f"Initiating compensating transaction: Deleting Supabase user {supabase_user_id}")
+                supabase_service.delete_user(supabase_user_id)
+            
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create tenant locally. External invite rolled back."
+            )
 
         return tenant_to_response(tenant, user)
 
