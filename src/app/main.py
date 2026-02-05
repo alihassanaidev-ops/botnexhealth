@@ -69,6 +69,16 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Add CORS middleware (must be first)
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # TODO: Restrict to your frontend domain in production
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     # Add tenant middleware (after CORS, before routes)
     if settings.database_url:
         from src.app.middleware.tenant import TenantMiddleware
