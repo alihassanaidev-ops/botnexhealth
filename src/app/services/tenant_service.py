@@ -137,6 +137,17 @@ class TenantService:
             hard_delete: If True, permanently delete. If False, soft delete (set is_active=False).
         """
         if hard_delete:
+            # Delete associated users first to avoid foreign key constraint violation
+            from src.app.models.user import User
+            result = await self.session.execute(
+                select(User).where(User.tenant_id == tenant.id)
+            )
+            users = result.scalars().all()
+            
+            for user in users:
+                await self.session.delete(user)
+                logger.info(f"Deleted user {user.email} associated with tenant {tenant.slug}")
+            
             await self.session.delete(tenant)
             logger.info(f"Hard deleted tenant: {tenant.slug}")
         else:
