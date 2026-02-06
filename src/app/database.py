@@ -32,8 +32,8 @@ def init_database(database_url: str) -> None:
         database_url,
         echo=False,  # Set to True for SQL debugging
         pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
+        pool_size=2,  # Reduced for Supabase Session Mode (limited connections)
+        max_overflow=3,  # Reduced to prevent pool exhaustion with multiple workers
     )
     
     _session_factory = async_sessionmaker(
