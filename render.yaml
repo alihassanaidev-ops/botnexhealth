@@ -51,6 +51,10 @@ services:
         sync: false
       - key: ENCRYPTION_KEY
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       
       # Optional: GHL
       - key: GHL_API_KEY
