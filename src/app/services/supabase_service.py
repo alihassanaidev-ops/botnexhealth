@@ -59,9 +59,14 @@ class SupabaseService:
         
         try:
             # options argument expects a dictionary with a 'data' key for user metadata
+            # and 'redirectTo' for the link destination
+            options: dict[str, Any] = {"data": data}
+            if self.settings.supabase_redirect_url:
+                options["redirectTo"] = self.settings.supabase_redirect_url
+
             response = self.client.auth.admin.invite_user_by_email(
                 email=email,
-                options={"data": data}
+                options=options
             )
             return response
         except Exception as e:

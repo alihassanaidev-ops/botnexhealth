@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     # Supabase Auth / Invite
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
+    supabase_redirect_url: str | None = None
 
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
