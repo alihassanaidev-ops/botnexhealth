@@ -28,12 +28,13 @@ def init_database(database_url: str) -> None:
     """
     global _engine, _session_factory
     
+    from sqlalchemy.pool import NullPool
+    
     _engine = create_async_engine(
         database_url,
         echo=False,  # Set to True for SQL debugging
-        pool_pre_ping=True,
-        pool_size=2,  # Reduced for Supabase Session Mode (limited connections)
-        max_overflow=3,  # Reduced to prevent pool exhaustion with multiple workers
+        poolclass=NullPool,  # Use NullPool for Supabase Transaction Mode (port 6543)
+        # No pool_size/max_overflow needed with NullPool - connections are created/closed per request
     )
     
     _session_factory = async_sessionmaker(
