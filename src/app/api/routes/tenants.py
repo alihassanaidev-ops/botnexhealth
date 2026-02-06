@@ -16,6 +16,7 @@ from src.app.services.audit_decorator import audit
 from src.app.services.auth import AuthService
 from src.app.services.tenant_service import TenantService
 from src.app.services.supabase_service import SupabaseService
+from src.app.api.models import TenantResponse
 
 logger = logging.getLogger(__name__)
 
@@ -80,73 +81,7 @@ class TenantUpdate(BaseModel):
     sikka_office_id: str | None = None
 
 
-class TenantUserResponse(BaseModel):
-    """User details in tenant response."""
-    id: str
-    email: str
-    role: str
-    is_active: bool
 
-
-class TenantResponse(BaseModel):
-    """Response model for tenant (no secrets)."""
-    id: str
-    name: str
-    slug: str
-    is_active: bool
-    
-    # Non-secret config
-    nexhealth_subdomain: str | None
-    nexhealth_location_id: str | None
-    ghl_location_id: str | None
-    ghl_custom_fields: dict[str, Any] | None
-    retell_agent_id: str | None
-    sikka_office_id: str | None
-    
-    # Credential presence indicators
-    has_nexhealth_key: bool
-    has_ghl_key: bool
-    has_retell_secret: bool
-    has_sikka_credentials: bool
-    
-    # Optional: Created user
-    user: TenantUserResponse | None = None
-    
-    class Config:
-        from_attributes = True
-
-
-def tenant_to_response(tenant, user=None) -> TenantResponse:
-    """Convert Tenant model to response (no secrets exposed)."""
-    user_resp = None
-    if user:
-        user_resp = TenantUserResponse(
-            id=user.id,
-            email=user.email,
-            role=user.role,
-            is_active=user.is_active
-        )
-
-    return TenantResponse(
-        id=tenant.id,
-        name=tenant.name,
-        slug=tenant.slug,
-        is_active=tenant.is_active,
-        nexhealth_subdomain=tenant.nexhealth_subdomain,
-        nexhealth_location_id=tenant.nexhealth_location_id,
-        ghl_location_id=tenant.ghl_location_id,
-        ghl_custom_fields=tenant.ghl_custom_fields,
-        retell_agent_id=tenant.retell_agent_id,
-        sikka_office_id=tenant.sikka_office_id,
-        has_nexhealth_key=tenant.nexhealth_api_key_encrypted is not None,
-        has_ghl_key=tenant.ghl_api_key_encrypted is not None,
-        has_retell_secret=tenant.retell_api_secret_encrypted is not None,
-        has_sikka_credentials=(
-            tenant.sikka_app_id_encrypted is not None and 
-            tenant.sikka_app_secret_encrypted is not None
-        ),
-        user=user_resp
-    )
 
 
 # =============================================================================
@@ -162,7 +97,7 @@ async def list_tenants(
     async with get_db_session() as session:
         service = TenantService(session)
         tenants = await service.list_all(include_inactive=include_inactive)
-        return [tenant_to_response(t) for t in tenants]
+        return [TenantResponse.from_tenant(t) for t in tenants]
 
 
 @router.post("", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
@@ -268,7 +203,7 @@ async def create_tenant(
                 detail="Failed to create tenant locally. External invite rolled back."
             )
 
-        return tenant_to_response(tenant, user)
+        return TenantResponse.from_tenant(tenant, user)
 
 
 @router.get("/{slug}", response_model=TenantResponse)
@@ -287,7 +222,7 @@ async def get_tenant(
                 detail=f"Tenant '{slug}' not found"
             )
         
-        return tenant_to_response(tenant)
+        return TenantResponse.from_tenant(tenant)
 
 
 @router.patch("/{slug}", response_model=TenantResponse)
@@ -316,7 +251,7 @@ async def update_tenant(
         # Only update non-None fields
         updates = {k: v for k, v in data.model_dump().items() if v is not None}
         tenant = await service.update(tenant, **updates)
-        return tenant_to_response(tenant)
+        return TenantResponse.from_tenant(tenant)
 
 
 @router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)

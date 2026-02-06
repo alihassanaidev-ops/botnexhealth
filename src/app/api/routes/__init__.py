@@ -23,6 +23,7 @@ from src.app.api.routes.appointment_types import router as appointment_types_rou
 # ============================================================================
 from src.app.api.routes.sikka import router as sikka_router
 from src.app.api.routes.sikka import public_router as sikka_public_router
+from src.app.api.routes.tenant_portal import router as tenant_portal_router
 
 # Main router that combines all sub-routers
 router = APIRouter()
@@ -47,3 +48,5 @@ router.include_router(appointment_types_router, prefix="/nexhealth", tags=["NexH
 # ============================================================================
 router.include_router(sikka_router, prefix="/sikka", tags=["Sikka"])
 router.include_router(sikka_public_router, prefix="/sikka", tags=["Sikka - OAuth"])
+
+router.include_router(tenant_portal_router)

@@ -576,3 +576,72 @@ class EmrApptDescriptorListResponse(NexHealthResponse):
     """Response model for listing EMR appointment descriptors."""
 
     data: list[EmrApptDescriptor]
+
+
+class TenantUserResponse(BaseModel):
+    """User details in tenant response."""
+    id: str
+    email: str
+    role: str
+    is_active: bool
+
+
+class TenantResponse(BaseModel):
+    """Response model for tenant (no secrets)."""
+    id: str
+    name: str
+    slug: str
+    is_active: bool
+    
+    # Non-secret config
+    nexhealth_subdomain: str | None
+    nexhealth_location_id: str | None
+    ghl_location_id: str | None
+    ghl_custom_fields: dict[str, Any] | None
+    retell_agent_id: str | None
+    sikka_office_id: str | None
+    
+    # Credential presence indicators
+    has_nexhealth_key: bool
+    has_ghl_key: bool
+    has_retell_secret: bool
+    has_sikka_credentials: bool
+    
+    # Optional: Created user
+    user: TenantUserResponse | None = None
+    
+    class Config:
+        from_attributes = True
+
+    @classmethod
+    def from_tenant(cls, tenant: Any, user: Any = None) -> "TenantResponse":
+        """Convert Tenant model to response (no secrets exposed)."""
+        user_resp = None
+        if user:
+            user_resp = TenantUserResponse(
+                id=str(user.id),
+                email=user.email,
+                role=user.role,
+                is_active=user.is_active
+            )
+
+        return cls(
+            id=str(tenant.id),
+            name=tenant.name,
+            slug=tenant.slug,
+            is_active=tenant.is_active,
+            nexhealth_subdomain=tenant.nexhealth_subdomain,
+            nexhealth_location_id=tenant.nexhealth_location_id,
+            ghl_location_id=tenant.ghl_location_id,
+            ghl_custom_fields=tenant.ghl_custom_fields,
+            retell_agent_id=tenant.retell_agent_id,
+            sikka_office_id=tenant.sikka_office_id,
+            has_nexhealth_key=tenant.nexhealth_api_key_encrypted is not None,
+            has_ghl_key=tenant.ghl_api_key_encrypted is not None,
+            has_retell_secret=tenant.retell_api_secret_encrypted is not None,
+            has_sikka_credentials=(
+                tenant.sikka_app_id_encrypted is not None and 
+                tenant.sikka_app_secret_encrypted is not None
+            ),
+            user=user_resp
+        )
