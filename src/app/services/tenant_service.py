@@ -128,13 +128,19 @@ class TenantService:
         logger.info(f"Updated tenant: {tenant.slug}")
         return tenant
     
-    async def delete(self, tenant: Tenant, hard_delete: bool = False) -> None:
+    async def delete(
+        self, 
+        tenant: Tenant, 
+        hard_delete: bool = False,
+        supabase_service: Any = None
+    ) -> None:
         """
         Delete a tenant.
         
         Args:
             tenant: Tenant to delete
             hard_delete: If True, permanently delete. If False, soft delete (set is_active=False).
+            supabase_service: Optional SupabaseService instance for cleaning up Supabase auth users.
         """
         if hard_delete:
             # Delete associated users first to avoid foreign key constraint violation
@@ -145,6 +151,15 @@ class TenantService:
             users = result.scalars().all()
             
             for user in users:
+                # Delete from Supabase auth if service is provided and user has supabase_id
+                if supabase_service and user.supabase_id:
+                    try:
+                        supabase_service.delete_user(user.supabase_id)
+                        logger.info(f"Deleted Supabase auth user {user.supabase_id} for {user.email}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete Supabase user {user.supabase_id}: {e}")
+                        # Continue with local deletion even if Supabase fails
+                
                 await self.session.delete(user)
                 logger.info(f"Deleted user {user.email} associated with tenant {tenant.slug}")
             

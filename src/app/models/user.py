@@ -70,6 +70,13 @@ class User(Base):
         index=True
     )
     
+    supabase_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+        comment="Supabase Auth user ID for cleanup on deletion"
+    )
+    
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,

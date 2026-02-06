@@ -248,6 +248,7 @@ async def create_tenant(
             hashed_password=None, # Password set via Supabase
             role=UserRole.TENANT.value,
             tenant_id=tenant.id,
+            supabase_id=supabase_user_id,  # Store for cleanup on deletion
             is_active=True
         )
         session.add(user)
@@ -347,4 +348,10 @@ async def delete_tenant(
                 detail=f"Tenant '{slug}' not found"
             )
         
-        await service.delete(tenant, hard_delete=hard)
+        # Initialize SupabaseService for cleaning up Supabase auth users
+        supabase_service = None
+        if hard:
+            from src.app.services.supabase_service import SupabaseService
+            supabase_service = SupabaseService()
+        
+        await service.delete(tenant, hard_delete=hard, supabase_service=supabase_service)
