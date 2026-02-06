@@ -145,10 +145,13 @@ class TenantService:
             users = result.scalars().all()
             
             for user in users:
-                self.session.delete(user)  # Note: delete() is synchronous, not async
+                await self.session.delete(user)
                 logger.info(f"Deleted user {user.email} associated with tenant {tenant.slug}")
             
-            self.session.delete(tenant)  # Note: delete() is synchronous, not async
+            # Flush to ensure user deletes are committed before tenant delete
+            await self.session.flush()
+            
+            await self.session.delete(tenant)
             logger.info(f"Hard deleted tenant: {tenant.slug}")
         else:
             tenant.is_active = False
