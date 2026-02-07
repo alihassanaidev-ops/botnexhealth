@@ -94,10 +94,10 @@ class TenantUpdate(BaseModel):
 
 @router.get("", response_model=list[TenantResponse])
 async def list_tenants(
-    include_inactive: bool = False,
+    include_inactive: bool = True,
     _: User = Depends(get_current_admin),
 ):
-    """List all tenants."""
+    """List all tenants. Admins see soft-deleted (is_active=false) tenants by default."""
     async with get_db_session() as session:
         service = TenantService(session)
         tenants = await service.list_all(include_inactive=include_inactive)
@@ -202,11 +202,11 @@ async def get_tenant(
     slug: str,
     _: User = Depends(get_current_admin),
 ):
-    """Get tenant by slug."""
+    """Get tenant by slug (includes soft-deleted for admin visibility)."""
     async with get_db_session() as session:
         service = TenantService(session)
-        tenant = await service.get_by_slug(slug)
-        
+        tenant = await service.get_by_slug(slug, include_inactive=True)
+
         if not tenant:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -268,14 +268,14 @@ async def delete_tenant(
     """
     async with get_db_session() as session:
         service = TenantService(session)
-        tenant = await service.get_by_slug(slug)
-        
+        tenant = await service.get_by_slug(slug, include_inactive=True)
+
         if not tenant:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Tenant '{slug}' not found"
             )
-        
+
         # Initialize SupabaseService for cleaning up Supabase auth users
         supabase_service = None
         if hard:
