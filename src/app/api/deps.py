@@ -20,6 +20,10 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> User:
     """
     Validate JWT token and return current user.
+    
+    Supports both:
+    1. Local JWTs (sub=email)
+    2. Supabase JWTs (sub=uuid, email=email)
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -28,20 +32,41 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> Use
     )
 
     try:
+        # Supabase tokens are HS256 by default. Ensure algorithm matches config.
+        # If using Supabase directly, settings.jwt_secret MUST be the Supabase JWT secret.
         payload = jwt.decode(
             token,
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm]
         )
-        email: str | None = payload.get("sub")
-        if email is None:
+        
+        # 'sub' is the unique identifier. 
+        # In Supabase/GoTrue, it's the UUID. 
+        # In our legacy local implementation, it might have been email.
+        token_sub: str | None = payload.get("sub")
+        token_email: str | None = payload.get("email")
+        
+        if token_sub is None:
             raise credentials_exception
+            
     except JWTError:
         raise credentials_exception
 
     async with get_db_session() as session:
-        result = await session.execute(select(User).where(User.email == email))
+        # Strategy 1: Try finding by supabase_id (Standard Supabase Token)
+        # This is the most reliable for Supabase auth
+        stmt = select(User).where(User.supabase_id == token_sub)
+        result = await session.execute(stmt)
         user = result.scalar_one_or_none()
+
+        # Strategy 2: If not found, try finding by email (Legacy or Local Token)
+        # Check 'email' claim first (Supabase), then fallback to 'sub' if it looks like an email
+        if not user:
+            search_email = token_email if token_email else token_sub
+            if search_email and "@" in search_email:
+                stmt = select(User).where(User.email == search_email)
+                result = await session.execute(stmt)
+                user = result.scalar_one_or_none()
 
         if user is None:
             raise credentials_exception
