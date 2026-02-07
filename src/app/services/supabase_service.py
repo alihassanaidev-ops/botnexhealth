@@ -91,6 +91,30 @@ class SupabaseService:
             logger.error(f"Failed to invite user {email}: {e}")
             raise
 
+    def get_user_by_token(self, access_token: str) -> Any:
+        """
+        Verify a Supabase access token and return the user.
+
+        The frontend authenticates with Supabase (email+password) and gets
+        a Supabase access token. This method validates that token server-side
+        and returns the Supabase user object.
+
+        Args:
+            access_token: Supabase JWT access token from the frontend
+
+        Returns:
+            Supabase User object
+
+        Raises:
+            RuntimeError: If client is not initialized
+            Exception: If token is invalid or expired
+        """
+        if not self.client:
+            raise RuntimeError("Supabase client is not initialized.")
+
+        response = self.client.auth.get_user(jwt=access_token)
+        return response.user
+
     def delete_user(self, user_id: str) -> bool:
         """
         Delete a user via Supabase Admin API.

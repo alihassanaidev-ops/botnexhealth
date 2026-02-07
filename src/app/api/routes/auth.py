@@ -1,17 +1,27 @@
 """
 Authentication routes.
+
+Two login flows:
+1. POST /auth/token          — Admin login with local email+password (bcrypt)
+2. POST /auth/supabase/token — Tenant login via Supabase token exchange
 """
 
+import logging
 from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from src.app.api.deps import get_current_active_user
+from src.app.database import get_db_session
 from src.app.models.user import User
 from src.app.services.auth import AuthService
+from src.app.services.supabase_service import SupabaseService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -21,11 +31,16 @@ class Token(BaseModel):
     token_type: str
 
 
+class SupabaseTokenRequest(BaseModel):
+    access_token: str
+
+
 class UserRead(BaseModel):
     id: str
     email: str
     role: str
     is_active: bool
+    tenant_id: str | None = None
 
 
 @router.post("/token", response_model=Token)
@@ -33,7 +48,7 @@ async def login_for_access_token(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
 ) -> Token:
     """
-    OAuth2 compatible token login, get an access token for future requests.
+    OAuth2 compatible token login for users with local passwords (admins).
     """
     auth_service = AuthService()
     user = await auth_service.authenticate_user(form_data.username, form_data.password)
@@ -53,6 +68,68 @@ async def login_for_access_token(
             "tenant_id": user.tenant_id,
         },
         expires_delta=access_token_expires
+    )
+
+    return Token(access_token=access_token, token_type="bearer")
+
+
+@router.post("/supabase/token", response_model=Token)
+async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
+    """
+    Exchange a Supabase access token for a local JWT.
+
+    Flow:
+    1. Frontend authenticates with Supabase (email + password)
+    2. Frontend sends the Supabase access_token here
+    3. We verify it server-side via Supabase admin API
+    4. We look up the matching local user and issue our own JWT
+    """
+    supabase_service = SupabaseService()
+
+    # Verify the Supabase token and get the user
+    try:
+        supabase_user = supabase_service.get_user_by_token(data.access_token)
+    except Exception as e:
+        logger.warning(f"Supabase token verification failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired Supabase token",
+        )
+
+    if not supabase_user or not supabase_user.email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not resolve user from Supabase token",
+        )
+
+    # Find the matching local user
+    async with get_db_session() as session:
+        result = await session.execute(
+            select(User).where(User.email == supabase_user.email)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No local account found for this email",
+            )
+
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is inactive",
+            )
+
+    # Issue local JWT
+    auth_service = AuthService()
+    access_token = auth_service.create_access_token(
+        data={
+            "sub": user.email,
+            "role": user.role,
+            "tenant_id": user.tenant_id,
+        },
+        expires_delta=timedelta(minutes=30)
     )
 
     return Token(access_token=access_token, token_type="bearer")
