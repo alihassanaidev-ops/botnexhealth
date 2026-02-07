@@ -53,11 +53,6 @@ class User(Base):
         index=True
     )
     
-    hashed_password: Mapped[str | None] = mapped_column(
-        String(255),
-        nullable=True
-    )
-    
     role: Mapped[str] = mapped_column(
         String(50),
         default=UserRole.TENANT.value,
@@ -81,17 +76,6 @@ class User(Base):
         Boolean,
         default=True,
         nullable=False
-    )
-    
-    failed_login_attempts: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False
-    )
-    
-    last_login_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True
     )
     
     created_at: Mapped[datetime] = mapped_column(
