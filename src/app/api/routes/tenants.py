@@ -173,7 +173,6 @@ async def create_tenant(
 
         user = User(
             email=data.email,
-            hashed_password=None,
             role=UserRole.TENANT.value,
             tenant_id=tenant.id,
             supabase_id=supabase_user_id,
@@ -283,3 +282,73 @@ async def delete_tenant(
             supabase_service = SupabaseService()
         
         await service.delete(tenant, hard_delete=hard, supabase_service=supabase_service)
+
+
+class ResendInviteRequest(BaseModel):
+    email: str = Field(..., description="Email of the user to re-invite")
+
+
+@router.post("/{slug}/reinvite", status_code=status.HTTP_200_OK)
+async def reinvite_tenant_user(
+    slug: str,
+    data: ResendInviteRequest,
+    _: User = Depends(get_current_admin),
+):
+    """
+    Re-invite a tenant user via Supabase.
+
+    Deletes the old Supabase auth user (if any) and creates a fresh invite.
+    Use this when the original invite link expired or the Supabase user was
+    accidentally deleted.
+    """
+    async with get_db_session() as session:
+        service = TenantService(session)
+        tenant = await service.get_by_slug(slug, include_inactive=True)
+
+        if not tenant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Tenant '{slug}' not found"
+            )
+
+        # Find the local user
+        result = await session.execute(
+            select(User).where(User.email == data.email, User.tenant_id == tenant.id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User '{data.email}' not found for tenant '{slug}'"
+            )
+
+        supabase_service = SupabaseService()
+
+        # Delete old Supabase auth user if it exists
+        if user.supabase_id:
+            supabase_service.delete_user(user.supabase_id)
+            logger.info(f"Deleted old Supabase user {user.supabase_id} for re-invite")
+
+        # Send fresh invite
+        try:
+            response = supabase_service.invite_user(
+                email=data.email,
+                tenant_id=str(tenant.id),
+                role=user.role
+            )
+            # Update local user with new supabase_id
+            if hasattr(response, 'user') and hasattr(response.user, 'id'):
+                user.supabase_id = str(response.user.id)
+            elif isinstance(response, dict) and 'id' in response:
+                user.supabase_id = str(response['id'])
+
+            session.add(user)
+        except Exception as e:
+            logger.error(f"Re-invite failed for {data.email}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to re-invite user: {e}"
+            )
+
+    return {"message": f"Invite re-sent to {data.email}"}

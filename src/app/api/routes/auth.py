@@ -20,6 +20,8 @@ from src.app.database import get_db_session
 from src.app.models.user import User
 from src.app.services.auth import AuthService
 from src.app.services.supabase_service import SupabaseService
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.services.audit import log_audit_background
 
 logger = logging.getLogger(__name__)
 
@@ -43,54 +45,33 @@ class UserRead(BaseModel):
     tenant_id: str | None = None
 
 
-@router.post("/token", response_model=Token)
-async def login_for_access_token(
-    form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
-) -> Token:
-    """
-    OAuth2 compatible token login for users with local passwords (admins).
-    """
-    auth_service = AuthService()
-    user = await auth_service.authenticate_user(form_data.username, form_data.password)
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    access_token_expires = timedelta(minutes=30)
-    access_token = auth_service.create_access_token(
-        data={
-            "sub": user.email,
-            "role": user.role,
-            "tenant_id": user.tenant_id,
-        },
-        expires_delta=access_token_expires
-    )
-
-    return Token(access_token=access_token, token_type="bearer")
-
-
 @router.post("/supabase/token", response_model=Token)
 async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
     """
     Exchange a Supabase access token for a local JWT.
-
-    Flow:
-    1. Frontend authenticates with Supabase (email + password)
+    
+    Unified Login Flow (Admins & Tenants):
+    1. Frontend authenticates with Supabase (email + password / magic link)
     2. Frontend sends the Supabase access_token here
     3. We verify it server-side via Supabase admin API
-    4. We look up the matching local user and issue our own JWT
+    4. We look up the matching local user (ADMIN or TENANT) and issue our own JWT
     """
     supabase_service = SupabaseService()
+    
+    # Audit: Attempting login
+    # We don't have the user ID yet, so we log with a placeholder or just wait for success/failure
+    # Ideally, we log the result.
+    
+    audit_meta = {"action": "token_exchange"}
 
     # Verify the Supabase token and get the user
     try:
         supabase_user = supabase_service.get_user_by_token(data.access_token)
     except Exception as e:
         logger.warning(f"Supabase token verification failed: {e}")
+        # Audit failure would be hard here without an actor, but strictly we could log system events.
+        # For now, we rely on the Exception to be caught if we wrap this in a service, 
+        # but here we just return 401.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired Supabase token",
@@ -102,6 +83,8 @@ async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
             detail="Could not resolve user from Supabase token",
         )
 
+    audit_meta["email"] = supabase_user.email
+
     # Find the matching local user
     async with get_db_session() as session:
         result = await session.execute(
@@ -110,16 +93,46 @@ async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
         user = result.scalar_one_or_none()
 
         if not user:
+            # Audit: Failure - User not found locally
+            log_audit_background(
+                actor=AuditActor.API_CLIENT,
+                action=AuditAction.LOGIN,
+                target_resource="auth:login",
+                outcome=AuditOutcome.FAILURE_NOT_FOUND,
+                metadata=audit_meta
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="No local account found for this email",
             )
 
+        # Audit: Context with actual user ID
+        audit_meta["user_id"] = user.id
+        audit_meta["role"] = user.role
+        
+        target_resource = f"user:{user.id}"
+
         if not user.is_active:
+            log_audit_background(
+                actor=AuditActor.API_CLIENT,
+                action=AuditAction.LOGIN,
+                target_resource=target_resource,
+                outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
+                metadata={**audit_meta, "reason": "account_inactive"},
+                tenant_id=user.tenant_id
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account is inactive",
             )
+
+        # Update Supabase ID if it was missing (Link the accounts)
+        if not user.supabase_id:
+            user.supabase_id = supabase_user.id
+            session.add(user)
+            # Commit will happen in the context manager if we were using a service that handles it,
+            # but here we are in the route using get_db_session directly.
+            # get_db_session commits on exit if no exception.
 
     # Issue local JWT
     auth_service = AuthService()
@@ -128,8 +141,19 @@ async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
             "sub": user.email,
             "role": user.role,
             "tenant_id": user.tenant_id,
+            "supabase_uid": user.supabase_id # Useful for RLS context if we pass it down
         },
-        expires_delta=timedelta(minutes=30)
+        expires_delta=timedelta(minutes=60) # Increased to 60m for better UX
+    )
+
+    # Audit: Success
+    log_audit_background(
+        actor=user.role, # The user is now the actor
+        action=AuditAction.LOGIN,
+        target_resource=target_resource,
+        outcome=AuditOutcome.SUCCESS,
+        metadata=audit_meta,
+        tenant_id=user.tenant_id
     )
 
     return Token(access_token=access_token, token_type="bearer")
