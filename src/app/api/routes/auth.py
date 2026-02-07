@@ -37,20 +37,24 @@ async def login_for_access_token(
     """
     auth_service = AuthService()
     user = await auth_service.authenticate_user(form_data.username, form_data.password)
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     access_token_expires = timedelta(minutes=30)
     access_token = auth_service.create_access_token(
-        data={"sub": user.email, "role": user.role},
+        data={
+            "sub": user.email,
+            "role": user.role,
+            "tenant_id": user.tenant_id,
+        },
         expires_delta=access_token_expires
     )
-    
+
     return Token(access_token=access_token, token_type="bearer")
 
 

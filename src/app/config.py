@@ -61,13 +61,15 @@ class Settings(BaseSettings):
     supabase_service_role_key: str | None = None
     supabase_redirect_url: str | None = None
 
+    # CORS — comma-separated allowed origins; defaults to "*" for local dev only
+    cors_allowed_origins: str = "*"
+
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
     admin_api_key_file: str | None = None
     supabase_service_role_key_file: str | None = None
     ghl_api_key_file: str | None = None
-    sikka_app_id_file: str | None = None
     sikka_app_id_file: str | None = None
     sikka_app_secret_file: str | None = None
     

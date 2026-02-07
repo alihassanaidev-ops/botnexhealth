@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -13,7 +15,6 @@ from src.app.api.deps import get_current_admin
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.user import User, UserRole
 from src.app.services.audit_decorator import audit
-from src.app.services.auth import AuthService
 from src.app.services.tenant_service import TenantService
 from src.app.services.supabase_service import SupabaseService
 from src.app.api.models import TenantResponse
@@ -31,25 +32,24 @@ class TenantCreate(BaseModel):
     """Request body for creating a tenant."""
     name: str = Field(..., min_length=1, max_length=255)
     slug: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
-    
+
     # Initial Tenant User (Mandatory)
-    email: str = Field(..., description="Email for the initial tenant user (used as username)")
-    # password: str = Field(..., min_length=8, description="Password for the initial tenant user")  # REMOVED for Supabase Invite Flow
-    
+    email: str = Field(..., description="Email for the initial tenant user (Supabase invite)")
+
     # NexHealth
     nexhealth_api_key: str | None = None
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
-    
+
     # GoHighLevel
     ghl_api_key: str | None = None
     ghl_location_id: str | None = None
     ghl_custom_fields: dict[str, str] | None = None
-    
+
     # Retell
     retell_agent_id: str | None = None
     retell_api_secret: str | None = None
-    
+
     # Sikka
     sikka_app_id: str | None = None
     sikka_app_secret: str | None = None
@@ -57,24 +57,28 @@ class TenantCreate(BaseModel):
 
 
 class TenantUpdate(BaseModel):
-    """Request body for updating a tenant."""
+    """Request body for updating a tenant.
+
+    Uses exclude_unset so that omitted fields are ignored,
+    while explicitly sending null clears the value.
+    """
     name: str | None = None
     is_active: bool | None = None
-    
+
     # NexHealth
     nexhealth_api_key: str | None = None
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
-    
+
     # GoHighLevel
     ghl_api_key: str | None = None
     ghl_location_id: str | None = None
     ghl_custom_fields: dict[str, str] | None = None
-    
+
     # Retell
     retell_agent_id: str | None = None
     retell_api_secret: str | None = None
-    
+
     # Sikka
     sikka_app_id: str | None = None
     sikka_app_secret: str | None = None
@@ -102,102 +106,89 @@ async def list_tenants(
 
 @router.post("", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
 @audit(
-    AuditAction.TENANT_CREATE, 
+    AuditAction.TENANT_CREATE,
     resource=lambda request, data, _: f"slug:{data.slug}",
-    actor=AuditActor.ADMIN 
+    actor=AuditActor.ADMIN
 )
 async def create_tenant(
     request: Request,
     data: TenantCreate,
     _: User = Depends(get_current_admin),
 ):
-    """Create a new tenant, with an initial tenant user."""
+    """Create a new tenant with an initial tenant user via Supabase invite."""
     async with get_db_session() as session:
         service = TenantService(session)
-        # auth_service = AuthService()  # Not needed for password hashing anymore
         supabase_service = SupabaseService()
-        
-        # Check if slug already exists
-        existing = await service.get_by_slug(data.slug)
+
+        # --- Validate uniqueness BEFORE any mutations ---
+
+        existing = await service.get_by_slug(data.slug, include_inactive=True)
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Tenant with slug '{data.slug}' already exists"
             )
-        
-        # Prepare tenant data (exclude user fields)
-        # Prepare tenant data (exclude user fields)
-        tenant_data = data.model_dump(exclude={"email", "password", "nexhealth_api_key", "nexhealth_subdomain", "nexhealth_location_id", "ghl_api_key", "ghl_location_id", "ghl_custom_fields", "retell_agent_id", "retell_api_secret", "sikka_app_id", "sikka_app_secret", "sikka_office_id"}) # Exclude all optional fields explicitly or just user fields if create handles extras. 
-        # Actually original code excluded email and password. Since password is removed from model, we just convert.
-        # But wait, data.model_dump() will not have password if we removed it from model.
-        tenant_data = data.model_dump(exclude={"email"})
-        
-        # Create tenant
-        tenant = await service.create(**tenant_data)
-        
-        # Create initial user (Mandatory)
-        # Check if email is available (simple check, assume email unique globally for now)
-        # Ideally this should check User table but service methods might be limited
-        # We'll use direct session for this special case
-        from sqlalchemy import select
-        
+
         existing_user = await session.execute(
             select(User).where(User.email == data.email)
         )
         if existing_user.scalar_one_or_none():
-             raise HTTPException(
+            raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"User with email '{data.email}' already exists"
             )
 
+        # --- Create tenant (flush only, not committed yet) ---
 
-        # Invite User via Supabase
+        tenant_data = data.model_dump(exclude={"email"})
+        try:
+            tenant = await service.create(**tenant_data)
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Tenant with slug '{data.slug}' already exists (race condition)"
+            )
+
+        # --- Invite user via Supabase ---
+
         supabase_user_id = None
         try:
-             response = supabase_service.invite_user(
-                email=data.email, 
-                tenant_id=tenant.id, 
+            response = supabase_service.invite_user(
+                email=data.email,
+                tenant_id=str(tenant.id),
                 role=UserRole.TENANT.value
             )
-             # Extract user ID from response if possible
-             # Supabase response -> UserResponse(user=User(...))
-             if hasattr(response, 'user') and hasattr(response.user, 'id'):
-                 supabase_user_id = response.user.id
-             elif isinstance(response, dict) and 'id' in response: # Fallback for mock/dict
-                 supabase_user_id = response['id']
-                 
+            if hasattr(response, 'user') and hasattr(response.user, 'id'):
+                supabase_user_id = str(response.user.id)
+            elif isinstance(response, dict) and 'id' in response:
+                supabase_user_id = str(response['id'])
         except Exception as e:
-            # If supabase fails, we should probably rollback tenant creation?
-            # Or just proceed and let admin retry invite manually? 
-            # For now, we'll log it and proceed but maybe without a local user or with local user but no password set.
-            # Ideally we want atomic operation. Since Supabase is external, we can't fully transaction it.
-            # Best effort: If invite fails, we could raise error and rollback DB transaction.
-            logging.error(f"Supabase invite failed: {e}")
+            logger.error(f"Supabase invite failed for {data.email}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to send Supabase invite"
             )
 
+        # --- Create local user record ---
+
         user = User(
             email=data.email,
-            hashed_password=None, # Password set via Supabase
+            hashed_password=None,
             role=UserRole.TENANT.value,
             tenant_id=tenant.id,
-            supabase_id=supabase_user_id,  # Store for cleanup on deletion
+            supabase_id=supabase_user_id,
             is_active=True
         )
         session.add(user)
-        
+
         try:
-            await session.commit() # Commit both tenant and user
+            await session.commit()
         except Exception as e:
             logger.error(f"Failed to commit tenant creation to DB: {e}")
-            
-            # Compensating Transaction: Delete orphaned Supabase user
+            # Compensating transaction: clean up the orphaned Supabase user
             if supabase_user_id:
-                logger.warning(f"Initiating compensating transaction: Deleting Supabase user {supabase_user_id}")
+                logger.warning(f"Compensating: deleting Supabase user {supabase_user_id}")
                 supabase_service.delete_user(supabase_user_id)
-            
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create tenant locally. External invite rolled back."
@@ -248,8 +239,10 @@ async def update_tenant(
                 detail=f"Tenant '{slug}' not found"
             )
         
-        # Only update non-None fields
-        updates = {k: v for k, v in data.model_dump().items() if v is not None}
+        # Only update fields that were explicitly sent in the request.
+        # Using exclude_unset=True means omitted fields are ignored,
+        # but explicitly sending null will clear the value (e.g., remove an API key).
+        updates = data.model_dump(exclude_unset=True)
         tenant = await service.update(tenant, **updates)
         return TenantResponse.from_tenant(tenant)
 

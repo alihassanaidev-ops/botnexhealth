@@ -159,28 +159,44 @@ async def require_tenant(request: Request) -> "Tenant":
     return tenant
 
 
+# Cache of tenant-specific NexHealth clients keyed by tenant ID
+_tenant_nexhealth_clients: dict[str, NexHealthClient] = {}
+
+
 async def get_tenant_nexhealth_client(request: Request) -> NexHealthClient:
     """
     Get a NexHealth client configured for the current tenant.
-    
-    If no tenant is set or tenant has no API key, falls back to global client.
+
+    Clients are cached per tenant ID to avoid creating a new HTTP connection
+    pool on every request (which would leak connections).
+    Falls back to the global client if the tenant has no API key.
     """
     tenant = await get_current_tenant(request)
-    
-    # If tenant has its own NexHealth API key, create a tenant-specific client
+
     if tenant and tenant.nexhealth_api_key:
-        # Create a tenant-specific settings object
+        cached = _tenant_nexhealth_clients.get(tenant.id)
+        if cached is not None:
+            return cached
+
         tenant_settings = Settings(
             nexhealth_api_key=tenant.nexhealth_api_key,
             nexhealth_subdomain=tenant.nexhealth_subdomain or settings.nexhealth_subdomain,
             nexhealth_location_id=tenant.nexhealth_location_id or settings.nexhealth_location_id,
         )
-        # Create a new client for this tenant
         client = NexHealthClient(config=tenant_settings)
         await client.__aenter__()
-        # Note: In production, you'd want to cache these clients per tenant
-        # For now, we create a new one per request (stateless approach)
+        _tenant_nexhealth_clients[tenant.id] = client
         return client
-    
-    # Fall back to global client
+
     return await get_nexhealth_client_dependency()
+
+
+async def cleanup_tenant_nexhealth_clients() -> None:
+    """Cleanup all cached tenant NexHealth clients on shutdown."""
+    global _tenant_nexhealth_clients
+    for tid, client in _tenant_nexhealth_clients.items():
+        try:
+            await client.__aexit__(None, None, None)
+        except Exception:
+            pass
+    _tenant_nexhealth_clients.clear()

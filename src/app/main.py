@@ -31,8 +31,12 @@ async def lifespan(app: FastAPI):
         from src.app.database import init_database, create_tables
         logger.info("Initializing database connection...")
         init_database(settings.database_url)
-        await create_tables()
-        logger.info("Database initialized and tables created")
+        # Only auto-create tables in local/dev — production should use migrations
+        if settings.app_env in ("local", "dev", "test"):
+            await create_tables()
+            logger.info("Database initialized and dev tables created")
+        else:
+            logger.info("Database initialized (production — tables managed by migrations)")
     
     # Initialize API clients
     from src.app.dependencies import init_nexhealth_client, init_sikka_client
@@ -50,7 +54,12 @@ async def lifespan(app: FastAPI):
         await close_database()
     
     # Cleanup API clients
-    from src.app.dependencies import cleanup_nexhealth_client, cleanup_sikka_client
+    from src.app.dependencies import (
+        cleanup_nexhealth_client,
+        cleanup_sikka_client,
+        cleanup_tenant_nexhealth_clients,
+    )
+    await cleanup_tenant_nexhealth_clients()
     await cleanup_nexhealth_client()
     await cleanup_sikka_client()
 
@@ -71,9 +80,11 @@ def create_app() -> FastAPI:
 
     # Add CORS middleware (must be first)
     from fastapi.middleware.cors import CORSMiddleware
+
+    origins = [o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # TODO: Restrict to your frontend domain in production
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

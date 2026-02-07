@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import os
 import secrets
 from datetime import datetime
 from typing import Any
@@ -27,11 +26,18 @@ from src.app.database import Base
 # =============================================================================
 
 def _get_encryption_key() -> bytes:
-    """Get 32-byte AES-256 encryption key from environment."""
-    key_b64 = os.getenv("ENCRYPTION_KEY")
+    """Get 32-byte AES-256 encryption key from Settings.
+
+    Uses the Settings object (which reads from .env, env vars, and Docker secrets)
+    rather than os.getenv() directly. os.getenv() does NOT read .env files —
+    pydantic-settings does, but only into the Settings instance.
+    """
+    from src.app.config import get_settings
+
+    key_b64 = get_settings().encryption_key
     if not key_b64:
-        raise RuntimeError("ENCRYPTION_KEY not set in environment")
-    
+        raise RuntimeError("ENCRYPTION_KEY not set in environment or .env file")
+
     key = base64.urlsafe_b64decode(key_b64)
     if len(key) != 32:
         raise RuntimeError(

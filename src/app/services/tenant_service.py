@@ -26,11 +26,13 @@ class TenantService:
         )
         return result.scalar_one_or_none()
     
-    async def get_by_slug(self, slug: str) -> Tenant | None:
+    async def get_by_slug(self, slug: str, include_inactive: bool = False) -> Tenant | None:
         """Get tenant by slug."""
-        result = await self.session.execute(
-            select(Tenant).where(Tenant.slug == slug, Tenant.is_active == True)
-        )
+        query = select(Tenant).where(Tenant.slug == slug)
+        if not include_inactive:
+            query = query.where(Tenant.is_active == True)
+        
+        result = await self.session.execute(query)
         return result.scalar_one_or_none()
     
     async def get_by_retell_agent_id(self, agent_id: str) -> Tenant | None:
