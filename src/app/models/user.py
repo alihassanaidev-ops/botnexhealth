@@ -1,14 +1,16 @@
 """
 User model for authentication and role management.
+
+The User.id is the Supabase auth.users.id (UUID) — single source of truth.
+It is set explicitly during user creation, not auto-generated.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,58 +28,47 @@ class UserRole(str, Enum):
 class User(Base):
     """
     User model for authentication.
-    
+
     Fields:
-    - id: Unique identifier
+    - id: Supabase auth.users.id (UUID) — set explicitly, not auto-generated
     - email: User's email address (login credential)
-    - hashed_password: Bcrypt hashed password
     - role: User role (ADMIN, TENANT)
     - tenant_id: Tenant this user belongs to (nullable for ADMIN)
     - is_active: Whether the user can log in
-    - failed_login_attempts: For brute force protection
-    - last_login_at: Timestamp of last successful login
     """
-    
+
     __tablename__ = "users"
-    
+
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         primary_key=True,
-        default=lambda: str(uuid4())
     )
-    
+
     email: Mapped[str] = mapped_column(
         String(255),
         unique=True,
         nullable=False,
         index=True
     )
-    
+
     role: Mapped[str] = mapped_column(
         String(50),
         default=UserRole.TENANT.value,
         nullable=False
     )
-    
+
     tenant_id: Mapped[str | None] = mapped_column(
         ForeignKey("tenants.id"),
         nullable=True,
         index=True
     )
-    
-    supabase_id: Mapped[str | None] = mapped_column(
-        String(255),
-        nullable=True,
-        index=True,
-        comment="Supabase Auth user ID for cleanup on deletion"
-    )
-    
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
         nullable=False
     )
-    
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

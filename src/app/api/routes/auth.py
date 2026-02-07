@@ -85,10 +85,11 @@ async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
 
     audit_meta["email"] = supabase_user.email
 
-    # Find the matching local user
+    # Find the matching local user by Supabase UUID (user.id = auth.users.id)
+    supabase_uid = str(supabase_user.id)
     async with get_db_session() as session:
         result = await session.execute(
-            select(User).where(User.email == supabase_user.email)
+            select(User).where(User.id == supabase_uid)
         )
         user = result.scalar_one_or_none()
 
@@ -103,13 +104,13 @@ async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="No local account found for this email",
+                detail="No local account found for this Supabase user",
             )
 
         # Audit: Context with actual user ID
         audit_meta["user_id"] = user.id
         audit_meta["role"] = user.role
-        
+
         target_resource = f"user:{user.id}"
 
         if not user.is_active:
@@ -126,24 +127,15 @@ async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
                 detail="Account is inactive",
             )
 
-        # Update Supabase ID if it was missing (Link the accounts)
-        if not user.supabase_id:
-            user.supabase_id = supabase_user.id
-            session.add(user)
-            # Commit will happen in the context manager if we were using a service that handles it,
-            # but here we are in the route using get_db_session directly.
-            # get_db_session commits on exit if no exception.
-
-    # Issue local JWT
+    # Issue local JWT (sub = user UUID)
     auth_service = AuthService()
     access_token = auth_service.create_access_token(
         data={
-            "sub": user.email,
+            "sub": user.id,
             "role": user.role,
             "tenant_id": user.tenant_id,
-            "supabase_uid": user.supabase_id # Useful for RLS context if we pass it down
         },
-        expires_delta=timedelta(minutes=60) # Increased to 60m for better UX
+        expires_delta=timedelta(minutes=60)
     )
 
     # Audit: Success

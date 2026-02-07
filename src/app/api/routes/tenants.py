@@ -169,13 +169,19 @@ async def create_tenant(
                 detail="Failed to send Supabase invite"
             )
 
-        # --- Create local user record ---
+        if not supabase_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Supabase invite did not return a user ID"
+            )
+
+        # --- Create local user record (id = Supabase UUID) ---
 
         user = User(
+            id=supabase_user_id,
             email=data.email,
             role=UserRole.TENANT.value,
             tenant_id=tenant.id,
-            supabase_id=supabase_user_id,
             is_active=True
         )
         session.add(user)
@@ -325,10 +331,12 @@ async def reinvite_tenant_user(
 
         supabase_service = SupabaseService()
 
-        # Delete old Supabase auth user if it exists
-        if user.supabase_id:
-            supabase_service.delete_user(user.supabase_id)
-            logger.info(f"Deleted old Supabase user {user.supabase_id} for re-invite")
+        # Delete old Supabase auth user (user.id IS the Supabase UUID)
+        try:
+            supabase_service.delete_user(user.id)
+            logger.info(f"Deleted old Supabase user {user.id} for re-invite")
+        except Exception as e:
+            logger.warning(f"Could not delete old Supabase user {user.id}: {e}")
 
         # Send fresh invite
         try:
@@ -337,13 +345,30 @@ async def reinvite_tenant_user(
                 tenant_id=str(tenant.id),
                 role=user.role
             )
-            # Update local user with new supabase_id
+            new_supabase_id = None
             if hasattr(response, 'user') and hasattr(response.user, 'id'):
-                user.supabase_id = str(response.user.id)
+                new_supabase_id = str(response.user.id)
             elif isinstance(response, dict) and 'id' in response:
-                user.supabase_id = str(response['id'])
+                new_supabase_id = str(response['id'])
 
-            session.add(user)
+            if not new_supabase_id:
+                raise ValueError("Supabase invite did not return a user ID")
+
+            # PK changed — delete old row, create new one with new Supabase UUID
+            old_role = user.role
+            old_tenant_id = user.tenant_id
+            old_is_active = user.is_active
+            await session.delete(user)
+            await session.flush()
+
+            new_user = User(
+                id=new_supabase_id,
+                email=data.email,
+                role=old_role,
+                tenant_id=old_tenant_id,
+                is_active=old_is_active,
+            )
+            session.add(new_user)
         except Exception as e:
             logger.error(f"Re-invite failed for {data.email}: {e}")
             raise HTTPException(

@@ -153,13 +153,13 @@ class TenantService:
             users = result.scalars().all()
             
             for user in users:
-                # Delete from Supabase auth if service is provided and user has supabase_id
-                if supabase_service and user.supabase_id:
+                # Delete from Supabase auth (user.id IS the Supabase UUID)
+                if supabase_service:
                     try:
-                        supabase_service.delete_user(user.supabase_id)
-                        logger.info(f"Deleted Supabase auth user {user.supabase_id} for {user.email}")
+                        supabase_service.delete_user(user.id)
+                        logger.info(f"Deleted Supabase auth user {user.id} for {user.email}")
                     except Exception as e:
-                        logger.warning(f"Failed to delete Supabase user {user.supabase_id}: {e}")
+                        logger.warning(f"Failed to delete Supabase user {user.id}: {e}")
                         # Continue with local deletion even if Supabase fails
                 
                 await self.session.delete(user)
