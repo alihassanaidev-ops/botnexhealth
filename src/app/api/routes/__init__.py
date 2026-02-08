@@ -25,6 +25,11 @@ from src.app.api.routes.sikka import router as sikka_router
 from src.app.api.routes.sikka import public_router as sikka_public_router
 from src.app.api.routes.tenant_portal import router as tenant_portal_router
 
+# ============================================================================
+# Universal PMS Routes (adapter-based, PMS-agnostic)
+# ============================================================================
+from src.app.api.routes.universal import universal_router
+
 # Main router that combines all sub-routers
 router = APIRouter()
 
@@ -50,3 +55,8 @@ router.include_router(sikka_router, prefix="/sikka", tags=["Sikka"])
 router.include_router(sikka_public_router, prefix="/sikka", tags=["Sikka - OAuth"])
 
 router.include_router(tenant_portal_router)
+
+# ============================================================================
+# Universal PMS Routes
+# ============================================================================
+router.include_router(universal_router)

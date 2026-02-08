@@ -1,517 +1,522 @@
+"""Tests for refactored Retell handlers (PMS adapter pattern)."""
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
+
+from src.app.pms.models import (
+    BookingResult,
+    UniversalAppointmentType,
+    UniversalLocation,
+    UniversalOperatory,
+    UniversalPatient,
+    UniversalProvider,
+    UniversalSlot,
+)
 from src.app.retell import handlers
 
-@pytest.fixture
-def mock_client():
-    return AsyncMock()
 
-@pytest.fixture
-def mock_settings():
-    settings = MagicMock()
-    settings.nexhealth_subdomain = "test-subdomain"
-    settings.nexhealth_location_id = 123
-    return settings
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-# Helper to setup async route mocks
-def setup_async_mock(mock_obj, method_name, return_value=None, side_effect=None):
-    async_mock = AsyncMock()
-    if return_value is not None:
-        async_mock.return_value = return_value
-    if side_effect is not None:
-        async_mock.side_effect = side_effect
-    setattr(mock_obj, method_name, async_mock)
+def _mock_adapter() -> AsyncMock:
+    """Return a mock PMSAdapter with all async methods."""
+    adapter = AsyncMock()
+    adapter.source = "test"
+    return adapter
+
+
+def _patient(**overrides) -> UniversalPatient:
+    defaults = {
+        "id": "t-1",
+        "source": "test",
+        "first_name": "John",
+        "last_name": "Doe",
+        "email": "john@example.com",
+        "phone": "555-5555",
+        "date_of_birth": "1990-01-01",
+        "extra": {},
+    }
+    defaults.update(overrides)
+    return UniversalPatient(**defaults)
+
+
+# All tests patch _get_adapter and log_audit_background
+_ADAPTER_PATCH = "src.app.retell.handlers._get_adapter"
+_AUDIT_PATCH = "src.app.services.audit_decorator.log_audit_background"
+
+
+# ---------------------------------------------------------------------------
+# Sanity – old helpers removed
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_resolve_subdomain_removed():
-    # Verify the helper is actually gone or not used (this is just a sanity check if we had left it)
     assert not hasattr(handlers, "_resolve_subdomain")
+    assert not hasattr(handlers, "_get_nexhealth_client")
+
+
+# ---------------------------------------------------------------------------
+# lookup_patient
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_lookup_patient_missing_args():
-    args = {}
-    result = await handlers.lookup_patient(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_lookup_patient_missing_args(mock_get_adapter, mock_audit):
+    mock_get_adapter.return_value = _mock_adapter()
+    result = await handlers.lookup_patient({})
     assert "Please provide at least one search criterion" in result["message"]
 
-@pytest.mark.asyncio
-async def test_lookup_patient_missing_location_subdomain():
-    args = {"name": "Test"}
-    result = await handlers.lookup_patient(args)
-    assert "I need to know which practice location and subdomain" in result["message"]
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.patient_routes")
-async def test_lookup_patient_success(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    
-    # Mock response model (dict)
-    setup_async_mock(mock_routes, "list_patients", return_value={
-        "data": {
-            "patients": [
-                {
-                    "id": 1,
-                    "first_name": "John",
-                    "last_name": "Doe",
-                    "email": "john@example.com",
-                    "phone_number": "555-5555",
-                    "bio": {"date_of_birth": "1990-01-01"}
-                }
-            ]
-        }
-    })
-    
-    args = {
-        "name": "John",
-        "subdomain": "test",
-        "location_id": 123
-    }
-    result = await handlers.lookup_patient(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_lookup_patient_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.search_patients.return_value = [_patient()]
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.lookup_patient({"name": "John"})
     assert result["count"] == 1
     assert result["patients"][0]["first_name"] == "John"
-    
+
+
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.patient_routes")
-async def test_lookup_patient_none_found(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_routes, "list_patients", return_value={"data": {"patients": []}})
-    
-    args = {
-        "name": "John",
-        "subdomain": "test",
-        "location_id": 123
-    }
-    result = await handlers.lookup_patient(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_lookup_patient_none_found(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.search_patients.return_value = []
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.lookup_patient({"name": "John"})
     assert "No patients found" in result["message"]
 
+
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.patient_routes")
-async def test_lookup_patient_error(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_routes, "list_patients", side_effect=Exception("API Error"))
-    
-    args = {
-        "name": "John",
-        "subdomain": "test",
-        "location_id": 123
-    }
-    result = await handlers.lookup_patient(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_lookup_patient_adapter_error(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.search_patients.side_effect = Exception("API Error")
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.lookup_patient({"name": "John"})
     assert "trouble accessing the patient records" in result["message"]
 
-# --- Create Patient ---
+
 @pytest.mark.asyncio
-async def test_create_patient_missing_fields():
-    args = {"first_name": "John"}
-    result = await handlers.create_patient(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_lookup_patient_no_tenant(mock_get_adapter, mock_audit):
+    mock_get_adapter.side_effect = ValueError("No tenant resolved")
+    result = await handlers.lookup_patient({"name": "John"})
+    assert "No tenant resolved" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# create_patient
+# ---------------------------------------------------------------------------
+
+_CREATE_ARGS = {
+    "first_name": "New",
+    "last_name": "Patient",
+    "email": "new@example.com",
+    "phone_number": "555-0000",
+    "date_of_birth": "2000-01-01",
+    "provider_id": "456",
+}
+
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+async def test_create_patient_missing_fields(mock_audit):
+    result = await handlers.create_patient({"first_name": "John"})
     assert "is required" in result["error"]
 
-@pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.patient_routes")
-async def test_create_patient_success(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    
-    setup_async_mock(mock_routes, "create_patient", return_value={
-        "code": True, # Simulate success behavior from handle_nexhealth_request if strictly dict
-        # Actually our route returns dict from handle_nexhealth_request.
-        # handlers.py checks if response.get("code") is False.
-        "data": {
-            "user": {
-                "id": 99,
-                "first_name": "New"
-            }
-        }
-    })
 
-    args = {
-        "first_name": "New",
-        "last_name": "Patient",
-        "email": "new@example.com",
-        "phone_number": "555-0000",
-        "date_of_birth": "2000-01-01",
-        "location_id": 123,
-        "subdomain": "test",
-        "provider_id": 456
-    }
-    result = await handlers.create_patient(args)
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_create_patient_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.create_patient.return_value = {"success": True, "patient_id": 99}
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.create_patient(_CREATE_ARGS)
     assert result["success"] is True
     assert result["patient_id"] == 99
 
-@pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.patient_routes")
-async def test_create_patient_failure_response(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_routes, "create_patient", return_value={"code": False, "error": "Bad Request"})
-    
-    args = {
-        "first_name": "New", "last_name": "P", "email": "e", "phone_number": "p", 
-        "date_of_birth": "d", "location_id": 1, "subdomain": "s", "provider_id": 1
-    }
-    result = await handlers.create_patient(args)
-    assert result["success"] is False
-    assert result["error"] == "Bad Request"
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.patient_routes")
-async def test_create_patient_exception(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_routes, "create_patient", side_effect=Exception("Boom"))
-    
-    args = {
-        "first_name": "New", "last_name": "P", "email": "e", "phone_number": "p", 
-        "date_of_birth": "d", "location_id": 1, "subdomain": "s", "provider_id": 1
-    }
-    result = await handlers.create_patient(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_create_patient_exception(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.create_patient.side_effect = Exception("Boom")
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.create_patient(_CREATE_ARGS)
     assert result["success"] is False
     assert "Boom" in result["error"]
 
-# --- Find Slots ---
-@pytest.mark.asyncio
-async def test_find_slots_missing_args():
-    args = {}
-    result = await handlers.find_appointment_slots(args)
-    assert "are required" in result["error"]
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.provider_routes")
-@patch("src.app.retell.handlers.slot_routes")
-async def test_find_slots_success_auto_providers(mock_slot_routes, mock_prov_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    
-    # Mock provider auto-fetch (uses client.get directly in handlers.py)
-    mock_client.get.return_value = {
-        "data": [{"id": 10}, {"id": 11}]
-    }
-    
-    # Mock slots
-    setup_async_mock(mock_slot_routes, "list_appointment_slots", return_value={
-        "data": [{"time": "2023-01-01T10:00:00"}]
-    })
-    
-    args = {
-        "start_date": "2023-01-01",
-        "location_id": 123,
-        "subdomain": "test",
-        # No provider_id, triggers auto-fetch
-    }
-    result = await handlers.find_appointment_slots(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_create_patient_no_tenant(mock_get_adapter, mock_audit):
+    mock_get_adapter.side_effect = ValueError("No tenant")
+    result = await handlers.create_patient(_CREATE_ARGS)
+    assert result["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# find_appointment_slots
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+async def test_find_slots_missing_start_date(mock_audit):
+    result = await handlers.find_appointment_slots({})
+    assert "start_date is required" in result["error"]
+
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_find_slots_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.get_available_slots.return_value = [
+        UniversalSlot(start="2023-01-01T10:00:00", end="2023-01-01T10:30:00", provider_id="p1")
+    ]
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.find_appointment_slots({"start_date": "2023-01-01"})
     assert result["slots_count"] == 1
     assert result["message"] == "Found 1 available slot(s)."
 
-@pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.provider_routes")
-@patch("src.app.retell.handlers.slot_routes")
-async def test_find_slots_with_provider(mock_slot_routes, mock_prov_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_slot_routes, "list_appointment_slots", return_value={"data": []})
-    
-    args = {
-        "start_date": "2023-01-01",
-        "location_id": 123,
-        "subdomain": "test",
-        "provider_id": 999
-    }
-    result = await handlers.find_appointment_slots(args)
-    # mock_client.get shouldn't be called for providers
-    mock_slot_routes.list_appointment_slots.assert_called()
-    assert result["slots_count"] == 0
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.provider_routes")
-@patch("src.app.retell.handlers.slot_routes")
-async def test_find_slots_exception(mock_slot_routes, mock_prov_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_slot_routes, "list_appointment_slots", side_effect=Exception("Fail"))
-    
-    args = {"start_date": "d", "location_id": 1, "subdomain": "s", "provider_id": 1}
-    result = await handlers.find_appointment_slots(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_find_slots_exception(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.get_available_slots.side_effect = Exception("Fail")
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.find_appointment_slots({"start_date": "2023-01-01"})
     assert "Failed to find slots" in result["error"]
 
-@pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.provider_routes")
-@patch("src.app.retell.handlers.slot_routes")
-async def test_find_slots_auto_provider_fail(mock_slot_routes, mock_prov_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    
-    # Mock fetch fail
-    mock_client.get.side_effect = Exception("Prov Fail")
-    
-    setup_async_mock(mock_slot_routes, "list_appointment_slots", return_value={"data": []})
-    
-    args = {"start_date": "d", "location_id": 1, "subdomain": "s"}
-    # Should catch logger warning and proceed with empty list
-    await handlers.find_appointment_slots(args)
-    mock_slot_routes.list_appointment_slots.assert_called()
 
-# --- Book Appointment ---
+# ---------------------------------------------------------------------------
+# book_appointment
+# ---------------------------------------------------------------------------
+
+_BOOK_ARGS = {
+    "patient_id": "1",
+    "provider_id": "1",
+    "start_time": "2023-01-01T10:00:00",
+}
+
+
 @pytest.mark.asyncio
-async def test_book_missing_args():
-    args = {"subdomain": "s"}
-    result = await handlers.book_appointment(args)
+@patch(_AUDIT_PATCH)
+async def test_book_missing_args(mock_audit):
+    result = await handlers.book_appointment({})
     assert "is required" in result["error"]
 
+
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.appt_routes")
-async def test_book_success(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    
-    setup_async_mock(mock_routes, "book_appointment", return_value={
-        "data": {
-            "appt": {
-                "id": 100,
-                "start_time": "2023-01-01"
-            }
-        }
-    })
-    
-    args = {
-        "subdomain": "s", "location_id": 1, "patient_id": 1, "provider_id": 1, "start_time": "t"
-    }
-    result = await handlers.book_appointment(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_book_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.book_appointment.return_value = BookingResult(
+        success=True, id="100", source="test", status="confirmed",
+        start="2023-01-01T10:00:00",
+    )
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.book_appointment(_BOOK_ARGS)
     assert result["success"] is True
-    assert result["appointment_id"] == 100
+    assert result["id"] == "100"
+
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.appt_routes")
-async def test_book_fail_response(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_routes, "book_appointment", return_value={"code": False, "error": "Book Error"})
-    
-    args = {"subdomain": "s", "location_id": 1, "patient_id": 1, "provider_id": 1, "start_time": "t"}
-    result = await handlers.book_appointment(args)
-    assert result["success"] is False
-    assert result["error"] == "Book Error"
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_book_exception(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.book_appointment.side_effect = Exception("Book Exception")
+    mock_get_adapter.return_value = adapter
 
-@pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.appt_routes")
-async def test_book_exception(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_routes, "book_appointment", side_effect=Exception("Book Exception"))
-    
-    args = {"subdomain": "s", "location_id": 1, "patient_id": 1, "provider_id": 1, "start_time": "t"}
-    result = await handlers.book_appointment(args)
+    result = await handlers.book_appointment(_BOOK_ARGS)
     assert result["success"] is False
     assert "Book Exception" in result["error"]
 
-# --- Cancel Appointment ---
-@pytest.mark.asyncio
-async def test_cancel_missing_args():
-    args = {}
-    result = await handlers.cancel_appointment(args)
-    assert "are required" in result["error"]
+
+# ---------------------------------------------------------------------------
+# cancel_appointment
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.appt_routes")
-async def test_cancel_success(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_routes, "cancel_appointment", return_value={"code": True})
-    
-    args = {"appointment_id": 1, "subdomain": "s"}
-    result = await handlers.cancel_appointment(args)
+@patch(_AUDIT_PATCH)
+async def test_cancel_missing_id(mock_audit):
+    result = await handlers.cancel_appointment({})
+    assert "appointment_id is required" in result["error"]
+
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_cancel_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.cancel_appointment.return_value = BookingResult(success=True, status="cancelled")
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.cancel_appointment({"appointment_id": "1"})
     assert result["success"] is True
 
-@pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.appt_routes")
-async def test_cancel_fail(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_routes, "cancel_appointment", return_value={"code": False})
-    
-    args = {"appointment_id": 1, "subdomain": "s"}
-    result = await handlers.cancel_appointment(args)
-    assert result["success"] is False
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.appt_routes")
-async def test_cancel_exception(mock_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    setup_async_mock(mock_routes, "cancel_appointment", side_effect=Exception("X"))
-    
-    args = {"appointment_id": 1, "subdomain": "s"}
-    result = await handlers.cancel_appointment(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_cancel_exception(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.cancel_appointment.side_effect = Exception("X")
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.cancel_appointment({"appointment_id": "1"})
     assert result["success"] is False
 
-# --- Reschedule ---
+
+# ---------------------------------------------------------------------------
+# reschedule_appointment
+# ---------------------------------------------------------------------------
+
+_RESCHED_ARGS = {
+    "old_appointment_id": "1",
+    "patient_id": "1",
+    "provider_id": "1",
+    "start_time": "2023-01-02T10:00:00",
+}
+
+
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers.cancel_appointment")
-@patch("src.app.retell.handlers.book_appointment")
-async def test_reschedule_success(mock_book, mock_cancel):
-    mock_cancel.return_value = {"success": True}
-    mock_book.return_value = {"success": True}
-    
-    args = {"old_appointment_id": 1, "subdomain": "s"}
-    result = await handlers.reschedule_appointment(args)
+@patch(_AUDIT_PATCH)
+async def test_reschedule_missing_old_id(mock_audit):
+    result = await handlers.reschedule_appointment({})
+    assert "old_appointment_id is required" in result["error"]
+
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+async def test_reschedule_missing_booking_fields(mock_audit):
+    result = await handlers.reschedule_appointment({"old_appointment_id": "1"})
+    assert "is required for the new booking" in result["error"]
+
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_reschedule_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.reschedule_appointment.return_value = BookingResult(
+        success=True, id="200", status="confirmed",
+    )
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.reschedule_appointment(_RESCHED_ARGS)
     assert result["success"] is True
-    assert "Rescheduled successfully" in result["message"]
+    assert result["id"] == "200"
+
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers.cancel_appointment")
-async def test_reschedule_cancel_fail(mock_cancel):
-    mock_cancel.return_value = {"success": False, "error": "Fail"}
-    args = {"old_appointment_id": 1, "subdomain": "s"}
-    result = await handlers.reschedule_appointment(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_reschedule_exception(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.reschedule_appointment.side_effect = Exception("Fail")
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.reschedule_appointment(_RESCHED_ARGS)
     assert result["success"] is False
-    assert "Failed to cancel" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# list_appointment_types
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers.cancel_appointment")
-@patch("src.app.retell.handlers.book_appointment")
-async def test_reschedule_book_fail(mock_book, mock_cancel):
-    mock_cancel.return_value = {"success": True}
-    mock_book.return_value = {"success": False, "error": "Book Fail"}
-    
-    args = {"old_appointment_id": 1, "subdomain": "s"}
-    result = await handlers.reschedule_appointment(args)
-    assert result["success"] is False
-    assert "failed to book" in result["error"]
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_list_appt_types_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.list_appointment_types.return_value = [
+        UniversalAppointmentType(
+            id="at-1", source="test", name="Cleaning",
+            duration_minutes=30, source_id="raw-1", source_metadata={"descriptor_ids": [1]},
+        )
+    ]
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.list_appointment_types({})
+    assert result["count"] == 1
+    assert result["appointment_types"][0]["name"] == "Cleaning"
+
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers.cancel_appointment")
-@patch("src.app.retell.handlers.book_appointment")
-async def test_reschedule_already_cancelled(mock_book, mock_cancel):
-    # If cancel fails because it's already cancelled, we should proceed
-    mock_cancel.return_value = {"success": False, "error": "Appointment already cancelled"}
-    mock_book.return_value = {"success": True}
-    
-    args = {"old_appointment_id": 1, "subdomain": "s"}
-    result = await handlers.reschedule_appointment(args)
-    assert result["success"] is True
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_list_appt_types_error(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.list_appointment_types.side_effect = Exception("Fail")
+    mock_get_adapter.return_value = adapter
 
-# --- Get Location Details ---
+    result = await handlers.list_appointment_types({})
+    assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# get_location_details
+# ---------------------------------------------------------------------------
+
 @pytest.mark.asyncio
-async def test_get_loc_missing_id():
+@patch(_AUDIT_PATCH)
+async def test_get_location_missing_id(mock_audit):
     result = await handlers.get_location_details({})
-    assert "is required" in result["error"]
+    assert "location_id is required" in result["error"]
+
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.location_routes")
-async def test_get_loc_success(mock_loc_routes, mock_get_client, mock_client):
-    mock_get_client.return_value = mock_client
-    setup_async_mock(mock_loc_routes, "get_location", return_value={
-        "data": {
-            "name": "Practice",
-            "hours": "9-5"
-        }
-    })
-    result = await handlers.get_location_details({"location_id": 1})
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_get_location_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.get_location.return_value = UniversalLocation(
+        id="loc-1", source="test", name="Practice",
+    )
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.get_location_details({"location_id": "loc-1"})
     assert result["practice_name"] == "Practice"
 
+
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.location_routes")
-async def test_get_loc_fail(mock_loc_routes, mock_get_client, mock_client):
-    mock_get_client.return_value = mock_client
-    setup_async_mock(mock_loc_routes, "get_location", side_effect=Exception("Loc Fail"))
-    result = await handlers.get_location_details({"location_id": 1})
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_get_location_not_found(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.get_location.return_value = None
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.get_location_details({"location_id": "loc-1"})
+    assert "Location not found" in result["error"]
+
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_get_location_exception(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.get_location.side_effect = Exception("Loc Fail")
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.get_location_details({"location_id": "loc-1"})
     assert "Failed to retrieve" in result["error"]
 
-# --- List Locations ---
+
+# ---------------------------------------------------------------------------
+# list_locations
+# ---------------------------------------------------------------------------
+
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.location_routes")
-async def test_list_locs_success(mock_loc_routes, mock_get_client, mock_client):
-    mock_get_client.return_value = mock_client
-    setup_async_mock(mock_loc_routes, "list_locations", return_value={
-        "data": [
-            {
-                "subdomain": "s1",
-                "locations": [{"id": 1, "name": "L1"}]
-            }
-        ]
-    })
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_list_locations_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.list_locations.return_value = [
+        UniversalLocation(id="loc-1", source="test", name="L1")
+    ]
+    mock_get_adapter.return_value = adapter
+
     result = await handlers.list_locations({})
     assert result["count"] == 1
     assert result["locations"][0]["name"] == "L1"
 
+
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.location_routes")
-async def test_list_locs_fail(mock_loc_routes, mock_get_client, mock_client):
-    mock_get_client.return_value = mock_client
-    setup_async_mock(mock_loc_routes, "list_locations", side_effect=Exception("Fail"))
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_list_locations_error(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.list_locations.side_effect = Exception("Fail")
+    mock_get_adapter.return_value = adapter
+
     result = await handlers.list_locations({})
     assert "Failed to list" in result["error"]
 
-# --- List Providers ---
-@pytest.mark.asyncio
-async def test_list_prov_missing_id():
-    result = await handlers.list_providers({})
-    assert "are required" in result["error"]
+
+# ---------------------------------------------------------------------------
+# list_providers
+# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.provider_routes")
-async def test_list_prov_success(mock_prov_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    
-    # handlers.list_providers uses client.get directly via auto-pagination
-    mock_client.get.return_value = {
-        "data": [{"id": 1, "name": "Doc"}]
-    }
-    
-    args = {"location_id": 1, "subdomain": "s"}
-    result = await handlers.list_providers(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_list_providers_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.list_providers.return_value = [
+        UniversalProvider(
+            id="p-1", source="test", name="Doc", first_name="Dr", last_name="Doc",
+        )
+    ]
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.list_providers({})
     assert result["count"] == 1
     assert result["providers"][0]["name"] == "Doc"
 
+
 @pytest.mark.asyncio
-@patch("src.app.retell.handlers._get_nexhealth_client")
-@patch("src.app.retell.handlers.get_settings")
-@patch("src.app.retell.handlers.provider_routes")
-async def test_list_prov_exception(mock_prov_routes, mock_get_settings, mock_get_client, mock_client, mock_settings):
-    mock_get_client.return_value = mock_client
-    mock_get_settings.return_value = mock_settings
-    
-    mock_client.get.side_effect = Exception("Fail")
-    
-    args = {"location_id": 1, "subdomain": "s"}
-    result = await handlers.list_providers(args)
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_list_providers_error(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.list_providers.side_effect = Exception("Fail")
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.list_providers({})
+    assert "Failed to list" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# list_operatories
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_list_operatories_success(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.list_operatories.return_value = [
+        UniversalOperatory(id="op-1", source="test", name="Chair 1", is_active=True)
+    ]
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.list_operatories({})
+    assert result["count"] == 1
+    assert result["operatories"][0]["name"] == "Chair 1"
+
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_list_operatories_error(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.list_operatories.side_effect = Exception("Fail")
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.list_operatories({})
     assert "Failed to list" in result["error"]

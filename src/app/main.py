@@ -63,6 +63,10 @@ async def lifespan(app: FastAPI):
     await cleanup_nexhealth_client()
     await cleanup_sikka_client()
 
+    # Cleanup PMS adapters
+    from src.app.pms.factory import cleanup_adapters
+    await cleanup_adapters()
+
 
 def create_app() -> FastAPI:
     """
