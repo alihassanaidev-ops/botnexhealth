@@ -125,15 +125,18 @@ def to_operatory(raw: dict) -> UniversalOperatory:
 
 
 def to_slot(raw: dict, appt_type_id: str | None = None) -> UniversalSlot:
+    # NexHealth slots use "time" for start; provider_id may be on parent group as "_pid"
+    provider_id = raw.get("provider_id") or raw.get("_pid")
+    location_id = raw.get("location_id") or raw.get("_lid")
     return UniversalSlot(
-        start=raw.get("start_time", ""),
+        start=raw.get("time") or raw.get("start_time", ""),
         end=raw.get("end_time", ""),
-        provider_id=_pid(raw.get("provider_id")),
+        provider_id=_pid(provider_id) if provider_id else "",
         provider_name=raw.get("provider_name", ""),
         operatory_id=_pid(raw.get("operatory_id")) if raw.get("operatory_id") else None,
         operatory_name=raw.get("operatory_name"),
         appointment_type_id=appt_type_id,
-        location_id=_pid(raw.get("location_id")) if raw.get("location_id") else None,
+        location_id=_pid(location_id) if location_id else None,
     )
 
 

@@ -195,8 +195,16 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             params["operatory_ids[]"] = [_strip(oid) for oid in operatory_ids]
 
         raw = await handle_nexhealth_request(self._client, "GET", "/appointment_slots", params=params)
-        slots = raw.get("data", [])
-        return [mappers.to_slot(s, appointment_type_id) for s in slots]
+        # NexHealth returns nested: data = [{lid, pid, slots: [{time, end_time, ...}]}]
+        result: list[UniversalSlot] = []
+        for group in raw.get("data", []):
+            group_pid = group.get("pid")
+            group_lid = group.get("lid")
+            for slot in group.get("slots", []):
+                slot["_pid"] = group_pid
+                slot["_lid"] = group_lid
+                result.append(mappers.to_slot(slot, appointment_type_id))
+        return result
 
     # ── Booking ──────────────────────────────────────────────────────────
 
@@ -297,7 +305,9 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
 
     async def list_pms_descriptors(self) -> list[dict]:
         params = self._default_params()
-        raw = await handle_nexhealth_request(self._client, "GET", "/appointment_descriptors", params=params)
+        raw = await handle_nexhealth_request(
+            self._client, "GET", f"/locations/{self._location_id}/appointment_descriptors", params=params
+        )
         return raw.get("data", [])
 
     async def create_appointment_type(
