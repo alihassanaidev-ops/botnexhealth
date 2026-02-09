@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -377,3 +378,260 @@ async def reinvite_tenant_user(
             )
 
     return {"message": f"Invite re-sent to {data.email}"}
+
+
+# =============================================================================
+# Location Schemas
+# =============================================================================
+
+class LocationCreate(BaseModel):
+    """Request body for creating a location."""
+    name: str = Field(..., min_length=1, max_length=255)
+    slug: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
+
+    nexhealth_subdomain: str | None = None
+    nexhealth_location_id: str | None = None
+    retell_agent_id: str | None = None
+    retell_api_secret: str | None = None
+
+    address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    phone: str | None = None
+    timezone: str | None = None
+
+
+class LocationUpdate(BaseModel):
+    """Request body for updating a location (PATCH)."""
+    name: str | None = None
+    is_active: bool | None = None
+
+    nexhealth_subdomain: str | None = None
+    nexhealth_location_id: str | None = None
+    retell_agent_id: str | None = None
+    retell_api_secret: str | None = None
+
+    address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    phone: str | None = None
+    timezone: str | None = None
+
+
+class LocationResponse(BaseModel):
+    """Response model for a location (no secrets)."""
+    id: str
+    tenant_id: str
+    name: str
+    slug: str
+    is_active: bool
+
+    nexhealth_subdomain: str | None
+    nexhealth_location_id: str | None
+    retell_agent_id: str | None
+    has_retell_secret: bool
+
+    address: str | None
+    city: str | None
+    state: str | None
+    phone: str | None
+    timezone: str | None
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_location(cls, loc: Any) -> "LocationResponse":
+        return cls(
+            id=str(loc.id),
+            tenant_id=str(loc.tenant_id),
+            name=loc.name,
+            slug=loc.slug,
+            is_active=loc.is_active,
+            nexhealth_subdomain=loc.nexhealth_subdomain,
+            nexhealth_location_id=loc.nexhealth_location_id,
+            retell_agent_id=loc.retell_agent_id,
+            has_retell_secret=loc.retell_api_secret_encrypted is not None,
+            address=loc.address,
+            city=loc.city,
+            state=loc.state,
+            phone=loc.phone,
+            timezone=loc.timezone,
+        )
+
+
+# =============================================================================
+# Location Routes
+# =============================================================================
+
+@router.post("/{slug}/locations", response_model=LocationResponse, status_code=status.HTTP_201_CREATED)
+@audit(
+    AuditAction.LOCATION_CREATE,
+    resource=lambda request, slug, data, _: f"tenant:{slug}/location:{data.slug}",
+    actor=AuditActor.ADMIN,
+)
+async def create_location(
+    request: Request,
+    slug: str,
+    data: LocationCreate,
+    _: User = Depends(get_current_admin),
+):
+    """Create a new location under a tenant."""
+    async with get_db_session() as session:
+        service = TenantService(session)
+
+        tenant = await service.get_by_slug(slug, include_inactive=True)
+        if not tenant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant '{slug}' not found")
+
+        existing = await service.get_location_by_slug(data.slug)
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Location with slug '{data.slug}' already exists",
+            )
+
+        location_data = data.model_dump()
+        try:
+            location = await service.create_location(tenant.id, **location_data)
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Location with slug '{data.slug}' already exists (race condition)",
+            )
+
+        return LocationResponse.from_location(location)
+
+
+@router.get("/{slug}/locations", response_model=list[LocationResponse])
+async def list_locations(
+    slug: str,
+    include_inactive: bool = False,
+    _: User = Depends(get_current_admin),
+):
+    """List all locations for a tenant."""
+    async with get_db_session() as session:
+        service = TenantService(session)
+
+        tenant = await service.get_by_slug(slug, include_inactive=True)
+        if not tenant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant '{slug}' not found")
+
+        locations = await service.list_locations(tenant.id, include_inactive=include_inactive)
+        return [LocationResponse.from_location(loc) for loc in locations]
+
+
+@router.get("/{slug}/locations/{loc_slug}", response_model=LocationResponse)
+async def get_location(
+    slug: str,
+    loc_slug: str,
+    _: User = Depends(get_current_admin),
+):
+    """Get a specific location by slug."""
+    async with get_db_session() as session:
+        service = TenantService(session)
+
+        tenant = await service.get_by_slug(slug, include_inactive=True)
+        if not tenant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant '{slug}' not found")
+
+        location = await service.get_location_by_slug(loc_slug)
+        if not location or location.tenant_id != tenant.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+
+        return LocationResponse.from_location(location)
+
+
+@router.patch("/{slug}/locations/{loc_slug}", response_model=LocationResponse)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    resource=lambda request, slug, loc_slug, data, _: f"tenant:{slug}/location:{loc_slug}",
+    actor=AuditActor.ADMIN,
+)
+async def update_location(
+    request: Request,
+    slug: str,
+    loc_slug: str,
+    data: LocationUpdate,
+    _: User = Depends(get_current_admin),
+):
+    """Update a location by slug."""
+    async with get_db_session() as session:
+        service = TenantService(session)
+
+        tenant = await service.get_by_slug(slug, include_inactive=True)
+        if not tenant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant '{slug}' not found")
+
+        location = await service.get_location_by_slug(loc_slug)
+        if not location or location.tenant_id != tenant.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+
+        updates = data.model_dump(exclude_unset=True)
+        location = await service.update_location(location, **updates)
+        return LocationResponse.from_location(location)
+
+
+@router.delete("/{slug}/locations/{loc_slug}", status_code=status.HTTP_204_NO_CONTENT)
+@audit(
+    AuditAction.LOCATION_DELETE,
+    resource=lambda request, slug, loc_slug, hard, _: f"tenant:{slug}/location:{loc_slug}",
+    actor=AuditActor.ADMIN,
+)
+async def delete_location(
+    request: Request,
+    slug: str,
+    loc_slug: str,
+    hard: bool = False,
+    _: User = Depends(get_current_admin),
+):
+    """Delete a location (soft or hard)."""
+    async with get_db_session() as session:
+        service = TenantService(session)
+
+        tenant = await service.get_by_slug(slug, include_inactive=True)
+        if not tenant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant '{slug}' not found")
+
+        location = await service.get_location_by_slug(loc_slug)
+        if not location or location.tenant_id != tenant.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+
+        await service.delete_location(location, hard=hard)
+
+
+@router.post("/{slug}/locations/{loc_slug}/sync")
+@audit(
+    AuditAction.LOCATION_SYNC,
+    resource=lambda request, slug, loc_slug, _: f"tenant:{slug}/location:{loc_slug}",
+    actor=AuditActor.ADMIN,
+)
+async def sync_location(
+    request: Request,
+    slug: str,
+    loc_slug: str,
+    _: User = Depends(get_current_admin),
+):
+    """Trigger a PMS sync for a specific location."""
+    from src.app.services.sync_service import SyncService
+
+    async with get_db_session() as session:
+        service = TenantService(session)
+
+        tenant = await service.get_by_slug(slug, include_inactive=True)
+        if not tenant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant '{slug}' not found")
+
+        location = await service.get_location_by_slug(loc_slug)
+        if not location or location.tenant_id != tenant.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+
+        sync_service = SyncService(session)
+        result = await sync_service.sync_location(tenant, location)
+
+        return {
+            "location": loc_slug,
+            "success": result.success,
+            "providers_synced": result.providers_synced,
+            "appointment_types_synced": result.appointment_types_synced,
+            "errors": result.errors,
+        }

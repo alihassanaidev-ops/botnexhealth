@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.tenant import Tenant
+from src.app.models.tenant_location import TenantLocation
 
 logger = logging.getLogger(__name__)
 
@@ -130,9 +131,92 @@ class TenantService:
         logger.info(f"Updated tenant: {tenant.slug}")
         return tenant
     
+    # =========================================================================
+    # Location CRUD
+    # =========================================================================
+
+    async def create_location(self, tenant_id: str, **data: Any) -> TenantLocation:
+        """Create a new location for a tenant."""
+        encrypted_fields = {"retell_api_secret"}
+        location = TenantLocation(tenant_id=tenant_id)
+
+        for key, value in data.items():
+            if key in encrypted_fields:
+                setattr(location, key, value)
+            elif hasattr(location, key):
+                setattr(location, key, value)
+
+        self.session.add(location)
+        await self.session.flush()
+        await self.session.refresh(location)
+        logger.info(f"Created location: {location.slug} for tenant {tenant_id}")
+        return location
+
+    async def update_location(self, location: TenantLocation, **updates: Any) -> TenantLocation:
+        """Update location fields."""
+        encrypted_fields = {"retell_api_secret"}
+
+        for key, value in updates.items():
+            if key in encrypted_fields:
+                setattr(location, key, value)
+            elif hasattr(location, key):
+                setattr(location, key, value)
+
+        await self.session.flush()
+        await self.session.refresh(location)
+        logger.info(f"Updated location: {location.slug}")
+        return location
+
+    async def delete_location(self, location: TenantLocation, hard: bool = False) -> None:
+        """Delete a location (soft or hard)."""
+        if hard:
+            await self.session.delete(location)
+            logger.info(f"Hard deleted location: {location.slug}")
+        else:
+            location.is_active = False
+            await self.session.flush()
+            logger.info(f"Soft deleted location: {location.slug}")
+
+    async def list_locations(self, tenant_id: str, include_inactive: bool = False) -> list[TenantLocation]:
+        """List locations for a tenant."""
+        query = select(TenantLocation).where(TenantLocation.tenant_id == tenant_id)
+        if not include_inactive:
+            query = query.where(TenantLocation.is_active == True)
+        query = query.order_by(TenantLocation.name)
+
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_location_by_slug(self, slug: str) -> TenantLocation | None:
+        """Get location by slug."""
+        result = await self.session.execute(
+            select(TenantLocation).where(TenantLocation.slug == slug)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_location_by_retell_agent_id(self, agent_id: str) -> tuple[TenantLocation, Tenant] | None:
+        """Get location and its parent tenant by Retell agent ID."""
+        result = await self.session.execute(
+            select(TenantLocation, Tenant)
+            .join(Tenant, TenantLocation.tenant_id == Tenant.id)
+            .where(
+                TenantLocation.retell_agent_id == agent_id,
+                TenantLocation.is_active == True,
+                Tenant.is_active == True,
+            )
+        )
+        row = result.first()
+        if row:
+            return row[0], row[1]
+        return None
+
+    # =========================================================================
+    # Tenant deletion (kept below location methods)
+    # =========================================================================
+
     async def delete(
-        self, 
-        tenant: Tenant, 
+        self,
+        tenant: Tenant,
         hard_delete: bool = False,
         supabase_service: Any = None
     ) -> None:

@@ -11,7 +11,7 @@ from typing import Any
 
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.pms.base import PMSAdapter
-from src.app.pms.factory import get_adapter_for_tenant
+from src.app.pms.factory import get_adapter_for_tenant, get_adapter_for_tenant_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import get_tenant_from_call_context, register_function
 from src.app.services.audit_decorator import audit
@@ -21,9 +21,11 @@ logger = logging.getLogger(__name__)
 
 async def _get_adapter() -> PMSAdapter:
     """Resolve PMS adapter from current Retell call context."""
-    tenant = await get_tenant_from_call_context()
+    tenant, location = await get_tenant_from_call_context()
     if not tenant:
         raise ValueError("No tenant resolved from call context. Check agent_id mapping.")
+    if location:
+        return await get_adapter_for_tenant_location(tenant, location)
     return await get_adapter_for_tenant(tenant)
 
 

@@ -44,27 +44,38 @@ def get_call_context() -> dict[str, Any]:
     return _current_call_context.copy()
 
 
-async def get_tenant_from_call_context() -> Optional["Tenant"]:
+async def get_tenant_from_call_context() -> tuple[Optional["Tenant"], Optional["TenantLocation"]]:
     """
-    Resolve tenant from current call context using agent_id.
-    
-    Call this from handlers to get tenant-specific configuration.
+    Resolve tenant (and optional location) from current call context using agent_id.
+
+    Resolution order:
+    1. TenantLocation with matching retell_agent_id  -> (tenant, location)
+    2. Tenant with matching retell_agent_id (backward compat) -> (tenant, None)
+    3. Not found -> (None, None)
     """
     from src.app.services.tenant_service import TenantService
     from src.app.database import get_db_session
-    
+
     agent_id = _current_call_context.get("agent_id")
     if not agent_id:
-        return None
-    
+        return None, None
+
     try:
-        async for session in get_db_session():
+        async with get_db_session() as session:
             tenant_service = TenantService(session)
+
+            # Try location-level first
+            result = await tenant_service.get_location_by_retell_agent_id(agent_id)
+            if result:
+                location, tenant = result
+                return tenant, location
+
+            # Fallback: tenant-level agent_id (backward compat)
             tenant = await tenant_service.get_by_retell_agent_id(agent_id)
-            return tenant
+            return tenant, None
     except Exception as e:
         logger.warning(f"Failed to resolve tenant from agent_id {agent_id}: {e}")
-        return None
+        return None, None
 
 
 def get_retell_secret() -> str | None:

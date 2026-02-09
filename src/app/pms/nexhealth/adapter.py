@@ -28,6 +28,7 @@ from src.app.pms.nexhealth import mappers
 
 if TYPE_CHECKING:
     from src.app.models.tenant import Tenant
+    from src.app.models.tenant_location import TenantLocation
     from src.app.nexhealth.client import NexHealthClient
 
 logger = logging.getLogger(__name__)
@@ -50,15 +51,31 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         self._location_id = tenant.nexhealth_location_id
 
     @classmethod
-    async def create(cls, tenant: Tenant) -> NexHealthAdapter:
-        """Factory: build a tenant-specific NexHealth client and wrap it."""
+    async def create(cls, tenant: Tenant, location: TenantLocation | None = None) -> NexHealthAdapter:
+        """Factory: build a tenant-specific NexHealth client and wrap it.
+
+        If a location is provided, its subdomain/location_id override the
+        tenant-level defaults (falling back to tenant values when unset).
+        """
         from src.app.config import Settings, settings as global_settings
         from src.app.nexhealth.client import NexHealthClient
 
+        # Location overrides tenant, tenant overrides global
+        subdomain = (
+            (location.nexhealth_subdomain if location else None)
+            or tenant.nexhealth_subdomain
+            or global_settings.nexhealth_subdomain
+        )
+        location_id = (
+            (location.nexhealth_location_id if location else None)
+            or tenant.nexhealth_location_id
+            or global_settings.nexhealth_location_id
+        )
+
         tenant_settings = Settings(
             nexhealth_api_key=tenant.nexhealth_api_key,
-            nexhealth_subdomain=tenant.nexhealth_subdomain or global_settings.nexhealth_subdomain,
-            nexhealth_location_id=tenant.nexhealth_location_id or global_settings.nexhealth_location_id,
+            nexhealth_subdomain=subdomain,
+            nexhealth_location_id=location_id,
         )
         client = NexHealthClient(config=tenant_settings)
         await client.__aenter__()
