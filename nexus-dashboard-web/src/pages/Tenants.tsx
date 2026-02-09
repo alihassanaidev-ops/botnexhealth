@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +25,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 
 export default function Tenants() {
+    const navigate = useNavigate();
     const [isOpen, setIsOpen] = useState(false);
     const [tenants, setTenants] = useState<Tenant[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -97,7 +99,11 @@ export default function Tenants() {
                             </TableRow>
                         )}
                         {tenants.map((tenant) => (
-                            <TableRow key={tenant.id}>
+                            <TableRow
+                                key={tenant.id}
+                                className="cursor-pointer"
+                                onClick={() => navigate(`/tenants/${tenant.slug}`)}
+                            >
                                 <TableCell className="font-medium">{tenant.name}</TableCell>
                                 <TableCell>{tenant.slug}</TableCell>
                                 <TableCell>

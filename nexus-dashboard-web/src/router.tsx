@@ -2,6 +2,7 @@ import { createBrowserRouter } from "react-router-dom";
 import DashboardWrapper from "./components/DashboardWrapper";
 import Dashboard from "./pages/Dashboard";
 import Tenants from "./pages/Tenants";
+import TenantDetail from "./pages/TenantDetail";
 import Login from "./pages/Login";
 import SetPassword from "./pages/SetPassword";
 import AppLayout from "./components/AppLayout";
@@ -33,6 +34,10 @@ export const router = createBrowserRouter([
                     {
                         path: "tenants",
                         element: <Tenants />,
+                    },
+                    {
+                        path: "tenants/:slug",
+                        element: <TenantDetail />,
                     },
                 ],
             },
