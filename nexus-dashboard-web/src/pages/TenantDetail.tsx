@@ -117,40 +117,54 @@ export default function TenantDetail() {
         name,
         description,
         isConfigured,
+        hasSystemKey = false,
         onConfigure,
     }: {
         name: string;
         description: string;
         isConfigured: boolean;
+        hasSystemKey?: boolean;
         onConfigure: () => void;
-    }) => (
-        <div className="group flex items-center justify-between rounded-lg border border-border/60 bg-card p-4 transition-all hover:border-border/80 hover:bg-muted/50 hover:shadow-sm">
-            <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                    <span className="font-semibold">{name}</span>
+    }) => {
+        let statusColor = "bg-neutral-300 dark:bg-neutral-600";
+        let statusText = "Not Connected";
+
+        if (isConfigured) {
+            statusColor = "bg-green-500";
+            statusText = "Connected";
+        } else if (hasSystemKey) {
+            statusColor = "bg-green-500/50";
+            statusText = "Connected (System)";
+        }
+
+        return (
+            <div className="group flex items-center justify-between rounded-lg border border-border/60 bg-card p-4 transition-all hover:border-border/80 hover:bg-muted/50 hover:shadow-sm">
+                <div className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                        <span className="font-semibold">{name}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{description}</p>
+                    <div className="mt-1.5 flex items-center gap-1.5">
+                        <div
+                            className={`h-1.5 w-1.5 rounded-full ${statusColor}`}
+                        />
+                        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                            {statusText}
+                        </span>
+                    </div>
                 </div>
-                <p className="text-xs text-muted-foreground">{description}</p>
-                <div className="mt-1.5 flex items-center gap-1.5">
-                    <div
-                        className={`h-1.5 w-1.5 rounded-full ${isConfigured ? "bg-green-500" : "bg-neutral-300 dark:bg-neutral-600"
-                            }`}
-                    />
-                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                        {isConfigured ? "Connected" : "Not Connected"}
-                    </span>
-                </div>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-background/80 hover:text-foreground"
+                    onClick={onConfigure}
+                >
+                    <Pencil className="h-4 w-4" />
+                    <span className="sr-only">Configure {name}</span>
+                </Button>
             </div>
-            <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-background/80 hover:text-foreground"
-                onClick={onConfigure}
-            >
-                <Pencil className="h-4 w-4" />
-                <span className="sr-only">Configure {name}</span>
-            </Button>
-        </div>
-    );
+        );
+    };
 
     if (isLoading) {
         return (
@@ -292,6 +306,7 @@ export default function TenantDetail() {
                                 name="NexHealth"
                                 description="Patient management system integration."
                                 isConfigured={tenant.has_nexhealth_key}
+                                hasSystemKey={tenant.has_system_nexhealth_key}
                                 onConfigure={() => setActiveTab("credentials")}
                             />
                             <IntegrationCard

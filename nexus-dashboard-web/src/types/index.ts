@@ -36,6 +36,7 @@ export interface TenantDetail {
     sikka_office_id: string | null;
 
     has_nexhealth_key: boolean;
+    has_system_nexhealth_key: boolean;
     has_ghl_key: boolean;
     has_retell_secret: boolean;
     has_sikka_credentials: boolean;

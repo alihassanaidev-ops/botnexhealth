@@ -607,6 +607,8 @@ class TenantResponse(BaseModel):
     has_retell_secret: bool
     has_sikka_credentials: bool
     
+    has_system_nexhealth_key: bool
+    
     # Optional: Created user
     user: TenantUserResponse | None = None
     
@@ -616,6 +618,8 @@ class TenantResponse(BaseModel):
     @classmethod
     def from_tenant(cls, tenant: Any, user: Any = None) -> "TenantResponse":
         """Convert Tenant model to response (no secrets exposed)."""
+        from src.app.config import settings
+
         user_resp = None
         if user:
             user_resp = TenantUserResponse(
@@ -637,6 +641,7 @@ class TenantResponse(BaseModel):
             retell_agent_id=tenant.retell_agent_id,
             sikka_office_id=tenant.sikka_office_id,
             has_nexhealth_key=tenant.nexhealth_api_key_encrypted is not None,
+            has_system_nexhealth_key=bool(settings.nexhealth_api_key),
             has_ghl_key=tenant.ghl_api_key_encrypted is not None,
             has_retell_secret=tenant.retell_api_secret_encrypted is not None,
             has_sikka_credentials=(
