@@ -49,6 +49,7 @@ export default function TenantDetail() {
     const [tenant, setTenant] = useState<TenantDetailType | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [editSheetOpen, setEditSheetOpen] = useState(false);
+    const [activeTab, setActiveTab] = useState("overview");
 
     const fetchTenant = useCallback(async () => {
         setIsLoading(true);
@@ -112,6 +113,45 @@ export default function TenantDetail() {
         }
     }
 
+    const IntegrationCard = ({
+        name,
+        description,
+        isConfigured,
+        onConfigure,
+    }: {
+        name: string;
+        description: string;
+        isConfigured: boolean;
+        onConfigure: () => void;
+    }) => (
+        <div className="group flex items-center justify-between rounded-lg border border-border/60 bg-card p-4 transition-all hover:border-border/80 hover:bg-muted/50 hover:shadow-sm">
+            <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                    <span className="font-semibold">{name}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">{description}</p>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                    <div
+                        className={`h-1.5 w-1.5 rounded-full ${isConfigured ? "bg-green-500" : "bg-neutral-300 dark:bg-neutral-600"
+                            }`}
+                    />
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                        {isConfigured ? "Connected" : "Not Connected"}
+                    </span>
+                </div>
+            </div>
+            <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-background/80 hover:text-foreground"
+                onClick={onConfigure}
+            >
+                <Pencil className="h-4 w-4" />
+                <span className="sr-only">Configure {name}</span>
+            </Button>
+        </div>
+    );
+
     if (isLoading) {
         return (
             <div className="flex-1 flex items-center justify-center p-8">
@@ -144,7 +184,7 @@ export default function TenantDetail() {
             </div>
 
             {/* Tabs */}
-            <Tabs defaultValue="overview">
+            <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                     <TabsTrigger value="overview">Overview</TabsTrigger>
                     <TabsTrigger value="credentials">Credentials</TabsTrigger>
@@ -153,112 +193,127 @@ export default function TenantDetail() {
 
                 {/* Overview Tab */}
                 <TabsContent value="overview" className="space-y-6">
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
-                            <div>
-                                <CardTitle>Tenant Details</CardTitle>
-                                <CardDescription>Basic information about this tenant</CardDescription>
-                            </div>
-                            <Button variant="outline" size="sm" onClick={() => setEditSheetOpen(true)}>
-                                <Pencil className="mr-1 h-3 w-3" /> Edit
-                            </Button>
-                        </CardHeader>
-                        <CardContent>
-                            <dl className="grid grid-cols-2 gap-4 text-sm">
-                                <div>
-                                    <dt className="text-muted-foreground">Name</dt>
-                                    <dd className="font-medium">{tenant.name}</dd>
-                                </div>
-                                <div>
-                                    <dt className="text-muted-foreground">Slug</dt>
-                                    <dd className="font-mono">{tenant.slug}</dd>
-                                </div>
-                                <div>
-                                    <dt className="text-muted-foreground">Status</dt>
-                                    <dd>
-                                        <span
-                                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tenant.is_active
-                                                ? "bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10"
-                                                : "bg-gray-50 text-gray-600 ring-gray-500/10 dark:bg-gray-900/20 dark:text-gray-400 dark:ring-gray-700/10"
-                                                }`}
-                                        >
-                                            {tenant.is_active ? "Active" : "Inactive"}
-                                        </span>
-                                    </dd>
-                                </div>
-                                <div>
-                                    <dt className="text-muted-foreground">ID</dt>
-                                    <dd className="font-mono text-xs text-muted-foreground">{tenant.id}</dd>
-                                </div>
-                            </dl>
-                        </CardContent>
-                    </Card>
-
-                    {tenant.user && (
+                    <div className="grid gap-6">
+                        {/* Tenant Details */}
                         <Card>
-                            <CardHeader>
-                                <CardTitle>Admin User</CardTitle>
-                                <CardDescription>The primary admin user for this tenant</CardDescription>
+                            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                                <div>
+                                    <CardTitle>Tenant Details</CardTitle>
+                                    <CardDescription>Basic information about this tenant</CardDescription>
+                                </div>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                    onClick={() => setEditSheetOpen(true)}
+                                >
+                                    <Pencil className="h-4 w-4" />
+                                    <span className="sr-only">Edit Tenant</span>
+                                </Button>
                             </CardHeader>
                             <CardContent>
                                 <dl className="grid grid-cols-2 gap-4 text-sm">
-                                    <div>
-                                        <dt className="text-muted-foreground">Email</dt>
-                                        <dd className="font-medium">{tenant.user.email}</dd>
+                                    <div className="space-y-1">
+                                        <dt className="text-muted-foreground">Name</dt>
+                                        <dd className="font-medium">{tenant.name}</dd>
                                     </div>
-                                    <div>
-                                        <dt className="text-muted-foreground">Role</dt>
-                                        <dd className="capitalize text-muted-foreground">{tenant.user.role}</dd>
+                                    <div className="space-y-1">
+                                        <dt className="text-muted-foreground">Slug</dt>
+                                        <dd className="font-mono">{tenant.slug}</dd>
                                     </div>
-                                    <div>
+                                    <div className="space-y-1">
                                         <dt className="text-muted-foreground">Status</dt>
                                         <dd>
                                             <span
-                                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tenant.user.is_active
+                                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tenant.is_active
                                                     ? "bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10"
                                                     : "bg-gray-50 text-gray-600 ring-gray-500/10 dark:bg-gray-900/20 dark:text-gray-400 dark:ring-gray-700/10"
                                                     }`}
                                             >
-                                                {tenant.user.is_active ? "Active" : "Inactive"}
+                                                {tenant.is_active ? "Active" : "Inactive"}
                                             </span>
                                         </dd>
                                     </div>
-                                    <div>
-                                        <dt className="text-muted-foreground">User ID</dt>
-                                        <dd className="font-mono text-xs text-muted-foreground">{tenant.user.id}</dd>
+                                    <div className="space-y-1">
+                                        <dt className="text-muted-foreground">ID</dt>
+                                        <dd className="font-mono text-xs text-muted-foreground">{tenant.id}</dd>
                                     </div>
                                 </dl>
                             </CardContent>
                         </Card>
-                    )}
 
-                    {/* Integration Status Summary */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Integration Status</CardTitle>
-                            <CardDescription>Quick overview of configured integrations</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                                <div className={`flex items-center gap-2 ${tenant.has_nexhealth_key ? "text-foreground" : "text-muted-foreground/60"}`}>
-                                    <div className={`h-1.5 w-1.5 rounded-full ${tenant.has_nexhealth_key ? "bg-green-500" : "bg-gray-300 dark:bg-gray-700"}`} />
-                                    <span className="text-sm font-medium">NexHealth</span>
-                                </div>
-                                <div className={`flex items-center gap-2 ${tenant.has_ghl_key ? "text-foreground" : "text-muted-foreground/60"}`}>
-                                    <div className={`h-1.5 w-1.5 rounded-full ${tenant.has_ghl_key ? "bg-green-500" : "bg-gray-300 dark:bg-gray-700"}`} />
-                                    <span className="text-sm font-medium">GoHighLevel</span>
-                                </div>
-                                <div className={`flex items-center gap-2 ${tenant.has_retell_secret ? "text-foreground" : "text-muted-foreground/60"}`}>
-                                    <div className={`h-1.5 w-1.5 rounded-full ${tenant.has_retell_secret ? "bg-green-500" : "bg-gray-300 dark:bg-gray-700"}`} />
-                                    <span className="text-sm font-medium">Retell AI</span>
-                                </div>
-                                <div className={`flex items-center gap-2 ${tenant.has_sikka_credentials ? "text-foreground" : "text-muted-foreground/60"}`}>
-                                    <div className={`h-1.5 w-1.5 rounded-full ${tenant.has_sikka_credentials ? "bg-green-500" : "bg-gray-300 dark:bg-gray-700"}`} />
-                                    <span className="text-sm font-medium">Sikka</span>
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
+                        {/* Admin User */}
+                        {tenant.user && (
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>Admin User</CardTitle>
+                                    <CardDescription>The primary admin user for this tenant</CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    <dl className="grid grid-cols-2 gap-4 text-sm">
+                                        <div className="space-y-1">
+                                            <dt className="text-muted-foreground">Email</dt>
+                                            <dd className="font-medium">{tenant.user.email}</dd>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <dt className="text-muted-foreground">Role</dt>
+                                            <dd className="capitalize text-muted-foreground">{tenant.user.role}</dd>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <dt className="text-muted-foreground">Status</dt>
+                                            <dd>
+                                                <span
+                                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tenant.user.is_active
+                                                        ? "bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10"
+                                                        : "bg-gray-50 text-gray-600 ring-gray-500/10 dark:bg-gray-900/20 dark:text-gray-400 dark:ring-gray-700/10"
+                                                        }`}
+                                                >
+                                                    {tenant.user.is_active ? "Active" : "Inactive"}
+                                                </span>
+                                            </dd>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <dt className="text-muted-foreground">User ID</dt>
+                                            <dd className="font-mono text-xs text-muted-foreground">{tenant.user.id}</dd>
+                                        </div>
+                                    </dl>
+                                </CardContent>
+                            </Card>
+                        )}
+                    </div>
+
+                    {/* Integrations Section */}
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-lg font-medium">Integrations</h3>
+                        </div>
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-2">
+                            <IntegrationCard
+                                name="NexHealth"
+                                description="Patient management system integration."
+                                isConfigured={tenant.has_nexhealth_key}
+                                onConfigure={() => setActiveTab("credentials")}
+                            />
+                            <IntegrationCard
+                                name="GoHighLevel"
+                                description="CRM and marketing automation."
+                                isConfigured={tenant.has_ghl_key}
+                                onConfigure={() => setActiveTab("credentials")}
+                            />
+                            <IntegrationCard
+                                name="Retell AI"
+                                description="Voice agent configuration."
+                                isConfigured={tenant.has_retell_secret}
+                                onConfigure={() => setActiveTab("credentials")}
+                            />
+                            <IntegrationCard
+                                name="Sikka"
+                                description="Universal PMS adapter."
+                                isConfigured={tenant.has_sikka_credentials}
+                                onConfigure={() => setActiveTab("credentials")}
+                            />
+                        </div>
+                    </div>
                 </TabsContent>
 
                 {/* Credentials Tab */}
