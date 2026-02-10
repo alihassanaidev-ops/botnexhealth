@@ -67,5 +67,93 @@ export interface SyncResult {
     success: boolean;
     providers_synced: number;
     appointment_types_synced: number;
+    operatories_synced: number;
+    descriptors_synced: number;
+    availabilities_synced: number;
     errors: string[];
+}
+
+// ── Tenant Setup Types ─────────────────────────────────────────────────
+
+export interface LocationInfo {
+    id: string;
+    name: string;
+    slug: string;
+    nexhealth_subdomain: string | null;
+    nexhealth_location_id: string | null;
+}
+
+export interface SetupOverview {
+    location: LocationInfo;
+    pms_source: string | null;
+    can_create_appointment_types: boolean;
+    can_link_availability: boolean;
+    counts: Record<string, number>;
+}
+
+export interface CachedProvider {
+    id: string;
+    source_id: string;
+    source: string;
+    name: string | null;
+    first_name: string | null;
+    last_name: string | null;
+    specialty: string | null;
+    is_active: boolean;
+    synced_at: string | null;
+}
+
+export interface CachedAppointmentType {
+    id: string;
+    source_id: string;
+    source: string;
+    name: string;
+    duration_minutes: number | null;
+    source_metadata: {
+        nh_appt_type_id?: number;
+        descriptor_ids?: string[];
+    } | null;
+    is_active: boolean;
+    synced_at: string | null;
+}
+
+export interface CachedOperatory {
+    id: string;
+    source_id: string;
+    source: string;
+    name: string;
+    is_active: boolean;
+    synced_at: string | null;
+}
+
+export interface CachedDescriptor {
+    id: string;
+    source_id: string;
+    source: string;
+    name: string;
+    descriptor_type: string | null;
+    code: string | null;
+    is_active: boolean;
+    source_metadata: Record<string, unknown> | null;
+    synced_at: string | null;
+}
+
+export interface CachedAvailability {
+    id: string;
+    source_id: string;
+    source: string;
+    provider_source_id: string | null;
+    provider_name: string | null;
+    operatory_source_id: string | null;
+    operatory_name: string | null;
+    begin_time: string | null;
+    end_time: string | null;
+    days: string[] | null;
+    specific_date: string | null;
+    appointment_type_ids: string[] | null;
+    appointment_type_names: string[] | null;
+    active: boolean;
+    synced: boolean;
+    source_metadata: Record<string, unknown> | null;
+    synced_at: string | null;
 }

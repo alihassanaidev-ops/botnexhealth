@@ -12,6 +12,7 @@ from src.app.config import settings
 from src.app.retell.functions import router as retell_router
 from src.app.retell.webhooks import router as retell_webhook_router
 from src.app.api.routes.auth import router as auth_router
+from src.app.api.routes.tenant_setup import router as tenant_setup_router
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,9 @@ def create_app() -> FastAPI:
     # Admin routes
     app.include_router(auth_router)
     app.include_router(tenants_router)
+
+    # Tenant portal routes (authenticated tenant users)
+    app.include_router(tenant_setup_router)
 
     return app
 

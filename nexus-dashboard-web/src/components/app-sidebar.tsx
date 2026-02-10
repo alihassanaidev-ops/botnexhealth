@@ -25,23 +25,43 @@ import {
     User2,
     ChevronUp,
     LogOut,
+    CalendarCheck,
+    UserCog,
+    Armchair,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 
-// Data for sidebar
-const navMain = [
+// Admin nav items
+const navAdmin = [
     {
         title: "Dashboard",
         url: "/dashboard",
         icon: Home,
-        isActive: true,
     },
     {
         title: "Tenants",
         url: "/tenants",
         icon: Users,
-        isActive: false,
+    },
+]
+
+// Tenant setup nav items (visible to all authenticated users with a tenant)
+const navSetup = [
+    {
+        title: "Appointment Types",
+        url: "/setup/appointment-types",
+        icon: CalendarCheck,
+    },
+    {
+        title: "Providers & Scheduling",
+        url: "/setup/providers",
+        icon: UserCog,
+    },
+    {
+        title: "Operatories",
+        url: "/setup/operatories",
+        icon: Armchair,
     },
 ]
 
@@ -74,7 +94,24 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     <SidebarGroupLabel>Menu</SidebarGroupLabel>
                     <SidebarGroupContent>
                         <SidebarMenu>
-                            {navMain.map((item) => (
+                            {navAdmin.map((item) => (
+                                <SidebarMenuItem key={item.title}>
+                                    <SidebarMenuButton asChild tooltip={item.title}>
+                                        <Link to={item.url}>
+                                            <item.icon />
+                                            <span>{item.title}</span>
+                                        </Link>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                            ))}
+                        </SidebarMenu>
+                    </SidebarGroupContent>
+                </SidebarGroup>
+                <SidebarGroup>
+                    <SidebarGroupLabel>Practice Setup</SidebarGroupLabel>
+                    <SidebarGroupContent>
+                        <SidebarMenu>
+                            {navSetup.map((item) => (
                                 <SidebarMenuItem key={item.title}>
                                     <SidebarMenuButton asChild tooltip={item.title}>
                                         <Link to={item.url}>

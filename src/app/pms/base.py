@@ -140,5 +140,18 @@ class SupportsAvailabilityLinking(ABC):
         ...
 
     @abstractmethod
+    async def update_availability(
+        self,
+        availability_id: str,
+        appointment_type_ids: list[str] | None = None,
+        days: list[str] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        operatory_id: str | None = None,
+        active: bool | None = None,
+    ) -> dict:
+        ...
+
+    @abstractmethod
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
         ...

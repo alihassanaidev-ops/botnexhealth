@@ -6,6 +6,9 @@ import TenantDetail from "./pages/TenantDetail";
 import Login from "./pages/Login";
 import SetPassword from "./pages/SetPassword";
 import AppLayout from "./components/AppLayout";
+import AppointmentTypes from "./pages/AppointmentTypes";
+import ProvidersScheduling from "./pages/ProvidersScheduling";
+import Operatories from "./pages/Operatories";
 
 export const router = createBrowserRouter([
     {
@@ -38,6 +41,18 @@ export const router = createBrowserRouter([
                     {
                         path: "tenants/:slug",
                         element: <TenantDetail />,
+                    },
+                    {
+                        path: "setup/appointment-types",
+                        element: <AppointmentTypes />,
+                    },
+                    {
+                        path: "setup/providers",
+                        element: <ProvidersScheduling />,
+                    },
+                    {
+                        path: "setup/operatories",
+                        element: <Operatories />,
                     },
                 ],
             },

@@ -1,23 +1,29 @@
-"""Sync service — fetches providers & appointment types from PMS and caches locally."""
+"""Sync service — fetches providers, appointment types, operatories, descriptors,
+and availabilities from PMS and caches locally."""
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.tenant_appointment_type import TenantAppointmentType
+from src.app.models.tenant_availability import TenantAvailability
+from src.app.models.tenant_descriptor import TenantDescriptor
+from src.app.models.tenant_operatory import TenantOperatory
 from src.app.models.tenant_provider import TenantProvider
+from src.app.pms.base import SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
 from src.app.services.audit import log_audit_background
 
 if TYPE_CHECKING:
     from src.app.models.tenant import Tenant
     from src.app.models.tenant_location import TenantLocation
+    from src.app.pms.base import PMSAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,9 @@ class SyncResult:
     location_slug: str
     providers_synced: int = 0
     appointment_types_synced: int = 0
+    operatories_synced: int = 0
+    descriptors_synced: int = 0
+    availabilities_synced: int = 0
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -37,13 +46,13 @@ class SyncResult:
 
 
 class SyncService:
-    """Syncs PMS provider/appointment-type data into local cache tables."""
+    """Syncs PMS data into local cache tables."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def sync_location(self, tenant: Tenant, location: TenantLocation) -> SyncResult:
-        """Sync providers and appointment types for a single location."""
+        """Sync all PMS data for a single location."""
         from src.app.pms.factory import get_adapter_for_tenant_location
 
         result = SyncResult(location_slug=location.slug)
@@ -57,50 +66,29 @@ class SyncService:
             return result
 
         # Sync providers
-        try:
-            pms_providers = await adapter.list_providers()
-            for p in pms_providers:
-                await self._upsert_provider(
-                    tenant_id=tenant.id,
-                    location_id=location.id,
-                    source=adapter.source,
-                    source_id=p.id,
-                    name=p.name,
-                    first_name=p.first_name,
-                    last_name=p.last_name,
-                    specialty=p.specialty,
-                    synced_at=now,
-                )
-                result.providers_synced += 1
-        except Exception as e:
-            logger.error(f"Provider sync failed for {location.slug}: {e}")
-            result.errors.append(f"Provider sync error: {e}")
+        await self._sync_providers(adapter, tenant.id, location.id, now, result)
 
         # Sync appointment types
-        try:
-            pms_types = await adapter.list_appointment_types()
-            for at in pms_types:
-                await self._upsert_appointment_type(
-                    tenant_id=tenant.id,
-                    location_id=location.id,
-                    source=adapter.source,
-                    source_id=at.id,
-                    name=at.name,
-                    duration_minutes=at.duration_minutes,
-                    source_metadata=at.source_metadata,
-                    synced_at=now,
-                )
-                result.appointment_types_synced += 1
-        except Exception as e:
-            logger.error(f"Appointment type sync failed for {location.slug}: {e}")
-            result.errors.append(f"Appointment type sync error: {e}")
+        await self._sync_appointment_types(adapter, tenant.id, location.id, now, result)
+
+        # Sync operatories
+        await self._sync_operatories(adapter, tenant.id, location.id, now, result)
+
+        # Sync descriptors (NexHealth-specific — only if adapter supports it)
+        await self._sync_descriptors(adapter, tenant.id, location.id, now, result)
+
+        # Sync availabilities (NexHealth-specific — only if adapter supports it)
+        await self._sync_availabilities(adapter, tenant.id, location.id, now, result)
 
         await self.session.flush()
         self._audit_sync(tenant, location, result)
         logger.info(
             f"Sync complete for {location.slug}: "
             f"{result.providers_synced} providers, "
-            f"{result.appointment_types_synced} appointment types"
+            f"{result.appointment_types_synced} appointment types, "
+            f"{result.operatories_synced} operatories, "
+            f"{result.descriptors_synced} descriptors, "
+            f"{result.availabilities_synced} availabilities"
         )
         return result
 
@@ -111,6 +99,144 @@ class SyncService:
             if loc.is_active:
                 results[loc.slug] = await self.sync_location(tenant, loc)
         return results
+
+    # ── Sync orchestrators ─────────────────────────────────────────────
+
+    async def _sync_providers(
+        self, adapter: PMSAdapter, tenant_id: str, location_id: str, now: datetime, result: SyncResult
+    ) -> None:
+        try:
+            pms_providers = await adapter.list_providers()
+            for p in pms_providers:
+                await self._upsert_provider(
+                    tenant_id=tenant_id,
+                    location_id=location_id,
+                    source=adapter.source,
+                    source_id=p.id,
+                    name=p.name,
+                    first_name=p.first_name,
+                    last_name=p.last_name,
+                    specialty=p.specialty,
+                    synced_at=now,
+                )
+                result.providers_synced += 1
+        except Exception as e:
+            logger.error(f"Provider sync failed: {e}")
+            result.errors.append(f"Provider sync error: {e}")
+
+    async def _sync_appointment_types(
+        self, adapter: PMSAdapter, tenant_id: str, location_id: str, now: datetime, result: SyncResult
+    ) -> None:
+        try:
+            pms_types = await adapter.list_appointment_types()
+            for at in pms_types:
+                await self._upsert_appointment_type(
+                    tenant_id=tenant_id,
+                    location_id=location_id,
+                    source=adapter.source,
+                    source_id=at.id,
+                    name=at.name,
+                    duration_minutes=at.duration_minutes,
+                    source_metadata=at.source_metadata,
+                    synced_at=now,
+                )
+                result.appointment_types_synced += 1
+        except Exception as e:
+            logger.error(f"Appointment type sync failed: {e}")
+            result.errors.append(f"Appointment type sync error: {e}")
+
+    async def _sync_operatories(
+        self, adapter: PMSAdapter, tenant_id: str, location_id: str, now: datetime, result: SyncResult
+    ) -> None:
+        try:
+            pms_ops = await adapter.list_operatories()
+            for op in pms_ops:
+                await self._upsert_operatory(
+                    tenant_id=tenant_id,
+                    location_id=location_id,
+                    source=adapter.source,
+                    source_id=op.id,
+                    name=op.name,
+                    is_active=op.is_active,
+                    synced_at=now,
+                )
+                result.operatories_synced += 1
+        except Exception as e:
+            logger.error(f"Operatory sync failed: {e}")
+            result.errors.append(f"Operatory sync error: {e}")
+
+    async def _sync_descriptors(
+        self, adapter: PMSAdapter, tenant_id: str, location_id: str, now: datetime, result: SyncResult
+    ) -> None:
+        if not isinstance(adapter, SupportsAppointmentTypeCreation):
+            return
+        try:
+            raw_descriptors = await adapter.list_pms_descriptors()
+            for d in raw_descriptors:
+                source_id = str(d.get("id", ""))
+                if not source_id:
+                    continue
+                await self._upsert_descriptor(
+                    tenant_id=tenant_id,
+                    location_id=location_id,
+                    source=adapter.source,
+                    source_id=source_id,
+                    name=d.get("name", ""),
+                    descriptor_type=d.get("descriptor_type"),
+                    code=d.get("code"),
+                    is_active=d.get("active", True),
+                    source_metadata={
+                        k: v for k, v in d.items()
+                        if k not in ("id", "name", "descriptor_type", "code", "active")
+                    } or None,
+                    synced_at=now,
+                )
+                result.descriptors_synced += 1
+        except Exception as e:
+            logger.error(f"Descriptor sync failed: {e}")
+            result.errors.append(f"Descriptor sync error: {e}")
+
+    async def _sync_availabilities(
+        self, adapter: PMSAdapter, tenant_id: str, location_id: str, now: datetime, result: SyncResult
+    ) -> None:
+        if not isinstance(adapter, SupportsAvailabilityLinking):
+            return
+        try:
+            raw_avails = await adapter.list_availabilities(
+                page=1, per_page=300, active=True, ignore_past_dates=True,
+            )
+            for av in raw_avails:
+                source_id = str(av.get("id", ""))
+                if not source_id:
+                    continue
+                appt_types = av.get("appointment_types") or []
+                await self._upsert_availability(
+                    tenant_id=tenant_id,
+                    location_id=location_id,
+                    source=adapter.source,
+                    source_id=source_id,
+                    provider_source_id=str(av.get("provider_id", "")),
+                    provider_name=None,  # Resolved from cache later if needed
+                    operatory_source_id=str(av.get("operatory_id", "")) if av.get("operatory_id") else None,
+                    operatory_name=None,
+                    begin_time=av.get("begin_time"),
+                    end_time=av.get("end_time"),
+                    days=av.get("days"),
+                    specific_date=av.get("specific_date"),
+                    appointment_type_ids=[str(at.get("id")) for at in appt_types],
+                    appointment_type_names=[at.get("name", "") for at in appt_types],
+                    active=av.get("active", True),
+                    synced=av.get("synced", False),
+                    source_metadata={
+                        "tz_offset": av.get("tz_offset"),
+                        "custom_recurrence": av.get("custom_recurrence"),
+                    },
+                    synced_at=now,
+                )
+                result.availabilities_synced += 1
+        except Exception as e:
+            logger.error(f"Availability sync failed: {e}")
+            result.errors.append(f"Availability sync error: {e}")
 
     # ── Upsert helpers ──────────────────────────────────────────────────
 
@@ -199,6 +325,159 @@ class SyncService:
                 )
             )
 
+    async def _upsert_operatory(
+        self,
+        tenant_id: str,
+        location_id: str,
+        source: str,
+        source_id: str,
+        name: str,
+        is_active: bool,
+        synced_at: datetime,
+    ) -> None:
+        """Insert or update a cached operatory row by (tenant_id, location_id, source_id)."""
+        stmt = select(TenantOperatory).where(
+            TenantOperatory.tenant_id == tenant_id,
+            TenantOperatory.location_id == location_id,
+            TenantOperatory.source_id == source_id,
+        )
+        result = await self.session.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            existing.name = name
+            existing.is_active = is_active
+            existing.source = source
+            existing.synced_at = synced_at
+        else:
+            self.session.add(
+                TenantOperatory(
+                    tenant_id=tenant_id,
+                    location_id=location_id,
+                    source=source,
+                    source_id=source_id,
+                    name=name,
+                    is_active=is_active,
+                    synced_at=synced_at,
+                )
+            )
+
+    async def _upsert_descriptor(
+        self,
+        tenant_id: str,
+        location_id: str,
+        source: str,
+        source_id: str,
+        name: str,
+        descriptor_type: str | None,
+        code: str | None,
+        is_active: bool,
+        source_metadata: dict | None,
+        synced_at: datetime,
+    ) -> None:
+        """Insert or update a cached descriptor row by (tenant_id, location_id, source_id)."""
+        stmt = select(TenantDescriptor).where(
+            TenantDescriptor.tenant_id == tenant_id,
+            TenantDescriptor.location_id == location_id,
+            TenantDescriptor.source_id == source_id,
+        )
+        result = await self.session.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            existing.name = name
+            existing.descriptor_type = descriptor_type
+            existing.code = code
+            existing.is_active = is_active
+            existing.source = source
+            existing.source_metadata = source_metadata
+            existing.synced_at = synced_at
+        else:
+            self.session.add(
+                TenantDescriptor(
+                    tenant_id=tenant_id,
+                    location_id=location_id,
+                    source=source,
+                    source_id=source_id,
+                    name=name,
+                    descriptor_type=descriptor_type,
+                    code=code,
+                    is_active=is_active,
+                    source_metadata=source_metadata,
+                    synced_at=synced_at,
+                )
+            )
+
+    async def _upsert_availability(
+        self,
+        tenant_id: str,
+        location_id: str,
+        source: str,
+        source_id: str,
+        provider_source_id: str | None,
+        provider_name: str | None,
+        operatory_source_id: str | None,
+        operatory_name: str | None,
+        begin_time: str | None,
+        end_time: str | None,
+        days: list[str] | None,
+        specific_date: str | None,
+        appointment_type_ids: list[str] | None,
+        appointment_type_names: list[str] | None,
+        active: bool,
+        synced: bool,
+        source_metadata: dict | None,
+        synced_at: datetime,
+    ) -> None:
+        """Insert or update a cached availability row by (tenant_id, location_id, source_id)."""
+        stmt = select(TenantAvailability).where(
+            TenantAvailability.tenant_id == tenant_id,
+            TenantAvailability.location_id == location_id,
+            TenantAvailability.source_id == source_id,
+        )
+        result = await self.session.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            existing.provider_source_id = provider_source_id
+            existing.provider_name = provider_name
+            existing.operatory_source_id = operatory_source_id
+            existing.operatory_name = operatory_name
+            existing.begin_time = begin_time
+            existing.end_time = end_time
+            existing.days = days
+            existing.specific_date = specific_date
+            existing.appointment_type_ids = appointment_type_ids
+            existing.appointment_type_names = appointment_type_names
+            existing.active = active
+            existing.synced = synced
+            existing.source = source
+            existing.source_metadata = source_metadata
+            existing.synced_at = synced_at
+        else:
+            self.session.add(
+                TenantAvailability(
+                    tenant_id=tenant_id,
+                    location_id=location_id,
+                    source=source,
+                    source_id=source_id,
+                    provider_source_id=provider_source_id,
+                    provider_name=provider_name,
+                    operatory_source_id=operatory_source_id,
+                    operatory_name=operatory_name,
+                    begin_time=begin_time,
+                    end_time=end_time,
+                    days=days,
+                    specific_date=specific_date,
+                    appointment_type_ids=appointment_type_ids,
+                    appointment_type_names=appointment_type_names,
+                    active=active,
+                    synced=synced,
+                    source_metadata=source_metadata,
+                    synced_at=synced_at,
+                )
+            )
+
     # ── Audit helper ────────────────────────────────────────────────────
 
     @staticmethod
@@ -212,6 +491,9 @@ class SyncService:
             metadata={
                 "providers_synced": result.providers_synced,
                 "appointment_types_synced": result.appointment_types_synced,
+                "operatories_synced": result.operatories_synced,
+                "descriptors_synced": result.descriptors_synced,
+                "availabilities_synced": result.availabilities_synced,
                 "errors": result.errors[:5],
             },
             tenant_id=tenant.id,

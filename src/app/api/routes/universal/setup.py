@@ -61,3 +61,31 @@ async def list_availabilities(pms: PMSAdapter = Depends(get_tenant_pms)):
     if not isinstance(pms, SupportsAvailabilityLinking):
         raise HTTPException(400, "This PMS does not use availability linking")
     return await pms.list_availabilities()
+
+
+class UpdateAvailabilityRequest(BaseModel):
+    appointment_type_ids: list[str] | None = None
+    days: list[str] | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    operatory_id: str | None = None
+    active: bool | None = None
+
+
+@router.patch("/availabilities/{availability_id}")
+async def update_availability(
+    availability_id: str,
+    req: UpdateAvailabilityRequest,
+    pms: PMSAdapter = Depends(get_tenant_pms),
+):
+    if not isinstance(pms, SupportsAvailabilityLinking):
+        raise HTTPException(400, "This PMS does not support availability updates")
+    return await pms.update_availability(
+        availability_id=availability_id,
+        appointment_type_ids=req.appointment_type_ids,
+        days=req.days,
+        start_time=req.start_time,
+        end_time=req.end_time,
+        operatory_id=req.operatory_id,
+        active=req.active,
+    )

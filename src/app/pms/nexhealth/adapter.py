@@ -359,7 +359,40 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         }
         return await handle_nexhealth_request(self._client, "POST", "/availabilities", params=params, json=body)
 
+    async def update_availability(
+        self,
+        availability_id: str,
+        appointment_type_ids: list[str] | None = None,
+        days: list[str] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        operatory_id: str | None = None,
+        active: bool | None = None,
+    ) -> dict:
+        params = {"subdomain": self._subdomain} if self._subdomain else {}
+        body: dict[str, Any] = {}
+        if appointment_type_ids is not None:
+            body["appointment_type_ids"] = [int(_strip(aid)) for aid in appointment_type_ids]
+        if days is not None:
+            body["days"] = days
+        if start_time is not None:
+            body["begin_time"] = start_time
+        if end_time is not None:
+            body["end_time"] = end_time
+        if operatory_id is not None:
+            body["operatory_id"] = int(_strip(operatory_id))
+        if active is not None:
+            body["active"] = active
+
+        raw = await handle_nexhealth_request(
+            self._client, "PATCH", f"/availabilities/{_strip(availability_id)}",
+            params=params, json={"availability": body},
+        )
+        return raw.get("data", {})
+
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
         params = {**self._default_params(), **kwargs}
+        if "include[]" not in params:
+            params["include[]"] = ["appointment_types"]
         raw = await handle_nexhealth_request(self._client, "GET", "/availabilities", params=params)
         return raw.get("data", [])
