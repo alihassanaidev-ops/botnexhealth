@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Annotated
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -18,7 +18,11 @@ from src.app.models.user import User, UserRole
 from src.app.services.audit_decorator import audit
 from src.app.services.tenant_service import TenantService
 from src.app.services.supabase_service import SupabaseService
-from src.app.api.models import TenantResponse
+from src.app.services.supabase_service import SupabaseService
+from src.app.api.models import TenantResponse, InstitutionBasicListResponse
+from src.app.api.helpers import handle_nexhealth_request
+from src.app.dependencies import get_nexhealth_client_dependency
+from src.app.nexhealth.client import NexHealthClient
 
 logger = logging.getLogger(__name__)
 
@@ -89,9 +93,32 @@ class TenantUpdate(BaseModel):
 
 
 
+
 # =============================================================================
 # Routes
 # =============================================================================
+
+@router.get("/nexhealth/locations", response_model=InstitutionBasicListResponse)
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda *args, **kwargs: "nexhealth:locations",
+    actor=AuditActor.ADMIN,
+)
+async def list_nexhealth_locations(
+    client: Annotated[NexHealthClient, Depends(get_nexhealth_client_dependency)],
+    _: User = Depends(get_current_admin),
+    subdomain: str | None = None,
+) -> dict[str, Any]:
+    """
+    List all locations from the main NexHealth account.
+    
+    Used by Admins to select a location when creating/configuring a Tenant.
+    """
+    params = {}
+    if subdomain:
+        params["subdomain"] = subdomain
+        
+    return await handle_nexhealth_request(client, "GET", "/locations", params=params)
 
 @router.get("", response_model=list[TenantResponse])
 async def list_tenants(

@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -9,11 +10,20 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
+    FormDescription,
 } from "@/components/ui/form";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import api from "@/lib/api";
-import type { Location } from "@/types";
+import type { Location, InstitutionBasicListResponse, NexHealthLocation } from "@/types";
+import { Loader2 } from "lucide-react";
 
 const locationSchema = z.object({
     name: z.string().min(1, "Name is required"),
@@ -39,6 +49,8 @@ interface LocationFormProps {
 
 export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormProps) {
     const isEditing = !!location;
+    const [nexHealthLocations, setNexHealthLocations] = useState<NexHealthLocation[]>([]);
+    const [isLoadingNH, setIsLoadingNH] = useState(false);
 
     const form = useForm<LocationFormValues>({
         resolver: zodResolver(locationSchema),
@@ -56,6 +68,50 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
             timezone: location?.timezone || "",
         },
     });
+
+    // Fetch NexHealth locations on mount
+    useEffect(() => {
+        async function fetchNHLocations() {
+            setIsLoadingNH(true);
+            try {
+                const { data } = await api.get<InstitutionBasicListResponse>("/admin/tenants/nexhealth/locations");
+                // Flatten locations from all institutions
+                const allLocs = data.data.flatMap(inst => inst.locations);
+                setNexHealthLocations(allLocs);
+            } catch (error) {
+                console.error("Failed to fetch NexHealth locations", error);
+                // Don't block UI, just log
+            } finally {
+                setIsLoadingNH(false);
+            }
+        }
+        if (!isEditing) {
+            fetchNHLocations();
+        }
+    }, [isEditing]);
+
+    function onLocationSelect(locationId: string) {
+        const selected = nexHealthLocations.find(l => String(l.id) === locationId);
+        if (!selected) return;
+
+        // Auto-fill form
+        form.setValue("nexhealth_location_id", String(selected.id));
+        form.setValue("name", selected.name);
+        // Generate slug from name
+        const slug = selected.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+        form.setValue("slug", slug);
+
+        if (selected.street_address) form.setValue("address", selected.street_address);
+        if (selected.city) form.setValue("city", selected.city);
+        if (selected.state) form.setValue("state", selected.state);
+        if (selected.phone_number) form.setValue("phone", selected.phone_number);
+        if (selected.tz) form.setValue("timezone", selected.tz);
+
+        // We might not have subdomain in the flattened location object easily if not passed down,
+        // but often the institution subdomain isn't explicitly on the location object in the basic list.
+        // For now, we leave subdomain manual or empty if not in the object.
+        // If needed, we can map institution subdomain to location.
+    }
 
     async function onSubmit(values: LocationFormValues) {
         try {
@@ -107,6 +163,30 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
     return (
         <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+
+                {/* NexHealth Location Selection (Create Mode Only) */}
+                {!isEditing && (
+                    <div className="space-y-2">
+                        <FormLabel>Select NexHealth Location (Optional)</FormLabel>
+                        <Select onValueChange={onLocationSelect} disabled={isLoadingNH}>
+                            <SelectTrigger>
+                                <SelectValue placeholder={isLoadingNH ? "Loading locations..." : "Choose a location to auto-fill"} />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {nexHealthLocations.map((loc) => (
+                                    <SelectItem key={loc.id} value={String(loc.id)}>
+                                        {loc.name} (ID: {loc.id})
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        {isLoadingNH && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                        <FormDescription>
+                            Selecting a location will auto-fill the form fields below.
+                        </FormDescription>
+                    </div>
+                )}
+
                 <FormField
                     control={form.control}
                     name="name"

@@ -157,3 +157,27 @@ export interface CachedAvailability {
     source_metadata: Record<string, unknown> | null;
     synced_at: string | null;
 }
+
+export interface NexHealthLocation {
+    id: number;
+    name: string;
+    institution_id: number;
+    street_address: string | null;
+    city: string | null;
+    state: string | null;
+    zip_code: string | null;
+    phone_number: string | null;
+    tz: string | null;
+}
+
+export interface InstitutionBasic {
+    id: number;
+    name: string;
+    subdomain: string | null;
+    locations: NexHealthLocation[];
+}
+
+export interface InstitutionBasicListResponse {
+    code: boolean;
+    data: InstitutionBasic[];
+}
