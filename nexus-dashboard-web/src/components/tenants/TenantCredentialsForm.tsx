@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Check, Pencil, X } from "lucide-react";
+import { Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Form,
@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import {
     Card,
     CardContent,
@@ -122,13 +121,14 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
     }
 
     const ConfiguredBadge = ({ configured }: { configured: boolean }) => (
-        <Badge variant={configured ? "default" : "outline"} className="ml-2">
-            {configured ? (
-                <><Check className="mr-1 h-3 w-3" /> Configured</>
-            ) : (
-                "Not configured"
-            )}
-        </Badge>
+        <span
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${configured
+                ? "bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10"
+                : "bg-gray-50 text-gray-600 ring-gray-500/10 dark:bg-gray-900/20 dark:text-gray-400 dark:ring-gray-700/10"
+                }`}
+        >
+            {configured ? "Configured" : "Not configured"}
+        </span>
     );
 
     const SectionEditButton = ({ section }: { section: SectionKey }) => {
@@ -138,9 +138,10 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                     type="button"
                     variant="ghost"
                     size="sm"
+                    className="h-8 px-2 text-muted-foreground hover:text-foreground"
                     onClick={() => setEditingSection(null)}
                 >
-                    <X className="mr-1 h-3 w-3" /> Cancel
+                    <X className="mr-1 h-3.5 w-3.5" /> Cancel
                 </Button>
             );
         }
@@ -149,287 +150,295 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                 type="button"
                 variant="ghost"
                 size="sm"
+                className="h-8 px-2 text-muted-foreground hover:text-foreground"
                 onClick={() => setEditingSection(section)}
                 disabled={editingSection !== null && editingSection !== section}
             >
-                <Pencil className="mr-1 h-3 w-3" /> Edit
+                <Pencil className="mr-1 h-3.5 w-3.5" /> Edit
             </Button>
         );
     };
 
+    const CredentialCard = ({
+        title,
+        description,
+        section,
+        configured,
+        children,
+    }: {
+        title: string;
+        description: string;
+        section: SectionKey;
+        configured: boolean;
+        children: React.ReactNode;
+    }) => (
+        <Card className="group overflow-hidden transition-colors hover:border-foreground/20">
+            <CardHeader className="flex flex-row items-start justify-between space-y-0 p-6">
+                <div className="space-y-1">
+                    <CardTitle className="text-sm font-medium leading-none">{title}</CardTitle>
+                    <CardDescription className="text-xs">{description}</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                    <ConfiguredBadge configured={configured} />
+                    <SectionEditButton section={section} />
+                </div>
+            </CardHeader>
+            <CardContent className="p-6 pt-0">
+                {editingSection === section ? (
+                    <div className="space-y-4 pt-2">
+                        {children}
+                    </div>
+                ) : (
+                    <div className="text-sm text-muted-foreground">
+                        {configured ? (
+                            <div className="grid gap-1">
+                                {section === "nexhealth" && (
+                                    <>
+                                        <div className="flex justify-between py-1 border-b border-border/50 last:border-0">
+                                            <span className="font-normal text-muted-foreground">Subdomain</span>
+                                            <span className="font-mono text-foreground">{tenant.nexhealth_subdomain || "—"}</span>
+                                        </div>
+                                        <div className="flex justify-between py-1 border-b border-border/50 last:border-0">
+                                            <span className="font-normal text-muted-foreground">Location ID</span>
+                                            <span className="font-mono text-foreground">{tenant.nexhealth_location_id || "—"}</span>
+                                        </div>
+                                    </>
+                                )}
+                                {section === "ghl" && (
+                                    <div className="flex justify-between py-1 border-b border-border/50 last:border-0">
+                                        <span className="font-normal text-muted-foreground">Location ID</span>
+                                        <span className="font-mono text-foreground">{tenant.ghl_location_id || "—"}</span>
+                                    </div>
+                                )}
+                                {section === "retell" && (
+                                    <div className="flex justify-between py-1 border-b border-border/50 last:border-0">
+                                        <span className="font-normal text-muted-foreground">Agent ID</span>
+                                        <span className="font-mono text-foreground">{tenant.retell_agent_id || "—"}</span>
+                                    </div>
+                                )}
+                                {section === "sikka" && (
+                                    <div className="flex justify-between py-1 border-b border-border/50 last:border-0">
+                                        <span className="font-normal text-muted-foreground">Office ID</span>
+                                        <span className="font-mono text-foreground">{tenant.sikka_office_id || "—"}</span>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <p className="text-sm text-muted-foreground/60 italic">No credentials configured.</p>
+                        )}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
+    );
+
     return (
         <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-                {/* NexHealth */}
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <div>
-                            <CardTitle className="text-base">NexHealth</CardTitle>
-                            <CardDescription>PMS integration credentials</CardDescription>
-                        </div>
-                        <div className="flex items-center">
-                            <ConfiguredBadge configured={tenant.has_nexhealth_key} />
-                            <SectionEditButton section="nexhealth" />
-                        </div>
-                    </CardHeader>
-                    {editingSection === "nexhealth" && (
-                        <CardContent className="space-y-4">
-                            <FormField
-                                control={form.control}
-                                name="nexhealth_api_key"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>API Key</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                type="password"
-                                                placeholder={tenant.has_nexhealth_key ? "••••••••  (leave blank to keep)" : "Enter API key"}
-                                                {...field}
-                                            />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                            <FormField
-                                control={form.control}
-                                name="nexhealth_subdomain"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>Subdomain</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="e.g. acme-dental" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                            <FormField
-                                control={form.control}
-                                name="nexhealth_location_id"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>Location ID</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="e.g. 12345" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                        </CardContent>
-                    )}
-                    {editingSection !== "nexhealth" && (tenant.nexhealth_subdomain || tenant.nexhealth_location_id) && (
-                        <CardContent>
-                            <div className="text-sm text-muted-foreground space-y-1">
-                                {tenant.nexhealth_subdomain && <p>Subdomain: <span className="font-mono">{tenant.nexhealth_subdomain}</span></p>}
-                                {tenant.nexhealth_location_id && <p>Location ID: <span className="font-mono">{tenant.nexhealth_location_id}</span></p>}
-                            </div>
-                        </CardContent>
-                    )}
-                </Card>
+                <CredentialCard
+                    title="NexHealth"
+                    description="Patient management system integration."
+                    section="nexhealth"
+                    configured={tenant.has_nexhealth_key}
+                >
+                    <FormField
+                        control={form.control}
+                        name="nexhealth_api_key"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>API Key</FormLabel>
+                                <FormControl>
+                                    <Input
+                                        type="password"
+                                        placeholder={tenant.has_nexhealth_key ? "••••••••" : "Enter API key"}
+                                        {...field}
+                                    />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                    <div className="grid grid-cols-2 gap-4">
+                        <FormField
+                            control={form.control}
+                            name="nexhealth_subdomain"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>Subdomain</FormLabel>
+                                    <FormControl>
+                                        <Input placeholder="acme-dental" {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <FormField
+                            control={form.control}
+                            name="nexhealth_location_id"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>Location ID</FormLabel>
+                                    <FormControl>
+                                        <Input placeholder="12345" {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                    </div>
+                </CredentialCard>
 
-                {/* GoHighLevel */}
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <div>
-                            <CardTitle className="text-base">GoHighLevel</CardTitle>
-                            <CardDescription>CRM integration credentials</CardDescription>
-                        </div>
-                        <div className="flex items-center">
-                            <ConfiguredBadge configured={tenant.has_ghl_key} />
-                            <SectionEditButton section="ghl" />
-                        </div>
-                    </CardHeader>
-                    {editingSection === "ghl" && (
-                        <CardContent className="space-y-4">
-                            <FormField
-                                control={form.control}
-                                name="ghl_api_key"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>API Key</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                type="password"
-                                                placeholder={tenant.has_ghl_key ? "••••••••  (leave blank to keep)" : "Enter API key"}
-                                                {...field}
-                                            />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                            <FormField
-                                control={form.control}
-                                name="ghl_location_id"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>Location ID</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="e.g. loc_abc123" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                            <FormField
-                                control={form.control}
-                                name="ghl_custom_fields"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>Custom Fields (JSON)</FormLabel>
-                                        <FormControl>
-                                            <Textarea
-                                                placeholder='{"field_name": "field_id"}'
-                                                className="font-mono text-sm"
-                                                {...field}
-                                            />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                        </CardContent>
-                    )}
-                    {editingSection !== "ghl" && tenant.ghl_location_id && (
-                        <CardContent>
-                            <div className="text-sm text-muted-foreground">
-                                <p>Location ID: <span className="font-mono">{tenant.ghl_location_id}</span></p>
-                            </div>
-                        </CardContent>
-                    )}
-                </Card>
+                <CredentialCard
+                    title="GoHighLevel"
+                    description="CRM and marketing automation."
+                    section="ghl"
+                    configured={tenant.has_ghl_key}
+                >
+                    <FormField
+                        control={form.control}
+                        name="ghl_api_key"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>API Key</FormLabel>
+                                <FormControl>
+                                    <Input
+                                        type="password"
+                                        placeholder={tenant.has_ghl_key ? "••••••••" : "Enter API key"}
+                                        {...field}
+                                    />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                    <FormField
+                        control={form.control}
+                        name="ghl_location_id"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Location ID</FormLabel>
+                                <FormControl>
+                                    <Input placeholder="location_id" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                    <FormField
+                        control={form.control}
+                        name="ghl_custom_fields"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Custom Fields (JSON)</FormLabel>
+                                <FormControl>
+                                    <Textarea
+                                        placeholder='{"field_name": "id"}'
+                                        className="font-mono text-xs"
+                                        rows={3}
+                                        {...field}
+                                    />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                </CredentialCard>
 
-                {/* Retell */}
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <div>
-                            <CardTitle className="text-base">Retell AI</CardTitle>
-                            <CardDescription>Voice agent credentials</CardDescription>
-                        </div>
-                        <div className="flex items-center">
-                            <ConfiguredBadge configured={tenant.has_retell_secret} />
-                            <SectionEditButton section="retell" />
-                        </div>
-                    </CardHeader>
-                    {editingSection === "retell" && (
-                        <CardContent className="space-y-4">
-                            <FormField
-                                control={form.control}
-                                name="retell_agent_id"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>Agent ID</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="e.g. agent_xxx" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                            <FormField
-                                control={form.control}
-                                name="retell_api_secret"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>API Secret</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                type="password"
-                                                placeholder={tenant.has_retell_secret ? "••••••••  (leave blank to keep)" : "Enter API secret"}
-                                                {...field}
-                                            />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                        </CardContent>
-                    )}
-                    {editingSection !== "retell" && tenant.retell_agent_id && (
-                        <CardContent>
-                            <div className="text-sm text-muted-foreground">
-                                <p>Agent ID: <span className="font-mono">{tenant.retell_agent_id}</span></p>
-                            </div>
-                        </CardContent>
-                    )}
-                </Card>
+                <CredentialCard
+                    title="Retell AI"
+                    description="Voice agent configuration."
+                    section="retell"
+                    configured={tenant.has_retell_secret}
+                >
+                    <FormField
+                        control={form.control}
+                        name="retell_agent_id"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Agent ID</FormLabel>
+                                <FormControl>
+                                    <Input placeholder="agent_xxx" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                    <FormField
+                        control={form.control}
+                        name="retell_api_secret"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>API Secret</FormLabel>
+                                <FormControl>
+                                    <Input
+                                        type="password"
+                                        placeholder={tenant.has_retell_secret ? "••••••••" : "Enter secret"}
+                                        {...field}
+                                    />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                </CredentialCard>
 
-                {/* Sikka */}
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <div>
-                            <CardTitle className="text-base">Sikka</CardTitle>
-                            <CardDescription>PMS adapter credentials</CardDescription>
-                        </div>
-                        <div className="flex items-center">
-                            <ConfiguredBadge configured={tenant.has_sikka_credentials} />
-                            <SectionEditButton section="sikka" />
-                        </div>
-                    </CardHeader>
-                    {editingSection === "sikka" && (
-                        <CardContent className="space-y-4">
-                            <FormField
-                                control={form.control}
-                                name="sikka_app_id"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>App ID</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                type="password"
-                                                placeholder={tenant.has_sikka_credentials ? "••••••••  (leave blank to keep)" : "Enter App ID"}
-                                                {...field}
-                                            />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                            <FormField
-                                control={form.control}
-                                name="sikka_app_secret"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>App Secret</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                type="password"
-                                                placeholder={tenant.has_sikka_credentials ? "••••••••  (leave blank to keep)" : "Enter App Secret"}
-                                                {...field}
-                                            />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                            <FormField
-                                control={form.control}
-                                name="sikka_office_id"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>Office ID</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="e.g. 12345" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                        </CardContent>
-                    )}
-                    {editingSection !== "sikka" && tenant.sikka_office_id && (
-                        <CardContent>
-                            <div className="text-sm text-muted-foreground">
-                                <p>Office ID: <span className="font-mono">{tenant.sikka_office_id}</span></p>
-                            </div>
-                        </CardContent>
-                    )}
-                </Card>
+                <CredentialCard
+                    title="Sikka"
+                    description="Universal PMS adapter."
+                    section="sikka"
+                    configured={tenant.has_sikka_credentials}
+                >
+                    <FormField
+                        control={form.control}
+                        name="sikka_app_id"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>App ID</FormLabel>
+                                <FormControl>
+                                    <Input
+                                        type="password"
+                                        placeholder={tenant.has_sikka_credentials ? "••••••••" : "Enter App ID"}
+                                        {...field}
+                                    />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                    <FormField
+                        control={form.control}
+                        name="sikka_app_secret"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>App Secret</FormLabel>
+                                <FormControl>
+                                    <Input
+                                        type="password"
+                                        placeholder={tenant.has_sikka_credentials ? "••••••••" : "Enter App Secret"}
+                                        {...field}
+                                    />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                    <FormField
+                        control={form.control}
+                        name="sikka_office_id"
+                        render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Office ID</FormLabel>
+                                <FormControl>
+                                    <Input placeholder="office_id" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                </CredentialCard>
 
                 {editingSection && (
-                    <div className="flex justify-end">
+                    <div className="flex justify-end pt-4 border-t">
                         <Button type="submit" disabled={isSaving}>
                             {isSaving ? "Saving..." : "Save Credentials"}
                         </Button>

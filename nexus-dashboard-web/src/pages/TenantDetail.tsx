@@ -5,7 +5,6 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
     Card,
@@ -139,9 +138,6 @@ export default function TenantDetail() {
                 <div className="flex-1">
                     <div className="flex items-center gap-3">
                         <h2 className="text-3xl font-bold tracking-tight">{tenant.name}</h2>
-                        <Badge variant={tenant.is_active ? "default" : "secondary"}>
-                            {tenant.is_active ? "Active" : "Inactive"}
-                        </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground font-mono">{tenant.slug}</p>
                 </div>
@@ -180,14 +176,19 @@ export default function TenantDetail() {
                                 <div>
                                     <dt className="text-muted-foreground">Status</dt>
                                     <dd>
-                                        <Badge variant={tenant.is_active ? "default" : "secondary"}>
+                                        <span
+                                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tenant.is_active
+                                                ? "bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10"
+                                                : "bg-gray-50 text-gray-600 ring-gray-500/10 dark:bg-gray-900/20 dark:text-gray-400 dark:ring-gray-700/10"
+                                                }`}
+                                        >
                                             {tenant.is_active ? "Active" : "Inactive"}
-                                        </Badge>
+                                        </span>
                                     </dd>
                                 </div>
                                 <div>
                                     <dt className="text-muted-foreground">ID</dt>
-                                    <dd className="font-mono text-xs">{tenant.id}</dd>
+                                    <dd className="font-mono text-xs text-muted-foreground">{tenant.id}</dd>
                                 </div>
                             </dl>
                         </CardContent>
@@ -207,19 +208,24 @@ export default function TenantDetail() {
                                     </div>
                                     <div>
                                         <dt className="text-muted-foreground">Role</dt>
-                                        <dd className="capitalize">{tenant.user.role}</dd>
+                                        <dd className="capitalize text-muted-foreground">{tenant.user.role}</dd>
                                     </div>
                                     <div>
                                         <dt className="text-muted-foreground">Status</dt>
                                         <dd>
-                                            <Badge variant={tenant.user.is_active ? "default" : "secondary"}>
+                                            <span
+                                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tenant.user.is_active
+                                                    ? "bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10"
+                                                    : "bg-gray-50 text-gray-600 ring-gray-500/10 dark:bg-gray-900/20 dark:text-gray-400 dark:ring-gray-700/10"
+                                                    }`}
+                                            >
                                                 {tenant.user.is_active ? "Active" : "Inactive"}
-                                            </Badge>
+                                            </span>
                                         </dd>
                                     </div>
                                     <div>
                                         <dt className="text-muted-foreground">User ID</dt>
-                                        <dd className="font-mono text-xs">{tenant.user.id}</dd>
+                                        <dd className="font-mono text-xs text-muted-foreground">{tenant.user.id}</dd>
                                     </div>
                                 </dl>
                             </CardContent>
@@ -234,21 +240,21 @@ export default function TenantDetail() {
                         </CardHeader>
                         <CardContent>
                             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                                <div className="flex items-center gap-2">
-                                    <div className={`h-2 w-2 rounded-full ${tenant.has_nexhealth_key ? "bg-green-500" : "bg-gray-300"}`} />
-                                    <span className="text-sm">NexHealth</span>
+                                <div className={`flex items-center gap-2 ${tenant.has_nexhealth_key ? "text-foreground" : "text-muted-foreground/60"}`}>
+                                    <div className={`h-1.5 w-1.5 rounded-full ${tenant.has_nexhealth_key ? "bg-green-500" : "bg-gray-300 dark:bg-gray-700"}`} />
+                                    <span className="text-sm font-medium">NexHealth</span>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <div className={`h-2 w-2 rounded-full ${tenant.has_ghl_key ? "bg-green-500" : "bg-gray-300"}`} />
-                                    <span className="text-sm">GoHighLevel</span>
+                                <div className={`flex items-center gap-2 ${tenant.has_ghl_key ? "text-foreground" : "text-muted-foreground/60"}`}>
+                                    <div className={`h-1.5 w-1.5 rounded-full ${tenant.has_ghl_key ? "bg-green-500" : "bg-gray-300 dark:bg-gray-700"}`} />
+                                    <span className="text-sm font-medium">GoHighLevel</span>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <div className={`h-2 w-2 rounded-full ${tenant.has_retell_secret ? "bg-green-500" : "bg-gray-300"}`} />
-                                    <span className="text-sm">Retell AI</span>
+                                <div className={`flex items-center gap-2 ${tenant.has_retell_secret ? "text-foreground" : "text-muted-foreground/60"}`}>
+                                    <div className={`h-1.5 w-1.5 rounded-full ${tenant.has_retell_secret ? "bg-green-500" : "bg-gray-300 dark:bg-gray-700"}`} />
+                                    <span className="text-sm font-medium">Retell AI</span>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <div className={`h-2 w-2 rounded-full ${tenant.has_sikka_credentials ? "bg-green-500" : "bg-gray-300"}`} />
-                                    <span className="text-sm">Sikka</span>
+                                <div className={`flex items-center gap-2 ${tenant.has_sikka_credentials ? "text-foreground" : "text-muted-foreground/60"}`}>
+                                    <div className={`h-1.5 w-1.5 rounded-full ${tenant.has_sikka_credentials ? "bg-green-500" : "bg-gray-300 dark:bg-gray-700"}`} />
+                                    <span className="text-sm font-medium">Sikka</span>
                                 </div>
                             </div>
                         </CardContent>
