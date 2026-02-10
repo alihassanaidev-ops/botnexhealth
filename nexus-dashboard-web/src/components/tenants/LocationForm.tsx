@@ -10,7 +10,6 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
-    FormDescription,
 } from "@/components/ui/form";
 import {
     Select,
@@ -20,6 +19,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import type { Location, InstitutionBasicListResponse, NexHealthLocation } from "@/types";
@@ -167,7 +167,7 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                 {/* NexHealth Location Selection (Create Mode Only) */}
                 {!isEditing && (
                     <div className="space-y-2">
-                        <FormLabel>Select NexHealth Location (Optional)</FormLabel>
+                        <Label>Select NexHealth Location (Optional)</Label>
                         <Select onValueChange={onLocationSelect} disabled={isLoadingNH}>
                             <SelectTrigger>
                                 <SelectValue placeholder={isLoadingNH ? "Loading locations..." : "Choose a location to auto-fill"} />
@@ -181,9 +181,9 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                             </SelectContent>
                         </Select>
                         {isLoadingNH && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-                        <FormDescription>
+                        <p className="text-sm text-muted-foreground">
                             Selecting a location will auto-fill the form fields below.
-                        </FormDescription>
+                        </p>
                     </div>
                 )}
 
