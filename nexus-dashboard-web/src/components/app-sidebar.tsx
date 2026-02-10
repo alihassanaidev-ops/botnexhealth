@@ -69,7 +69,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { user, signOut } = useAuth();
 
     const displayEmail = user?.email ?? "—";
-    const isAdmin = user?.role === "admin" || user?.role === "superadmin";
     const hasTenant = !!user?.tenant_id;
 
     return (
