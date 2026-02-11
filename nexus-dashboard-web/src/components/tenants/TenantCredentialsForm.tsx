@@ -116,26 +116,41 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
         }
     }
 
-    const IntegrationStatus = ({ configured }: { configured: boolean }) => (
-        <div className="flex items-center gap-1.5 mt-2">
-            <div className={`h-1.5 w-1.5 rounded-full ${configured ? "bg-green-500" : "bg-neutral-300 dark:bg-neutral-600"}`} />
-            <span className="text-xs text-muted-foreground font-medium">
-                {configured ? "Connected" : "Not Connected"}
-            </span>
-        </div>
-    );
+    const IntegrationStatus = ({ configured, hasSystemKey = false }: { configured: boolean; hasSystemKey?: boolean }) => {
+        let statusColor = "bg-neutral-300 dark:bg-neutral-600";
+        let statusText = "Not Connected";
+
+        if (configured) {
+            statusColor = "bg-green-500";
+            statusText = "Connected";
+        } else if (hasSystemKey) {
+            statusColor = "bg-green-500/50";
+            statusText = "Connected (System)";
+        }
+
+        return (
+            <div className="flex items-center gap-1.5 mt-2">
+                <div className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
+                <span className="text-xs text-muted-foreground font-medium">
+                    {statusText}
+                </span>
+            </div>
+        );
+    };
 
     const CredentialCard = ({
         title,
         description,
         section,
         configured,
+        hasSystemKey = false,
         children,
     }: {
         title: string;
         description: string;
         section: SectionKey;
         configured: boolean;
+        hasSystemKey?: boolean;
         children: React.ReactNode;
     }) => {
         const isEditing = editingSection === section;
@@ -150,7 +165,7 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                         <p className="text-xs text-muted-foreground max-w-md">
                             {description}
                         </p>
-                        <IntegrationStatus configured={configured} />
+                        <IntegrationStatus configured={configured} hasSystemKey={hasSystemKey} />
                     </div>
 
                     <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
@@ -195,6 +210,7 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                     description="Sync patients, appointments, and providers from the practice management system."
                     section="nexhealth"
                     configured={tenant.has_nexhealth_key}
+                    hasSystemKey={tenant.has_system_nexhealth_key}
                 >
                     <div className="grid gap-4">
                         <FormField
