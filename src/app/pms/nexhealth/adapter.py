@@ -73,7 +73,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         )
 
         tenant_settings = Settings(
-            nexhealth_api_key=tenant.nexhealth_api_key,
+            nexhealth_api_key=tenant.nexhealth_api_key or global_settings.nexhealth_api_key,
             nexhealth_subdomain=subdomain,
             nexhealth_location_id=location_id,
         )

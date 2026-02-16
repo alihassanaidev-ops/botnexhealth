@@ -10,7 +10,7 @@ import logging
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -22,8 +22,13 @@ from src.app.services.auth import AuthService
 from src.app.services.supabase_service import SupabaseService
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.services.audit import log_audit_background
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 logger = logging.getLogger(__name__)
+
+# Rate limiter — keyed by client IP
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -46,7 +51,8 @@ class UserRead(BaseModel):
 
 
 @router.post("/supabase/token", response_model=Token)
-async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
+@limiter.limit("5/minute")
+async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) -> Token:
     """
     Exchange a Supabase access token for a local JWT.
     
@@ -135,7 +141,7 @@ async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
             "role": user.role,
             "tenant_id": user.tenant_id,
         },
-        expires_delta=timedelta(minutes=60)
+        expires_delta=timedelta(minutes=15)
     )
 
     # Audit: Success
@@ -152,7 +158,9 @@ async def exchange_supabase_token(data: SupabaseTokenRequest) -> Token:
 
 
 @router.get("/users/me", response_model=UserRead)
+@limiter.limit("30/minute")
 async def read_users_me(
+    request: Request,
     current_user: Annotated[User, Depends(get_current_active_user)]
 ) -> User:
     """

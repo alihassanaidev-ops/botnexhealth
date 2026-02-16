@@ -13,6 +13,10 @@ from src.app.retell.functions import router as retell_router
 from src.app.retell.webhooks import router as retell_webhook_router
 from src.app.api.routes.auth import router as auth_router
 from src.app.api.routes.tenant_setup import router as tenant_setup_router
+from src.app.api.routes.tenant_calls import router as tenant_calls_router
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +99,16 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Security headers (HSTS, X-Frame-Options, Cache-Control, etc.)
+    from src.app.middleware.security_headers import SecurityHeadersMiddleware
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    # Rate limiting
+    from src.app.api.routes.auth import limiter
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+
     # Add tenant middleware (after CORS, before routes)
     if settings.database_url:
         from src.app.middleware.tenant import TenantMiddleware
@@ -114,6 +128,7 @@ def create_app() -> FastAPI:
 
     # Tenant portal routes (authenticated tenant users)
     app.include_router(tenant_setup_router)
+    app.include_router(tenant_calls_router)
 
     return app
 

@@ -39,8 +39,8 @@ class Settings(BaseSettings):
     # Retell AI settings
     retell_api_secret: str | None = None
 
-    # Security
-    admin_api_key: str = "secret-admin-key"  # Default for dev, override in env
+    # Security (REQUIRED — no defaults, must be set in .env or Render secrets)
+    admin_api_key: str
 
     # GoHighLevel API settings
     ghl_api_key: str | None = None
@@ -73,8 +73,8 @@ class Settings(BaseSettings):
     sikka_app_id_file: str | None = None
     sikka_app_secret_file: str | None = None
     
-    # Auth / JWT
-    jwt_secret: str = "unsafe-secret-key-change-me"  # For dev only
+    # Auth / JWT (REQUIRED — no defaults, must be set in .env or Render secrets)
+    jwt_secret: str
     jwt_algorithm: str = "HS256"
     jwt_secret_file: str | None = None
 
@@ -120,6 +120,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "NEXHEALTH_API_KEY is required. Set via environment variable or "
                 "NEXHEALTH_API_KEY_FILE for Docker secrets."
+            )
+
+        # Block wildcard CORS in production
+        if self.app_env == "production" and self.cors_allowed_origins.strip() == "*":
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS must not be '*' in production. "
+                "Set explicit origins, e.g. 'https://dashboard.yourdomain.com'"
             )
 
         return self

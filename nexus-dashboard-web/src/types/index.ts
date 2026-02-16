@@ -182,3 +182,39 @@ export interface InstitutionBasicListResponse {
     code: boolean;
     data: InstitutionBasic[];
 }
+
+// ── GHL Call Intelligence ───────────────────────────────────────────────
+
+export interface CallRecord {
+    id: string;
+    patient_name: string;
+    contact_id: string | null;
+    phone: string | null;
+    email: string | null;
+    call_date: string | null;
+    call_time: string | null;
+    call_duration: string | null;
+    call_status: string | null;
+    call_status_normalized: string | null;
+    call_summary: string | null;
+    call_transcript: string | null;
+    recording_link: string | null;
+    next_action: string | null;
+    patient_intent: string | null;
+    new_patient: string | null;
+    preferred_callback_time: string | null;
+    times_called: string | null;
+    agent_used: string | null;
+    complaining_patient: string | null;
+    insurance_and_billing: string | null;
+    patient_contact_status: string | null;
+    monetary_value: number | null;
+    pipeline_stage: string | null;
+}
+
+export interface CallsResponse {
+    calls: CallRecord[];
+    total: number;
+    counts: Record<string, number>;
+}
+

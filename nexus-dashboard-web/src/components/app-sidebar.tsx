@@ -28,6 +28,7 @@ import {
     CalendarCheck,
     UserCog,
     Armchair,
+    Phone,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
@@ -38,6 +39,11 @@ const navAdmin = [
         title: "Dashboard",
         url: "/dashboard",
         icon: Home,
+    },
+    {
+        title: "Patient Calls",
+        url: "/calls",
+        icon: Phone,
     },
     {
         title: "Tenants",

@@ -9,6 +9,7 @@ import AppLayout from "./components/AppLayout";
 import AppointmentTypes from "./pages/AppointmentTypes";
 import ProvidersScheduling from "./pages/ProvidersScheduling";
 import Operatories from "./pages/Operatories";
+import Calls from "./pages/Calls";
 
 export const router = createBrowserRouter([
     {
@@ -33,6 +34,10 @@ export const router = createBrowserRouter([
                     {
                         path: "dashboard",
                         element: <Dashboard />,
+                    },
+                    {
+                        path: "calls",
+                        element: <Calls />,
                     },
                     {
                         path: "tenants",

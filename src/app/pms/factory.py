@@ -25,9 +25,12 @@ async def get_adapter_for_tenant(tenant: "Tenant") -> PMSAdapter:
     if cached is not None:
         return cached
 
+
     adapter: PMSAdapter
 
-    if tenant.nexhealth_api_key:
+    from src.app.config import settings
+
+    if tenant.nexhealth_api_key or settings.nexhealth_api_key:
         from src.app.pms.nexhealth.adapter import NexHealthAdapter
         adapter = await NexHealthAdapter.create(tenant)
     elif tenant.sikka_app_id:
@@ -50,7 +53,9 @@ async def get_adapter_for_tenant_location(tenant: "Tenant", location: "TenantLoc
 
     adapter: PMSAdapter
 
-    if tenant.nexhealth_api_key:
+    from src.app.config import settings
+
+    if tenant.nexhealth_api_key or settings.nexhealth_api_key:
         from src.app.pms.nexhealth.adapter import NexHealthAdapter
         adapter = await NexHealthAdapter.create(tenant, location=location)
     elif tenant.sikka_app_id:

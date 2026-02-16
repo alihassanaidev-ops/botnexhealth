@@ -68,6 +68,45 @@ class GHLClient:
             return f"{minutes}m {remaining_seconds}s"
         return f"{remaining_seconds}s"
 
+    async def search_opportunities(
+        self,
+        limit: int = 100,
+        page: int = 1,
+    ) -> dict[str, Any]:
+        """
+        Search opportunities in GHL for this location.
+
+        Args:
+            limit: Max results per page (max 100).
+            page: Page number (1-indexed).
+
+        Returns:
+            GHL API response with opportunities list.
+        """
+        client = await self._get_client()
+
+        body: dict[str, Any] = {
+            "locationId": self.location_id,
+            "limit": min(limit, 100),
+            "page": page,
+        }
+
+        logger.info(f"Searching GHL opportunities: location={self.location_id}, limit={limit}, page={page}")
+
+        try:
+            response = await client.post("/opportunities/search", json=body)
+            response.raise_for_status()
+            result = response.json()
+            count = len(result.get("opportunities", []))
+            logger.info(f"GHL opportunities fetched: {count} results")
+            return result
+        except httpx.HTTPStatusError as e:
+            logger.error(f"GHL API error: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"GHL client error: {e}")
+            raise
+
     async def upsert_contact_from_retell(
         self,
         phone_number: str,
