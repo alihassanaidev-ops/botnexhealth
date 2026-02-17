@@ -122,8 +122,9 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                 const defaults = form.formState.defaultValues as Record<string, unknown>;
                 for (const [key, val] of Object.entries(values)) {
                     if (key === "slug") continue;
-                    if (val !== defaults[key] && val !== "") {
-                        payload[key] = val;
+                    if (val !== defaults[key]) {
+                        // Send empty string as null to clear optional fields
+                        payload[key] = val === "" ? null : val;
                     }
                 }
 

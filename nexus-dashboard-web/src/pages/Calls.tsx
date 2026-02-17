@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react"
+import React, { useEffect, useState, useCallback, useRef } from "react"
 import {
     CalendarSearch,
     Phone,
@@ -322,7 +322,10 @@ export default function Calls() {
     const [searchInput, setSearchInput] = useState("")
     const [currentPage, setCurrentPage] = useState(1)
 
+    // Fetch calls with stale-request guard
+    const fetchIdRef = useRef(0)
     const fetchCalls = useCallback(async () => {
+        const id = ++fetchIdRef.current
         setLoading(true)
         setError(null)
         try {
@@ -332,13 +335,20 @@ export default function Calls() {
                 page: currentPage,
                 page_size: 20,
             })
-            setData(result)
+            // Only apply if this is still the latest request
+            if (id === fetchIdRef.current) {
+                setData(result)
+            }
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : "Failed to load calls"
-            setError(message)
-            toast.error(message)
+            if (id === fetchIdRef.current) {
+                const message = err instanceof Error ? err.message : "Failed to load calls"
+                setError(message)
+                toast.error(message)
+            }
         } finally {
-            setLoading(false)
+            if (id === fetchIdRef.current) {
+                setLoading(false)
+            }
         }
     }, [statusFilter, searchQuery, currentPage])
 
@@ -536,9 +546,8 @@ export default function Calls() {
                                                 call.complaining_patient.toLowerCase() !== "false"
 
                                             return (
-                                                <>
+                                                <React.Fragment key={call.id}>
                                                     <TableRow
-                                                        key={call.id}
                                                         className={`cursor-pointer ${hasComplaint ? "bg-rose-50/50 dark:bg-rose-950/20" : ""} ${isExpanded ? "border-b-0" : ""}`}
                                                         onClick={() => toggleRow(call.id)}
                                                     >
@@ -592,13 +601,13 @@ export default function Calls() {
                                                         </TableCell>
                                                     </TableRow>
                                                     {isExpanded && (
-                                                        <TableRow key={`${call.id}-detail`}>
+                                                        <TableRow>
                                                             <TableCell colSpan={6} className="p-0">
                                                                 <CallDetail call={call} />
                                                             </TableCell>
                                                         </TableRow>
                                                     )}
-                                                </>
+                                                </React.Fragment>
                                             )
                                         })}
                                     </TableBody>

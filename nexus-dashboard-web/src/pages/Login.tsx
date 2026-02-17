@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { useNavigate } from "react-router-dom"
 
 const formSchema = z.object({
     email: z.string().email({ message: "Invalid email address" }),
@@ -23,7 +22,6 @@ const formSchema = z.object({
 
 export default function Login() {
     const { signInWithSupabase } = useAuth()
-    const navigate = useNavigate()
     const [loading, setLoading] = useState(false)
 
     const form = useForm<z.infer<typeof formSchema>>({
@@ -38,7 +36,7 @@ export default function Login() {
         setLoading(true)
         try {
             await signInWithSupabase(values.email, values.password);
-            navigate("/");
+            // onAuthStateChange in AuthContext handles navigation after token exchange
         } catch (error) {
             // Error handled in AuthContext with toast
         } finally {

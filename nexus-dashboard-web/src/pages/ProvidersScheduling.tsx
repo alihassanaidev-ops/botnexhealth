@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -22,16 +22,22 @@ export default function ProvidersScheduling() {
     const [availabilities, setAvailabilities] = useState<CachedAvailability[]>([])
     const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
     const [selectedProviderId, setSelectedProviderId] = useState<string>("")
+    const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [loading, setLoading] = useState(true)
+    const [loadingAvailabilities, setLoadingAvailabilities] = useState(false)
     const [syncing, setSyncing] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const initialLoadDone = useRef(false)
 
     // Edit dialog state
     const [editTarget, setEditTarget] = useState<CachedAvailability | null>(null)
     const [editTypeIds, setEditTypeIds] = useState<string[]>([])
     const [saving, setSaving] = useState(false)
 
+    // Load providers + appointment types once on mount
     const fetchData = useCallback(async () => {
         setLoading(true)
+        setError(null)
         try {
             const [p, at] = await Promise.all([
                 listProviders(),
@@ -39,25 +45,32 @@ export default function ProvidersScheduling() {
             ])
             setProviders(p)
             setAppointmentTypes(at)
-            if (p.length > 0 && !selectedProviderId) {
+            // Auto-select first provider on initial load
+            if (p.length > 0 && !initialLoadDone.current) {
                 setSelectedProviderId(p[0].source_id)
+                initialLoadDone.current = true
             }
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : "Failed to load data"
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : "Failed to load data"
+            setError(message)
             toast.error(message)
         } finally {
             setLoading(false)
         }
-    }, [selectedProviderId])
+    }, [])
 
+    // Fetch availabilities when provider changes
     const fetchAvailabilities = useCallback(async () => {
         if (!selectedProviderId) return
+        setLoadingAvailabilities(true)
         try {
             const data = await listAvailabilities(undefined, selectedProviderId)
             setAvailabilities(data)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load availabilities"
             toast.error(message)
+        } finally {
+            setLoadingAvailabilities(false)
         }
     }, [selectedProviderId])
 
@@ -68,6 +81,11 @@ export default function ProvidersScheduling() {
     useEffect(() => {
         fetchAvailabilities()
     }, [fetchAvailabilities])
+
+    // Reset appointment type filter when provider changes
+    useEffect(() => {
+        setSelectedApptTypeId("all")
+    }, [selectedProviderId])
 
     const handleSync = async () => {
         setSyncing(true)
@@ -122,9 +140,21 @@ export default function ProvidersScheduling() {
     }
 
     const selectedProvider = providers.find((p) => p.source_id === selectedProviderId)
+
+    // Filter availabilities by selected appointment type
+    const filteredAvailabilities = selectedApptTypeId === "all"
+        ? availabilities
+        : availabilities.filter(
+            (av) => av.appointment_type_ids?.includes(selectedApptTypeId)
+        )
+
     const unlinkedCount = availabilities.filter(
         (av) => !av.appointment_type_ids || av.appointment_type_ids.length === 0
     ).length
+
+    // Collect appointment types that appear in this provider's availabilities
+    const availableApptTypeIds = new Set(availabilities.flatMap((av) => av.appointment_type_ids || []))
+    const relevantApptTypes = appointmentTypes.filter((at) => availableApptTypeIds.has(at.source_id))
 
     return (
         <div className="flex-1 space-y-4 p-8 pt-6">
@@ -142,7 +172,16 @@ export default function ProvidersScheduling() {
                 </div>
             </div>
 
-            {unlinkedCount > 0 && (
+            {error && (
+                <Alert variant="destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription>
+                        {error}. Please try refreshing the page or click Sync.
+                    </AlertDescription>
+                </Alert>
+            )}
+
+            {unlinkedCount > 0 && !loading && !error && (
                 <Alert className="border-yellow-200 bg-yellow-50 text-yellow-800">
                     <AlertTriangle className="h-4 w-4" />
                     <AlertDescription>
@@ -162,21 +201,42 @@ export default function ProvidersScheduling() {
                 </Card>
             ) : (
                 <>
-                    <div className="flex items-center gap-3">
-                        <label className="text-sm font-medium">Provider:</label>
-                        <Select value={selectedProviderId} onValueChange={setSelectedProviderId}>
-                            <SelectTrigger className="w-[280px]">
-                                <SelectValue placeholder="Select provider" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {providers.map((p) => (
-                                    <SelectItem key={p.source_id} value={p.source_id}>
-                                        {p.name || `${p.first_name} ${p.last_name}`}
-                                        {p.specialty ? ` (${p.specialty})` : ""}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                    {/* Filters: Provider → Appointment Type */}
+                    <div className="flex items-center gap-4 flex-wrap">
+                        <div className="flex items-center gap-2">
+                            <label className="text-sm font-medium whitespace-nowrap">Provider:</label>
+                            <Select value={selectedProviderId} onValueChange={setSelectedProviderId}>
+                                <SelectTrigger className="w-[280px]">
+                                    <SelectValue placeholder="Select provider" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {providers.map((p) => (
+                                        <SelectItem key={p.source_id} value={p.source_id}>
+                                            {p.name || `${p.first_name} ${p.last_name}`}
+                                            {p.specialty ? ` (${p.specialty})` : ""}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <label className="text-sm font-medium whitespace-nowrap">Appointment Type:</label>
+                            <Select value={selectedApptTypeId} onValueChange={setSelectedApptTypeId}>
+                                <SelectTrigger className="w-[260px]">
+                                    <SelectValue placeholder="All Types" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All Types</SelectItem>
+                                    {relevantApptTypes.map((at) => (
+                                        <SelectItem key={at.source_id} value={at.source_id}>
+                                            {at.name}
+                                            {at.duration_minutes ? ` (${at.duration_minutes} min)` : ""}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
                     </div>
 
                     <Card>
@@ -185,18 +245,23 @@ export default function ProvidersScheduling() {
                                 Availabilities for {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}
                             </CardTitle>
                             <CardDescription>
-                                {availabilities.length} schedule{availabilities.length !== 1 ? "s" : ""} found.
+                                {filteredAvailabilities.length} schedule{filteredAvailabilities.length !== 1 ? "s" : ""} found
+                                {selectedApptTypeId !== "all" ? " (filtered)" : ""}.
                                 Click "Edit Linking" to associate appointment types.
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
-                            {availabilities.length === 0 ? (
+                            {loadingAvailabilities ? (
+                                <div className="flex justify-center py-6 text-muted-foreground">Loading availabilities...</div>
+                            ) : filteredAvailabilities.length === 0 ? (
                                 <p className="text-center py-6 text-muted-foreground">
-                                    No availabilities found for this provider.
+                                    {selectedApptTypeId !== "all"
+                                        ? "No availabilities match this appointment type."
+                                        : "No availabilities found for this provider."}
                                 </p>
                             ) : (
                                 <div className="space-y-3">
-                                    {availabilities.map((av) => {
+                                    {filteredAvailabilities.map((av) => {
                                         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
                                         return (
                                             <div

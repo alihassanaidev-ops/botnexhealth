@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -66,6 +66,26 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
             sikka_app_secret: "",
         },
     });
+
+    // Reset form when tenant data is refreshed (e.g. after save)
+    useEffect(() => {
+        form.reset({
+            nexhealth_subdomain: tenant.nexhealth_subdomain || "",
+            nexhealth_location_id: tenant.nexhealth_location_id || "",
+            nexhealth_api_key: "",
+            ghl_location_id: tenant.ghl_location_id || "",
+            ghl_api_key: "",
+            ghl_custom_fields: tenant.ghl_custom_fields
+                ? JSON.stringify(tenant.ghl_custom_fields, null, 2)
+                : "",
+            retell_agent_id: tenant.retell_agent_id || "",
+            retell_api_secret: "",
+            sikka_office_id: tenant.sikka_office_id || "",
+            sikka_app_id: "",
+            sikka_app_secret: "",
+        });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tenant]);
 
     async function onSubmit(values: CredentialsFormValues) {
         setIsSaving(true);

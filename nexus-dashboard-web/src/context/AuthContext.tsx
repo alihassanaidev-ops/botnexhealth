@@ -25,6 +25,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const location = useLocation();
     const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // Use refs so the onAuthStateChange callback always has current values
+    const locationRef = useRef(location);
+    const userRef = useRef(user);
+    useEffect(() => { locationRef.current = location; }, [location]);
+    useEffect(() => { userRef.current = user; }, [user]);
+
     // ---- Token exchange helper ----
     const exchangeToken = useCallback(async (supabaseAccessToken: string): Promise<boolean> => {
         try {
@@ -121,11 +127,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             } else if (event === 'SIGNED_IN' && session?.user) {
                 if (isInviteOrRecovery) {
                     navigate("/set-password");
-                } else if (!user) {
+                } else if (!userRef.current) {
                     const ok = await completeSignIn(session.access_token);
                     if (ok) {
-                        const from = (location.state as Record<string, { pathname?: string }>)?.from?.pathname || "/";
-                        if (location.pathname === "/login") {
+                        const loc = locationRef.current;
+                        const from = (loc.state as Record<string, { pathname?: string }>)?.from?.pathname || "/";
+                        if (loc.pathname === "/login") {
                             navigate(from, { replace: true });
                         }
                     } else {
@@ -141,7 +148,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
 
         return () => subscription.unsubscribe();
-    }, [navigate, location.pathname]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // ---- Sign in with email + password ----
     const signInWithSupabase = async (email: string, password: string) => {
@@ -151,7 +159,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             toast.error(error.message);
             throw error;
         }
-        // onAuthStateChange handles the rest
+        // onAuthStateChange handles the rest (token exchange, navigate)
     };
 
     // ---- Update password (invite / recovery flow) ----
