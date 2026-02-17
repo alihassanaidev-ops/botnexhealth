@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.api.deps import get_current_active_user
-from src.app.database import get_db_session
+from src.app.database import get_db_session_dep
 from src.app.gohighlevel.client import GHLClient
 from src.app.models.tenant import Tenant
 from src.app.models.user import User
@@ -178,7 +178,7 @@ def _process_opportunity(
 @router.get("", response_model=CallsResponse)
 async def list_calls(
     user: Annotated[User, Depends(get_current_active_user)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: Annotated[AsyncSession, Depends(get_db_session_dep)],
     status_filter: str | None = Query(None, alias="status", description="Filter by call status bucket"),
     search: str | None = Query(None, description="Search patient name"),
     page: int = Query(1, ge=1, description="Page number"),

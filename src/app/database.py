@@ -76,6 +76,28 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
         await session.close()
 
 
+async def get_db_session_dep() -> AsyncGenerator[AsyncSession, None]:
+    """
+    FastAPI-compatible dependency for database sessions.
+
+    Use this with ``Depends(get_db_session_dep)`` in route signatures.
+    The plain ``get_db_session`` (decorated with @asynccontextmanager)
+    should only be used with ``async with get_db_session() as session:``.
+    """
+    if not _session_factory:
+        raise RuntimeError("Database not initialized. Call init_database() first.")
+
+    session = _session_factory()
+    try:
+        yield session
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
+
+
 async def create_tables() -> None:
     """Create all tables in the database if they don't exist."""
     if not _engine:
