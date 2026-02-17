@@ -8,6 +8,7 @@ No GHL credentials are ever exposed to the frontend.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -63,9 +64,28 @@ class CallsResponse(BaseModel):
     calls: list[CallRecord]
     total: int
     counts: dict[str, int]
+    page: int = 1
+    page_size: int = 20
+    total_pages: int = 1
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
+
+
+def _safe_parse_date(raw_date: Any) -> str | None:
+    """Safely parse a date value from GHL, returning None on failure."""
+    if not raw_date:
+        return None
+    try:
+        if isinstance(raw_date, (int, float)):
+            return datetime.fromtimestamp(raw_date / 1000).strftime("%Y-%m-%d")
+        elif isinstance(raw_date, str):
+            return datetime.fromisoformat(raw_date).strftime("%Y-%m-%d")
+        else:
+            return str(raw_date)
+    except (ValueError, TypeError, OSError) as e:
+        logger.warning(f"Failed to parse date value {raw_date!r}: {e}")
+        return str(raw_date)
 
 
 def _get_custom_field_value(
@@ -79,15 +99,7 @@ def _get_custom_field_value(
     for field in opportunity["customFields"]:
         if field.get("id") == field_id:
             raw_date = field.get("fieldValueDate")
-            date_val: str | None = None
-            if raw_date:
-                if isinstance(raw_date, (int, float)):
-                    # GHL returns epoch milliseconds for date fields
-                    date_val = datetime.fromtimestamp(raw_date / 1000).strftime("%Y-%m-%d")
-                elif isinstance(raw_date, str):
-                    date_val = datetime.fromisoformat(raw_date).strftime("%Y-%m-%d")
-                else:
-                    date_val = str(raw_date)
+            date_val = _safe_parse_date(raw_date)
             str_val = field.get("fieldValueString")
             if str_val:
                 return str_val
@@ -134,52 +146,54 @@ def _process_opportunity(
     field_map: dict[str, str],
 ) -> CallRecord | None:
     """Transform a raw GHL opportunity into a CallRecord."""
-    agent_used = _get_custom_field_value(opp, field_map.get("agent_used"))
+    try:
+        agent_used = _get_custom_field_value(opp, field_map.get("agent_used"))
 
-    # Filter: only include calls from our Retell agent
-    # Accept if agent_used is not mapped or if it matches
-    if field_map.get("agent_used") and (
-        not agent_used
-    ):
+        # Filter: only include calls from our Retell agent
+        if field_map.get("agent_used") and not agent_used:
+            return None
+
+        call_date = _get_custom_field_value(opp, field_map.get("call_date"))
+        if not call_date:
+            return None
+
+        raw_status = _get_custom_field_value(opp, field_map.get("call_status")) or ""
+        normalized = _normalize_status(raw_status)
+
+        return CallRecord(
+            id=opp.get("id", ""),
+            patient_name=(
+                opp.get("name")
+                or opp.get("contact", {}).get("name")
+                or "Unknown Patient"
+            ),
+            contact_id=opp.get("contact", {}).get("id"),
+            phone=_get_custom_field_value(opp, field_map.get("phone")) or opp.get("contact", {}).get("phone"),
+            email=opp.get("contact", {}).get("email"),
+            call_date=call_date,
+            call_time=_get_custom_field_value(opp, field_map.get("call_time")),
+            call_duration=_get_custom_field_value(opp, field_map.get("call_duration")) or "0:00",
+            call_status=raw_status,
+            call_status_normalized=_status_bucket(normalized),
+            call_summary=_get_custom_field_value(opp, field_map.get("call_summary")),
+            call_transcript=_get_custom_field_value(opp, field_map.get("call_transcript")),
+            recording_link=_get_custom_field_value(opp, field_map.get("recording_link")),
+            next_action=_get_custom_field_value(opp, field_map.get("next_action")),
+            patient_intent=_get_custom_field_value(opp, field_map.get("patient_intent")),
+            new_patient=_get_custom_field_value(opp, field_map.get("new_patient")),
+            preferred_callback_time=_get_custom_field_value(opp, field_map.get("preferred_callback_time")),
+            times_called=_get_custom_field_value(opp, field_map.get("times_called")),
+            agent_used=agent_used,
+            complaining_patient=_get_custom_field_value(opp, field_map.get("complaining_patient")),
+            insurance_and_billing=_get_custom_field_value(opp, field_map.get("insurance_and_billing")),
+            patient_contact_status=_get_custom_field_value(opp, field_map.get("patient_contact_status")),
+            monetary_value=opp.get("monetaryValue"),
+            pipeline_stage=opp.get("pipelineStage", {}).get("name"),
+        )
+    except Exception as e:
+        opp_id = opp.get("id", "unknown")
+        logger.warning(f"Failed to process opportunity {opp_id}: {e}")
         return None
-
-    call_date = _get_custom_field_value(opp, field_map.get("call_date"))
-    if not call_date:
-        return None
-
-    raw_status = _get_custom_field_value(opp, field_map.get("call_status")) or ""
-    normalized = _normalize_status(raw_status)
-
-    return CallRecord(
-        id=opp.get("id", ""),
-        patient_name=(
-            opp.get("name")
-            or opp.get("contact", {}).get("name")
-            or "Unknown Patient"
-        ),
-        contact_id=opp.get("contact", {}).get("id"),
-        phone=_get_custom_field_value(opp, field_map.get("phone")) or opp.get("contact", {}).get("phone"),
-        email=opp.get("contact", {}).get("email"),
-        call_date=call_date,
-        call_time=_get_custom_field_value(opp, field_map.get("call_time")),
-        call_duration=_get_custom_field_value(opp, field_map.get("call_duration")) or "0:00",
-        call_status=raw_status,
-        call_status_normalized=_status_bucket(normalized),
-        call_summary=_get_custom_field_value(opp, field_map.get("call_summary")),
-        call_transcript=_get_custom_field_value(opp, field_map.get("call_transcript")),
-        recording_link=_get_custom_field_value(opp, field_map.get("recording_link")),
-        next_action=_get_custom_field_value(opp, field_map.get("next_action")),
-        patient_intent=_get_custom_field_value(opp, field_map.get("patient_intent")),
-        new_patient=_get_custom_field_value(opp, field_map.get("new_patient")),
-        preferred_callback_time=_get_custom_field_value(opp, field_map.get("preferred_callback_time")),
-        times_called=_get_custom_field_value(opp, field_map.get("times_called")),
-        agent_used=agent_used,
-        complaining_patient=_get_custom_field_value(opp, field_map.get("complaining_patient")),
-        insurance_and_billing=_get_custom_field_value(opp, field_map.get("insurance_and_billing")),
-        patient_contact_status=_get_custom_field_value(opp, field_map.get("patient_contact_status")),
-        monetary_value=opp.get("monetaryValue"),
-        pipeline_stage=opp.get("pipelineStage", {}).get("name"),
-    )
 
 
 # ── Routes ───────────────────────────────────────────────────────────────
@@ -192,6 +206,7 @@ async def list_calls(
     status_filter: str | None = Query(None, alias="status", description="Filter by call status bucket"),
     search: str | None = Query(None, description="Search patient name"),
     page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Results per page"),
 ) -> CallsResponse:
     """
     List patient calls from GoHighLevel.
@@ -223,10 +238,10 @@ async def list_calls(
     # Get custom field mapping (or empty dict)
     field_map: dict[str, str] = tenant.ghl_custom_fields or {}
 
-    # Fetch from GHL
+    # Fetch from GHL — pass page_size as limit for server-side pagination
     client = GHLClient(api_key=ghl_key, location_id=ghl_location)
     try:
-        result = await client.search_opportunities(limit=100, page=page)
+        result = await client.search_opportunities(limit=page_size, page=page)
     except Exception as e:
         logger.error(f"Failed to fetch calls from GHL: {e}")
         raise HTTPException(
@@ -235,6 +250,10 @@ async def list_calls(
         )
     finally:
         await client.close()
+
+    # Read total from GHL meta
+    ghl_total = result.get("meta", {}).get("total", 0)
+    total_pages = max(1, math.ceil(ghl_total / page_size)) if ghl_total else 1
 
     # Process opportunities
     raw_opportunities = result.get("opportunities", [])
@@ -256,7 +275,7 @@ async def list_calls(
         search_lower = search.lower()
         calls = [c for c in calls if search_lower in c.patient_name.lower()]
 
-    # Count by status bucket
+    # Count by status bucket (from current page)
     counts: dict[str, int] = {
         "need_booking": 0,
         "need_cancellation": 0,
@@ -265,7 +284,6 @@ async def list_calls(
         "needs_follow_up": 0,
         "no_action": 0,
     }
-    # Use unfiltered calls for counts but recalculate from all processed
     for opp in raw_opportunities:
         record = _process_opportunity(opp, field_map)
         if record and record.call_status_normalized:
@@ -275,6 +293,9 @@ async def list_calls(
 
     return CallsResponse(
         calls=calls,
-        total=len(calls),
+        total=ghl_total,
         counts=counts,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
     )

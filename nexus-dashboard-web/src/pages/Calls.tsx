@@ -3,14 +3,13 @@ import {
     CalendarSearch,
     Phone,
     AlertTriangle,
-    Clock,
     CheckCircle2,
     XCircle,
     CalendarClock,
     Siren,
     BellRing,
     ChevronDown,
-    ChevronUp,
+    ChevronRight,
     ExternalLink,
     Search,
     X,
@@ -19,8 +18,10 @@ import {
     Headphones,
     Zap,
     ShieldAlert,
+    ChevronLeft,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -116,228 +117,194 @@ function formatTime(timeStr: string | null): string {
     }
 }
 
-// ── Call Card Component ─────────────────────────────────────────────────
+// ── Pagination Component ────────────────────────────────────────────────
 
-function CallCard({
-    call,
-    isExpanded,
-    onToggle,
+function Pagination({
+    page,
+    totalPages,
+    onPageChange,
 }: {
-    call: CallRecord
-    isExpanded: boolean
-    onToggle: () => void
+    page: number
+    totalPages: number
+    onPageChange: (page: number) => void
 }) {
-    const statusKey = call.call_status_normalized || "no_action"
-    const config = STATUS_CONFIG[statusKey] || STATUS_CONFIG.no_action
-    const StatusIcon = config.icon
+    if (totalPages <= 1) return null
+
+    // Build page numbers: show up to 5 around current page
+    const pages: number[] = []
+    let start = Math.max(1, page - 2)
+    const end = Math.min(totalPages, start + 4)
+    start = Math.max(1, end - 4)
+    for (let i = start; i <= end; i++) pages.push(i)
+
+    return (
+        <div className="flex items-center justify-between pt-4">
+            <span className="text-sm text-muted-foreground">
+                Page {page} of {totalPages}
+            </span>
+            <div className="flex items-center gap-1">
+                <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page <= 1}
+                    onClick={() => onPageChange(page - 1)}
+                    className="h-8 w-8 p-0"
+                >
+                    <ChevronLeft className="h-4 w-4" />
+                </Button>
+                {pages.map((p) => (
+                    <Button
+                        key={p}
+                        variant={p === page ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => onPageChange(p)}
+                        className="h-8 w-8 p-0 tabular-nums"
+                    >
+                        {p}
+                    </Button>
+                ))}
+                <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= totalPages}
+                    onClick={() => onPageChange(page + 1)}
+                    className="h-8 w-8 p-0"
+                >
+                    <ChevronRight className="h-4 w-4" />
+                </Button>
+            </div>
+        </div>
+    )
+}
+
+// ── Expanded Row Detail ─────────────────────────────────────────────────
+
+function CallDetail({ call }: { call: CallRecord }) {
     const hasComplaint =
         call.complaining_patient &&
         call.complaining_patient.toLowerCase() !== "no" &&
         call.complaining_patient.toLowerCase() !== "false"
 
     return (
-        <Card className={`transition-all hover:shadow-md ${hasComplaint ? "ring-1 ring-rose-300 dark:ring-rose-700" : ""}`}>
+        <div className="px-4 py-4 space-y-4 bg-muted/30">
             {/* Complaint banner */}
             {hasComplaint && (
-                <div className="flex items-center gap-2 bg-rose-50 dark:bg-rose-950/40 px-4 py-2 text-sm text-rose-700 dark:text-rose-400 border-b border-rose-200 dark:border-rose-800 rounded-t-lg">
+                <div className="flex items-center gap-2 rounded-lg bg-rose-50 dark:bg-rose-950/40 px-4 py-2 text-sm text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800">
                     <ShieldAlert className="h-4 w-4 shrink-0" />
                     <span className="font-medium">Complaint Alert:</span>
                     <span className="truncate">{call.complaining_patient}</span>
                 </div>
             )}
 
-            <div
-                className="cursor-pointer p-4"
-                onClick={onToggle}
-            >
-                {/* Header row */}
-                <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-semibold text-sm">
-                                {call.patient_name}
-                            </span>
-                            {call.new_patient?.toLowerCase() === "yes" && (
-                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-primary/10 text-primary">
-                                    New Patient
-                                </Badge>
-                            )}
-                        </div>
-                        <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground flex-wrap">
-                            <span className="flex items-center gap-1">
-                                <Clock className="h-3 w-3" />
-                                {formatDate(call.call_date)}
-                                {call.call_time && ` · ${formatTime(call.call_time)}`}
-                            </span>
-                            {call.call_duration && call.call_duration !== "0:00" && (
-                                <span className="flex items-center gap-1">
-                                    <Phone className="h-3 w-3" />
-                                    {call.call_duration}
-                                </span>
-                            )}
-                            {call.times_called && (
-                                <span>{call.times_called} call(s)</span>
-                            )}
-                        </div>
-                    </div>
-
-                    <Badge
-                        variant="outline"
-                        className={`shrink-0 gap-1 ${config.color} ${config.bgColor} ${config.borderColor}`}
-                    >
-                        <StatusIcon className="h-3 w-3" />
-                        {call.call_status || config.label}
-                    </Badge>
+            {/* Next Action */}
+            {call.next_action && (
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3">
+                    <h4 className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5 mb-1">
+                        <Zap className="h-3.5 w-3.5" />
+                        Next Action To Do
+                    </h4>
+                    <p className="text-sm">{call.next_action}</p>
                 </div>
+            )}
 
-                {/* Summary preview */}
-                {call.call_summary && !isExpanded && (
-                    <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
-                        💬 {call.call_summary}
-                    </p>
-                )}
+            {/* Call Summary */}
+            {call.call_summary && (
+                <div>
+                    <h4 className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1">
+                        <MessageSquareText className="h-3.5 w-3.5" />
+                        Call Summary
+                    </h4>
+                    <p className="text-sm">{call.call_summary}</p>
+                </div>
+            )}
 
-                {/* Footer */}
-                <div className="flex items-center justify-between mt-3">
-                    {call.next_action ? (
-                        <span className="text-xs font-medium text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                            <AlertTriangle className="h-3 w-3" />
-                            Action Required
-                        </span>
-                    ) : (
-                        <span />
+            {/* Patient Info Grid */}
+            <div>
+                <h4 className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-2">
+                    <User2 className="h-3.5 w-3.5" />
+                    Patient Information
+                </h4>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+                    <div>
+                        <span className="text-xs text-muted-foreground">Name</span>
+                        <p className="font-medium">{call.patient_name}</p>
+                    </div>
+                    {call.phone && (
+                        <div>
+                            <span className="text-xs text-muted-foreground">Phone</span>
+                            <p className="font-medium">{call.phone}</p>
+                        </div>
                     )}
-                    <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 text-muted-foreground">
-                        {isExpanded ? (
-                            <>
-                                <ChevronUp className="h-3 w-3" />
-                                Hide Details
-                            </>
-                        ) : (
-                            <>
-                                <ChevronDown className="h-3 w-3" />
-                                View Details
-                            </>
-                        )}
-                    </Button>
+                    {call.email && (
+                        <div>
+                            <span className="text-xs text-muted-foreground">Email</span>
+                            <p className="font-medium">{call.email}</p>
+                        </div>
+                    )}
+                    {call.new_patient && (
+                        <div>
+                            <span className="text-xs text-muted-foreground">New Patient</span>
+                            <p className="font-medium">{call.new_patient}</p>
+                        </div>
+                    )}
+                    {call.patient_intent && (
+                        <div>
+                            <span className="text-xs text-muted-foreground">Intent</span>
+                            <p className="font-medium">{call.patient_intent}</p>
+                        </div>
+                    )}
+                    {call.preferred_callback_time && (
+                        <div>
+                            <span className="text-xs text-muted-foreground">Preferred Callback</span>
+                            <p className="font-medium">{call.preferred_callback_time}</p>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            {/* Expanded details */}
-            {isExpanded && (
-                <div className="border-t px-4 pb-4 pt-3 space-y-4">
-                    {/* Next Action */}
-                    {call.next_action && (
-                        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3">
-                            <h4 className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5 mb-1">
-                                <Zap className="h-3.5 w-3.5" />
-                                Next Action To Do
-                            </h4>
-                            <p className="text-sm">{call.next_action}</p>
-                        </div>
-                    )}
-
-                    {/* Call Summary */}
-                    {call.call_summary && (
-                        <div>
-                            <h4 className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1">
-                                <MessageSquareText className="h-3.5 w-3.5" />
-                                Call Summary
-                            </h4>
-                            <p className="text-sm">{call.call_summary}</p>
-                        </div>
-                    )}
-
-                    {/* Patient Info Grid */}
-                    <div>
-                        <h4 className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-2">
-                            <User2 className="h-3.5 w-3.5" />
-                            Patient Information
-                        </h4>
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                            <div>
-                                <span className="text-xs text-muted-foreground">Name</span>
-                                <p className="font-medium">{call.patient_name}</p>
-                            </div>
-                            {call.phone && (
-                                <div>
-                                    <span className="text-xs text-muted-foreground">Phone</span>
-                                    <p className="font-medium">{call.phone}</p>
-                                </div>
-                            )}
-                            {call.email && (
-                                <div>
-                                    <span className="text-xs text-muted-foreground">Email</span>
-                                    <p className="font-medium">{call.email}</p>
-                                </div>
-                            )}
-                            {call.new_patient && (
-                                <div>
-                                    <span className="text-xs text-muted-foreground">New Patient</span>
-                                    <p className="font-medium">{call.new_patient}</p>
-                                </div>
-                            )}
-                            {call.patient_intent && (
-                                <div>
-                                    <span className="text-xs text-muted-foreground">Intent</span>
-                                    <p className="font-medium">{call.patient_intent}</p>
-                                </div>
-                            )}
-                            {call.preferred_callback_time && (
-                                <div>
-                                    <span className="text-xs text-muted-foreground">Preferred Callback</span>
-                                    <p className="font-medium">{call.preferred_callback_time}</p>
-                                </div>
-                            )}
-                        </div>
+            {/* Insurance & Billing */}
+            {call.insurance_and_billing && (
+                <div>
+                    <h4 className="text-xs font-semibold text-muted-foreground mb-1.5">
+                        Insurance & Billing
+                    </h4>
+                    <div className="flex flex-wrap gap-1.5">
+                        {call.insurance_and_billing.split(",").map((tag, i) => (
+                            <Badge key={i} variant="secondary" className="text-xs">
+                                {tag.trim()}
+                            </Badge>
+                        ))}
                     </div>
-
-                    {/* Insurance & Billing */}
-                    {call.insurance_and_billing && (
-                        <div>
-                            <h4 className="text-xs font-semibold text-muted-foreground mb-1.5">
-                                💳 Insurance & Billing
-                            </h4>
-                            <div className="flex flex-wrap gap-1.5">
-                                {call.insurance_and_billing.split(",").map((tag, i) => (
-                                    <Badge key={i} variant="secondary" className="text-xs">
-                                        {tag.trim()}
-                                    </Badge>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Transcript */}
-                    {call.call_transcript && (
-                        <div>
-                            <h4 className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1">
-                                📝 Call Transcript
-                            </h4>
-                            <div className="text-xs bg-muted/50 rounded-lg p-3 max-h-48 overflow-y-auto whitespace-pre-wrap font-mono">
-                                {call.call_transcript}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Recording link */}
-                    {call.recording_link && (
-                        <a
-                            href={call.recording_link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <Button variant="outline" size="sm" className="gap-1.5">
-                                <Headphones className="h-3.5 w-3.5" />
-                                Listen to Recording
-                                <ExternalLink className="h-3 w-3" />
-                            </Button>
-                        </a>
-                    )}
                 </div>
             )}
-        </Card>
+
+            {/* Transcript */}
+            {call.call_transcript && (
+                <div>
+                    <h4 className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-1">
+                        Call Transcript
+                    </h4>
+                    <div className="text-xs bg-muted/50 rounded-lg p-3 max-h-48 overflow-y-auto whitespace-pre-wrap font-mono">
+                        {call.call_transcript}
+                    </div>
+                </div>
+            )}
+
+            {/* Recording link */}
+            {call.recording_link && (
+                <a
+                    href={call.recording_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    <Button variant="outline" size="sm" className="gap-1.5">
+                        <Headphones className="h-3.5 w-3.5" />
+                        Listen to Recording
+                        <ExternalLink className="h-3 w-3" />
+                    </Button>
+                </a>
+            )}
+        </div>
     )
 }
 
@@ -353,6 +320,7 @@ export default function Calls() {
     const [statusFilter, setStatusFilter] = useState<string>("")
     const [searchQuery, setSearchQuery] = useState("")
     const [searchInput, setSearchInput] = useState("")
+    const [currentPage, setCurrentPage] = useState(1)
 
     const fetchCalls = useCallback(async () => {
         setLoading(true)
@@ -361,6 +329,8 @@ export default function Calls() {
             const result = await listCalls({
                 status: statusFilter || undefined,
                 search: searchQuery || undefined,
+                page: currentPage,
+                page_size: 20,
             })
             setData(result)
         } catch (err: unknown) {
@@ -370,7 +340,7 @@ export default function Calls() {
         } finally {
             setLoading(false)
         }
-    }, [statusFilter, searchQuery])
+    }, [statusFilter, searchQuery, currentPage])
 
     useEffect(() => {
         fetchCalls()
@@ -382,7 +352,7 @@ export default function Calls() {
         return () => clearInterval(interval)
     }, [fetchCalls])
 
-    const toggleCard = (id: string) => {
+    const toggleRow = (id: string) => {
         setExpandedIds((prev) => {
             const next = new Set(prev)
             if (next.has(id)) next.delete(id)
@@ -393,16 +363,19 @@ export default function Calls() {
 
     const handleSearch = () => {
         setSearchQuery(searchInput)
+        setCurrentPage(1)
     }
 
     const clearFilters = () => {
         setStatusFilter("")
         setSearchInput("")
         setSearchQuery("")
+        setCurrentPage(1)
     }
 
     const filterByStatus = (status: string) => {
         setStatusFilter((prev) => (prev === status ? "" : status))
+        setCurrentPage(1)
     }
 
     const priorityCalls = data?.calls.filter((c) => c.next_action) ?? []
@@ -471,14 +444,14 @@ export default function Calls() {
                         <div className="flex items-center gap-2 flex-1 min-w-[200px]">
                             <Search className="h-4 w-4 text-muted-foreground shrink-0" />
                             <Input
-                                placeholder="Search by patient name…"
+                                placeholder="Search by patient name..."
                                 value={searchInput}
                                 onChange={(e) => setSearchInput(e.target.value)}
                                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
                                 className="h-9"
                             />
                         </div>
-                        <Select value={statusFilter} onValueChange={setStatusFilter}>
+                        <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v === "all" ? "" : v); setCurrentPage(1) }}>
                             <SelectTrigger className="w-[200px] h-9">
                                 <SelectValue placeholder="All Statuses" />
                             </SelectTrigger>
@@ -507,34 +480,28 @@ export default function Calls() {
 
             {/* Main Content Grid */}
             <div className="grid gap-6 lg:grid-cols-7">
-                {/* Calls List — 5 cols */}
+                {/* Calls Table — 5 cols */}
                 <div className="lg:col-span-5 space-y-3">
                     <div className="flex items-center justify-between">
                         <h3 className="font-semibold flex items-center gap-2">
-                            📋 Patient Calls
+                            Patient Calls
                             <Badge variant="secondary" className="tabular-nums">
                                 {data?.total ?? 0}
                             </Badge>
                         </h3>
                     </div>
 
-                    {loading ? (
-                        <div className="space-y-3">
-                            {[1, 2, 3, 4].map((i) => (
-                                <Card key={i}>
-                                    <CardContent className="p-4 space-y-3">
-                                        <div className="flex justify-between">
-                                            <Skeleton className="h-5 w-40" />
-                                            <Skeleton className="h-5 w-24" />
-                                        </div>
-                                        <Skeleton className="h-4 w-full" />
-                                        <Skeleton className="h-3 w-32" />
-                                    </CardContent>
-                                </Card>
-                            ))}
-                        </div>
-                    ) : data?.calls.length === 0 ? (
-                        <Card>
+                    <Card>
+                        {loading ? (
+                            <CardContent className="p-4 space-y-3">
+                                {[1, 2, 3, 4].map((i) => (
+                                    <div key={i} className="flex justify-between py-3">
+                                        <Skeleton className="h-5 w-40" />
+                                        <Skeleton className="h-5 w-24" />
+                                    </div>
+                                ))}
+                            </CardContent>
+                        ) : data?.calls.length === 0 ? (
                             <CardContent className="flex flex-col items-center justify-center py-12 text-center">
                                 <Phone className="h-10 w-10 text-muted-foreground/40 mb-3" />
                                 <p className="font-medium">No calls found</p>
@@ -544,19 +511,110 @@ export default function Calls() {
                                         : "Calls will appear here once your GHL integration is active"}
                                 </p>
                             </CardContent>
-                        </Card>
-                    ) : (
-                        <div className="space-y-3">
-                            {data?.calls.map((call) => (
-                                <CallCard
-                                    key={call.id}
-                                    call={call}
-                                    isExpanded={expandedIds.has(call.id)}
-                                    onToggle={() => toggleCard(call.id)}
-                                />
-                            ))}
-                        </div>
-                    )}
+                        ) : (
+                            <>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead className="w-8"></TableHead>
+                                            <TableHead>Patient</TableHead>
+                                            <TableHead>Date</TableHead>
+                                            <TableHead>Duration</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead>Intent</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {data?.calls.map((call) => {
+                                            const isExpanded = expandedIds.has(call.id)
+                                            const statusKey = call.call_status_normalized || "no_action"
+                                            const config = STATUS_CONFIG[statusKey] || STATUS_CONFIG.no_action
+                                            const StatusIcon = config.icon
+                                            const hasComplaint =
+                                                call.complaining_patient &&
+                                                call.complaining_patient.toLowerCase() !== "no" &&
+                                                call.complaining_patient.toLowerCase() !== "false"
+
+                                            return (
+                                                <>
+                                                    <TableRow
+                                                        key={call.id}
+                                                        className={`cursor-pointer ${hasComplaint ? "bg-rose-50/50 dark:bg-rose-950/20" : ""} ${isExpanded ? "border-b-0" : ""}`}
+                                                        onClick={() => toggleRow(call.id)}
+                                                    >
+                                                        <TableCell className="w-8 pr-0">
+                                                            {isExpanded ? (
+                                                                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                                            ) : (
+                                                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                                            )}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-medium">
+                                                                    {call.patient_name}
+                                                                </span>
+                                                                {call.new_patient?.toLowerCase() === "yes" && (
+                                                                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-primary/10 text-primary">
+                                                                        New
+                                                                    </Badge>
+                                                                )}
+                                                                {hasComplaint && (
+                                                                    <ShieldAlert className="h-3.5 w-3.5 text-rose-500 shrink-0" />
+                                                                )}
+                                                                {call.next_action && (
+                                                                    <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                                                                )}
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-muted-foreground">
+                                                            {formatDate(call.call_date)}
+                                                            {call.call_time && (
+                                                                <span className="block text-xs">{formatTime(call.call_time)}</span>
+                                                            )}
+                                                        </TableCell>
+                                                        <TableCell className="text-muted-foreground">
+                                                            {call.call_duration && call.call_duration !== "0:00"
+                                                                ? call.call_duration
+                                                                : "-"}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <Badge
+                                                                variant="outline"
+                                                                className={`gap-1 text-xs ${config.color} ${config.bgColor} ${config.borderColor}`}
+                                                            >
+                                                                <StatusIcon className="h-3 w-3" />
+                                                                {call.call_status || config.label}
+                                                            </Badge>
+                                                        </TableCell>
+                                                        <TableCell className="text-muted-foreground text-sm">
+                                                            {call.patient_intent || "-"}
+                                                        </TableCell>
+                                                    </TableRow>
+                                                    {isExpanded && (
+                                                        <TableRow key={`${call.id}-detail`}>
+                                                            <TableCell colSpan={6} className="p-0">
+                                                                <CallDetail call={call} />
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    )}
+                                                </>
+                                            )
+                                        })}
+                                    </TableBody>
+                                </Table>
+
+                                {/* Pagination */}
+                                <div className="px-4 pb-4">
+                                    <Pagination
+                                        page={data?.page ?? 1}
+                                        totalPages={data?.total_pages ?? 1}
+                                        onPageChange={setCurrentPage}
+                                    />
+                                </div>
+                            </>
+                        )}
+                    </Card>
                 </div>
 
                 {/* Priority Sidebar — 2 cols */}

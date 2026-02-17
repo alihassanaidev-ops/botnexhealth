@@ -216,5 +216,8 @@ export interface CallsResponse {
     calls: CallRecord[];
     total: number;
     counts: Record<string, number>;
+    page: number;
+    page_size: number;
+    total_pages: number;
 }
 
