@@ -8,6 +8,7 @@ Proxies mutations to PMS and refreshes the local cache.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -101,7 +102,7 @@ class CachedProviderResponse(BaseModel):
     last_name: str | None = None
     specialty: str | None = None
     is_active: bool = True
-    synced_at: str | None = None
+    synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -114,7 +115,7 @@ class CachedAppointmentTypeResponse(BaseModel):
     duration_minutes: int | None = None
     source_metadata: dict | None = None
     is_active: bool = True
-    synced_at: str | None = None
+    synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -125,7 +126,7 @@ class CachedOperatoryResponse(BaseModel):
     source: str
     name: str
     is_active: bool = True
-    synced_at: str | None = None
+    synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -139,7 +140,7 @@ class CachedDescriptorResponse(BaseModel):
     code: str | None = None
     is_active: bool = True
     source_metadata: dict | None = None
-    synced_at: str | None = None
+    synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -161,7 +162,7 @@ class CachedAvailabilityResponse(BaseModel):
     active: bool = True
     synced: bool = False
     source_metadata: dict | None = None
-    synced_at: str | None = None
+    synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
