@@ -79,16 +79,25 @@ def _get_custom_field_value(
     for field in opportunity["customFields"]:
         if field.get("id") == field_id:
             raw_date = field.get("fieldValueDate")
-            return (
-                field.get("fieldValueString")
-                or field.get("fieldValueNumber")
-                or field.get("value")
-                or (
-                    datetime.fromisoformat(str(raw_date)).isoformat()
-                    if raw_date and isinstance(raw_date, str)
-                    else str(raw_date) if raw_date else None
-                )
-            )
+            date_val: str | None = None
+            if raw_date:
+                if isinstance(raw_date, (int, float)):
+                    # GHL returns epoch milliseconds for date fields
+                    date_val = datetime.fromtimestamp(raw_date / 1000).strftime("%Y-%m-%d")
+                elif isinstance(raw_date, str):
+                    date_val = datetime.fromisoformat(raw_date).strftime("%Y-%m-%d")
+                else:
+                    date_val = str(raw_date)
+            str_val = field.get("fieldValueString")
+            if str_val:
+                return str_val
+            num_val = field.get("fieldValueNumber")
+            if num_val is not None:
+                return str(num_val)
+            generic = field.get("value")
+            if generic:
+                return str(generic)
+            return date_val
     return None
 
 
