@@ -1,5 +1,8 @@
 import { createBrowserRouter } from "react-router-dom";
 import DashboardWrapper from "./components/DashboardWrapper";
+import RoleRedirect from "./components/RoleRedirect";
+import RoleGuard from "./components/RoleGuard";
+import AdminDashboard from "./pages/AdminDashboard";
 import Dashboard from "./pages/Dashboard";
 import Tenants from "./pages/Tenants";
 import TenantDetail from "./pages/TenantDetail";
@@ -29,35 +32,71 @@ export const router = createBrowserRouter([
                 children: [
                     {
                         path: "/",
-                        element: <Dashboard />,
+                        element: <RoleRedirect />,
+                    },
+                    {
+                        path: "admin",
+                        element: (
+                            <RoleGuard allowed={["ADMIN"]}>
+                                <AdminDashboard />
+                            </RoleGuard>
+                        ),
                     },
                     {
                         path: "dashboard",
-                        element: <Dashboard />,
+                        element: (
+                            <RoleGuard allowed={["TENANT"]}>
+                                <Dashboard />
+                            </RoleGuard>
+                        ),
                     },
                     {
                         path: "calls",
-                        element: <Calls />,
+                        element: (
+                            <RoleGuard allowed={["TENANT"]}>
+                                <Calls />
+                            </RoleGuard>
+                        ),
                     },
                     {
                         path: "tenants",
-                        element: <Tenants />,
+                        element: (
+                            <RoleGuard allowed={["ADMIN"]}>
+                                <Tenants />
+                            </RoleGuard>
+                        ),
                     },
                     {
                         path: "tenants/:slug",
-                        element: <TenantDetail />,
+                        element: (
+                            <RoleGuard allowed={["ADMIN"]}>
+                                <TenantDetail />
+                            </RoleGuard>
+                        ),
                     },
                     {
                         path: "setup/appointment-types",
-                        element: <AppointmentTypes />,
+                        element: (
+                            <RoleGuard allowed={["TENANT"]}>
+                                <AppointmentTypes />
+                            </RoleGuard>
+                        ),
                     },
                     {
                         path: "setup/providers",
-                        element: <ProvidersScheduling />,
+                        element: (
+                            <RoleGuard allowed={["TENANT"]}>
+                                <ProvidersScheduling />
+                            </RoleGuard>
+                        ),
                     },
                     {
                         path: "setup/operatories",
-                        element: <Operatories />,
+                        element: (
+                            <RoleGuard allowed={["TENANT"]}>
+                                <Operatories />
+                            </RoleGuard>
+                        ),
                     },
                 ],
             },

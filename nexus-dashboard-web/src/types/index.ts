@@ -1,7 +1,7 @@
 export interface User {
     id: string;
     email: string;
-    role?: string;
+    role: "ADMIN" | "TENANT";
     is_active?: boolean;
     tenant_id?: string;
 }

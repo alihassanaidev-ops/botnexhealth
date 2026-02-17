@@ -29,12 +29,27 @@ import {
     UserCog,
     Armchair,
     Phone,
+    LayoutDashboard,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 
-// Admin nav items
-const navAdmin = [
+// Admin-only nav items
+const adminNav = [
+    {
+        title: "Admin Dashboard",
+        url: "/admin",
+        icon: LayoutDashboard,
+    },
+    {
+        title: "Tenants",
+        url: "/tenants",
+        icon: Users,
+    },
+]
+
+// Tenant-only nav items
+const tenantNav = [
     {
         title: "Dashboard",
         url: "/dashboard",
@@ -44,11 +59,6 @@ const navAdmin = [
         title: "Patient Calls",
         url: "/calls",
         icon: Phone,
-    },
-    {
-        title: "Tenants",
-        url: "/tenants",
-        icon: Users,
     },
 ]
 
@@ -75,7 +85,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { user, signOut } = useAuth();
 
     const displayEmail = user?.email ?? "—";
-    const hasTenant = !!user?.tenant_id;
+    const isAdmin = user?.role === "ADMIN";
+    const isTenant = user?.role === "TENANT";
+    const mainNav = isAdmin ? adminNav : tenantNav;
 
     return (
         <Sidebar collapsible="icon" {...props}>
@@ -101,7 +113,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     <SidebarGroupLabel>Menu</SidebarGroupLabel>
                     <SidebarGroupContent>
                         <SidebarMenu>
-                            {navAdmin.map((item) => (
+                            {mainNav.map((item) => (
                                 <SidebarMenuItem key={item.title}>
                                     <SidebarMenuButton asChild tooltip={item.title}>
                                         <Link to={item.url}>
@@ -114,7 +126,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                         </SidebarMenu>
                     </SidebarGroupContent>
                 </SidebarGroup>
-                {hasTenant && (
+                {isTenant && (
                     <SidebarGroup>
                         <SidebarGroupLabel>Practice Setup</SidebarGroupLabel>
                         <SidebarGroupContent>
