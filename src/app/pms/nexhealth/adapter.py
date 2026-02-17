@@ -262,7 +262,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         from src.app.api.models import CancelAppointmentBody, CancelAppointmentRequest
 
         body = CancelAppointmentRequest(appt=CancelAppointmentBody(cancelled=True))
-        params = {"subdomain": self._subdomain} if self._subdomain else {}
+        params = self._default_params()
 
         try:
             raw = await handle_nexhealth_request(
@@ -369,7 +369,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         operatory_id: str | None = None,
         active: bool | None = None,
     ) -> dict:
-        params = {"subdomain": self._subdomain} if self._subdomain else {}
+        params = self._default_params()
         body: dict[str, Any] = {}
         if appointment_type_ids is not None:
             body["appointment_type_ids"] = [int(_strip(aid)) for aid in appointment_type_ids]

@@ -15,17 +15,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Cache of initialized adapters keyed by tenant ID or "tenant_id:location_id"
-_adapter_cache: dict[str, PMSAdapter] = {}
-
 
 async def get_adapter_for_tenant(tenant: "Tenant") -> PMSAdapter:
-    """Create (or retrieve cached) PMS adapter for a tenant (backward compat)."""
-    cached = _adapter_cache.get(tenant.id)
-    if cached is not None:
-        return cached
-
-
+    """Create a fresh PMS adapter for a tenant (backward compat)."""
     adapter: PMSAdapter
 
     from src.app.config import settings
@@ -39,18 +31,12 @@ async def get_adapter_for_tenant(tenant: "Tenant") -> PMSAdapter:
     else:
         raise ValueError(f"No PMS configured for tenant {tenant.slug}")
 
-    _adapter_cache[tenant.id] = adapter
     logger.info(f"Created {adapter.source} adapter for tenant '{tenant.slug}'")
     return adapter
 
 
 async def get_adapter_for_tenant_location(tenant: "Tenant", location: "TenantLocation") -> PMSAdapter:
-    """Create (or retrieve cached) PMS adapter scoped to a specific location."""
-    cache_key = f"{tenant.id}:{location.id}"
-    cached = _adapter_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
+    """Create a fresh PMS adapter scoped to a specific location."""
     adapter: PMSAdapter
 
     from src.app.config import settings
@@ -64,7 +50,6 @@ async def get_adapter_for_tenant_location(tenant: "Tenant", location: "TenantLoc
     else:
         raise ValueError(f"No PMS configured for tenant {tenant.slug}")
 
-    _adapter_cache[cache_key] = adapter
     logger.info(f"Created {adapter.source} adapter for tenant '{tenant.slug}' location '{location.slug}'")
     return adapter
 
@@ -82,26 +67,3 @@ async def get_tenant_pms(request: Request) -> PMSAdapter:
     if location:
         return await get_adapter_for_tenant_location(tenant, location)
     return await get_adapter_for_tenant(tenant)
-
-
-async def cleanup_adapters() -> None:
-    """Cleanup all cached adapters on shutdown."""
-    global _adapter_cache
-    for tid, adapter in _adapter_cache.items():
-        try:
-            await adapter.close()
-        except Exception:
-            pass
-    _adapter_cache.clear()
-    logger.info("Cleaned up all PMS adapter caches")
-
-
-def invalidate_adapter(tenant_id: str, location_id: str | None = None) -> None:
-    """Remove a tenant's (or specific location's) cached adapter."""
-    if location_id:
-        _adapter_cache.pop(f"{tenant_id}:{location_id}", None)
-    else:
-        # Invalidate all adapters for this tenant (tenant-level + all locations)
-        keys_to_remove = [k for k in _adapter_cache if k == tenant_id or k.startswith(f"{tenant_id}:")]
-        for k in keys_to_remove:
-            _adapter_cache.pop(k, None)
