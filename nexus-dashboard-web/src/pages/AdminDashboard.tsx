@@ -185,6 +185,7 @@ export default function AdminDashboard() {
                                 <thead>
                                     <tr className="border-b text-left text-muted-foreground">
                                         <th className="pb-3 font-medium">Name</th>
+                                        <th className="pb-3 font-medium">Contact</th>
                                         <th className="pb-3 font-medium">Status</th>
                                         <th className="pb-3 font-medium">NexHealth</th>
                                         <th className="pb-3 font-medium">GHL</th>
@@ -197,6 +198,9 @@ export default function AdminDashboard() {
                                     {tenants.map((tenant) => (
                                         <tr key={tenant.id} className="border-b last:border-0">
                                             <td className="py-3 font-medium">{tenant.name}</td>
+                                            <td className="py-3 text-muted-foreground text-xs">
+                                                {tenant.user?.email ?? "—"}
+                                            </td>
                                             <td className="py-3">
                                                 <Badge variant={tenant.is_active ? "default" : "secondary"}>
                                                     {tenant.is_active ? "Active" : "Inactive"}

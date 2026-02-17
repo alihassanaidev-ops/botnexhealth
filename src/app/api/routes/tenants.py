@@ -125,11 +125,32 @@ async def list_tenants(
     include_inactive: bool = True,
     _: User = Depends(get_current_admin),
 ):
-    """List all tenants. Admins see soft-deleted (is_active=false) tenants by default."""
+    """List all tenants with their primary user. Admins see soft-deleted tenants by default."""
+    from src.app.models.tenant import Tenant
+    from sqlalchemy.orm import selectinload
+
     async with get_db_session() as session:
         service = TenantService(session)
         tenants = await service.list_all(include_inactive=include_inactive)
-        return [TenantResponse.from_tenant(t) for t in tenants]
+
+        # Single query to fetch one user per tenant (avoids N+1)
+        tenant_ids = [t.id for t in tenants]
+        if tenant_ids:
+            user_result = await session.execute(
+                select(User).where(User.tenant_id.in_(tenant_ids))
+            )
+            users_by_tenant: dict[str, User] = {}
+            for u in user_result.scalars().all():
+                # Keep first user per tenant (the primary tenant user)
+                if u.tenant_id and u.tenant_id not in users_by_tenant:
+                    users_by_tenant[u.tenant_id] = u
+        else:
+            users_by_tenant = {}
+
+        return [
+            TenantResponse.from_tenant(t, user=users_by_tenant.get(t.id))
+            for t in tenants
+        ]
 
 
 @router.post("", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
@@ -245,8 +266,14 @@ async def get_tenant(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Tenant '{slug}' not found"
             )
-        
-        return TenantResponse.from_tenant(tenant)
+
+        # Fetch tenant's primary user
+        user_result = await session.execute(
+            select(User).where(User.tenant_id == tenant.id).limit(1)
+        )
+        tenant_user = user_result.scalar_one_or_none()
+
+        return TenantResponse.from_tenant(tenant, user=tenant_user)
 
 
 @router.patch("/{slug}", response_model=TenantResponse)
