@@ -78,14 +78,15 @@ def _get_custom_field_value(
 
     for field in opportunity["customFields"]:
         if field.get("id") == field_id:
+            raw_date = field.get("fieldValueDate")
             return (
                 field.get("fieldValueString")
                 or field.get("fieldValueNumber")
                 or field.get("value")
                 or (
-                    datetime.fromisoformat(field["fieldValueDate"]).isoformat()
-                    if field.get("fieldValueDate")
-                    else None
+                    datetime.fromisoformat(str(raw_date)).isoformat()
+                    if raw_date and isinstance(raw_date, str)
+                    else str(raw_date) if raw_date else None
                 )
             )
     return None
