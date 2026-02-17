@@ -44,11 +44,11 @@ def _strip(prefixed_id: str) -> str:
 class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking):
     source = "nexhealth"
 
-    def __init__(self, client: NexHealthClient, tenant: Tenant) -> None:
+    def __init__(self, client: NexHealthClient, tenant: Tenant, *, subdomain: str | None = None, location_id: str | None = None) -> None:
         self._client = client
         self._tenant = tenant
-        self._subdomain = tenant.nexhealth_subdomain
-        self._location_id = tenant.nexhealth_location_id
+        self._subdomain = subdomain
+        self._location_id = location_id
 
     @classmethod
     async def create(cls, tenant: Tenant, location: TenantLocation | None = None) -> NexHealthAdapter:
@@ -79,7 +79,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         )
         client = NexHealthClient(config=tenant_settings)
         await client.__aenter__()
-        return cls(client, tenant)
+        return cls(client, tenant, subdomain=subdomain, location_id=location_id)
 
     async def close(self) -> None:
         if self._client:
