@@ -6,7 +6,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from src.app.api.routes.base import verify_admin_key
+from src.app.api.deps import get_current_user
 from src.app.dependencies import get_sikka_client_dependency
 from src.app.sikka.client import SikkaClient
 from src.app.sikka.exceptions import (
@@ -217,7 +217,7 @@ async def oauth_callback(
 # Admin Routes (require admin API key)
 # =============================================================================
 
-router = APIRouter(dependencies=[Depends(verify_admin_key)])
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/authorized_practices", response_model=AuthorizedPracticesResponse)

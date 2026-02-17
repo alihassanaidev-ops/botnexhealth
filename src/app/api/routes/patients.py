@@ -6,14 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import CreatePatientRequest, PatientDetailResponse, PatientListResponse
-from src.app.api.routes.base import verify_admin_key
-from src.app.config import Settings
-from src.app.dependencies import get_nexhealth_client_dependency, get_settings
+from src.app.api.deps import get_current_user
+from src.app.config import Settings, get_settings
+from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.nexhealth.client import NexHealthClient
 from src.app.services.audit_decorator import audit
 
-router = APIRouter(dependencies=[Depends(verify_admin_key)])
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/patients", response_model=PatientListResponse)

@@ -8,9 +8,8 @@ from typing import Any, Callable, Coroutine, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.app.config import settings
 from src.app.retell.models import FunctionCallRequest, FunctionCallResponse, FunctionError
-from src.app.retell.security import get_signature_dependency, hash_for_logging
+from src.app.retell.security import get_retell_secret, get_signature_dependency, hash_for_logging
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +75,6 @@ async def get_tenant_from_call_context() -> tuple[Optional["Tenant"], Optional["
     except Exception as e:
         logger.warning(f"Failed to resolve tenant from agent_id {agent_id}: {e}")
         return None, None
-
-
-def get_retell_secret() -> str | None:
-    """Get Retell secret from settings."""
-    return getattr(settings, "retell_api_secret", None)
 
 
 # Create signature verification dependency

@@ -91,6 +91,12 @@ class RetellSignatureVerifier:
             return False
 
 
+def get_retell_secret() -> str | None:
+    """Get Retell secret from settings."""
+    from src.app.config import settings
+    return getattr(settings, "retell_api_secret", None)
+
+
 def get_signature_dependency(api_key_getter: Callable[[], str | None]):
     """
     Create a FastAPI dependency for signature verification.

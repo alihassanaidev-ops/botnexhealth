@@ -4,13 +4,14 @@ import respx
 from fastapi.testclient import TestClient
 from httpx import Response
 from src.app.main import app
-from src.app.dependencies import get_settings
-from src.app.config import Settings
+from src.app.config import Settings, get_settings
+from src.app.api.deps import get_current_user
 
 @pytest.fixture
 def override_settings(mock_settings):
     app.dependency_overrides[get_settings] = lambda: mock_settings
-    mock_settings.admin_api_key = "test-admin-key"
+    # Bypass JWT auth for unit tests
+    app.dependency_overrides[get_current_user] = lambda: None
     return mock_settings
 
 @pytest.fixture
@@ -46,7 +47,7 @@ def test_list_locations(test_client, mock_settings):
         
         response = test_client.get(
             "/api/v1/nexhealth/locations", 
-            headers={"x-admin-api-key": "test-admin-key"}
+            headers={}
         )
         
         assert response.status_code == 200
@@ -78,7 +79,7 @@ def test_get_location(test_client, mock_settings):
         
         response = test_client.get(
             "/api/v1/nexhealth/locations/101",
-            headers={"x-admin-api-key": "test-admin-key"}
+            headers={}
         )
         assert response.status_code == 200
         data = response.json()["data"]
@@ -106,7 +107,7 @@ def test_list_appointment_descriptors(test_client, mock_settings):
         
         response = test_client.get(
             "/api/v1/nexhealth/locations/101/appointment_descriptors",
-            headers={"x-admin-api-key": "test-admin-key"}
+            headers={}
         )
         assert response.status_code == 200
         assert response.json()["data"][0]["name"] == "Exam"

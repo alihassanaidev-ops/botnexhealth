@@ -11,23 +11,13 @@ from pydantic import BaseModel, Field
 
 from src.app.config import settings
 from src.app.gohighlevel.client import GHLClient
-from src.app.retell.security import get_signature_dependency
+from src.app.retell.security import get_retell_secret, get_signature_dependency
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/retell", tags=["Retell Webhooks"])
 
-
-# ============================================================================
-# Signature Verification
-# ============================================================================
-
-def get_retell_secret() -> str | None:
-    """Get Retell secret from settings."""
-    return getattr(settings, "retell_api_secret", None)
-
-
-# Create signature verification dependency (same as functions.py)
+# Create signature verification dependency
 verify_webhook_signature = get_signature_dependency(get_retell_secret)
 
 

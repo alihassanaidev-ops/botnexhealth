@@ -78,10 +78,10 @@ async def test_handle_function_call_execution_error(mock_registry):
 
 @pytest.mark.asyncio
 async def test_get_retell_secret():
-    # Just cover the property access
-    with patch("src.app.retell.functions.settings") as mock_settings:
+    from src.app.retell.security import get_retell_secret
+    with patch("src.app.config.settings") as mock_settings:
         mock_settings.retell_api_secret = "secret"
-        assert functions.get_retell_secret() == "secret"
+        assert get_retell_secret() == "secret"
 
 def test_register_decorator(mock_registry):
     @functions.register_function("decorated_func")

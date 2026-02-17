@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from src.app.api.routes import appointments
 from src.app.dependencies import get_nexhealth_client_dependency
-from src.app.api.routes.base import verify_admin_key
+from src.app.api.deps import get_current_user
 
 # Setup app with overrides
 def get_test_app(mock_client):
@@ -18,7 +18,7 @@ def get_test_app(mock_client):
         return True
 
     app.dependency_overrides[get_nexhealth_client_dependency] = override_get_client
-    app.dependency_overrides[verify_admin_key] = override_auth
+    app.dependency_overrides[get_current_user] = override_auth
     return app
 
 @pytest.fixture

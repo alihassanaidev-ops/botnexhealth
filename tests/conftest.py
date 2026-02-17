@@ -21,6 +21,7 @@ def mock_settings():
         nexhealth_subdomain="test-subdomain",
         nexhealth_location_id="123",
         retell_api_secret="test-secret",
+        jwt_secret="test-jwt-secret",
         app_env="test"
     )
 
@@ -43,7 +44,6 @@ async def async_client():
     # Initialize the client manually as we're not running full server startup events in this fixture style sometimes
     await init_nexhealth_client()
     
-    # headers = {"x-admin-api-key": settings.admin_api_key}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
         

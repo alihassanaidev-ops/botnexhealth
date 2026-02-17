@@ -62,9 +62,7 @@ async def lifespan(app: FastAPI):
     from src.app.dependencies import (
         cleanup_nexhealth_client,
         cleanup_sikka_client,
-        cleanup_tenant_nexhealth_clients,
     )
-    await cleanup_tenant_nexhealth_clients()
     await cleanup_nexhealth_client()
     await cleanup_sikka_client()
 

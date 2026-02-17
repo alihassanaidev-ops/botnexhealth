@@ -39,9 +39,6 @@ class Settings(BaseSettings):
     # Retell AI settings
     retell_api_secret: str | None = None
 
-    # Security (REQUIRED — no defaults, must be set in .env or Render secrets)
-    admin_api_key: str
-
     # GoHighLevel API settings
     ghl_api_key: str | None = None
     ghl_location_id: str = "nUR2OnxPQh3aLQXrymf6"  # Default location
@@ -67,7 +64,6 @@ class Settings(BaseSettings):
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
-    admin_api_key_file: str | None = None
     supabase_service_role_key_file: str | None = None
     ghl_api_key_file: str | None = None
     sikka_app_id_file: str | None = None
@@ -91,10 +87,6 @@ class Settings(BaseSettings):
         if secret := read_secret_file(self.retell_api_secret_file):
             object.__setattr__(self, "retell_api_secret", secret)
 
-        # Admin API Key
-        if secret := read_secret_file(self.admin_api_key_file):
-            object.__setattr__(self, "admin_api_key", secret)
-
         # GHL API Key
         if secret := read_secret_file(self.ghl_api_key_file):
             object.__setattr__(self, "ghl_api_key", secret)
@@ -114,13 +106,6 @@ class Settings(BaseSettings):
         # Supabase Service Role Key
         if secret := read_secret_file(self.supabase_service_role_key_file):
             object.__setattr__(self, "supabase_service_role_key", secret)
-
-        # Validate required keys
-        if not self.nexhealth_api_key:
-            raise ValueError(
-                "NEXHEALTH_API_KEY is required. Set via environment variable or "
-                "NEXHEALTH_API_KEY_FILE for Docker secrets."
-            )
 
         # Block wildcard CORS in production
         if self.app_env == "production" and self.cors_allowed_origins.strip() == "*":

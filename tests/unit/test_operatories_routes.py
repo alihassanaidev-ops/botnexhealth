@@ -4,12 +4,14 @@ import respx
 from fastapi.testclient import TestClient
 from httpx import Response
 from src.app.main import app
-from src.app.dependencies import get_settings
+from src.app.config import get_settings
+from src.app.api.deps import get_current_user
 
 @pytest.fixture
 def override_settings(mock_settings):
     app.dependency_overrides[get_settings] = lambda: mock_settings
-    mock_settings.admin_api_key = "test-admin-key"
+    # Bypass JWT auth for unit tests
+    app.dependency_overrides[get_current_user] = lambda: None
     mock_settings.nexhealth_subdomain = "test-subdomain"
     mock_settings.nexhealth_location_id = 123
     return mock_settings
@@ -55,7 +57,7 @@ def test_list_operatories(test_client, mock_settings):
         # Call API
         response = test_client.get(
             "/api/v1/nexhealth/operatories",
-            headers={"x-admin-api-key": "test-admin-key"},
+            headers={},
              # We rely on settings for subdomain/location_id
         )
         
@@ -101,7 +103,7 @@ def test_get_operatory(test_client, mock_settings):
         
         response = test_client.get(
             f"/api/v1/nexhealth/operatories/{operatory_id}",
-            headers={"x-admin-api-key": "test-admin-key"}
+            headers={}
         )
         
         assert response.status_code == 200
