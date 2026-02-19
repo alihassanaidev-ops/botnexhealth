@@ -29,6 +29,52 @@ async def _get_adapter() -> PMSAdapter:
     return await get_adapter_for_tenant(tenant)
 
 
+def _mask_email(value: str | None) -> str | None:
+    """Mask email for safe identity hints in basic lookup responses."""
+    if not value or "@" not in value:
+        return None
+    local, domain = value.split("@", 1)
+    if len(local) <= 2:
+        return f"{local[0]}***@{domain}" if local else None
+    return f"{local[0]}***{local[-1]}@{domain}"
+
+
+def _mask_phone(value: str | None) -> str | None:
+    """Mask phone for safe identity hints in basic lookup responses."""
+    if not value:
+        return None
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if len(digits) < 4:
+        return None
+    return f"***-***-{digits[-4:]}"
+
+
+def _to_basic_patient_payload(patient: Any) -> dict[str, Any]:
+    """Return minimum necessary patient identity payload."""
+    return {
+        "id": patient.id,
+        "first_name": patient.first_name,
+        "last_name": patient.last_name,
+        "has_email": bool(patient.email),
+        "has_phone": bool(patient.phone),
+        "email_hint": _mask_email(patient.email),
+        "phone_hint": _mask_phone(patient.phone),
+    }
+
+
+def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
+    """Return richer payload for explicitly requested full detail lookups."""
+    return {
+        "id": patient.id,
+        "first_name": patient.first_name,
+        "last_name": patient.last_name,
+        "email": patient.email,
+        "phone_number": patient.phone,
+        "date_of_birth": patient.date_of_birth,
+        **patient.extra,
+    }
+
+
 # ============================================================================
 # Patient Functions
 # ============================================================================
@@ -46,9 +92,17 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     except ValueError as e:
         return {"message": str(e)}
 
+    detail_level = str(args.get("detail_level", "basic")).lower()
+    if detail_level not in {"basic", "full"}:
+        detail_level = "basic"
+
     query = args.get("name") or args.get("email") or args.get("phone_number") or ""
     if not query and not args.get("date_of_birth"):
         return {"message": "Please provide at least one search criterion (name, email, phone, or DOB)."}
+
+    include = None
+    if detail_level == "full":
+        include = ["upcoming_appts", "last_visited_appointment", "procedures"]
 
     try:
         patients = await adapter.search_patients(
@@ -56,7 +110,7 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
             email=args.get("email"),
             phone_number=args.get("phone_number"),
             date_of_birth=args.get("date_of_birth"),
-            include=["upcoming_appts", "last_visited_appointment", "procedures"],
+            include=include,
         )
     except Exception as e:
         logger.error(f"Patient lookup failed: {e}")
@@ -65,20 +119,13 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     if not patients:
         return {"message": "No patients found matching the criteria."}
 
-    simplified = [
-        {
-            "id": p.id,
-            "first_name": p.first_name,
-            "last_name": p.last_name,
-            "email": p.email,
-            "phone_number": p.phone,
-            "date_of_birth": p.date_of_birth,
-            **p.extra,
-        }
-        for p in patients[:10]
-    ]
+    if detail_level == "full":
+        simplified = [_to_full_patient_payload(p) for p in patients[:10]]
+    else:
+        simplified = [_to_basic_patient_payload(p) for p in patients[:10]]
 
     return {
+        "detail_level": detail_level,
         "count": len(simplified),
         "patients": simplified,
         "message": f"Found {len(simplified)} patient(s).",

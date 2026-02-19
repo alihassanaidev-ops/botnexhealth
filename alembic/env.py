@@ -20,6 +20,7 @@ from src.app.config import settings
 from src.app.database import Base
 from src.app.models import (  # noqa: F401 — side-effect import
     AuditLog,
+    RetellWebhookEvent,
     Tenant,
     TenantAppointmentType,
     TenantAvailability,

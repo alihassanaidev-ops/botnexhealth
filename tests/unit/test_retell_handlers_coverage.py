@@ -78,8 +78,32 @@ async def test_lookup_patient_success(mock_get_adapter, mock_audit):
     mock_get_adapter.return_value = adapter
 
     result = await handlers.lookup_patient({"name": "John"})
+    assert result["detail_level"] == "basic"
     assert result["count"] == 1
     assert result["patients"][0]["first_name"] == "John"
+    assert "email" not in result["patients"][0]
+    assert "date_of_birth" not in result["patients"][0]
+    assert adapter.search_patients.await_args.kwargs["include"] is None
+
+
+@pytest.mark.asyncio
+@patch(_AUDIT_PATCH)
+@patch(_ADAPTER_PATCH)
+async def test_lookup_patient_full_detail_level(mock_get_adapter, mock_audit):
+    adapter = _mock_adapter()
+    adapter.search_patients.return_value = [_patient()]
+    mock_get_adapter.return_value = adapter
+
+    result = await handlers.lookup_patient({"name": "John", "detail_level": "full"})
+    assert result["detail_level"] == "full"
+    assert result["count"] == 1
+    assert result["patients"][0]["email"] == "john@example.com"
+    assert result["patients"][0]["date_of_birth"] == "1990-01-01"
+    assert adapter.search_patients.await_args.kwargs["include"] == [
+        "upcoming_appts",
+        "last_visited_appointment",
+        "procedures",
+    ]
 
 
 @pytest.mark.asyncio

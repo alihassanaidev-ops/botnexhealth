@@ -31,6 +31,7 @@ import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import type { CallRecord, CallsResponse } from "@/types"
 import { listCalls } from "@/lib/tenant-api"
+import { getToken } from "@/lib/token-manager"
 
 // ── Status Config ───────────────────────────────────────────────────────
 
@@ -324,6 +325,7 @@ export default function Calls() {
 
     // Fetch calls with stale-request guard
     const fetchIdRef = useRef(0)
+    const fetchCallsRef = useRef<() => Promise<void>>(async () => undefined)
     const fetchCalls = useCallback(async () => {
         const id = ++fetchIdRef.current
         setLoading(true)
@@ -353,14 +355,67 @@ export default function Calls() {
     }, [statusFilter, searchQuery, currentPage])
 
     useEffect(() => {
+        fetchCallsRef.current = fetchCalls
+    }, [fetchCalls])
+
+    useEffect(() => {
         fetchCalls()
     }, [fetchCalls])
 
-    // Auto-refresh every 30s
+    // Fallback refresh every 2m in case realtime channel drops
     useEffect(() => {
-        const interval = setInterval(fetchCalls, 30_000)
+        const interval = setInterval(fetchCalls, 120_000)
         return () => clearInterval(interval)
     }, [fetchCalls])
+
+    // Realtime freshness events from backend (tenant-scoped websocket)
+    useEffect(() => {
+        let socket: WebSocket | null = null
+        let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+        let unmounted = false
+
+        const connect = () => {
+            const token = getToken()
+            if (!token || unmounted) return
+
+            const apiBase = import.meta.env.VITE_API_URL || "http://localhost:3000/api"
+            const wsBase = apiBase.replace(/^http/, "ws").replace(/\/+$/, "")
+            const url = `${wsBase}/tenant/calls/ws?token=${encodeURIComponent(token)}`
+            socket = new WebSocket(url)
+
+            socket.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data) as {
+                        type?: string
+                        payload?: { call_id?: string }
+                    }
+                    if (message.type === "data_changed") {
+                        void fetchCallsRef.current()
+                    } else if (message.type === "data_sync_error") {
+                        // Keep lightweight: UI remains GHL-backed and pull-driven.
+                        console.warn("Call data sync error event received", message.payload)
+                    }
+                } catch {
+                    // ignore malformed events
+                }
+            }
+
+            socket.onclose = () => {
+                if (unmounted) return
+                reconnectTimer = setTimeout(connect, 3000)
+            }
+        }
+
+        connect()
+
+        return () => {
+            unmounted = true
+            if (reconnectTimer) clearTimeout(reconnectTimer)
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.close()
+            }
+        }
+    }, [])
 
     const toggleRow = (id: string) => {
         setExpandedIds((prev) => {

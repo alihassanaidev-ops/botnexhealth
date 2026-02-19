@@ -7,21 +7,25 @@ No GHL credentials are ever exposed to the frontend.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.app.config import settings
 from src.app.api.deps import get_current_active_user
-from src.app.database import get_db_session_dep
+from src.app.database import get_db_session, get_db_session_dep
 from src.app.gohighlevel.client import GHLClient
 from src.app.models.tenant import Tenant
 from src.app.models.user import User
+from src.app.services.call_events import call_event_broker
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +200,30 @@ def _process_opportunity(
         return None
 
 
+async def _resolve_user_from_ws_token(token: str) -> User | None:
+    """Resolve active user for WebSocket auth using backend JWT."""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+        )
+        user_id = payload.get("sub")
+    except JWTError:
+        return None
+
+    if not user_id:
+        return None
+
+    async with get_db_session() as session:
+        result = await session.execute(
+            select(User).where(User.id == user_id, User.is_active == True)
+        )
+        return result.scalar_one_or_none()
+
+
 # ── Routes ───────────────────────────────────────────────────────────────
 
 
@@ -299,3 +327,39 @@ async def list_calls(
         page_size=page_size,
         total_pages=total_pages,
     )
+
+
+@router.websocket("/ws")
+async def calls_events_ws(websocket: WebSocket, token: str = Query(...)) -> None:
+    """
+    Tenant-scoped realtime event stream for call data freshness notifications.
+
+    Frontend listens for `data_changed`, then refreshes existing `/tenant/calls` data.
+    """
+    user = await _resolve_user_from_ws_token(token)
+    if not user or not user.tenant_id:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept()
+    tenant_id = user.tenant_id
+    queue = await call_event_broker.subscribe(tenant_id)
+
+    try:
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "tenant_id": tenant_id,
+            }
+        )
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=25)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "keepalive"})
+                continue
+            await websocket.send_json(event)
+    except WebSocketDisconnect:
+        logger.info(f"Tenant calls websocket disconnected for tenant={tenant_id}")
+    finally:
+        await call_event_broker.unsubscribe(tenant_id, queue)
