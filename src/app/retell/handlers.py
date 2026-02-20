@@ -242,7 +242,7 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 
     include = None
     if detail_level == "full":
-        include = ["upcoming_appts", "last_visited_appointment", "procedures"]
+        include = ["upcoming_appts", "last_visited_appointment", "procedures", "insurance_coverages"]
 
     try:
         patients = await ctx.adapter.search_patients(

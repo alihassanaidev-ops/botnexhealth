@@ -27,6 +27,7 @@ def to_patient(raw: dict) -> UniversalPatient:
     upcoming = raw.get("upcoming_appts") or []
     last_visited = raw.get("last_visited_appointment")
     procedures = raw.get("procedures") or []
+    insurance_coverages = raw.get("insurance_coverages") or []
 
     extra: dict[str, Any] = {}
     if upcoming:
@@ -36,7 +37,9 @@ def to_patient(raw: dict) -> UniversalPatient:
                 "provider_id": a.get("provider_id"),
                 "provider_name": a.get("provider_name"),
                 "start_time": a.get("start_time"),
+                "end_time": a.get("end_time"),
                 "location_id": a.get("location_id"),
+                "confirmed": a.get("confirmed"),
             }
             for a in upcoming[:3]
         ]
@@ -46,6 +49,9 @@ def to_patient(raw: dict) -> UniversalPatient:
             "provider_id": last_visited.get("provider_id"),
             "provider_name": last_visited.get("provider_name"),
             "start_time": last_visited.get("start_time"),
+            "end_time": last_visited.get("end_time"),
+            "location_id": last_visited.get("location_id"),
+            "confirmed": last_visited.get("confirmed"),
         }
     if procedures:
         extra["recent_procedures"] = [
@@ -57,6 +63,21 @@ def to_patient(raw: dict) -> UniversalPatient:
                 "date": pr.get("start_date"),
             }
             for pr in procedures[:5]
+        ]
+    if insurance_coverages:
+        extra["insurance_coverages"] = [
+            {
+                "id": ic.get("id"),
+                "insurance_name": (ic.get("plan") or {}).get("name"),
+                "group_number": (ic.get("plan") or {}).get("group_num"),
+                "member_id": ic.get("subscriber_num"),
+                "relation": ic.get("subscription_relation"),
+                "priority": ic.get("priority"),
+                "effective_date": ic.get("effective_date"),
+                "expiration_date": ic.get("expiration_date"),
+                "employer": (ic.get("plan") or {}).get("employer_name"),
+            }
+            for ic in insurance_coverages
         ]
 
     return UniversalPatient(
