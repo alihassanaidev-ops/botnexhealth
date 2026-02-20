@@ -23,16 +23,11 @@ import type { TenantDetail } from "@/types";
 
 const credentialsSchema = z.object({
     nexhealth_api_key: z.string().optional(),
-    nexhealth_subdomain: z.string().optional(),
-    nexhealth_location_id: z.string().optional(),
     ghl_api_key: z.string().optional(),
-    ghl_location_id: z.string().optional(),
     ghl_custom_fields: z.string().optional(),
-    retell_agent_id: z.string().optional(),
     retell_api_secret: z.string().optional(),
     sikka_app_id: z.string().optional(),
     sikka_app_secret: z.string().optional(),
-    sikka_office_id: z.string().optional(),
 });
 
 type CredentialsFormValues = z.infer<typeof credentialsSchema>;
@@ -51,17 +46,12 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
     const form = useForm<CredentialsFormValues>({
         resolver: zodResolver(credentialsSchema),
         defaultValues: {
-            nexhealth_subdomain: tenant.nexhealth_subdomain || "",
-            nexhealth_location_id: tenant.nexhealth_location_id || "",
             nexhealth_api_key: "",
-            ghl_location_id: tenant.ghl_location_id || "",
             ghl_api_key: "",
             ghl_custom_fields: tenant.ghl_custom_fields
                 ? JSON.stringify(tenant.ghl_custom_fields, null, 2)
                 : "",
-            retell_agent_id: tenant.retell_agent_id || "",
             retell_api_secret: "",
-            sikka_office_id: tenant.sikka_office_id || "",
             sikka_app_id: "",
             sikka_app_secret: "",
         },
@@ -70,21 +60,16 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
     // Reset form when tenant data is refreshed (e.g. after save)
     useEffect(() => {
         form.reset({
-            nexhealth_subdomain: tenant.nexhealth_subdomain || "",
-            nexhealth_location_id: tenant.nexhealth_location_id || "",
             nexhealth_api_key: "",
-            ghl_location_id: tenant.ghl_location_id || "",
             ghl_api_key: "",
             ghl_custom_fields: tenant.ghl_custom_fields
                 ? JSON.stringify(tenant.ghl_custom_fields, null, 2)
                 : "",
-            retell_agent_id: tenant.retell_agent_id || "",
             retell_api_secret: "",
-            sikka_office_id: tenant.sikka_office_id || "",
             sikka_app_id: "",
             sikka_app_secret: "",
         });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tenant]);
 
     async function onSubmit(values: CredentialsFormValues) {
@@ -94,10 +79,10 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
 
             // Only include fields from the active section that have values
             const sectionFields: Record<SectionKey, (keyof CredentialsFormValues)[]> = {
-                nexhealth: ["nexhealth_api_key", "nexhealth_subdomain", "nexhealth_location_id"],
-                ghl: ["ghl_api_key", "ghl_location_id", "ghl_custom_fields"],
-                retell: ["retell_agent_id", "retell_api_secret"],
-                sikka: ["sikka_app_id", "sikka_app_secret", "sikka_office_id"],
+                nexhealth: ["nexhealth_api_key"],
+                ghl: ["ghl_api_key", "ghl_custom_fields"],
+                retell: ["retell_api_secret"],
+                sikka: ["sikka_app_id", "sikka_app_secret"],
             };
 
             if (editingSection) {
@@ -250,34 +235,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                                 </FormItem>
                             )}
                         />
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <FormField
-                                control={form.control}
-                                name="nexhealth_subdomain"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>Subdomain</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="acme-dental" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                            <FormField
-                                control={form.control}
-                                name="nexhealth_location_id"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>Location ID</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="12345" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-                        </div>
                     </div>
                 </CredentialCard>
 
@@ -300,19 +257,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                                             placeholder={tenant.has_ghl_key ? "••••••••" : "Enter API key"}
                                             {...field}
                                         />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                        <FormField
-                            control={form.control}
-                            name="ghl_location_id"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>Location ID</FormLabel>
-                                    <FormControl>
-                                        <Input placeholder="location_id" {...field} />
                                     </FormControl>
                                     <FormMessage />
                                 </FormItem>
@@ -346,19 +290,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                     configured={tenant.has_retell_secret}
                 >
                     <div className="grid gap-4">
-                        <FormField
-                            control={form.control}
-                            name="retell_agent_id"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>Agent ID</FormLabel>
-                                    <FormControl>
-                                        <Input placeholder="agent_xxx" {...field} />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
                         <FormField
                             control={form.control}
                             name="retell_api_secret"
@@ -415,19 +346,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                                             placeholder={tenant.has_sikka_credentials ? "••••••••" : "Enter App Secret"}
                                             {...field}
                                         />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                        <FormField
-                            control={form.control}
-                            name="sikka_office_id"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>Office ID</FormLabel>
-                                    <FormControl>
-                                        <Input placeholder="office_id" {...field} />
                                     </FormControl>
                                     <FormMessage />
                                 </FormItem>

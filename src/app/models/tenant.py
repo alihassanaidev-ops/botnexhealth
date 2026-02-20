@@ -120,22 +120,16 @@ class Tenant(Base):
     
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    nexhealth_subdomain: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    nexhealth_location_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     
-    # GoHighLevel credentials (encrypted)
     ghl_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ghl_location_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     ghl_custom_fields: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     
     # Retell credentials
-    retell_agent_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     retell_api_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     # Sikka credentials (encrypted)
     sikka_app_id_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     sikka_app_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    sikka_office_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(

@@ -43,22 +43,17 @@ class TenantCreate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
-    nexhealth_subdomain: str | None = None
-    nexhealth_location_id: str | None = None
 
     # GoHighLevel
     ghl_api_key: str | None = None
-    ghl_location_id: str | None = None
     ghl_custom_fields: dict[str, str] | None = None
 
     # Retell
-    retell_agent_id: str | None = None
     retell_api_secret: str | None = None
 
     # Sikka
     sikka_app_id: str | None = None
     sikka_app_secret: str | None = None
-    sikka_office_id: str | None = None
 
 
 class TenantUpdate(BaseModel):
@@ -72,22 +67,17 @@ class TenantUpdate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
-    nexhealth_subdomain: str | None = None
-    nexhealth_location_id: str | None = None
 
     # GoHighLevel
     ghl_api_key: str | None = None
-    ghl_location_id: str | None = None
     ghl_custom_fields: dict[str, str] | None = None
 
     # Retell
-    retell_agent_id: str | None = None
     retell_api_secret: str | None = None
 
     # Sikka
     sikka_app_id: str | None = None
     sikka_app_secret: str | None = None
-    sikka_office_id: str | None = None
 
 
 
@@ -447,6 +437,8 @@ class LocationCreate(BaseModel):
     nexhealth_location_id: str | None = None
     retell_agent_id: str | None = None
     retell_api_secret: str | None = None
+    ghl_location_id: str | None = None
+    sikka_office_id: str | None = None
 
     address: str | None = None
     city: str | None = None
@@ -464,6 +456,8 @@ class LocationUpdate(BaseModel):
     nexhealth_location_id: str | None = None
     retell_agent_id: str | None = None
     retell_api_secret: str | None = None
+    ghl_location_id: str | None = None
+    sikka_office_id: str | None = None
 
     address: str | None = None
     city: str | None = None
@@ -484,6 +478,8 @@ class LocationResponse(BaseModel):
     nexhealth_location_id: str | None
     retell_agent_id: str | None
     has_retell_secret: bool
+    ghl_location_id: str | None
+    sikka_office_id: str | None
 
     address: str | None
     city: str | None
@@ -505,6 +501,8 @@ class LocationResponse(BaseModel):
             nexhealth_location_id=loc.nexhealth_location_id,
             retell_agent_id=loc.retell_agent_id,
             has_retell_secret=loc.retell_api_secret_encrypted is not None,
+            ghl_location_id=loc.ghl_location_id,
+            sikka_office_id=loc.sikka_office_id,
             address=loc.address,
             city=loc.city,
             state=loc.state,

@@ -30,8 +30,10 @@ const locationSchema = z.object({
     slug: z.string().optional(),
     nexhealth_subdomain: z.string().optional(),
     nexhealth_location_id: z.string().optional(),
+    ghl_location_id: z.string().optional(),
     retell_agent_id: z.string().optional(),
     retell_api_secret: z.string().optional(),
+    sikka_office_id: z.string().optional(),
     address: z.string().optional(),
     city: z.string().optional(),
     state: z.string().optional(),
@@ -59,8 +61,10 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
             slug: location?.slug || "",
             nexhealth_subdomain: location?.nexhealth_subdomain || "",
             nexhealth_location_id: location?.nexhealth_location_id || "",
+            ghl_location_id: location?.ghl_location_id || "",
             retell_agent_id: location?.retell_agent_id || "",
             retell_api_secret: "",
+            sikka_office_id: location?.sikka_office_id || "",
             address: location?.address || "",
             city: location?.city || "",
             state: location?.state || "",
@@ -278,6 +282,44 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                             placeholder={location?.has_retell_secret ? "••••••••  (leave blank to keep)" : "Enter API secret"}
                                             {...field}
                                         />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                    </div>
+                </div>
+
+                <div className="border-t pt-4">
+                    <p className="text-sm font-medium mb-3">GoHighLevel Settings</p>
+                    <div className="space-y-4">
+                        <FormField
+                            control={form.control}
+                            name="ghl_location_id"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>Location ID</FormLabel>
+                                    <FormControl>
+                                        <Input placeholder="e.g. location_xxx" {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                    </div>
+                </div>
+
+                <div className="border-t pt-4">
+                    <p className="text-sm font-medium mb-3">Sikka Settings</p>
+                    <div className="space-y-4">
+                        <FormField
+                            control={form.control}
+                            name="sikka_office_id"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>Office ID</FormLabel>
+                                    <FormControl>
+                                        <Input placeholder="e.g. office_xxx" {...field} />
                                     </FormControl>
                                     <FormMessage />
                                 </FormItem>

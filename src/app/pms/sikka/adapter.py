@@ -42,13 +42,14 @@ def _strip(prefixed_id: str) -> str:
 class SikkaAdapter(PMSAdapter):
     source = "sikka"
 
-    def __init__(self, client: SikkaClient, tenant: Tenant) -> None:
+    def __init__(self, client: SikkaClient, tenant: Tenant, location: TenantLocation | None = None) -> None:
         self._client = client
         self._tenant = tenant
-        self._office_id = tenant.sikka_office_id or ""
+        self._location = location
+        self._office_id = location.sikka_office_id if location else ""
 
     @classmethod
-    async def create(cls, tenant: Tenant) -> SikkaAdapter:
+    async def create(cls, tenant: Tenant, location: TenantLocation | None = None) -> SikkaAdapter:
         """Factory: build a tenant-specific Sikka client and wrap it."""
         from src.app.config import SikkaConfig, settings as global_settings
         from src.app.sikka.client import SikkaClient
@@ -76,10 +77,10 @@ class SikkaAdapter(PMSAdapter):
 
         client = SikkaClient(
             config=sikka_config,
-            office_id=tenant.sikka_office_id,
+            office_id=location.sikka_office_id if location else None,
         )
         await client.__aenter__()
-        return cls(client, tenant)
+        return cls(client, tenant, location)
 
     async def close(self) -> None:
         if self._client:

@@ -594,12 +594,7 @@ class TenantResponse(BaseModel):
     is_active: bool
     
     # Non-secret config
-    nexhealth_subdomain: str | None
-    nexhealth_location_id: str | None
-    ghl_location_id: str | None
     ghl_custom_fields: dict[str, Any] | None
-    retell_agent_id: str | None
-    sikka_office_id: str | None
     
     # Credential presence indicators
     has_nexhealth_key: bool
@@ -634,12 +629,7 @@ class TenantResponse(BaseModel):
             name=tenant.name,
             slug=tenant.slug,
             is_active=tenant.is_active,
-            nexhealth_subdomain=tenant.nexhealth_subdomain,
-            nexhealth_location_id=tenant.nexhealth_location_id,
-            ghl_location_id=tenant.ghl_location_id,
             ghl_custom_fields=tenant.ghl_custom_fields,
-            retell_agent_id=tenant.retell_agent_id,
-            sikka_office_id=tenant.sikka_office_id,
             has_nexhealth_key=tenant.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
             has_ghl_key=tenant.ghl_api_key_encrypted is not None,

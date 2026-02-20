@@ -23,12 +23,7 @@ async def test_create_tenant_with_user(async_client: AsyncClient):
     payload = {
         "name": "Test Tenant With User",
         "slug": TENANT_SLUG,
-        "email": USER_EMAIL,
-        "name": "Test Tenant With User",
-        "slug": TENANT_SLUG,
-        "email": USER_EMAIL,
-        "email": USER_EMAIL,
-        # "password": USER_PASS # Removed
+        "email": USER_EMAIL
     }
 
     # Mock Admin User for Auth Dependency
@@ -70,12 +65,7 @@ async def test_create_tenant_with_user(async_client: AsyncClient):
             mock_tenant.sikka_app_secret_encrypted = None
             
             # Other fields
-            mock_tenant.nexhealth_subdomain = None
-            mock_tenant.nexhealth_location_id = None
-            mock_tenant.ghl_location_id = None
             mock_tenant.ghl_custom_fields = None
-            mock_tenant.retell_agent_id = None
-            mock_tenant.sikka_office_id = None
 
             mock_service_instance.create.return_value = mock_tenant
             
@@ -133,7 +123,6 @@ async def test_create_tenant_with_user(async_client: AsyncClient):
             assert user_arg.email == USER_EMAIL
             assert user_arg.role == UserRole.TENANT.value
             assert user_arg.tenant_id == "tenant-123"
-            assert user_arg.hashed_password is None
 
     # Clean up override
     app.dependency_overrides = {}

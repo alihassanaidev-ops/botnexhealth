@@ -26,6 +26,7 @@ from src.app.gohighlevel.client import GHLClient
 from src.app.models.tenant import Tenant
 from src.app.models.user import User
 from src.app.services.call_events import call_event_broker
+from src.app.services.tenant_service import TenantService
 
 logger = logging.getLogger(__name__)
 
@@ -255,12 +256,19 @@ async def list_calls(
 
     # Verify GHL credentials exist
     ghl_key = tenant.ghl_api_key
-    ghl_location = tenant.ghl_location_id
+    
+    tenant_service = TenantService(session)
+    locations = await tenant_service.list_locations(tenant.id)
+    ghl_location = None
+    for loc in locations:
+        if loc.ghl_location_id:
+            ghl_location = loc.ghl_location_id
+            break
 
     if not ghl_key or not ghl_location:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "GoHighLevel credentials are not configured for this tenant",
+            "GoHighLevel credentials are not configured for this tenant (missing API key or location ID)",
         )
 
     # Get custom field mapping (or empty dict)

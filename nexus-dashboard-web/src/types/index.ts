@@ -28,12 +28,7 @@ export interface TenantDetail {
     slug: string;
     is_active: boolean;
 
-    nexhealth_subdomain: string | null;
-    nexhealth_location_id: string | null;
-    ghl_location_id: string | null;
     ghl_custom_fields: Record<string, string> | null;
-    retell_agent_id: string | null;
-    sikka_office_id: string | null;
 
     has_nexhealth_key: boolean;
     has_system_nexhealth_key: boolean;
@@ -53,7 +48,9 @@ export interface Location {
 
     nexhealth_subdomain: string | null;
     nexhealth_location_id: string | null;
+    ghl_location_id: string | null;
     retell_agent_id: string | null;
+    sikka_office_id: string | null;
     has_retell_secret: boolean;
 
     address: string | null;
@@ -82,6 +79,8 @@ export interface LocationInfo {
     slug: string;
     nexhealth_subdomain: string | null;
     nexhealth_location_id: string | null;
+    ghl_location_id: string | null;
+    sikka_office_id: string | null;
 }
 
 export interface SetupOverview {

@@ -91,20 +91,23 @@ async def get_tenant_ghl_client(agent_id: str | None) -> tuple[GHLClient | None,
     from src.app.services.tenant_service import TenantService
     
     tenant = None
+    location = None
     
     if agent_id:
         try:
             async with get_db_session() as session:
                 tenant_service = TenantService(session)
-                tenant = await tenant_service.get_by_retell_agent_id(agent_id)
+                result = await tenant_service.get_location_by_retell_agent_id(agent_id)
+                if result:
+                    location, tenant = result
         except Exception as e:
             logger.warning(f"Failed to lookup tenant by agent_id {agent_id}: {e}")
     
     # If tenant has GHL config, create tenant-specific client
-    if tenant and tenant.ghl_api_key and tenant.ghl_location_id:
+    if tenant and location and tenant.ghl_api_key and location.ghl_location_id:
         client = GHLClient(
             api_key=tenant.ghl_api_key,
-            location_id=tenant.ghl_location_id,
+            location_id=location.ghl_location_id,
         )
         return client, tenant
     

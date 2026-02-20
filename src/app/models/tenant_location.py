@@ -48,6 +48,12 @@ class TenantLocation(Base):
     retell_agent_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     retell_api_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # GoHighLevel
+    ghl_location_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Sikka
+    sikka_office_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     # Address
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     city: Mapped[str | None] = mapped_column(String(100), nullable=True)

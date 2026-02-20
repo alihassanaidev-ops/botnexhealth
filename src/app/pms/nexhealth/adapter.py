@@ -63,12 +63,10 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         # Location overrides tenant, tenant overrides global
         subdomain = (
             (location.nexhealth_subdomain if location else None)
-            or tenant.nexhealth_subdomain
             or global_settings.nexhealth_subdomain
         )
         location_id = (
             (location.nexhealth_location_id if location else None)
-            or tenant.nexhealth_location_id
             or global_settings.nexhealth_location_id
         )
 

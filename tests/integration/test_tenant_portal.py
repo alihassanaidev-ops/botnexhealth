@@ -18,8 +18,6 @@ async def test_get_my_tenant_config_success(async_client: AsyncClient):
         name="Test Clinic",
         slug="test-clinic",
         is_active=True,
-        nexhealth_subdomain="test-sub",
-        nexhealth_location_id="123",
         nexhealth_api_key_encrypted="encrypted_key", # Should result in has_nexhealth_key=True
         ghl_api_key_encrypted=None,                  # Should result in has_ghl_key=False
     )
