@@ -1,32 +1,72 @@
 """Retell function handlers — PMS-agnostic via adapter pattern.
 
-All handlers resolve the tenant from call context, get the appropriate
-PMS adapter, and call universal methods. No PMS-specific branching.
+All handlers resolve the tenant and location automatically from the
+call context (agent_id → TenantLocation mapping). Since each Retell
+agent maps 1:1 to a location, the agent never needs to specify
+location_id — the backend routes automatically.
+
+HIPAA Note: Only hashed identifiers appear in logs.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from src.app.models.audit_log import AuditAction, AuditActor
+from src.app.models.tenant import Tenant
+from src.app.models.tenant_location import TenantLocation
 from src.app.pms.base import PMSAdapter
 from src.app.pms.factory import get_adapter_for_tenant, get_adapter_for_tenant_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import get_tenant_from_call_context, register_function
+from src.app.retell.security import hash_for_logging
 from src.app.services.audit_decorator import audit
 
 logger = logging.getLogger(__name__)
 
 
-async def _get_adapter() -> PMSAdapter:
-    """Resolve PMS adapter from current Retell call context."""
+# ============================================================================
+# Context Resolution
+# ============================================================================
+
+
+@dataclass
+class ResolvedContext:
+    """Resolved tenant, location, and PMS adapter from call context."""
+
+    tenant: Tenant
+    location: TenantLocation | None
+    adapter: PMSAdapter
+
+
+async def _resolve_context() -> ResolvedContext:
+    """Resolve PMS adapter and location from current Retell call context.
+
+    Returns a ResolvedContext containing the tenant, location (if mapped),
+    and the scoped PMS adapter. Since each Retell agent is mapped 1:1 to a
+    TenantLocation, the location is automatically resolved — the agent
+    does not need to call list_locations or pass location_id.
+
+    Raises:
+        ValueError: If no tenant can be resolved from the agent_id.
+    """
     tenant, location = await get_tenant_from_call_context()
     if not tenant:
         raise ValueError("No tenant resolved from call context. Check agent_id mapping.")
+
     if location:
-        return await get_adapter_for_tenant_location(tenant, location)
-    return await get_adapter_for_tenant(tenant)
+        adapter = await get_adapter_for_tenant_location(tenant, location)
+    else:
+        adapter = await get_adapter_for_tenant(tenant)
+
+    return ResolvedContext(tenant=tenant, location=location, adapter=adapter)
+
+
+# ============================================================================
+# Privacy Helpers (HIPAA-safe masking for patient data)
+# ============================================================================
 
 
 def _mask_email(value: str | None) -> str | None:
@@ -76,6 +116,106 @@ def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
 
 
 # ============================================================================
+# Location Functions (auto-routed)
+# ============================================================================
+
+
+@register_function("list_locations")
+@audit(AuditAction.READ_LOCATIONS, resource="auto_resolved_location")
+async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
+    """Return the auto-resolved location for this Retell agent.
+
+    Since each agent maps 1:1 to a TenantLocation, this returns
+    exactly one location — no PMS API call needed.
+    """
+    try:
+        ctx = await _resolve_context()
+    except ValueError as e:
+        return {"error": str(e)}
+
+    if ctx.location:
+        return {
+            "count": 1,
+            "locations": [
+                {
+                    "id": ctx.location.nexhealth_location_id or ctx.location.id,
+                    "name": ctx.location.name,
+                    "slug": ctx.location.slug,
+                    "address": ctx.location.address,
+                    "city": ctx.location.city,
+                    "state": ctx.location.state,
+                    "phone": ctx.location.phone,
+                    "timezone": ctx.location.timezone,
+                }
+            ],
+            "message": f"Your location is {ctx.location.name}.",
+        }
+
+    # Fallback: tenant-only (no location mapped), fetch from PMS
+    try:
+        locations = await ctx.adapter.list_locations()
+        return {
+            "count": len(locations),
+            "locations": [loc.model_dump() for loc in locations],
+            "message": f"Found {len(locations)} location(s).",
+        }
+    except Exception as e:
+        logger.error(f"Failed to list locations: {e}")
+        return {"error": f"Failed to list locations: {str(e)}"}
+
+
+@register_function("get_location_details")
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda args: f"location:{args.get('location_id', 'auto')}",
+)
+async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
+    """Get location details for FAQs (hours, address, etc).
+
+    location_id is optional — defaults to the auto-resolved location.
+    """
+    try:
+        ctx = await _resolve_context()
+    except ValueError as e:
+        return {"error": str(e)}
+
+    location_id = args.get("location_id")
+
+    # Auto-resolve: use the mapped location if no explicit ID
+    if not location_id and ctx.location:
+        return {
+            "practice_name": ctx.location.name,
+            "location": {
+                "id": ctx.location.nexhealth_location_id or ctx.location.id,
+                "name": ctx.location.name,
+                "slug": ctx.location.slug,
+                "address": ctx.location.address,
+                "city": ctx.location.city,
+                "state": ctx.location.state,
+                "phone": ctx.location.phone,
+                "timezone": ctx.location.timezone,
+            },
+        }
+
+    # Explicit location_id or no mapped location — fetch from PMS
+    target_id = location_id or (ctx.location.nexhealth_location_id if ctx.location else None)
+    if not target_id:
+        return {"error": "No location could be resolved."}
+
+    try:
+        loc = await ctx.adapter.get_location(target_id)
+        if not loc:
+            return {"error": "Location not found."}
+        return {
+            "practice_name": loc.name,
+            "location": loc.model_dump(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to get location details: {e}")
+        return {"error": f"Failed to retrieve location details: {str(e)}"}
+
+
+# ============================================================================
 # Patient Functions
 # ============================================================================
 
@@ -88,7 +228,7 @@ def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
 async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     """Lookup a patient by name, email, phone, or date of birth."""
     try:
-        adapter = await _get_adapter()
+        ctx = await _resolve_context()
     except ValueError as e:
         return {"message": str(e)}
 
@@ -105,7 +245,7 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
         include = ["upcoming_appts", "last_visited_appointment", "procedures"]
 
     try:
-        patients = await adapter.search_patients(
+        patients = await ctx.adapter.search_patients(
             query,
             email=args.get("email"),
             phone_number=args.get("phone_number"),
@@ -145,12 +285,12 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
             return {"error": f"{field} is required."}
 
     try:
-        adapter = await _get_adapter()
+        ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
     try:
-        return await adapter.create_patient(
+        return await ctx.adapter.create_patient(
             PatientCreateRequest(
                 first_name=args["first_name"],
                 last_name=args["last_name"],
@@ -183,12 +323,12 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "start_date is required."}
 
     try:
-        adapter = await _get_adapter()
+        ctx = await _resolve_context()
     except ValueError as e:
         return {"error": str(e)}
 
     try:
-        slots = await adapter.get_available_slots(
+        slots = await ctx.adapter.get_available_slots(
             start_date=start_date,
             days=args.get("days", 7),
             provider_id=args.get("provider_id"),
@@ -223,12 +363,12 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
             return {"error": f"{field} is required."}
 
     try:
-        adapter = await _get_adapter()
+        ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
     try:
-        result = await adapter.book_appointment(
+        result = await ctx.adapter.book_appointment(
             BookingRequest(
                 patient_id=args["patient_id"],
                 provider_id=args["provider_id"],
@@ -258,12 +398,12 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "appointment_id is required."}
 
     try:
-        adapter = await _get_adapter()
+        ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
     try:
-        result = await adapter.cancel_appointment(appointment_id)
+        result = await ctx.adapter.cancel_appointment(appointment_id)
         return result.model_dump()
     except Exception as e:
         logger.error(f"Failed to cancel appointment: {e}")
@@ -287,12 +427,12 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
             return {"error": f"{field} is required for the new booking."}
 
     try:
-        adapter = await _get_adapter()
+        ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
     try:
-        result = await adapter.reschedule_appointment(
+        result = await ctx.adapter.reschedule_appointment(
             old_id,
             BookingRequest(
                 patient_id=args["patient_id"],
@@ -324,12 +464,12 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
 async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
     """List appointment types for a practice."""
     try:
-        adapter = await _get_adapter()
+        ctx = await _resolve_context()
     except ValueError as e:
         return {"error": str(e)}
 
     try:
-        types = await adapter.list_appointment_types()
+        types = await ctx.adapter.list_appointment_types()
         simplified = [
             {
                 "id": t.id,
@@ -349,57 +489,6 @@ async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": str(e)}
 
 
-@register_function("get_location_details")
-@audit(
-    AuditAction.READ_LOCATIONS,
-    resource=lambda args: f"location:{args.get('location_id')}",
-)
-async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
-    """Get location details for FAQs (hours, address, etc)."""
-    location_id = args.get("location_id")
-    if not location_id:
-        return {"error": "location_id is required."}
-
-    try:
-        adapter = await _get_adapter()
-    except ValueError as e:
-        return {"error": str(e)}
-
-    try:
-        loc = await adapter.get_location(location_id)
-        if not loc:
-            return {"error": "Location not found."}
-        return {
-            "practice_name": loc.name,
-            "location": loc.model_dump(),
-        }
-    except Exception as e:
-        logger.error(f"Failed to get location details: {e}")
-        return {"error": f"Failed to retrieve location details: {str(e)}"}
-
-
-@register_function("list_locations")
-@audit(AuditAction.READ_LOCATIONS, resource="all_locations")
-async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
-    """List all available practice locations."""
-    try:
-        adapter = await _get_adapter()
-    except ValueError as e:
-        return {"error": str(e)}
-
-    try:
-        locations = await adapter.list_locations()
-        simplified = [loc.model_dump() for loc in locations]
-        return {
-            "count": len(simplified),
-            "locations": simplified,
-            "message": f"Found {len(simplified)} location(s).",
-        }
-    except Exception as e:
-        logger.error(f"Failed to list locations: {e}")
-        return {"error": f"Failed to list locations: {str(e)}"}
-
-
 @register_function("list_providers")
 @audit(
     AuditAction.READ_PROVIDERS,
@@ -408,12 +497,12 @@ async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
 async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
     """List all providers at the practice."""
     try:
-        adapter = await _get_adapter()
+        ctx = await _resolve_context()
     except ValueError as e:
         return {"error": str(e)}
 
     try:
-        providers = await adapter.list_providers()
+        providers = await ctx.adapter.list_providers()
         simplified = [
             {
                 "id": p.id,
@@ -440,12 +529,12 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
 async def list_operatories(args: dict[str, Any]) -> dict[str, Any]:
     """List operatories (chairs/rooms) at the practice."""
     try:
-        adapter = await _get_adapter()
+        ctx = await _resolve_context()
     except ValueError as e:
         return {"error": str(e)}
 
     try:
-        ops = await adapter.list_operatories()
+        ops = await ctx.adapter.list_operatories()
         simplified = [
             {"id": op.id, "name": op.name, "active": op.is_active}
             for op in ops

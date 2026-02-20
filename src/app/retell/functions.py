@@ -1,4 +1,10 @@
-"""Retell AI function calling endpoint and handler registry."""
+"""Retell AI function calling endpoint and handler registry.
+
+HIPAA Compliance:
+- Only hashed call_ids appear in logs; never raw identifiers.
+- Function arguments (which may contain PHI) are never logged.
+- Signature verification ensures requests originate from Retell.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +31,7 @@ _function_registry: dict[str, Callable[..., Coroutine[Any, Any, dict[str, Any]]]
 def register_function(name: str):
     """
     Decorator to register a function handler.
-    
+
     Usage:
         @register_function("check_availability")
         async def check_availability(args: dict) -> dict:
@@ -45,7 +51,11 @@ def get_call_context() -> dict[str, Any]:
 
 async def get_tenant_from_call_context() -> tuple[Optional["Tenant"], Optional["TenantLocation"]]:
     """
-    Resolve tenant (and optional location) from current call context using agent_id.
+    Resolve tenant and location from current call context using agent_id.
+
+    Since each Retell agent is mapped 1:1 to a TenantLocation, this
+    provides automatic location routing — no need for the agent to
+    call list_locations or pass location_id.
 
     Resolution order:
     1. TenantLocation with matching retell_agent_id  -> (tenant, location)
@@ -56,34 +66,36 @@ async def get_tenant_from_call_context() -> tuple[Optional["Tenant"], Optional["
     from src.app.database import get_db_session
 
     agent_id = _current_call_context.get("agent_id")
-    logger.info(f"[TENANT_RESOLVE] agent_id from call context: {agent_id!r}")
-    logger.info(f"[TENANT_RESOLVE] full call context keys: {list(_current_call_context.keys())}")
     if not agent_id:
-        logger.warning("[TENANT_RESOLVE] No agent_id in call context — payload may not contain it")
+        logger.warning("Tenant resolution failed: no agent_id in call context")
         return None, None
 
     try:
         async with get_db_session() as session:
             tenant_service = TenantService(session)
 
-            # Try location-level first
+            # Primary: location-level agent_id (standard path)
             result = await tenant_service.get_location_by_retell_agent_id(agent_id)
-            logger.info(f"[TENANT_RESOLVE] location lookup result: {result}")
             if result:
                 location, tenant = result
-                logger.info(f"[TENANT_RESOLVE] Resolved tenant={tenant.id}, location={location.slug}")
+                logger.info(
+                    f"Resolved tenant={hash_for_logging(tenant.id)}, "
+                    f"location={location.slug} from agent_id"
+                )
                 return tenant, location
 
             # Fallback: tenant-level agent_id (backward compat)
             tenant = await tenant_service.get_by_retell_agent_id(agent_id)
-            logger.info(f"[TENANT_RESOLVE] tenant-level lookup result: {tenant}")
             if tenant:
-                logger.info(f"[TENANT_RESOLVE] Resolved tenant={tenant.id} (no location)")
+                logger.info(
+                    f"Resolved tenant={hash_for_logging(tenant.id)} "
+                    f"(no location) from agent_id"
+                )
             else:
-                logger.warning(f"[TENANT_RESOLVE] No tenant found for agent_id={agent_id!r}")
+                logger.warning("Tenant resolution failed: no tenant found for agent_id")
             return tenant, None
     except Exception as e:
-        logger.warning(f"[TENANT_RESOLVE] Exception resolving agent_id {agent_id}: {e}")
+        logger.error(f"Tenant resolution error: {e}")
         return None, None
 
 
@@ -98,18 +110,17 @@ async def handle_function_call(
 ) -> FunctionCallResponse | FunctionError:
     """
     Handle function calls from Retell AI.
-    
+
     This endpoint is called synchronously during a conversation when
     the voice agent needs to execute a function (e.g., lookup patient,
     check availability, schedule appointment).
-    
+
     HIPAA Note: We only log hashed call_ids, never function arguments
     which may contain PHI.
     """
     try:
         # Parse the verified body
         payload = json.loads(body)
-        logger.debug(f"Retell Payload: {json.dumps(payload)}")
 
         # Allow specifying function name via query param (Standard Retell Pattern)
         # Retell often sends just { args: {...}, call_id: ... }
@@ -117,10 +128,10 @@ async def handle_function_call(
             payload["function_name"] = function_name
 
         request = FunctionCallRequest.model_validate(payload)
-        
+
         # Handle call_id extraction
         if not request.call_id and request.chat:
-             request.call_id = request.chat.get("call_id") # Retell sometimes nests it?
+             request.call_id = request.chat.get("call_id")
         if not request.call_id:
              request.call_id = "unknown_call_id"
 
@@ -129,7 +140,7 @@ async def handle_function_call(
         logger.info(
             f"Function call received: call={call_id_hash}, function={request.function_name}"
         )
-        
+
         # Get handler from registry
         handler = _function_registry.get(request.function_name)
         if not handler:
@@ -138,30 +149,31 @@ async def handle_function_call(
                 status_code=400,
                 detail=f"Unknown function: {request.function_name}",
             )
-        
-        # Set call context for tenant resolution in handlers
+
+        # Set call context for tenant resolution in handlers.
+        # agent_id may be at the top level or nested under "call".
         global _current_call_context
-        extracted_agent_id = payload.get("agent_id") or payload.get("call", {}).get("agent_id")
-        logger.info(f"[DEBUG] Payload top-level keys: {list(payload.keys())}")
-        logger.info(f"[DEBUG] agent_id extracted: {extracted_agent_id!r}")
         _current_call_context = {
             "call_id": request.call_id,
-            "agent_id": extracted_agent_id,
+            "agent_id": (
+                payload.get("agent_id")
+                or payload.get("call", {}).get("agent_id")
+            ),
             "args": request.args,
         }
-        
+
         try:
             # Execute the function
             result = await handler(request.args)
-            
+
             # Log success (no PHI in result logging)
             logger.info(f"Function completed: call={call_id_hash}, function={request.function_name}")
-            
+
             return FunctionCallResponse(result=result)
         finally:
             # Clear context after execution
             _current_call_context = {}
-        
+
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in function call: {e}")
         raise HTTPException(status_code=400, detail="Invalid JSON")
