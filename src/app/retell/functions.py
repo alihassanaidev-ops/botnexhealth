@@ -56,7 +56,10 @@ async def get_tenant_from_call_context() -> tuple[Optional["Tenant"], Optional["
     from src.app.database import get_db_session
 
     agent_id = _current_call_context.get("agent_id")
+    logger.info(f"[TENANT_RESOLVE] agent_id from call context: {agent_id!r}")
+    logger.info(f"[TENANT_RESOLVE] full call context keys: {list(_current_call_context.keys())}")
     if not agent_id:
+        logger.warning("[TENANT_RESOLVE] No agent_id in call context — payload may not contain it")
         return None, None
 
     try:
@@ -65,15 +68,22 @@ async def get_tenant_from_call_context() -> tuple[Optional["Tenant"], Optional["
 
             # Try location-level first
             result = await tenant_service.get_location_by_retell_agent_id(agent_id)
+            logger.info(f"[TENANT_RESOLVE] location lookup result: {result}")
             if result:
                 location, tenant = result
+                logger.info(f"[TENANT_RESOLVE] Resolved tenant={tenant.id}, location={location.slug}")
                 return tenant, location
 
             # Fallback: tenant-level agent_id (backward compat)
             tenant = await tenant_service.get_by_retell_agent_id(agent_id)
+            logger.info(f"[TENANT_RESOLVE] tenant-level lookup result: {tenant}")
+            if tenant:
+                logger.info(f"[TENANT_RESOLVE] Resolved tenant={tenant.id} (no location)")
+            else:
+                logger.warning(f"[TENANT_RESOLVE] No tenant found for agent_id={agent_id!r}")
             return tenant, None
     except Exception as e:
-        logger.warning(f"Failed to resolve tenant from agent_id {agent_id}: {e}")
+        logger.warning(f"[TENANT_RESOLVE] Exception resolving agent_id {agent_id}: {e}")
         return None, None
 
 
@@ -131,9 +141,12 @@ async def handle_function_call(
         
         # Set call context for tenant resolution in handlers
         global _current_call_context
+        extracted_agent_id = payload.get("agent_id") or payload.get("call", {}).get("agent_id")
+        logger.info(f"[DEBUG] Payload top-level keys: {list(payload.keys())}")
+        logger.info(f"[DEBUG] agent_id extracted: {extracted_agent_id!r}")
         _current_call_context = {
             "call_id": request.call_id,
-            "agent_id": payload.get("agent_id"),  # Retell sends agent_id in payload
+            "agent_id": extracted_agent_id,
             "args": request.args,
         }
         
