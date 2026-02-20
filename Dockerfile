@@ -59,6 +59,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY --chown=appuser:appgroup src/ ./src/
 COPY --chown=appuser:appgroup pyproject.toml ./
 
+# Copy Alembic migration files
+COPY --chown=appuser:appgroup alembic/ ./alembic/
+COPY --chown=appuser:appgroup alembic.ini ./
+
+# Copy and set entrypoint script
+COPY --chown=appuser:appgroup entrypoint.sh ./
+RUN chmod +x ./entrypoint.sh
+
 # Security: Remove unnecessary files
 RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
@@ -74,6 +82,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl --fail http://localhost:8000/livez || exit 1
 
 # Default command: Gunicorn with Uvicorn workers for production
+# Run migrations then start the app
+ENTRYPOINT ["./entrypoint.sh"]
 CMD ["gunicorn", "src.app.main:app", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
      "--workers", "1", \
