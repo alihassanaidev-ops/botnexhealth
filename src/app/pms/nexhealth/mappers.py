@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from src.app.pms.models import (
@@ -73,7 +74,15 @@ def to_patient(raw: dict) -> UniversalPatient:
 def to_provider(raw: dict) -> UniversalProvider:
     appointment_types: list[dict] = []
     operatory_ids: list[str] = []
+    today = date.today().isoformat()
     for avail in raw.get("availabilities") or []:
+        # Skip inactive availability windows
+        if avail.get("active") is False:
+            continue
+        # Skip one-off windows whose specific date has already passed
+        specific_date = avail.get("specific_date")
+        if specific_date and specific_date < today:
+            continue
         op_id = avail.get("operatory_id")
         if op_id and _pid(op_id) not in operatory_ids:
             operatory_ids.append(_pid(op_id))

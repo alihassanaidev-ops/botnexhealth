@@ -389,7 +389,12 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         return raw.get("data", {})
 
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
-        params = {**self._default_params(), **kwargs}
+        params = {
+            **self._default_params(),
+            "per_page": 100,
+            "ignore_past_dates": True,
+            **kwargs,  # caller can still override
+        }
         if "include[]" not in params:
             params["include[]"] = ["appointment_types"]
         raw = await handle_nexhealth_request(self._client, "GET", "/availabilities", params=params)

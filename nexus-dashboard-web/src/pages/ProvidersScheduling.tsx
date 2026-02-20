@@ -263,10 +263,11 @@ export default function ProvidersScheduling() {
                                 <div className="space-y-3">
                                     {filteredAvailabilities.map((av) => {
                                         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
+                                        const isPastDate = !!av.specific_date && av.specific_date < new Date().toISOString().slice(0, 10)
                                         return (
                                             <div
                                                 key={av.id}
-                                                className={`rounded-lg border p-4 ${!hasTypes ? "border-yellow-200 bg-yellow-50/50" : ""}`}
+                                                className={`rounded-lg border p-4 ${isPastDate ? "border-gray-200 bg-gray-50/50 opacity-60" : !hasTypes ? "border-yellow-200 bg-yellow-50/50" : ""}`}
                                             >
                                                 <div className="flex items-start justify-between">
                                                     <div className="space-y-1">
@@ -275,6 +276,11 @@ export default function ProvidersScheduling() {
                                                             <span className="font-medium">
                                                                 {av.begin_time} - {av.end_time}
                                                             </span>
+                                                            {isPastDate && (
+                                                                <Badge variant="outline" className="text-xs text-gray-500 border-gray-300">
+                                                                    Expired
+                                                                </Badge>
+                                                            )}
                                                             {av.synced && (
                                                                 <Badge variant="secondary" className="text-xs">
                                                                     Synced from PMS
