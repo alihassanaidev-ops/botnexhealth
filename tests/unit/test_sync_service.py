@@ -33,7 +33,6 @@ class TestSyncResult:
         assert r.appointment_types_synced == 0
         assert r.operatories_synced == 0
         assert r.descriptors_synced == 0
-        assert r.availabilities_synced == 0
         assert r.errors == []
 
     def test_success_when_no_errors(self):
@@ -119,23 +118,6 @@ def _sample_descriptors() -> list[dict]:
     ]
 
 
-def _sample_availabilities() -> list[dict]:
-    return [
-        {
-            "id": 200,
-            "provider_id": 10,
-            "operatory_id": 100,
-            "begin_time": "09:00",
-            "end_time": "17:00",
-            "days": ["Monday", "Tuesday", "Wednesday"],
-            "specific_date": None,
-            "appointment_types": [{"id": 50, "name": "Cleaning"}],
-            "active": True,
-            "synced": True,
-            "tz_offset": "-05:00",
-            "custom_recurrence": None,
-        },
-    ]
 
 
 # =============================================================================
@@ -323,117 +305,6 @@ class TestSyncDescriptors:
         assert "Descriptor sync error" in result.errors[0]
 
 
-class TestSyncAvailabilities:
-    """Test _sync_availabilities orchestrator."""
-
-    @pytest.mark.asyncio
-    async def test_sync_availabilities_skipped_if_not_supported(self):
-        """Base adapter (no SupportsAvailabilityLinking) should skip availabilities."""
-        adapter = _make_base_adapter()
-
-        session = AsyncMock()
-        svc = SyncService(session)
-        result = SyncResult(location_slug="test")
-
-        await svc._sync_availabilities(adapter, "t1", "l1", datetime.now(timezone.utc), result)
-
-        assert result.availabilities_synced == 0
-        assert len(result.errors) == 0
-
-    @pytest.mark.asyncio
-    async def test_sync_availabilities_success(self):
-        adapter = _make_full_adapter()
-        adapter.list_availabilities.return_value = _sample_availabilities()
-
-        session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-        session.add = MagicMock()
-
-        svc = SyncService(session)
-        result = SyncResult(location_slug="test")
-
-        await svc._sync_availabilities(adapter, "t1", "l1", datetime.now(timezone.utc), result)
-
-        assert result.availabilities_synced == 1
-        assert len(result.errors) == 0
-        adapter.list_availabilities.assert_awaited_once_with(
-            page=1, per_page=300, active=True, ignore_past_dates=True,
-        )
-
-    @pytest.mark.asyncio
-    async def test_sync_availabilities_skips_empty_id(self):
-        adapter = _make_full_adapter()
-        adapter.list_availabilities.return_value = [
-            {"provider_id": 10, "begin_time": "09:00", "end_time": "12:00"},  # no id
-            {"id": 200, "provider_id": 10, "begin_time": "09:00", "end_time": "17:00",
-             "appointment_types": [], "active": True, "synced": True},
-        ]
-
-        session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-        session.add = MagicMock()
-
-        svc = SyncService(session)
-        result = SyncResult(location_slug="test")
-
-        await svc._sync_availabilities(adapter, "t1", "l1", datetime.now(timezone.utc), result)
-
-        assert result.availabilities_synced == 1
-
-    @pytest.mark.asyncio
-    async def test_sync_availabilities_error_captured(self):
-        adapter = _make_full_adapter()
-        adapter.list_availabilities.side_effect = Exception("Network error")
-
-        session = AsyncMock()
-        svc = SyncService(session)
-        result = SyncResult(location_slug="test")
-
-        await svc._sync_availabilities(adapter, "t1", "l1", datetime.now(timezone.utc), result)
-
-        assert result.availabilities_synced == 0
-        assert "Availability sync error" in result.errors[0]
-
-    @pytest.mark.asyncio
-    async def test_sync_availabilities_extracts_appointment_types(self):
-        """Verify appointment_type_ids and names are extracted from nested data."""
-        adapter = _make_full_adapter()
-        adapter.list_availabilities.return_value = [
-            {
-                "id": 300,
-                "provider_id": 10,
-                "begin_time": "08:00",
-                "end_time": "16:00",
-                "days": ["Monday"],
-                "appointment_types": [
-                    {"id": 50, "name": "Cleaning"},
-                    {"id": 51, "name": "Exam"},
-                ],
-                "active": True,
-                "synced": False,
-            }
-        ]
-
-        # Track what gets added to the session
-        added_objects = []
-        session = AsyncMock()
-        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-        session.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
-
-        svc = SyncService(session)
-        result = SyncResult(location_slug="test")
-
-        await svc._sync_availabilities(adapter, "t1", "l1", datetime.now(timezone.utc), result)
-
-        assert result.availabilities_synced == 1
-        assert len(added_objects) == 1
-        av = added_objects[0]
-        assert av.appointment_type_ids == ["50", "51"]
-        assert av.appointment_type_names == ["Cleaning", "Exam"]
-        assert av.provider_source_id == "10"
-        assert av.begin_time == "08:00"
-        assert av.end_time == "16:00"
-
 
 # =============================================================================
 # Full sync_location Tests
@@ -474,7 +345,6 @@ class TestSyncLocation:
         adapter.list_appointment_types.return_value = _sample_appointment_types()
         adapter.list_operatories.return_value = _sample_operatories()
         adapter.list_pms_descriptors.return_value = _sample_descriptors()
-        adapter.list_availabilities.return_value = _sample_availabilities()
 
         session = AsyncMock()
         session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
@@ -500,7 +370,6 @@ class TestSyncLocation:
         assert result.appointment_types_synced == 1
         assert result.operatories_synced == 2
         assert result.descriptors_synced == 2
-        assert result.availabilities_synced == 1
 
     @pytest.mark.asyncio
     async def test_sync_location_partial_errors(self):
@@ -510,7 +379,6 @@ class TestSyncLocation:
         adapter.list_appointment_types.return_value = _sample_appointment_types()
         adapter.list_operatories.return_value = _sample_operatories()
         adapter.list_pms_descriptors.return_value = _sample_descriptors()
-        adapter.list_availabilities.return_value = _sample_availabilities()
 
         session = AsyncMock()
         session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))

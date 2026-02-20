@@ -20,7 +20,6 @@ from src.app.api.deps import get_current_active_user
 from src.app.database import get_db_session
 from src.app.models.tenant import Tenant
 from src.app.models.tenant_appointment_type import TenantAppointmentType
-from src.app.models.tenant_availability import TenantAvailability
 from src.app.models.tenant_descriptor import TenantDescriptor
 from src.app.models.tenant_location import TenantLocation
 from src.app.models.tenant_operatory import TenantOperatory
@@ -229,7 +228,6 @@ async def get_setup_overview(
             ("appointment_types", TenantAppointmentType),
             ("operatories", TenantOperatory),
             ("descriptors", TenantDescriptor),
-            ("availabilities", TenantAvailability),
         ]:
             q = select(model).where(
                 model.tenant_id == tenant.id, model.location_id == location.id
@@ -438,7 +436,7 @@ async def list_descriptors(
         return [CachedDescriptorResponse.model_validate(d) for d in result.scalars().all()]
 
 
-# ── Availabilities (cached + PATCH via PMS) ──────────────────────────────
+# ── Availabilities (fetched LIVE from PMS — too volatile for cache) ───────
 
 
 @router.get("/availabilities", response_model=list[CachedAvailabilityResponse])
@@ -447,22 +445,50 @@ async def list_availabilities(
     location_id: str | None = Query(None),
     provider_source_id: str | None = Query(None, description="Filter by provider"),
 ):
-    """List cached availabilities for the tenant location."""
+    """Fetch availabilities live from PMS for the tenant location."""
     async with get_db_session() as session:
         tenant, location = await _resolve_tenant_location(current_user, session, location_id)
-        query = (
-            select(TenantAvailability)
-            .where(
-                TenantAvailability.tenant_id == tenant.id,
-                TenantAvailability.location_id == location.id,
-                TenantAvailability.active == True,
-            )
-        )
-        if provider_source_id:
-            query = query.where(TenantAvailability.provider_source_id == provider_source_id)
+        adapter = await _get_adapter(tenant, location)
 
-        result = await session.execute(query.order_by(TenantAvailability.begin_time))
-        return [CachedAvailabilityResponse.model_validate(av) for av in result.scalars().all()]
+        # Build extra params for the PMS call
+        extra: dict[str, Any] = {}
+        if provider_source_id:
+            # Strip prefix (e.g. "nh-449151038" -> "449151038")
+            raw_pid = provider_source_id.removeprefix("nh-")
+            extra["provider_id"] = raw_pid
+
+        try:
+            raw_items = await adapter.list_availabilities(**extra)
+        except Exception as e:
+            logger.error(f"Failed to fetch availabilities from PMS: {e}")
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Failed to fetch availabilities: {e}")
+
+        # Map raw PMS response to the response schema
+        results: list[CachedAvailabilityResponse] = []
+        for item in raw_items:
+            appt_types = item.get("appointment_types") or []
+            results.append(CachedAvailabilityResponse(
+                id=str(item.get("id", "")),
+                source_id=f"nh-{item['id']}" if item.get("id") else "",
+                source="nexhealth",
+                provider_source_id=f"nh-{item['provider_id']}" if item.get("provider_id") else None,
+                provider_name=item.get("provider_name"),
+                operatory_source_id=f"nh-{item['operatory_id']}" if item.get("operatory_id") else None,
+                operatory_name=item.get("operatory_name"),
+                begin_time=item.get("begin_time"),
+                end_time=item.get("end_time"),
+                days=item.get("days"),
+                specific_date=item.get("specific_date"),
+                appointment_type_ids=[f"nh-{at.get('id')}" for at in appt_types],
+                appointment_type_names=[at.get("name", "") for at in appt_types],
+                active=item.get("active", True),
+                synced=item.get("synced", False),
+                source_metadata={
+                    "tz_offset": item.get("tz_offset"),
+                    "custom_recurrence": item.get("custom_recurrence"),
+                },
+            ))
+        return results
 
 
 @router.patch("/availabilities/{source_id}", response_model=CachedAvailabilityResponse)
@@ -472,7 +498,7 @@ async def update_availability(
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_id: str | None = Query(None),
 ):
-    """Update availability via PMS (e.g. link appointment types) and refresh cache."""
+    """Update availability via PMS (e.g. link appointment types)."""
     async with get_db_session() as session:
         tenant, location = await _resolve_tenant_location(current_user, session, location_id)
         adapter = await _get_adapter(tenant, location)
@@ -490,25 +516,21 @@ async def update_availability(
             active=req.active,
         )
 
-        # Refresh this availability in cache
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
+        # Return the PMS response directly
         appt_types = updated.get("appointment_types") or []
-        sync_svc = SyncService(session)
-        await sync_svc._upsert_availability(
-            tenant_id=tenant.id,
-            location_id=location.id,
-            source=adapter.source,
-            source_id=str(updated.get("id", source_id)),
-            provider_source_id=str(updated.get("provider_id", "")),
-            provider_name=None,
-            operatory_source_id=str(updated.get("operatory_id", "")) if updated.get("operatory_id") else None,
-            operatory_name=None,
+        return CachedAvailabilityResponse(
+            id=str(updated.get("id", source_id)),
+            source_id=f"nh-{updated.get('id', source_id)}",
+            source="nexhealth",
+            provider_source_id=f"nh-{updated['provider_id']}" if updated.get("provider_id") else None,
+            provider_name=updated.get("provider_name"),
+            operatory_source_id=f"nh-{updated['operatory_id']}" if updated.get("operatory_id") else None,
+            operatory_name=updated.get("operatory_name"),
             begin_time=updated.get("begin_time"),
             end_time=updated.get("end_time"),
             days=updated.get("days"),
             specific_date=updated.get("specific_date"),
-            appointment_type_ids=[str(at.get("id")) for at in appt_types],
+            appointment_type_ids=[f"nh-{at.get('id')}" for at in appt_types],
             appointment_type_names=[at.get("name", "") for at in appt_types],
             active=updated.get("active", True),
             synced=updated.get("synced", False),
@@ -516,21 +538,7 @@ async def update_availability(
                 "tz_offset": updated.get("tz_offset"),
                 "custom_recurrence": updated.get("custom_recurrence"),
             },
-            synced_at=now,
         )
-        await session.flush()
-
-        # Return updated cached row
-        stmt = select(TenantAvailability).where(
-            TenantAvailability.tenant_id == tenant.id,
-            TenantAvailability.location_id == location.id,
-            TenantAvailability.source_id == str(updated.get("id", source_id)),
-        )
-        cached = (await session.execute(stmt)).scalar_one_or_none()
-        if not cached:
-            raise HTTPException(500, "Failed to cache updated availability")
-
-        return CachedAvailabilityResponse.model_validate(cached)
 
 
 # ── Sync (trigger fresh sync from PMS) ───────────────────────────────────
@@ -553,6 +561,6 @@ async def trigger_sync(
             "appointment_types_synced": result.appointment_types_synced,
             "operatories_synced": result.operatories_synced,
             "descriptors_synced": result.descriptors_synced,
-            "availabilities_synced": result.availabilities_synced,
+
             "errors": result.errors,
         }

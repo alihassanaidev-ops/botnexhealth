@@ -93,7 +93,7 @@ export default function ProvidersScheduling() {
             const result = await triggerSync()
             if (result.success) {
                 toast.success(
-                    `Synced: ${result.providers_synced} providers, ${result.availabilities_synced} availabilities`
+                    `Synced: ${result.providers_synced} providers, ${result.appointment_types_synced} appointment types`
                 )
                 await fetchData()
                 await fetchAvailabilities()

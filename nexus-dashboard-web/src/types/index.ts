@@ -67,7 +67,6 @@ export interface SyncResult {
     appointment_types_synced: number;
     operatories_synced: number;
     descriptors_synced: number;
-    availabilities_synced: number;
     errors: string[];
 }
 
