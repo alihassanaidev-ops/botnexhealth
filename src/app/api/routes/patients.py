@@ -19,8 +19,10 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 @router.get("/patients", response_model=PatientListResponse)
 @audit(
     AuditAction.SEARCH_PATIENTS, 
-    resource=lambda request, subdomain, location_id, name, email, phone_number, date_of_birth, **kwargs: 
-        f"criteria:name={name},email={email},phone={phone_number},dob={date_of_birth}",
+    resource=lambda request, subdomain, location_id, name, email, phone_number, date_of_birth, **kwargs:
+        "patient_search:by_" + ",".join(
+            k for k, v in [("name", name), ("email", email), ("phone", phone_number), ("dob", date_of_birth)] if v
+        ),
     actor=AuditActor.API_CLIENT
 )
 async def list_patients(
@@ -117,7 +119,7 @@ async def get_patient(
 @router.post("/patients")
 @audit(
     AuditAction.CREATE_PATIENT, 
-    resource=lambda request, body, **kwargs: f"new_patient:{body.patient.first_name}_{body.patient.last_name}",
+    resource=lambda request, body, **kwargs: "new_patient:created",
     actor=AuditActor.API_CLIENT
 )
 async def create_patient(

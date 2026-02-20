@@ -223,7 +223,10 @@ async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
 @register_function("lookup_patient")
 @audit(
     AuditAction.SEARCH_PATIENTS,
-    resource=lambda args: f"criteria:name={args.get('name')},phone={args.get('phone_number')},email={args.get('email')}",
+    resource=lambda args: "patient_search:by_" + ",".join(
+        k for k, v in [("name", args.get("name")), ("phone", args.get("phone_number")),
+                        ("email", args.get("email")), ("dob", args.get("date_of_birth"))] if v
+    ),
 )
 async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     """Lookup a patient by name, email, phone, or date of birth."""
@@ -275,7 +278,7 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 @register_function("create_patient")
 @audit(
     AuditAction.CREATE_PATIENT,
-    resource=lambda args: f"new_patient:{args.get('first_name')}_{args.get('last_name')}",
+    resource=lambda args: "new_patient:created",
 )
 async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
     """Create a new patient."""

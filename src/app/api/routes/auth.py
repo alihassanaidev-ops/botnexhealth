@@ -89,7 +89,7 @@ async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) 
             detail="Could not resolve user from Supabase token",
         )
 
-    audit_meta["email"] = supabase_user.email
+    audit_meta["supabase_uid"] = str(supabase_user.id)
 
     # Find the matching local user by Supabase UUID (user.id = auth.users.id)
     supabase_uid = str(supabase_user.id)

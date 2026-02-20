@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from src.app.config import settings
 from src.app.gohighlevel.client import GHLClient
-from src.app.retell.security import get_retell_secret, get_signature_dependency
+from src.app.retell.security import get_retell_secret, get_signature_dependency, hash_for_logging
 from src.app.services.call_events import call_event_broker
 
 logger = logging.getLogger(__name__)
@@ -334,7 +334,7 @@ async def handle_retell_webhook(
                 outcome=AuditOutcome.SUCCESS,
                 metadata={
                     "event_type": event.event,
-                    "call_id": event.call.call_id,
+                    "call_id": hash_for_logging(event.call.call_id),
                     "is_new": result.get("new", False)
                 },
                 tenant_id=tenant.id if tenant else None,
@@ -373,11 +373,11 @@ async def handle_retell_webhook(
             log_audit_background(
                 actor=AuditActor.RETELL_AGENT,
                 action=AuditAction.SYNC_GHL_CONTACT,
-                target_resource=f"phone:{phone_number}",
+                target_resource=f"phone:{hash_for_logging(phone_number) if phone_number else 'unknown'}",
                 outcome=AuditOutcome.FAILURE_EXTERNAL_API,
                 metadata={
                     "event_type": event.event,
-                    "call_id": event.call.call_id,
+                    "call_id": hash_for_logging(event.call.call_id),
                     "error": str(e)
                 },
                 tenant_id=tenant.id if tenant else None,
