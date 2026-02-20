@@ -23,7 +23,6 @@ from src.app.models import (  # noqa: F401 — side-effect import
     RetellWebhookEvent,
     Tenant,
     TenantAppointmentType,
-    TenantAvailability,
     TenantDescriptor,
     TenantLocation,
     TenantOperatory,
