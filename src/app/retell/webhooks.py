@@ -238,13 +238,9 @@ async def handle_retell_webhook(
         # Parse the verified body (bytes -> dict)
         payload = json.loads(body)
 
-        # Log full payload for debugging (exclude transcript to reduce log size)
-        log_body = {k: v for k, v in payload.get("call", {}).items() if k not in ["transcript", "transcript_object", "transcript_with_tool_calls"]}
-        logger.info(f"Retell webhook payload: event={payload.get('event')}, call_data={json.dumps(log_body, default=str)}")
-
         event = RetellWebhookEvent.model_validate(payload)
 
-        logger.info(f"Received Retell webhook: event={event.event}, call_id={event.call.call_id}")
+        logger.info(f"Received Retell webhook: event={event.event}, call_id={hash_for_logging(event.call.call_id)}")
 
         # Only process call_analyzed events (has full analysis data)
         if event.event != "call_analyzed":

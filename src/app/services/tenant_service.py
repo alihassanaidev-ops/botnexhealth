@@ -214,13 +214,13 @@ class TenantService:
                 if supabase_service:
                     try:
                         supabase_service.delete_user(user.id)
-                        logger.info(f"Deleted Supabase auth user {user.id} for {user.email}")
+                        logger.info(f"Deleted Supabase auth user {user.id}")
                     except Exception as e:
                         logger.warning(f"Failed to delete Supabase user {user.id}: {e}")
                         # Continue with local deletion even if Supabase fails
                 
                 await self.session.delete(user)
-                logger.info(f"Deleted user {user.email} associated with tenant {tenant.slug}")
+                logger.info(f"Deleted user {user.id} associated with tenant {tenant.slug}")
             
             # Flush to ensure user deletes are committed before tenant delete
             await self.session.flush()

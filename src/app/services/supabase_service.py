@@ -67,7 +67,7 @@ class SupabaseService:
         if role:
             user_metadata["role"] = role
 
-        logger.info(f"Inviting user {email} to Supabase (tenant_id={tenant_id}, role={role})")
+        logger.info(f"Inviting user to Supabase (tenant_id={tenant_id}, role={role})")
 
         try:
             options: dict[str, Any] = {"data": user_metadata}
@@ -88,7 +88,7 @@ class SupabaseService:
 
             return response
         except Exception as e:
-            logger.error(f"Failed to invite user {email}: {e}")
+            logger.error(f"Failed to invite user to Supabase: {e}")
             raise
 
     def get_user_by_token(self, access_token: str) -> Any:

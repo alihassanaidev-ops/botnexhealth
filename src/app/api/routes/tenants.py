@@ -202,7 +202,7 @@ async def create_tenant(
             elif isinstance(response, dict) and 'id' in response:
                 supabase_user_id = str(response['id'])
         except Exception as e:
-            logger.error(f"Supabase invite failed for {data.email}: {e}")
+            logger.error(f"Supabase invite failed: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to send Supabase invite"
@@ -415,7 +415,7 @@ async def reinvite_tenant_user(
             )
             session.add(new_user)
         except Exception as e:
-            logger.error(f"Re-invite failed for {data.email}: {e}")
+            logger.error(f"Re-invite failed: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to re-invite user: {e}"
