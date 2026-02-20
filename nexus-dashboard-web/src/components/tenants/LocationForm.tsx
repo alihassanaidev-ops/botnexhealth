@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import api from "@/lib/api";
-import type { Location, InstitutionBasicListResponse, NexHealthLocation } from "@/types";
+import type { Location, InstitutionBasicListResponse, InstitutionBasic } from "@/types";
 import { Loader2 } from "lucide-react";
 
 const locationSchema = z.object({
@@ -51,7 +51,7 @@ interface LocationFormProps {
 
 export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormProps) {
     const isEditing = !!location;
-    const [nexHealthLocations, setNexHealthLocations] = useState<NexHealthLocation[]>([]);
+    const [nexHealthInstitutions, setNexHealthInstitutions] = useState<InstitutionBasic[]>([]);
     const [isLoadingNH, setIsLoadingNH] = useState(false);
 
     const form = useForm<LocationFormValues>({
@@ -73,18 +73,15 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
         },
     });
 
-    // Fetch NexHealth locations on mount
+    // Fetch NexHealth institutions + locations on mount
     useEffect(() => {
         async function fetchNHLocations() {
             setIsLoadingNH(true);
             try {
                 const { data } = await api.get<InstitutionBasicListResponse>("/admin/tenants/nexhealth/locations");
-                // Flatten locations from all institutions
-                const allLocs = data.data.flatMap(inst => inst.locations);
-                setNexHealthLocations(allLocs);
+                setNexHealthInstitutions(data.data);
             } catch (error) {
                 console.error("Failed to fetch NexHealth locations", error);
-                // Don't block UI, just log
             } finally {
                 setIsLoadingNH(false);
             }
@@ -93,6 +90,9 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
             fetchNHLocations();
         }
     }, [isEditing]);
+
+    // Flatten for dropdown display, but keep institution reference for subdomain lookup
+    const nexHealthLocations = nexHealthInstitutions.flatMap(inst => inst.locations);
 
     function onLocationSelect(locationId: string) {
         const selected = nexHealthLocations.find(l => String(l.id) === locationId);
@@ -111,10 +111,13 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
         if (selected.phone_number) form.setValue("phone", selected.phone_number);
         if (selected.tz) form.setValue("timezone", selected.tz);
 
-        // We might not have subdomain in the flattened location object easily if not passed down,
-        // but often the institution subdomain isn't explicitly on the location object in the basic list.
-        // For now, we leave subdomain manual or empty if not in the object.
-        // If needed, we can map institution subdomain to location.
+        // Look up the parent institution to auto-fill subdomain
+        const parentInstitution = nexHealthInstitutions.find(inst =>
+            inst.locations.some(l => l.id === selected.id)
+        );
+        if (parentInstitution?.subdomain) {
+            form.setValue("nexhealth_subdomain", parentInstitution.subdomain);
+        }
     }
 
     async function onSubmit(values: LocationFormValues) {
