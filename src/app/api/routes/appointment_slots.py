@@ -2,7 +2,7 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import AppointmentSlotsResponse
@@ -10,12 +10,15 @@ from src.app.api.deps import get_current_active_user
 from src.app.config import Settings, get_settings
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.nexhealth.client import NexHealthClient
+from src.app.api.rate_limit import limiter, RATE_READ
 
 router = APIRouter(dependencies=[Depends(get_current_active_user)])
 
 
 @router.get("/appointment_slots", response_model=AppointmentSlotsResponse)
+@limiter.limit(RATE_READ)
 async def list_appointment_slots(
+    request: Request,
     start_date: str = Query(..., description="Date string for results to start at, format YYYY-MM-DD"),
     days: int = Query(..., ge=1, description="Number of days to include, counting the start date"),
     lids: list[int] = Query(..., alias="lids[]", description="Array of Location Ids"),

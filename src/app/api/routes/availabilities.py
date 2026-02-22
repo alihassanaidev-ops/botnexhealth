@@ -2,7 +2,7 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import AvailabilityDetailResponse, AvailabilityListResponse
@@ -10,12 +10,15 @@ from src.app.api.deps import get_current_active_user
 from src.app.config import Settings, get_settings
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.nexhealth.client import NexHealthClient
+from src.app.api.rate_limit import limiter, RATE_READ
 
 router = APIRouter(dependencies=[Depends(get_current_active_user)])
 
 
 @router.get("/availabilities", response_model=AvailabilityListResponse)
+@limiter.limit(RATE_READ)
 async def list_availabilities(
+    request: Request,
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     location_id: int | None = Query(None, description="Used to scope the request to the specified location"),
     page: int = Query(1, ge=1, description="Page number, starts with page 1"),
@@ -67,7 +70,9 @@ async def list_availabilities(
 
 
 @router.get("/availabilities/{availability_id}", response_model=AvailabilityDetailResponse)
+@limiter.limit(RATE_READ)
 async def get_availability(
+    request: Request,
     availability_id: int = Path(..., description="Id of the availability"),
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     include: list[str] | None = Query(None, alias="include[]", description="Resources to include (e.g., appointment_types)"),

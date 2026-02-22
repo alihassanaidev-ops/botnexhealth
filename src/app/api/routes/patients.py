@@ -12,11 +12,13 @@ from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.nexhealth.client import NexHealthClient
 from src.app.services.audit_decorator import audit
+from src.app.api.rate_limit import limiter, RATE_READ, RATE_WRITE
 
 router = APIRouter(dependencies=[Depends(get_current_active_user)])
 
 
 @router.get("/patients", response_model=PatientListResponse)
+@limiter.limit(RATE_READ)
 @audit(
     AuditAction.SEARCH_PATIENTS, 
     resource=lambda request, subdomain, location_id, name, email, phone_number, date_of_birth, **kwargs:
@@ -87,6 +89,7 @@ async def list_patients(
 
 
 @router.get("/patients/{id}", response_model=PatientDetailResponse)
+@limiter.limit(RATE_READ)
 @audit(
     AuditAction.READ_PATIENT, 
     resource=lambda request, id, **kwargs: f"patient:{id}",
@@ -117,6 +120,7 @@ async def get_patient(
 
 
 @router.post("/patients")
+@limiter.limit(RATE_WRITE)
 @audit(
     AuditAction.CREATE_PATIENT, 
     resource=lambda request, body, **kwargs: "new_patient:created",

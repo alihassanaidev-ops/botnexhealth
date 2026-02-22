@@ -22,13 +22,11 @@ from src.app.services.auth import AuthService
 from src.app.services.supabase_service import SupabaseService
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.services.audit import log_audit_background
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from src.app.api.rate_limit import limiter, RATE_AUTH
 
 logger = logging.getLogger(__name__)
 
-# Rate limiter — keyed by client IP
-limiter = Limiter(key_func=get_remote_address)
+
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -51,7 +49,7 @@ class UserRead(BaseModel):
 
 
 @router.post("/supabase/token", response_model=Token)
-@limiter.limit("5/minute")
+@limiter.limit(RATE_AUTH)
 async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) -> Token:
     """
     Exchange a Supabase access token for a local JWT.

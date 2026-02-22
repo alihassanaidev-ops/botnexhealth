@@ -2,7 +2,7 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import (
@@ -13,12 +13,15 @@ from src.app.api.models import (
 from src.app.api.deps import get_current_active_user
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.nexhealth.client import NexHealthClient
+from src.app.api.rate_limit import limiter, RATE_READ
 
 router = APIRouter(dependencies=[Depends(get_current_active_user)])
 
 
 @router.get("/locations", response_model=InstitutionBasicListResponse)
+@limiter.limit(RATE_READ)
 async def list_locations(
+    request: Request,
     subdomain: str | None = Query(None, description="Scope request to the specified institution"),
     inactive: bool | None = Query(None, description="Filter by inactive status"),
     foreign_id: str | None = Query(None, description="Find location by the integrated system Id"),
@@ -48,7 +51,9 @@ async def list_locations(
 
 
 @router.get("/locations/{location_id}", response_model=LocationDetailResponse)
+@limiter.limit(RATE_READ)
 async def get_location(
+    request: Request,
     location_id: int = Path(..., description="Location ID"),
     client: Annotated[NexHealthClient, Depends(get_nexhealth_client_dependency)] = None,
 ) -> dict[str, Any]:
@@ -57,7 +62,9 @@ async def get_location(
 
 
 @router.get("/locations/{location_id}/appointment_descriptors", response_model=AppointmentDescriptorListResponse)
+@limiter.limit(RATE_READ)
 async def list_appointment_descriptors(
+    request: Request,
     location_id: int = Path(..., description="Location ID"),
     client: Annotated[NexHealthClient, Depends(get_nexhealth_client_dependency)] = None,
 ) -> dict[str, Any]:

@@ -2,7 +2,7 @@
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import (
@@ -16,12 +16,15 @@ from src.app.api.deps import get_current_active_user
 from src.app.config import Settings, get_settings
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.nexhealth.client import NexHealthClient
+from src.app.api.rate_limit import limiter, RATE_READ, RATE_WRITE
 
 router = APIRouter(dependencies=[Depends(get_current_active_user)])
 
 
 @router.get("/appointment_types", response_model=AppointmentTypeListResponse)
+@limiter.limit(RATE_READ)
 async def list_appointment_types(
+    request: Request,
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     location_id: int | None = Query(None, description="Id of the associated location, required when appointment types are location specific"),
     include: list[str] | None = Query(None, alias="include[]", description="Resources to include (descriptors)"),
@@ -53,7 +56,9 @@ async def list_appointment_types(
 
 
 @router.post("/appointment_types", response_model=AppointmentTypeDetailResponse, status_code=201)
+@limiter.limit(RATE_WRITE)
 async def create_appointment_type(
+    request: Request,
     body: CreateAppointmentTypeRequest,
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     settings: Annotated[Settings, Depends(get_settings)] = None,
@@ -100,7 +105,9 @@ async def create_appointment_type(
 
 
 @router.get("/appointment_types/{id}", response_model=AppointmentTypeDetailResponse)
+@limiter.limit(RATE_READ)
 async def get_appointment_type(
+    request: Request,
     id: int = Path(..., description="The appointment type ID"),
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     location_id: int | None = Query(None, description="Id of the associated location, required when appointment types are location specific"),
@@ -128,7 +135,9 @@ async def get_appointment_type(
 
 
 @router.patch("/appointment_types/{id}", response_model=AppointmentTypeDetailResponse)
+@limiter.limit(RATE_WRITE)
 async def update_appointment_type(
+    request: Request,
     body: UpdateAppointmentTypeRequest,
     id: int = Path(..., description="The appointment type ID"),
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
@@ -173,7 +182,9 @@ async def update_appointment_type(
 
 
 @router.delete("/appointment_types/{id}", response_model=AppointmentTypeDetailResponse)
+@limiter.limit(RATE_WRITE)
 async def delete_appointment_type(
+    request: Request,
     id: int = Path(..., description="The appointment type ID"),
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     location_id: int | None = Query(None, description="Id of the associated location, required when appointment types are location specific"),
@@ -203,7 +214,9 @@ async def delete_appointment_type(
 
 
 @router.get("/appointment_types/{id}/appointment_descriptors", response_model=EmrApptDescriptorListResponse)
+@limiter.limit(RATE_READ)
 async def get_appointment_type_descriptors(
+    request: Request,
     id: int = Path(..., description="The appointment type ID"),
     subdomain: str | None = Query(None, description="Used to scope the request to the specified institution"),
     location_id: int | None = Query(None, description="Id of the associated location, required when appointment types are location specific"),
