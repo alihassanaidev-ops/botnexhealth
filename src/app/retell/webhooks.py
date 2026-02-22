@@ -214,6 +214,41 @@ async def handle_retell_webhook(
             tenant_id=tenant.id if tenant else None,
         )
 
+        # Process Contact & Call records if we identified the tenant clinic
+        if tenant:
+            from src.app.database import get_db_session
+            from src.app.services.post_call_service import PostCallService
+            
+            async with get_db_session() as session:
+                post_call_service = PostCallService(session)
+                
+                # event.call is RetellCallWebhook, map it to the expected dict for analysis
+                analysis_dict = event.call.call_analysis.model_dump() if event.call.call_analysis else None
+                
+                # Transform to RetellCallData format expected by service
+                # The webhook event structure differs slightly from the direct API structure
+                from src.app.retell.models import RetellCallData
+                mapped_call_data = RetellCallData(
+                    call_id=event.call.call_id,
+                    call_type=event.call.call_type,
+                    from_number=event.call.from_number,
+                    to_number=event.call.to_number,
+                    direction=event.call.direction,
+                    agent_id=event.call.agent_id,
+                    call_status=event.call.call_status,
+                    disconnection_reason=event.call.disconnection_reason,
+                )
+                
+                # Call service to save to DB
+                await post_call_service.process_call_analyzed_event(
+                    tenant_id=tenant.id,
+                    webhook_call=mapped_call_data,
+                    analysis=analysis_dict,
+                )
+                
+                # Commit the transaction so contacts and calls are saved!
+                await session.commit()
+                
         await _finish_webhook_processing(
             processing_call_id,
             processing_event_type,
