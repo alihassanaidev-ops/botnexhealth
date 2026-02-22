@@ -6,12 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import AppointmentSlotsResponse
-from src.app.api.deps import get_current_user
+from src.app.api.deps import get_current_active_user
 from src.app.config import Settings, get_settings
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.nexhealth.client import NexHealthClient
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(get_current_active_user)])
 
 
 @router.get("/appointment_slots", response_model=AppointmentSlotsResponse)

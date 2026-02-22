@@ -10,11 +10,11 @@ from src.app.api.models import (
     InstitutionBasicListResponse,
     LocationDetailResponse,
 )
-from src.app.api.deps import get_current_user
+from src.app.api.deps import get_current_active_user
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.nexhealth.client import NexHealthClient
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(get_current_active_user)])
 
 
 @router.get("/locations", response_model=InstitutionBasicListResponse)

@@ -6,14 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import CreateAppointmentRequest, CancelAppointmentRequest
-from src.app.api.deps import get_current_user
+from src.app.api.deps import get_current_active_user
 from src.app.config import Settings, get_settings
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.nexhealth.client import NexHealthClient
 from src.app.services.audit_decorator import audit
 
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(get_current_active_user)])
 
 
 @router.get("/appointments")

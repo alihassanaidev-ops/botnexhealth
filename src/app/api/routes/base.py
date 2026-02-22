@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends
 
-from src.app.api.deps import get_current_user
+from src.app.api.deps import get_current_active_user
 
 # Public router for health checks (no auth required)
 public_router = APIRouter()
@@ -21,7 +21,7 @@ async def readiness_probe() -> dict[str, str]:
 
 
 # Secured router for authenticated endpoints
-router = APIRouter(dependencies=[Depends(get_current_user)])
+router = APIRouter(dependencies=[Depends(get_current_active_user)])
 
 
 @router.get("/health")
