@@ -22,12 +22,11 @@ import type { TenantDetail } from "@/types";
 
 const credentialsSchema = z.object({
     nexhealth_api_key: z.string().optional(),
-    retell_api_secret: z.string().optional(),
 });
 
 type CredentialsFormValues = z.infer<typeof credentialsSchema>;
 
-type SectionKey = "nexhealth" | "retell";
+type SectionKey = "nexhealth";
 
 interface TenantCredentialsFormProps {
     tenant: TenantDetail;
@@ -42,7 +41,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
         resolver: zodResolver(credentialsSchema),
         defaultValues: {
             nexhealth_api_key: "",
-            retell_api_secret: "",
         },
     });
 
@@ -50,7 +48,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
     useEffect(() => {
         form.reset({
             nexhealth_api_key: "",
-            retell_api_secret: "",
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tenant]);
@@ -63,7 +60,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
             // Only include fields from the active section that have values
             const sectionFields: Record<SectionKey, (keyof CredentialsFormValues)[]> = {
                 nexhealth: ["nexhealth_api_key"],
-                retell: ["retell_api_secret"],
             };
 
             if (editingSection) {
@@ -199,34 +195,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                                         <Input
                                             type="password"
                                             placeholder={tenant.has_nexhealth_key ? "••••••••" : "Enter API key"}
-                                            {...field}
-                                        />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                    </div>
-                </CredentialCard>
-
-
-                <CredentialCard
-                    title="Retell AI"
-                    description="Configure voice agents for inbound and outbound calls."
-                    section="retell"
-                    configured={tenant.has_retell_secret}
-                >
-                    <div className="grid gap-4">
-                        <FormField
-                            control={form.control}
-                            name="retell_api_secret"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>API Secret</FormLabel>
-                                    <FormControl>
-                                        <Input
-                                            type="password"
-                                            placeholder={tenant.has_retell_secret ? "••••••••" : "Enter secret"}
                                             {...field}
                                         />
                                     </FormControl>
