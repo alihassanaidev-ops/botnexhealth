@@ -593,14 +593,10 @@ class TenantResponse(BaseModel):
     slug: str
     is_active: bool
     
-    # Non-secret config
-    ghl_custom_fields: dict[str, Any] | None
     
     # Credential presence indicators
     has_nexhealth_key: bool
-    has_ghl_key: bool
     has_retell_secret: bool
-    has_sikka_credentials: bool
     
     has_system_nexhealth_key: bool
     
@@ -629,14 +625,8 @@ class TenantResponse(BaseModel):
             name=tenant.name,
             slug=tenant.slug,
             is_active=tenant.is_active,
-            ghl_custom_fields=tenant.ghl_custom_fields,
             has_nexhealth_key=tenant.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
-            has_ghl_key=tenant.ghl_api_key_encrypted is not None,
             has_retell_secret=tenant.retell_api_secret_encrypted is not None,
-            has_sikka_credentials=(
-                tenant.sikka_app_id_encrypted is not None and 
-                tenant.sikka_app_secret_encrypted is not None
-            ),
             user=user_resp
         )

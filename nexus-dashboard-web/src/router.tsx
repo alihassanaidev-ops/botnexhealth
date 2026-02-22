@@ -12,7 +12,7 @@ import AppLayout from "./components/AppLayout";
 import AppointmentTypes from "./pages/AppointmentTypes";
 import ProvidersScheduling from "./pages/ProvidersScheduling";
 import Operatories from "./pages/Operatories";
-import Calls from "./pages/Calls";
+
 
 export const router = createBrowserRouter([
     {
@@ -50,14 +50,7 @@ export const router = createBrowserRouter([
                             </RoleGuard>
                         ),
                     },
-                    {
-                        path: "calls",
-                        element: (
-                            <RoleGuard allowed={["TENANT"]}>
-                                <Calls />
-                            </RoleGuard>
-                        ),
-                    },
+
                     {
                         path: "tenants",
                         element: (

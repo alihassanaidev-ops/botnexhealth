@@ -19,7 +19,6 @@ async def test_get_my_tenant_config_success(async_client: AsyncClient):
         slug="test-clinic",
         is_active=True,
         nexhealth_api_key_encrypted="encrypted_key", # Should result in has_nexhealth_key=True
-        ghl_api_key_encrypted=None,                  # Should result in has_ghl_key=False
     )
 
     # Mock user
@@ -57,7 +56,6 @@ async def test_get_my_tenant_config_success(async_client: AsyncClient):
             
             assert data["slug"] == "test-clinic"
             assert data["has_nexhealth_key"] is True
-            assert data["has_ghl_key"] is False
             assert "nexhealth_api_key" not in data # Secrets should not be exposed
             assert data["user"]["email"] == "test@clinic.com"
             

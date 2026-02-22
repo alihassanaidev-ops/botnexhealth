@@ -48,7 +48,6 @@ class RetellWebhookEvent(Base):
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     tenant_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
-    ghl_contact_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

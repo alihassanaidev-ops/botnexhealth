@@ -28,13 +28,10 @@ export interface TenantDetail {
     slug: string;
     is_active: boolean;
 
-    ghl_custom_fields: Record<string, string> | null;
 
     has_nexhealth_key: boolean;
     has_system_nexhealth_key: boolean;
-    has_ghl_key: boolean;
     has_retell_secret: boolean;
-    has_sikka_credentials: boolean;
 
     user: TenantUser | null;
 }
@@ -48,9 +45,7 @@ export interface Location {
 
     nexhealth_subdomain: string | null;
     nexhealth_location_id: string | null;
-    ghl_location_id: string | null;
     retell_agent_id: string | null;
-    sikka_office_id: string | null;
     has_retell_secret: boolean;
 
     address: string | null;
@@ -78,8 +73,7 @@ export interface LocationInfo {
     slug: string;
     nexhealth_subdomain: string | null;
     nexhealth_location_id: string | null;
-    ghl_location_id: string | null;
-    sikka_office_id: string | null;
+
 }
 
 export interface SetupOverview {
@@ -181,41 +175,4 @@ export interface InstitutionBasicListResponse {
     data: InstitutionBasic[];
 }
 
-// ── GHL Call Intelligence ───────────────────────────────────────────────
-
-export interface CallRecord {
-    id: string;
-    patient_name: string;
-    contact_id: string | null;
-    phone: string | null;
-    email: string | null;
-    call_date: string | null;
-    call_time: string | null;
-    call_duration: string | null;
-    call_status: string | null;
-    call_status_normalized: string | null;
-    call_summary: string | null;
-    call_transcript: string | null;
-    recording_link: string | null;
-    next_action: string | null;
-    patient_intent: string | null;
-    new_patient: string | null;
-    preferred_callback_time: string | null;
-    times_called: string | null;
-    agent_used: string | null;
-    complaining_patient: string | null;
-    insurance_and_billing: string | null;
-    patient_contact_status: string | null;
-    monetary_value: number | null;
-    pipeline_stage: string | null;
-}
-
-export interface CallsResponse {
-    calls: CallRecord[];
-    total: number;
-    counts: Record<string, number>;
-    page: number;
-    page_size: number;
-    total_pages: number;
-}
 

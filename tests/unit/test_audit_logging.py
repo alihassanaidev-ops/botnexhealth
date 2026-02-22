@@ -107,7 +107,7 @@ class TestAuditEntry:
     def test_audit_entry_immutable(self):
         """Test that AuditEntry is frozen (immutable)."""
         entry = AuditEntry(
-            actor=AuditActor.GHL,
+            actor=AuditActor.SYSTEM,
             action=AuditAction.BOOK_APPOINTMENT,
             target_resource="appointment:789",
             outcome=AuditOutcome.SUCCESS,
@@ -403,7 +403,6 @@ class TestAuditEnums:
     
     def test_actor_enum_values(self):
         """Test AuditActor enum has expected values."""
-        assert AuditActor.GHL.value == "GHL"
         assert AuditActor.RETELL_AGENT.value == "RETELL_AGENT"
         assert AuditActor.ADMIN.value == "ADMIN"
         assert AuditActor.SYSTEM.value == "SYSTEM"

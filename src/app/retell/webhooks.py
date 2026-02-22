@@ -13,9 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from src.app.config import settings
-from src.app.gohighlevel.client import GHLClient
 from src.app.retell.security import get_retell_secret, get_signature_dependency, hash_for_logging
-from src.app.services.call_events import call_event_broker
 
 logger = logging.getLogger(__name__)
 
@@ -60,59 +58,6 @@ class RetellWebhookEvent(BaseModel):
     """Retell webhook event envelope."""
     event: str
     call: RetellCallWebhook
-
-
-# ============================================================================
-# GHL Client - Tenant Aware
-# ============================================================================
-
-# Global client fallback
-_ghl_client: GHLClient | None = None
-
-
-def get_ghl_client() -> GHLClient | None:
-    """Get global GHL client singleton (fallback when no tenant)."""
-    global _ghl_client
-    if _ghl_client is None and settings.ghl_api_key:
-        _ghl_client = GHLClient(
-            api_key=settings.ghl_api_key,
-            location_id=settings.ghl_location_id,
-        )
-    return _ghl_client
-
-
-async def get_tenant_ghl_client(agent_id: str | None) -> tuple[GHLClient | None, "Tenant | None"]:
-    """
-    Get GHL client for the tenant associated with the given agent_id.
-    
-    Returns (client, tenant) tuple. Falls back to global client if no tenant found.
-    """
-    from src.app.database import get_db_session
-    from src.app.services.tenant_service import TenantService
-    
-    tenant = None
-    location = None
-    
-    if agent_id:
-        try:
-            async with get_db_session() as session:
-                tenant_service = TenantService(session)
-                result = await tenant_service.get_location_by_retell_agent_id(agent_id)
-                if result:
-                    location, tenant = result
-        except Exception as e:
-            logger.warning(f"Failed to lookup tenant by agent_id {agent_id}: {e}")
-    
-    # If tenant has GHL config, create tenant-specific client
-    if tenant and location and tenant.ghl_api_key and location.ghl_location_id:
-        client = GHLClient(
-            api_key=tenant.ghl_api_key,
-            location_id=location.ghl_location_id,
-        )
-        return client, tenant
-    
-    # Fall back to global client
-    return get_ghl_client(), tenant
 
 
 async def _begin_webhook_processing(call_id: str, event_type: str) -> tuple[bool, str]:
@@ -170,7 +115,6 @@ async def _finish_webhook_processing(
     *,
     status: str,
     tenant_id: str | None = None,
-    ghl_contact_id: str | None = None,
     error: str | None = None,
 ) -> None:
     """Update idempotency row after webhook processing finishes."""
@@ -191,26 +135,8 @@ async def _finish_webhook_processing(
             return
         row.status = status
         row.tenant_id = tenant_id or row.tenant_id
-        row.ghl_contact_id = ghl_contact_id or row.ghl_contact_id
         row.last_error = error
         row.updated_at = datetime.now(timezone.utc)
-
-
-async def _publish_call_data_event(
-    tenant_id: str,
-    event_type: str,
-    call_id: str,
-    details: dict[str, Any] | None = None,
-) -> None:
-    """Emit tenant-scoped call data freshness signal for dashboard clients."""
-    await call_event_broker.publish(
-        tenant_id=tenant_id,
-        event_type=event_type,
-        payload={
-            "call_id": call_id,
-            **(details or {}),
-        },
-    )
 
 
 # ============================================================================
@@ -225,8 +151,8 @@ async def handle_retell_webhook(
     """
     Handle Retell webhook events (call_analyzed, call_ended).
 
-    This endpoint receives call data from Retell and forwards it to GoHighLevel
-    for CRM integration. It creates/updates contacts with call details.
+    This endpoint receives call data from Retell and records webhook events
+    for idempotency tracking.
 
     Security: Requires valid Retell signature (x-retell-signature header).
     """
@@ -259,146 +185,47 @@ async def handle_retell_webhook(
             return {"status": "duplicate", "reason": reason}
         processing_started = True
 
-        # Get tenant-aware GHL client (resolves from agent_id)
-        ghl_client, tenant = await get_tenant_ghl_client(event.call.agent_id)
-        if not ghl_client:
-            logger.warning("GHL not configured (no global or tenant config), skipping contact sync")
-            await _finish_webhook_processing(
-                processing_call_id,
-                processing_event_type,
-                status="COMPLETED",
-                tenant_id=tenant.id if tenant else None,
-                error="GHL not configured",
-            )
-            return {"status": "skipped", "reason": "GHL not configured"}
-        
-        tenant_info = f" for tenant '{tenant.slug}'" if tenant else " (global config)"
-        logger.info(f"Using GHL client{tenant_info}")
+        # Resolve tenant from agent_id
+        tenant = None
+        if event.call.agent_id:
+            try:
+                from src.app.database import get_db_session
+                from src.app.services.tenant_service import TenantService
 
-        # Extract phone number (required)
-        phone_number = event.call.from_number
-        if not phone_number:
-            logger.warning("No from_number in webhook, skipping")
-            await _finish_webhook_processing(
-                processing_call_id,
-                processing_event_type,
-                status="COMPLETED",
-                tenant_id=tenant.id if tenant else None,
-                error="No phone number in webhook",
-            )
-            return {"status": "skipped", "reason": "No phone number"}
+                async with get_db_session() as session:
+                    tenant_service = TenantService(session)
+                    result = await tenant_service.get_location_by_retell_agent_id(event.call.agent_id)
+                    if result:
+                        _, tenant = result
+            except Exception as e:
+                logger.warning(f"Failed to lookup tenant by agent_id {event.call.agent_id}: {e}")
 
-        # Extract call analysis data
-        call_summary: str | None = None
-        appointment_details: str | None = None
-        patient_name: str | None = None
-        patient_dob: str | None = None
-        patient_email: str | None = None
+        # Audit webhook received
+        from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
+        log_audit_background(
+            actor=AuditActor.RETELL_AGENT,
+            action=AuditAction.WEBHOOK_RECEIVED,
+            target_resource=f"call:{hash_for_logging(event.call.call_id)}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "event_type": event.event,
+                "call_id": hash_for_logging(event.call.call_id),
+            },
+            tenant_id=tenant.id if tenant else None,
+        )
 
-        if event.call.call_analysis:
-            call_summary = event.call.call_analysis.call_summary
-            custom_data = event.call.call_analysis.custom_analysis_data
+        await _finish_webhook_processing(
+            processing_call_id,
+            processing_event_type,
+            status="COMPLETED",
+            tenant_id=tenant.id if tenant else None,
+        )
 
-            # Extract custom analysis fields (configured in Retell)
-            appointment_details = custom_data.get("Appointment Detail")
-            patient_name = custom_data.get("Patient name")
-            patient_dob = custom_data.get("Date of birth")
-            patient_email = custom_data.get("Patient email")
-
-            # Send to GHL
-        try:
-            result = await ghl_client.upsert_contact_from_retell(
-                phone_number=phone_number,
-                call_summary=call_summary,
-                appointment_details=appointment_details,
-                recording_url=event.call.recording_url,
-                duration_ms=event.call.duration_ms,
-                transcript=event.call.transcript,
-                patient_name=patient_name if patient_name else None,
-                patient_dob=patient_dob if patient_dob else None,
-                patient_email=patient_email if patient_email else None,
-            )
-
-            contact_id = result.get("contact", {}).get("id", "unknown")
-            
-            # Audit GHL Sync
-            from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
-            log_audit_background(
-                actor=AuditActor.RETELL_AGENT,  # or SYSTEM/GHL, but triggered by Retell webhook
-                action=AuditAction.SYNC_GHL_CONTACT,
-                target_resource=f"contact:{contact_id}",
-                outcome=AuditOutcome.SUCCESS,
-                metadata={
-                    "event_type": event.event,
-                    "call_id": hash_for_logging(event.call.call_id),
-                    "is_new": result.get("new", False)
-                },
-                tenant_id=tenant.id if tenant else None,
-            )
-
-            await _finish_webhook_processing(
-                processing_call_id,
-                processing_event_type,
-                status="COMPLETED",
-                tenant_id=tenant.id if tenant else None,
-                ghl_contact_id=contact_id,
-            )
-
-            if tenant:
-                await _publish_call_data_event(
-                    tenant_id=tenant.id,
-                    event_type="data_changed",
-                    call_id=event.call.call_id,
-                    details={
-                        "source": "retell_webhook",
-                        "retell_event": event.event,
-                    },
-                )
-            
-            return {
-                "status": "success",
-                "ghl_contact_id": contact_id,
-                "is_new_contact": str(result.get("new", False)),
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to sync to GHL: {e}")
-            
-            # Audit GHL Sync Failure
-            from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
-            log_audit_background(
-                actor=AuditActor.RETELL_AGENT,
-                action=AuditAction.SYNC_GHL_CONTACT,
-                target_resource=f"phone:{hash_for_logging(phone_number) if phone_number else 'unknown'}",
-                outcome=AuditOutcome.FAILURE_EXTERNAL_API,
-                metadata={
-                    "event_type": event.event,
-                    "call_id": hash_for_logging(event.call.call_id),
-                    "error": str(e)
-                },
-                tenant_id=tenant.id if tenant else None,
-            )
-
-            await _finish_webhook_processing(
-                processing_call_id,
-                processing_event_type,
-                status="FAILED",
-                tenant_id=tenant.id if tenant else None,
-                error=str(e),
-            )
-            if tenant:
-                await _publish_call_data_event(
-                    tenant_id=tenant.id,
-                    event_type="data_sync_error",
-                    call_id=event.call.call_id,
-                    details={
-                        "source": "retell_webhook",
-                        "retell_event": event.event,
-                    },
-                )
-            
-            # Don't fail the webhook, just log the error
-            return {"status": "error", "reason": str(e)}
+        return {
+            "status": "success",
+            "event": event.event,
+            "call_id": hash_for_logging(event.call.call_id),
+        }
 
     except Exception as e:
         logger.exception(f"Webhook processing error: {e}")

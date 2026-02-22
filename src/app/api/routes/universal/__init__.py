@@ -1,7 +1,8 @@
 """Universal PMS-agnostic routes."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from src.app.api.deps import get_current_active_user
 from src.app.api.routes.universal.patients import router as patients_router
 from src.app.api.routes.universal.slots import router as slots_router
 from src.app.api.routes.universal.appointments import router as appointments_router
@@ -11,7 +12,7 @@ from src.app.api.routes.universal.operatories import router as operatories_route
 from src.app.api.routes.universal.locations import router as locations_router
 from src.app.api.routes.universal.setup import router as setup_router
 
-universal_router = APIRouter(prefix="/pms", tags=["Universal PMS"])
+universal_router = APIRouter(prefix="/pms", tags=["Universal PMS"], dependencies=[Depends(get_current_active_user)])
 universal_router.include_router(patients_router)
 universal_router.include_router(slots_router)
 universal_router.include_router(appointments_router)

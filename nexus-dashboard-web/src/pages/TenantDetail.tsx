@@ -310,21 +310,9 @@ export default function TenantDetail() {
                                 onConfigure={() => setActiveTab("credentials")}
                             />
                             <IntegrationCard
-                                name="GoHighLevel"
-                                description="CRM and marketing automation."
-                                isConfigured={tenant.has_ghl_key}
-                                onConfigure={() => setActiveTab("credentials")}
-                            />
-                            <IntegrationCard
                                 name="Retell AI"
                                 description="Voice agent configuration."
                                 isConfigured={tenant.has_retell_secret}
-                                onConfigure={() => setActiveTab("credentials")}
-                            />
-                            <IntegrationCard
-                                name="Sikka"
-                                description="Universal PMS adapter."
-                                isConfigured={tenant.has_sikka_credentials}
                                 onConfigure={() => setActiveTab("credentials")}
                             />
                         </div>

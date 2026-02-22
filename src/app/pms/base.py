@@ -28,7 +28,7 @@ from src.app.pms.models import (
 class PMSAdapter(ABC):
     """Core operations every PMS adapter must implement."""
 
-    source: str  # "nexhealth" | "sikka"
+    source: str  # "nexhealth"
 
     # --- Patients ---
 

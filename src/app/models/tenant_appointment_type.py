@@ -15,7 +15,7 @@ from src.app.database import Base
 
 class TenantAppointmentType(Base):
     """
-    Locally cached appointment type data synced from PMS (NexHealth/Sikka).
+    Locally cached appointment type data synced from PMS (NexHealth).
 
     No PHI stored — only type names, durations, and source metadata.
     """
@@ -40,7 +40,7 @@ class TenantAppointmentType(Base):
         index=True,
     )
 
-    source: Mapped[str] = mapped_column(String(50), nullable=False)  # "nexhealth" | "sikka"
+    source: Mapped[str] = mapped_column(String(50), nullable=False)  # "nexhealth"
     source_id: Mapped[str] = mapped_column(String(100), nullable=False)
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)

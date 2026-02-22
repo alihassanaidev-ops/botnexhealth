@@ -26,7 +26,6 @@ class AuditActor(str, Enum):
     
     Extensible: Add new actors without modifying existing code (OCP).
     """
-    GHL = "GHL"                     # GoHighLevel webhook
     RETELL_AGENT = "RETELL_AGENT"   # Retell Voice Agent
     ADMIN = "ADMIN"                 # Admin API user
     SYSTEM = "SYSTEM"               # Internal system operations
@@ -59,7 +58,7 @@ class AuditAction(str, Enum):
     
     # External Integrations
     WEBHOOK_RECEIVED = "WEBHOOK_RECEIVED"
-    SYNC_GHL_CONTACT = "SYNC_GHL_CONTACT"
+
     
     # Admin operations
     TENANT_CREATE = "TENANT_CREATE"
@@ -96,7 +95,7 @@ class AuditLog(Base):
     
     Fields match the architecture document:
     - timestamp: When the action occurred (UTC)
-    - actor: Who performed it (GHL, RETELL Agent, Admin, System)
+    - actor: Who performed it (RETELL Agent, Admin, System)
     - action: What was done (READ_PATIENT, BOOK_APPOINTMENT, etc.)
     - target_resource: What resource was accessed
     - outcome: Success or type of failure

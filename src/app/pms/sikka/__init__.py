@@ -1,1 +1,0 @@
-"""Sikka PMS adapter."""

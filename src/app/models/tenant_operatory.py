@@ -14,7 +14,7 @@ from src.app.database import Base
 
 class TenantOperatory(Base):
     """
-    Locally cached operatory data synced from PMS (NexHealth/Sikka).
+    Locally cached operatory data synced from PMS (NexHealth).
 
     No PHI stored — only room/chair name and source IDs.
     """
@@ -39,7 +39,7 @@ class TenantOperatory(Base):
         index=True,
     )
 
-    source: Mapped[str] = mapped_column(String(50), nullable=False)  # "nexhealth" | "sikka"
+    source: Mapped[str] = mapped_column(String(50), nullable=False)  # "nexhealth"
     source_id: Mapped[str] = mapped_column(String(100), nullable=False)
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -40,7 +40,7 @@ class TestTenantOperatoryModel:
         op = TenantOperatory(
             tenant_id="t1",
             location_id="l1",
-            source="sikka",
+            source="nexhealth",
             source_id="sk-50",
             name="Room A",
             is_active=False,

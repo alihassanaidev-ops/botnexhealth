@@ -1,1 +1,0 @@
-"""Sikka API client package."""

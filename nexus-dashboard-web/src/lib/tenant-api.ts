@@ -125,23 +125,4 @@ export async function triggerSync(locationId?: string): Promise<SyncResult> {
     return data;
 }
 
-// ── Calls (GHL) ─────────────────────────────────────────────────────────
-
-interface CallFilters {
-    status?: string;
-    search?: string;
-    page?: number;
-    page_size?: number;
-}
-
-export async function listCalls(filters?: CallFilters): Promise<import("@/types").CallsResponse> {
-    const params = new URLSearchParams();
-    if (filters?.status) params.set("status", filters.status);
-    if (filters?.search) params.set("search", filters.search);
-    if (filters?.page) params.set("page", String(filters.page));
-    if (filters?.page_size) params.set("page_size", String(filters.page_size));
-    const q = params.toString() ? `?${params.toString()}` : "";
-    const { data } = await api.get<import("@/types").CallsResponse>(`/tenant/calls${q}`);
-    return data;
-}
 

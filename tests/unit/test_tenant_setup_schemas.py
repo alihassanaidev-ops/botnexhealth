@@ -43,7 +43,7 @@ class TestCachedProviderResponse:
         assert p.source == "nexhealth"
 
     def test_minimal_fields(self):
-        p = CachedProviderResponse(id="uuid-1", source_id="10", source="sikka")
+        p = CachedProviderResponse(id="uuid-1", source_id="10", source="nexhealth")
         assert p.name is None
         assert p.is_active is True
         assert p.synced_at is None

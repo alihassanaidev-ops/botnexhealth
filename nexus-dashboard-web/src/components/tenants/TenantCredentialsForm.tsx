@@ -13,7 +13,6 @@ import {
     FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
     Card,
 } from "@/components/ui/card";
@@ -23,16 +22,12 @@ import type { TenantDetail } from "@/types";
 
 const credentialsSchema = z.object({
     nexhealth_api_key: z.string().optional(),
-    ghl_api_key: z.string().optional(),
-    ghl_custom_fields: z.string().optional(),
     retell_api_secret: z.string().optional(),
-    sikka_app_id: z.string().optional(),
-    sikka_app_secret: z.string().optional(),
 });
 
 type CredentialsFormValues = z.infer<typeof credentialsSchema>;
 
-type SectionKey = "nexhealth" | "ghl" | "retell" | "sikka";
+type SectionKey = "nexhealth" | "retell";
 
 interface TenantCredentialsFormProps {
     tenant: TenantDetail;
@@ -47,13 +42,7 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
         resolver: zodResolver(credentialsSchema),
         defaultValues: {
             nexhealth_api_key: "",
-            ghl_api_key: "",
-            ghl_custom_fields: tenant.ghl_custom_fields
-                ? JSON.stringify(tenant.ghl_custom_fields, null, 2)
-                : "",
             retell_api_secret: "",
-            sikka_app_id: "",
-            sikka_app_secret: "",
         },
     });
 
@@ -61,13 +50,7 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
     useEffect(() => {
         form.reset({
             nexhealth_api_key: "",
-            ghl_api_key: "",
-            ghl_custom_fields: tenant.ghl_custom_fields
-                ? JSON.stringify(tenant.ghl_custom_fields, null, 2)
-                : "",
             retell_api_secret: "",
-            sikka_app_id: "",
-            sikka_app_secret: "",
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tenant]);
@@ -80,26 +63,14 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
             // Only include fields from the active section that have values
             const sectionFields: Record<SectionKey, (keyof CredentialsFormValues)[]> = {
                 nexhealth: ["nexhealth_api_key"],
-                ghl: ["ghl_api_key", "ghl_custom_fields"],
                 retell: ["retell_api_secret"],
-                sikka: ["sikka_app_id", "sikka_app_secret"],
             };
 
             if (editingSection) {
                 for (const field of sectionFields[editingSection]) {
                     const val = values[field];
                     if (val !== undefined && val !== "") {
-                        if (field === "ghl_custom_fields") {
-                            try {
-                                payload[field] = JSON.parse(val as string);
-                            } catch {
-                                toast.error("Invalid JSON in GHL Custom Fields");
-                                setIsSaving(false);
-                                return;
-                            }
-                        } else {
-                            payload[field] = val;
-                        }
+                        payload[field] = val;
                     }
                 }
             }
@@ -238,50 +209,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                     </div>
                 </CredentialCard>
 
-                <CredentialCard
-                    title="GoHighLevel"
-                    description="Manage leads, automation workflows, and customer relationships."
-                    section="ghl"
-                    configured={tenant.has_ghl_key}
-                >
-                    <div className="grid gap-4">
-                        <FormField
-                            control={form.control}
-                            name="ghl_api_key"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>API Key</FormLabel>
-                                    <FormControl>
-                                        <Input
-                                            type="password"
-                                            placeholder={tenant.has_ghl_key ? "••••••••" : "Enter API key"}
-                                            {...field}
-                                        />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                        <FormField
-                            control={form.control}
-                            name="ghl_custom_fields"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>Custom Fields (JSON)</FormLabel>
-                                    <FormControl>
-                                        <Textarea
-                                            placeholder='{"field_name": "id"}'
-                                            className="font-mono text-xs"
-                                            rows={3}
-                                            {...field}
-                                        />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                    </div>
-                </CredentialCard>
 
                 <CredentialCard
                     title="Retell AI"
@@ -310,49 +237,6 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                     </div>
                 </CredentialCard>
 
-                <CredentialCard
-                    title="Sikka"
-                    description="Universal adapter for connecting legacy practice management systems."
-                    section="sikka"
-                    configured={tenant.has_sikka_credentials}
-                >
-                    <div className="grid gap-4">
-                        <FormField
-                            control={form.control}
-                            name="sikka_app_id"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>App ID</FormLabel>
-                                    <FormControl>
-                                        <Input
-                                            type="password"
-                                            placeholder={tenant.has_sikka_credentials ? "••••••••" : "Enter App ID"}
-                                            {...field}
-                                        />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                        <FormField
-                            control={form.control}
-                            name="sikka_app_secret"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>App Secret</FormLabel>
-                                    <FormControl>
-                                        <Input
-                                            type="password"
-                                            placeholder={tenant.has_sikka_credentials ? "••••••••" : "Enter App Secret"}
-                                            {...field}
-                                        />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                    </div>
-                </CredentialCard>
 
                 {editingSection && (
                     <div className="flex items-center justify-end pt-2">

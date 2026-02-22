@@ -14,7 +14,7 @@ from src.app.database import Base
 
 class TenantProvider(Base):
     """
-    Locally cached provider data synced from PMS (NexHealth/Sikka).
+    Locally cached provider data synced from PMS (NexHealth).
 
     No PHI stored — only provider name, specialty, and source IDs.
     """
@@ -39,7 +39,7 @@ class TenantProvider(Base):
         index=True,
     )
 
-    source: Mapped[str] = mapped_column(String(50), nullable=False)  # "nexhealth" | "sikka"
+    source: Mapped[str] = mapped_column(String(50), nullable=False)  # "nexhealth"
     source_id: Mapped[str] = mapped_column(String(100), nullable=False)
 
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 class UniversalPatient(BaseModel):
     id: str
-    source: str  # "nexhealth" | "sikka"
+    source: str  # "nexhealth"
     first_name: str
     last_name: str
     email: str | None = None
@@ -41,7 +41,7 @@ class UniversalAppointmentType(BaseModel):
     source_id: str  # raw PMS ID for API calls
     source_metadata: dict = {}
     # NexHealth: {"nh_appt_type_id": ..., "descriptor_ids": [...]}
-    # Sikka: {"sikka_procedure_code": ...}
+
 
 
 class UniversalOperatory(BaseModel):

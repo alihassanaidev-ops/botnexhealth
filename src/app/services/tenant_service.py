@@ -52,23 +52,15 @@ class TenantService:
         slug: str,
         *,
         nexhealth_api_key: str | None = None,
-        ghl_api_key: str | None = None,
-        ghl_custom_fields: dict[str, Any] | None = None,
-        sikka_app_id: str | None = None,
-        sikka_app_secret: str | None = None,
     ) -> Tenant:
         """Create a new tenant."""
         tenant = Tenant(
             name=name,
             slug=slug,
-            ghl_custom_fields=ghl_custom_fields,
         )
         
         # Set encrypted fields via properties
         tenant.nexhealth_api_key = nexhealth_api_key
-        tenant.ghl_api_key = ghl_api_key
-        tenant.sikka_app_id = sikka_app_id
-        tenant.sikka_app_secret = sikka_app_secret
         
         self.session.add(tenant)
         await self.session.flush()
@@ -86,9 +78,6 @@ class TenantService:
         # Fields that use encryption setters
         encrypted_fields = {
             "nexhealth_api_key",
-            "ghl_api_key",
-            "sikka_app_id",
-            "sikka_app_secret",
         }
         
         for key, value in updates.items():

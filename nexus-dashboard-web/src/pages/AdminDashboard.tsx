@@ -51,9 +51,7 @@ export default function AdminDashboard() {
 
     const integrationCounts = {
         nexhealth: tenants.filter((t) => t.has_nexhealth_key || t.has_system_nexhealth_key).length,
-        ghl: tenants.filter((t) => t.has_ghl_key).length,
         retell: tenants.filter((t) => t.has_retell_secret).length,
-        sikka: tenants.filter((t) => t.has_sikka_credentials).length,
     }
 
     const hour = new Date().getHours()
@@ -136,13 +134,7 @@ export default function AdminDashboard() {
                                 NexHealth: {integrationCounts.nexhealth}
                             </Badge>
                             <Badge variant="secondary" className="text-sm px-3 py-1">
-                                GoHighLevel: {integrationCounts.ghl}
-                            </Badge>
-                            <Badge variant="secondary" className="text-sm px-3 py-1">
                                 Retell AI: {integrationCounts.retell}
-                            </Badge>
-                            <Badge variant="secondary" className="text-sm px-3 py-1">
-                                Sikka: {integrationCounts.sikka}
                             </Badge>
                         </div>
                     </CardContent>
@@ -188,9 +180,7 @@ export default function AdminDashboard() {
                                         <th className="pb-3 font-medium">Contact</th>
                                         <th className="pb-3 font-medium">Status</th>
                                         <th className="pb-3 font-medium">NexHealth</th>
-                                        <th className="pb-3 font-medium">GHL</th>
                                         <th className="pb-3 font-medium">Retell</th>
-                                        <th className="pb-3 font-medium">Sikka</th>
                                         <th className="pb-3 font-medium sr-only">Actions</th>
                                     </tr>
                                 </thead>
@@ -210,13 +200,7 @@ export default function AdminDashboard() {
                                                 <span className={`inline-block h-2.5 w-2.5 rounded-full ${tenant.has_nexhealth_key || tenant.has_system_nexhealth_key ? "bg-green-500" : "bg-gray-300"}`} />
                                             </td>
                                             <td className="py-3">
-                                                <span className={`inline-block h-2.5 w-2.5 rounded-full ${tenant.has_ghl_key ? "bg-green-500" : "bg-gray-300"}`} />
-                                            </td>
-                                            <td className="py-3">
                                                 <span className={`inline-block h-2.5 w-2.5 rounded-full ${tenant.has_retell_secret ? "bg-green-500" : "bg-gray-300"}`} />
-                                            </td>
-                                            <td className="py-3">
-                                                <span className={`inline-block h-2.5 w-2.5 rounded-full ${tenant.has_sikka_credentials ? "bg-green-500" : "bg-gray-300"}`} />
                                             </td>
                                             <td className="py-3 text-right">
                                                 <Link to={`/tenants/${tenant.slug}`}>

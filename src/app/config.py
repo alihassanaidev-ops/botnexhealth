@@ -39,15 +39,6 @@ class Settings(BaseSettings):
     # Retell AI settings
     retell_api_secret: str | None = None
 
-    # GoHighLevel API settings
-    ghl_api_key: str | None = None
-    ghl_location_id: str = "nUR2OnxPQh3aLQXrymf6"  # Default location
-
-    # Sikka API settings
-    sikka_app_id: str | None = None
-    sikka_app_secret: str | None = None
-    sikka_base_url: str = "https://api.sikkasoft.com"
-    sikka_api_version: str = "v4"
 
     # Database (Supabase PostgreSQL)
     database_url: str | None = None
@@ -65,10 +56,6 @@ class Settings(BaseSettings):
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
     supabase_service_role_key_file: str | None = None
-    ghl_api_key_file: str | None = None
-    sikka_app_id_file: str | None = None
-    sikka_app_secret_file: str | None = None
-    
     # Auth / JWT (REQUIRED — no defaults, must be set in .env or Render secrets)
     jwt_secret: str
     jwt_algorithm: str = "HS256"
@@ -87,18 +74,7 @@ class Settings(BaseSettings):
         if secret := read_secret_file(self.retell_api_secret_file):
             object.__setattr__(self, "retell_api_secret", secret)
 
-        # GHL API Key
-        if secret := read_secret_file(self.ghl_api_key_file):
-            object.__setattr__(self, "ghl_api_key", secret)
 
-        # Sikka App ID
-        if secret := read_secret_file(self.sikka_app_id_file):
-            object.__setattr__(self, "sikka_app_id", secret)
-
-        # Sikka App Secret
-        if secret := read_secret_file(self.sikka_app_secret_file):
-            object.__setattr__(self, "sikka_app_secret", secret)
-            
         # JWT Secret
         if secret := read_secret_file(self.jwt_secret_file):
             object.__setattr__(self, "jwt_secret", secret)
@@ -136,36 +112,6 @@ class Settings(BaseSettings):
         """Alias for nexhealth_api_version (implements AuthConfig protocol)."""
         return self.nexhealth_api_version
 
-
-class SikkaConfig:
-    """
-    Wrapper that implements Sikka AuthConfig protocol using Settings values.
-
-    This separates Sikka configuration from NexHealth while using the same Settings instance.
-    """
-
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-
-    @property
-    def app_id(self) -> str:
-        """Sikka Application ID."""
-        return self._settings.sikka_app_id or ""
-
-    @property
-    def app_secret(self) -> str:
-        """Sikka Application Secret Key."""
-        return self._settings.sikka_app_secret or ""
-
-    @property
-    def base_url(self) -> str:
-        """Sikka API base URL."""
-        return self._settings.sikka_base_url
-
-    @property
-    def api_version(self) -> str:
-        """Sikka API version."""
-        return self._settings.sikka_api_version
 
 
 def setup_logging(log_level: str = "info") -> None:

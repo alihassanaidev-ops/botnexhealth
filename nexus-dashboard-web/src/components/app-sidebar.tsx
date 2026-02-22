@@ -28,7 +28,6 @@ import {
     CalendarCheck,
     UserCog,
     Armchair,
-    Phone,
     LayoutDashboard,
 } from "lucide-react"
 import { Link } from "react-router-dom"
@@ -54,11 +53,6 @@ const tenantNav = [
         title: "Dashboard",
         url: "/dashboard",
         icon: Home,
-    },
-    {
-        title: "Patient Calls",
-        url: "/calls",
-        icon: Phone,
     },
 ]
 

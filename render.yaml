@@ -58,11 +58,6 @@ services:
       - key: SUPABASE_REDIRECT_URL
         sync: false
 
-      # Optional: GHL
-      - key: GHL_API_KEY
-        sync: false
-      - key: GHL_LOCATION_ID
-        sync: false
 
   # Redis (Key Value Store)
   - type: redis

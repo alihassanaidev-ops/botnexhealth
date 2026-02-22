@@ -18,11 +18,6 @@ from src.app.api.routes.patients import router as patients_router
 from src.app.api.routes.providers import router as providers_router
 from src.app.api.routes.appointment_types import router as appointment_types_router
 
-# ============================================================================
-# Sikka Routes
-# ============================================================================
-from src.app.api.routes.sikka import router as sikka_router
-from src.app.api.routes.sikka import public_router as sikka_public_router
 from src.app.api.routes.tenant_portal import router as tenant_portal_router
 
 # ============================================================================
@@ -47,12 +42,6 @@ router.include_router(locations_router, prefix="/nexhealth", tags=["NexHealth - 
 router.include_router(patients_router, prefix="/nexhealth", tags=["NexHealth - Patients"])
 router.include_router(providers_router, prefix="/nexhealth", tags=["NexHealth - Providers"])
 router.include_router(appointment_types_router, prefix="/nexhealth", tags=["NexHealth - Appointment Types"])
-
-# ============================================================================
-# Sikka Routes
-# ============================================================================
-router.include_router(sikka_router, prefix="/sikka", tags=["Sikka"])
-router.include_router(sikka_public_router, prefix="/sikka", tags=["Sikka - OAuth"])
 
 router.include_router(tenant_portal_router)
 

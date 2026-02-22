@@ -59,13 +59,7 @@ async def test_create_tenant_with_user(async_client: AsyncClient):
             mock_tenant.is_active = True
             # Mock encrypted fields as None
             mock_tenant.nexhealth_api_key_encrypted = None
-            mock_tenant.ghl_api_key_encrypted = None
             mock_tenant.retell_api_secret_encrypted = None
-            mock_tenant.sikka_app_id_encrypted = None
-            mock_tenant.sikka_app_secret_encrypted = None
-            
-            # Other fields
-            mock_tenant.ghl_custom_fields = None
 
             mock_service_instance.create.return_value = mock_tenant
             

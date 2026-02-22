@@ -121,16 +121,9 @@ class Tenant(Base):
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     
-    ghl_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ghl_custom_fields: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    
     # Retell credentials
     retell_api_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    
-    # Sikka credentials (encrypted)
-    sikka_app_id_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    sikka_app_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -159,16 +152,6 @@ class Tenant(Base):
         self.nexhealth_api_key_encrypted = encrypt_value(value)
     
     @property
-    def ghl_api_key(self) -> str | None:
-        """Decrypt and return GHL API key."""
-        return decrypt_value(self.ghl_api_key_encrypted)
-    
-    @ghl_api_key.setter
-    def ghl_api_key(self, value: str | None) -> None:
-        """Encrypt and store GHL API key."""
-        self.ghl_api_key_encrypted = encrypt_value(value)
-    
-    @property
     def retell_api_secret(self) -> str | None:
         """Decrypt and return Retell API secret."""
         return decrypt_value(self.retell_api_secret_encrypted)
@@ -177,26 +160,6 @@ class Tenant(Base):
     def retell_api_secret(self, value: str | None) -> None:
         """Encrypt and store Retell API secret."""
         self.retell_api_secret_encrypted = encrypt_value(value)
-    
-    @property
-    def sikka_app_id(self) -> str | None:
-        """Decrypt and return Sikka App ID."""
-        return decrypt_value(self.sikka_app_id_encrypted)
-    
-    @sikka_app_id.setter
-    def sikka_app_id(self, value: str | None) -> None:
-        """Encrypt and store Sikka App ID."""
-        self.sikka_app_id_encrypted = encrypt_value(value)
-    
-    @property
-    def sikka_app_secret(self) -> str | None:
-        """Decrypt and return Sikka App Secret."""
-        return decrypt_value(self.sikka_app_secret_encrypted)
-    
-    @sikka_app_secret.setter
-    def sikka_app_secret(self, value: str | None) -> None:
-        """Encrypt and store Sikka App Secret."""
-        self.sikka_app_secret_encrypted = encrypt_value(value)
     
     def __repr__(self) -> str:
         return f"<Tenant(id={self.id}, name='{self.name}', slug='{self.slug}')>"

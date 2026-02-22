@@ -13,7 +13,7 @@ from src.app.retell.functions import router as retell_router
 from src.app.retell.webhooks import router as retell_webhook_router
 from src.app.api.routes.auth import router as auth_router
 from src.app.api.routes.tenant_setup import router as tenant_setup_router
-from src.app.api.routes.tenant_calls import router as tenant_calls_router
+
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -44,9 +44,8 @@ async def lifespan(app: FastAPI):
             logger.info("Database initialized (production — tables managed by migrations)")
     
     # Initialize API clients
-    from src.app.dependencies import init_nexhealth_client, init_sikka_client
+    from src.app.dependencies import init_nexhealth_client
     await init_nexhealth_client()
-    await init_sikka_client()
     
     yield  # Application runs here
     
@@ -59,12 +58,8 @@ async def lifespan(app: FastAPI):
         await close_database()
     
     # Cleanup API clients
-    from src.app.dependencies import (
-        cleanup_nexhealth_client,
-        cleanup_sikka_client,
-    )
+    from src.app.dependencies import cleanup_nexhealth_client
     await cleanup_nexhealth_client()
-    await cleanup_sikka_client()
 
 
 def create_app() -> FastAPI:
@@ -122,7 +117,7 @@ def create_app() -> FastAPI:
 
     # Tenant portal routes (authenticated tenant users)
     app.include_router(tenant_setup_router)
-    app.include_router(tenant_calls_router)
+
 
     return app
 
