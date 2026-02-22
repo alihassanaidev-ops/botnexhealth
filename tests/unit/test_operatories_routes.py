@@ -10,8 +10,10 @@ from src.app.api.deps import get_current_user
 @pytest.fixture
 def override_settings(mock_settings):
     app.dependency_overrides[get_settings] = lambda: mock_settings
-    # Bypass JWT auth for unit tests
-    app.dependency_overrides[get_current_user] = lambda: None
+    class MockUser:
+        is_active = True
+        
+    app.dependency_overrides[get_current_user] = lambda: MockUser()
     mock_settings.nexhealth_subdomain = "test-subdomain"
     mock_settings.nexhealth_location_id = 123
     return mock_settings

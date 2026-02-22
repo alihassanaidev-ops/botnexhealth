@@ -14,8 +14,11 @@ def get_test_app(mock_client):
     async def override_get_client():
         return mock_client
         
+    class MockUser:
+        is_active = True
+
     async def override_auth():
-        return True
+        return MockUser()
 
     app.dependency_overrides[get_nexhealth_client_dependency] = override_get_client
     app.dependency_overrides[get_current_user] = override_auth

@@ -99,13 +99,10 @@ class TenantService:
 
     async def create_location(self, tenant_id: str, **data: Any) -> TenantLocation:
         """Create a new location for a tenant."""
-        encrypted_fields = {"retell_api_secret"}
         location = TenantLocation(tenant_id=tenant_id)
 
         for key, value in data.items():
-            if key in encrypted_fields:
-                setattr(location, key, value)
-            elif hasattr(location, key):
+            if hasattr(location, key):
                 setattr(location, key, value)
 
         self.session.add(location)
@@ -116,12 +113,8 @@ class TenantService:
 
     async def update_location(self, location: TenantLocation, **updates: Any) -> TenantLocation:
         """Update location fields."""
-        encrypted_fields = {"retell_api_secret"}
-
         for key, value in updates.items():
-            if key in encrypted_fields:
-                setattr(location, key, value)
-            elif hasattr(location, key):
+            if hasattr(location, key):
                 setattr(location, key, value)
 
         await self.session.flush()

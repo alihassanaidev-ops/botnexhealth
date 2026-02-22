@@ -596,7 +596,6 @@ class TenantResponse(BaseModel):
     
     # Credential presence indicators
     has_nexhealth_key: bool
-    has_retell_secret: bool
     
     has_system_nexhealth_key: bool
     
@@ -627,6 +626,5 @@ class TenantResponse(BaseModel):
             is_active=tenant.is_active,
             has_nexhealth_key=tenant.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
-            has_retell_secret=tenant.retell_api_secret_encrypted is not None,
             user=user_resp
         )

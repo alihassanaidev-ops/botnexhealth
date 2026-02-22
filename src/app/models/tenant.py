@@ -120,9 +120,6 @@ class Tenant(Base):
     
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    
-    # Retell credentials
-    retell_api_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -150,16 +147,6 @@ class Tenant(Base):
     def nexhealth_api_key(self, value: str | None) -> None:
         """Encrypt and store NexHealth API key."""
         self.nexhealth_api_key_encrypted = encrypt_value(value)
-    
-    @property
-    def retell_api_secret(self) -> str | None:
-        """Decrypt and return Retell API secret."""
-        return decrypt_value(self.retell_api_secret_encrypted)
-    
-    @retell_api_secret.setter
-    def retell_api_secret(self, value: str | None) -> None:
-        """Encrypt and store Retell API secret."""
-        self.retell_api_secret_encrypted = encrypt_value(value)
     
     def __repr__(self) -> str:
         return f"<Tenant(id={self.id}, name='{self.name}', slug='{self.slug}')>"

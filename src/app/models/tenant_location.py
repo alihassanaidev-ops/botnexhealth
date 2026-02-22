@@ -46,7 +46,9 @@ class TenantLocation(Base):
 
     # Retell — per-location agent
     retell_agent_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
-    retell_api_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Configuration
+    timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
 
 
     # Address
@@ -54,7 +56,6 @@ class TenantLocation(Base):
     city: Mapped[str | None] = mapped_column(String(100), nullable=True)
     state: Mapped[str | None] = mapped_column(String(50), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    timezone: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -64,14 +65,9 @@ class TenantLocation(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    # Encrypted field properties
-    @property
-    def retell_api_secret(self) -> str | None:
-        return decrypt_value(self.retell_api_secret_encrypted)
-
-    @retell_api_secret.setter
-    def retell_api_secret(self, value: str | None) -> None:
-        self.retell_api_secret_encrypted = encrypt_value(value)
-
+    # =========================================================================
+    # Methods
+    # =========================================================================
+    
     def __repr__(self) -> str:
-        return f"<TenantLocation(id={self.id}, name='{self.name}', slug='{self.slug}')>"
+        return f"<TenantLocation(id={self.id}, tenant_id={self.tenant_id}, name='{self.name}')>"
