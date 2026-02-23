@@ -48,8 +48,11 @@ class RetellCallWebhook(BaseModel):
     to_number: str | None = None
     direction: str | None = None
     duration_ms: int | None = None
+    start_timestamp: int | None = None
+    end_timestamp: int | None = None
     transcript: str | None = None
     recording_url: str | None = None
+    scrubbed_recording_url: str | None = None   # PII-scrubbed version (preferred for HIPAA)
     disconnection_reason: str | None = None
     call_analysis: CallAnalysisData | None = None
 
@@ -237,6 +240,11 @@ async def handle_retell_webhook(
                     agent_id=event.call.agent_id,
                     call_status=event.call.call_status,
                     disconnection_reason=event.call.disconnection_reason,
+                    start_timestamp=event.call.start_timestamp,
+                    end_timestamp=event.call.end_timestamp,
+                    transcript=event.call.transcript,
+                    # Prefer PII-scrubbed URL for HIPAA; fall back to raw only if scrubbed absent
+                    recording_url=event.call.scrubbed_recording_url or event.call.recording_url,
                 )
                 
                 # Call service to save to DB

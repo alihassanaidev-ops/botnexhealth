@@ -175,4 +175,49 @@ export interface InstitutionBasicListResponse {
     data: InstitutionBasic[];
 }
 
+// ── Calls & Contacts ───────────────────────────────────────────────────
+
+export type CallStatus =
+    | "booked"
+    | "needs_follow_up"
+    | "cancelled"
+    | "emergency"
+    | "no_action_needed"
+    | "rescheduled";
+
+export type CallDirection = "inbound" | "outbound";
+
+export interface ContactSummary {
+    id: string;
+    full_name: string | null;
+    first_name: string | null;
+    last_name: string | null;
+}
+
+export interface CallRecord {
+    id: string;
+    retell_call_id: string | null;
+    call_direction: string | null;
+    call_status: string | null;
+    patient_status: string | null;
+    summary: string | null;
+    patient_sentiment: string | null;
+    next_action: string | null;
+    is_new_patient: boolean;
+    is_complaint: boolean;
+    is_insurance_billing: boolean;
+    call_date: string | null;
+    call_time: string | null;
+    call_duration_seconds: number | null;
+    created_at: string;
+    contact: ContactSummary | null;
+}
+
+export interface CallsListResponse {
+    total: number;
+    limit: number;
+    offset: number;
+    items: CallRecord[];
+}
+
 

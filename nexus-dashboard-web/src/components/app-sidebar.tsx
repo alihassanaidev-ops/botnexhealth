@@ -29,6 +29,7 @@ import {
     UserCog,
     Armchair,
     LayoutDashboard,
+    Phone,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
@@ -53,6 +54,11 @@ const tenantNav = [
         title: "Dashboard",
         url: "/dashboard",
         icon: Home,
+    },
+    {
+        title: "Calls",
+        url: "/calls",
+        icon: Phone,
     },
 ]
 

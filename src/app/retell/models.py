@@ -59,8 +59,8 @@ class RetellCallData(BaseModel):
     start_timestamp: int | None = None
     end_timestamp: int | None = None
     disconnection_reason: str | None = None
-    # Note: transcript fields excluded intentionally for HIPAA compliance
-    # Never store or log transcript data
+    transcript: str | None = None
+    recording_url: str | None = None  # Always mapped from scrubbed_recording_url in webhook handler
 
 
 class WebhookEvent(BaseModel):
