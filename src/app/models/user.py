@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,6 +35,8 @@ class User(Base):
     - role: User role (ADMIN, TENANT)
     - tenant_id: Tenant this user belongs to (nullable for ADMIN)
     - is_active: Whether the user can log in
+    - failed_login_attempts: Consecutive failed login attempts since last success
+    - locked_until: Account locked until this UTC timestamp (None = not locked)
     """
 
     __tablename__ = "users"
@@ -69,11 +71,30 @@ class User(Base):
         nullable=False
     )
 
+    failed_login_attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        server_default="0",
+    )
+
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False
     )
-    
+
+    def is_locked(self) -> bool:
+        """Return True if the account lockout is currently active."""
+        if self.locked_until is None:
+            return False
+        return datetime.now(timezone.utc) < self.locked_until
+
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email}, role={self.role})>"

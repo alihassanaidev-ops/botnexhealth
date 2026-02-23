@@ -71,6 +71,7 @@ class AuditAction(str, Enum):
     
     # Auth operations
     LOGIN = "LOGIN"
+    ACCOUNT_UNLOCK = "ACCOUNT_UNLOCK"
 
 
 class AuditOutcome(str, Enum):
@@ -85,6 +86,7 @@ class AuditOutcome(str, Enum):
     FAILURE_VALIDATION = "FAILURE_VALIDATION"
     FAILURE_EXTERNAL_API = "FAILURE_EXTERNAL_API"
     FAILURE_INTERNAL = "FAILURE_INTERNAL"
+    FAILURE_ACCOUNT_LOCKED = "FAILURE_ACCOUNT_LOCKED"
 
 
 class AuditLog(Base):

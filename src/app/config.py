@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     supabase_service_role_key: str | None = None
     supabase_redirect_url: str | None = None
 
+    # Account lockout (HIPAA §164.312(d))
+    max_failed_login_attempts: int = 5
+    account_lockout_minutes: int = 30
+
     # CORS — comma-separated allowed origins; defaults to "*" for local dev only
     cors_allowed_origins: str = "*"
 

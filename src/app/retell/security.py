@@ -47,9 +47,14 @@ class RetellSignatureVerifier:
             True if signature is valid, False otherwise
         """
         if not self._api_key:
-            # If no API key configured, log warning but allow (for development)
-            logger.warning("Retell signature verification disabled: no API key configured")
-            return True
+            # No API key means we cannot verify — reject unconditionally.
+            # Never allow unauthenticated callers to reach PHI-handling flows.
+            # Set RETELL_API_SECRET in your environment to enable the webhook.
+            logger.error(
+                "Retell signature verification failed: RETELL_API_SECRET is not configured. "
+                "Set this environment variable to enable webhook verification."
+            )
+            return False
 
         if not signature:
             logger.warning("Missing x-retell-signature header")

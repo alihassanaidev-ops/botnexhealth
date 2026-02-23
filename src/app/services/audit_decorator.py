@@ -76,15 +76,16 @@ def audit(
                 target_resource = f"{action}:CONFIGURATION_ERROR"
 
             # 2. Context Resolution (Tenant, IP, etc.)
-            # We still do some "smart" context resolution because that's cross-cutting,
-            # but the CORE identity (Resource ID) is now explicit.
             tenant_id = _resolve_tenant_id(args, kwargs)
-            
+            client_ip = _resolve_client_ip(args, kwargs)
+
             # Base metadata
-            safe_metadata = {
+            safe_metadata: dict[str, Any] = {
                 "request_id": request_id,
                 "function_name": func.__name__,
             }
+            if client_ip:
+                safe_metadata["ip_address"] = client_ip
             if config_error:
                 safe_metadata["config_error"] = config_error
 
@@ -127,21 +128,30 @@ def audit(
 
 def _resolve_tenant_id(args: tuple, kwargs: dict) -> str | None:
     """Attempt to resolve tenant ID from arguments (Context)."""
-    # 1. Check for explicit 'tenant' object in args (API patterns)
     for arg in args:
         if hasattr(arg, "state") and hasattr(arg.state, "tenant"):
             tenant = getattr(arg.state, "tenant", None)
-            if tenant: return str(tenant.id)
-            
-    # 2. Check for Retell 'context' (often injected or available globally)
-    # Note: In Retell handlers, we often rely on the global context helper 
-    # inside the function, but having it here is a nice-to-have optimization.
-    # For now, we return None and let the AuditService/Global context handle it if needed?
-    # Actually, the original code imported `get_tenant_from_call_context`.
-    # Let's restore that for async context support if possible, or keep it simple.
-    
-    # We will try the global context helper if not found in args
-    return None 
+            if tenant:
+                return str(tenant.id)
+    return None
+
+
+def _resolve_client_ip(args: tuple, kwargs: dict) -> str | None:
+    """
+    Extract client IP from a FastAPI Request object in the call arguments.
+
+    Prefers X-Forwarded-For (set by reverse proxies / Render's load balancer)
+    and falls back to the direct connection IP.
+    """
+    for arg in args:
+        if hasattr(arg, "headers") and hasattr(arg, "client"):
+            # X-Forwarded-For may contain a comma-separated chain; take the first (original client)
+            forwarded_for = arg.headers.get("x-forwarded-for")
+            if forwarded_for:
+                return forwarded_for.split(",")[0].strip()
+            if arg.client:
+                return arg.client.host
+    return None
 
 
 def _classify_exception(e: Exception) -> AuditOutcome:
