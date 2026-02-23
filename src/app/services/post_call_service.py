@@ -14,6 +14,16 @@ from src.app.retell.models import RetellCallData
 logger = logging.getLogger(__name__)
 
 
+def _nonempty(value: str | None) -> str | None:
+    """Return None for falsy or placeholder strings like 'None', 'N/A', 'n/a'."""
+    if not value:
+        return None
+    stripped = value.strip()
+    if stripped.lower() in ("none", "n/a", ""):
+        return None
+    return stripped
+
+
 class PostCallService:
     """Handles business logic for saving post-call data securely."""
 
@@ -154,7 +164,8 @@ class PostCallService:
             is_new_patient=contact.is_new_patient if contact else is_new_patient_flag,
             is_complaint=bool(custom.get("Complaining Patient", False)),
             is_insurance_billing=bool(custom.get("Insurance and Billing", False)),
-            next_action=custom.get("Appointment Detail") or None,
+            # Treat the string "None" (from Retell when no detail exists) as NULL
+            next_action=_nonempty(custom.get("Appointment Detail")),
         )
 
         if webhook_call.start_timestamp:
@@ -162,11 +173,11 @@ class PostCallService:
                 webhook_call.start_timestamp / 1000, tz=timezone.utc
             )
             call.call_date = start_dt.date()
-            call.call_time = start_dt.time()
+            call.call_time = start_dt.timetz()  # keep UTC offset — column is TIME WITH TIME ZONE
         else:
             now = datetime.now(timezone.utc)
             call.call_date = now.date()
-            call.call_time = now.time()
+            call.call_time = now.timetz()  # keep UTC offset
 
         self.session.add(call)
 
