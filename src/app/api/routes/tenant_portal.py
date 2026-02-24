@@ -49,6 +49,7 @@ async def get_my_tenant_config(
             select(TenantLocation.tenant_id)
             .where(TenantLocation.tenant_id == tenant.id)
             .where(TenantLocation.retell_agent_id.is_not(None))
+            .where(TenantLocation.retell_agent_id != "")
             .limit(1)
         )
         has_retell = retell_result.scalar_one_or_none() is not None

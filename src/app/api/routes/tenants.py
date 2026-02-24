@@ -118,6 +118,7 @@ async def list_tenants(
                 select(TenantLocation.tenant_id)
                 .where(TenantLocation.tenant_id.in_(tenant_ids))
                 .where(TenantLocation.retell_agent_id.is_not(None))
+                .where(TenantLocation.retell_agent_id != "")
                 .distinct()
             )
             retell_tenant_ids = set(retell_result.scalars().all())
@@ -257,6 +258,7 @@ async def get_tenant(
             select(TenantLocation.tenant_id)
             .where(TenantLocation.tenant_id == tenant.id)
             .where(TenantLocation.retell_agent_id.is_not(None))
+            .where(TenantLocation.retell_agent_id != "")
             .limit(1)
         )
         has_retell = retell_result.scalar_one_or_none() is not None
@@ -298,6 +300,7 @@ async def update_tenant(
             select(TenantLocation.tenant_id)
             .where(TenantLocation.tenant_id == tenant.id)
             .where(TenantLocation.retell_agent_id.is_not(None))
+            .where(TenantLocation.retell_agent_id != "")
             .limit(1)
         )
         has_retell = retell_result.scalar_one_or_none() is not None
