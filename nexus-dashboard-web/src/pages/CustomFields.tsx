@@ -22,7 +22,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
-import { Plus, Pencil, Trash2, ShieldAlert, Eye, EyeOff } from "lucide-react"
+import { Plus, Pencil, Trash2, ShieldAlert, EyeOff } from "lucide-react"
 import type { CustomFieldDefinition } from "@/types"
 import {
     listFieldDefinitions,
@@ -139,7 +139,7 @@ export default function CustomFields() {
                     dropdown_options:
                         form.field_type === "dropdown"
                             ? form.dropdown_options.split(",").map((s) => s.trim()).filter(Boolean)
-                            : null,
+                            : undefined,
                     retell_source: form.retell_source || undefined,
                     retell_source_key: form.retell_source_key.trim() || undefined,
                 }
