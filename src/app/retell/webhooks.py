@@ -55,6 +55,8 @@ class RetellCallWebhook(BaseModel):
     scrubbed_recording_url: str | None = None   # PII-scrubbed version (preferred for HIPAA)
     disconnection_reason: str | None = None
     call_analysis: CallAnalysisData | None = None
+    # Dynamic variables collected during the call (name, email, etc.)
+    collected_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetellWebhookEvent(BaseModel):
@@ -226,7 +228,10 @@ async def handle_retell_webhook(
                 post_call_service = PostCallService(session)
                 
                 # event.call is RetellCallWebhook, map it to the expected dict for analysis
-                analysis_dict = event.call.call_analysis.model_dump() if event.call.call_analysis else None
+                analysis_dict = event.call.call_analysis.model_dump() if event.call.call_analysis else {}
+                # Merge top-level collected_dynamic_variables so the service can use them
+                # as a fallback for name/email when custom_analysis_data fields are missing
+                analysis_dict["collected_dynamic_variables"] = event.call.collected_dynamic_variables or {}
                 
                 # Transform to RetellCallData format expected by service
                 # The webhook event structure differs slightly from the direct API structure
@@ -247,7 +252,7 @@ async def handle_retell_webhook(
                     recording_url=event.call.scrubbed_recording_url or event.call.recording_url,
                 )
                 
-                # Call service to save to DB
+                # Call service to save to DB (analysis_dict is always a dict now)
                 await post_call_service.process_call_analyzed_event(
                     tenant_id=tenant.id,
                     webhook_call=mapped_call_data,

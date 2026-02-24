@@ -14,6 +14,8 @@ from src.app.retell.webhooks import router as retell_webhook_router
 from src.app.api.routes.auth import router as auth_router
 from src.app.api.routes.tenant_setup import router as tenant_setup_router
 from src.app.api.routes.calls import router as calls_router
+from src.app.api.routes.dashboard import router as dashboard_router
+from src.app.api.routes.custom_fields import router as custom_fields_router
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -119,7 +121,8 @@ def create_app() -> FastAPI:
     # Tenant portal routes (authenticated tenant users)
     app.include_router(tenant_setup_router)
     app.include_router(calls_router)
-
+    app.include_router(dashboard_router)
+    app.include_router(custom_fields_router)
 
     return app
 

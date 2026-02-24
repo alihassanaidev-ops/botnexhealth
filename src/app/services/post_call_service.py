@@ -13,6 +13,25 @@ from src.app.retell.models import RetellCallData
 
 logger = logging.getLogger(__name__)
 
+# ── Status normalization ───────────────────────────────────────────────────────
+
+# Maps Retell's Title Case "Call Status" values to our snake_case CallStatus enum values.
+# Keys are lowercased for case-insensitive matching.
+RETELL_STATUS_MAP: dict[str, str] = {
+    "appointment booked": CallStatus.APPOINTMENT_BOOKED.value,
+    "appointment rescheduled": CallStatus.APPOINTMENT_RESCHEDULED.value,
+    "appointment cancelled": CallStatus.APPOINTMENT_CANCELLED.value,
+    "emergency": CallStatus.EMERGENCY.value,
+    "complaint": CallStatus.COMPLAINT.value,
+    "needs callback": CallStatus.NEEDS_CALLBACK.value,
+    "faq handled": CallStatus.FAQ_HANDLED.value,
+    "financial inquiry": CallStatus.FINANCIAL_INQUIRY.value,
+    "transferred": CallStatus.TRANSFERRED.value,
+    "insurance verified": CallStatus.INSURANCE_VERIFIED.value,
+    "insurance unverified": CallStatus.INSURANCE_UNVERIFIED.value,
+    "no action needed": CallStatus.NO_ACTION_NEEDED.value,
+}
+
 
 def _nonempty(value: str | None) -> str | None:
     """Return None for falsy or placeholder strings like 'None', 'N/A', 'n/a'."""
@@ -22,6 +41,33 @@ def _nonempty(value: str | None) -> str | None:
     if stripped.lower() in ("none", "n/a", ""):
         return None
     return stripped
+
+
+def _parse_dob(raw: str | None) -> str | None:
+    """Normalize DOB to ISO YYYY-MM-DD.
+
+    Handles both ISO format ("2001-02-02") and human-readable format
+    ("February 2, 2001") that Retell may send.
+    """
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw or raw.lower() in ("none", "n/a"):
+        return None
+    # Already ISO
+    try:
+        datetime.strptime(raw, "%Y-%m-%d")
+        return raw
+    except ValueError:
+        pass
+    # Human-readable: "February 2, 2001" or "February 02, 2001"
+    for fmt in ("%B %d, %Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    logger.warning("Could not parse DOB string: %r", raw)
+    return None
 
 
 class PostCallService:
@@ -38,41 +84,73 @@ class PostCallService:
             return call_data.to_number
         return call_data.from_number or call_data.to_number
 
-    def _map_call_status(self, call_data: RetellCallData, analysis: dict[str, Any] | None) -> str:
-        """Determine CallStatus from Retell analysis data.
+    def _parse_call_tags(
+        self, custom: dict[str, Any]
+    ) -> tuple[str | None, str | None]:
+        """Parse the 'Call Status' CSV field into (primary_status, all_tags_csv).
 
-        Key mapping (Title Case as configured in the Retell dashboard):
-        - call_successful (top-level) → BOOKED
-        - Complaining Patient         → NEEDS_FOLLOW_UP
-        - Appointment Detail present  → BOOKED
-        - fallback                    → NO_ACTION_NEEDED
+        Retell sends a comma-separated Title Case string, e.g. "Complaint, FAQ Handled".
+        We normalize each token to a snake_case enum value and return:
+          - primary_status: first recognized tag (stored indexed for fast filtering)
+          - all_tags_csv:   all recognized tags joined by comma (stored for display/multi-filter)
+
+        Unknown tokens are skipped with a warning so new Retell statuses don't crash us.
         """
-        if not analysis:
-            return CallStatus.NEEDS_FOLLOW_UP.value
+        raw = (custom.get("Call Status") or "").strip()
+        if not raw:
+            return None, None
 
-        if analysis.get("call_successful"):
-            return CallStatus.BOOKED.value
+        tags: list[str] = []
+        for part in raw.split(","):
+            token = part.strip().lower()
+            mapped = RETELL_STATUS_MAP.get(token)
+            if mapped:
+                tags.append(mapped)
+            else:
+                logger.warning("Unrecognized Retell 'Call Status' token: %r — skipping", token)
 
-        custom = analysis.get("custom_analysis_data", {})
+        if not tags:
+            return None, None
 
-        if custom.get("Complaining Patient"):
-            return CallStatus.NEEDS_FOLLOW_UP.value
-
-        appointment_detail = (custom.get("Appointment Detail") or "").strip().lower()
-        if appointment_detail and appointment_detail not in ("none", "n/a", "no appointment"):
-            return CallStatus.BOOKED.value
-
-        return CallStatus.NO_ACTION_NEEDED.value
+        return tags[0], ",".join(tags)
 
     @staticmethod
-    def _parse_patient_name(raw: str | None) -> tuple[str | None, str | None, str | None]:
-        """Split 'First Last' string into (first_name, last_name, full_name)."""
-        if not raw or not raw.strip():
-            return None, None, None
-        parts = raw.strip().split(None, 1)
-        first = parts[0]
-        last = parts[1] if len(parts) > 1 else None
-        return first, last, raw.strip()
+    def _extract_name(
+        custom: dict[str, Any],
+        dynamic_vars: dict[str, Any],
+    ) -> tuple[str | None, str | None, str | None]:
+        """Return (first_name, last_name, full_name) from available sources.
+
+        Priority:
+          1. Separate first_name / last_name in collected_dynamic_variables
+          2. Separate first_name / last_name in custom_analysis_data
+          3. Combined 'Patient name' string in custom_analysis_data
+
+        _nonempty() is applied to each source individually before the `or` so that
+        placeholder strings like "None" / "N/A" correctly fall through to the next source.
+        """
+        first = (
+            _nonempty(dynamic_vars.get("first_name"))
+            or _nonempty(custom.get("first_name"))
+        )
+        last = (
+            _nonempty(dynamic_vars.get("last_name"))
+            or _nonempty(custom.get("last_name"))
+        )
+
+        if first:
+            full = f"{first} {last}".strip() if last else first
+            return first, last, full
+
+        # Fall back to combined "Patient name"
+        combined = _nonempty(custom.get("Patient name"))
+        if combined:
+            parts = combined.split(None, 1)
+            f = parts[0]
+            l = parts[1] if len(parts) > 1 else None
+            return f, l, combined
+
+        return None, None, None
 
     async def process_call_analyzed_event(
         self,
@@ -86,18 +164,25 @@ class PostCallService:
         Idempotency: retell_call_id is UNIQUE — duplicate webhooks are safe.
         """
         analysis_dict = analysis or {}
-        custom = analysis_dict.get("custom_analysis_data", {})
+        custom: dict[str, Any] = analysis_dict.get("custom_analysis_data") or {}
+        dynamic_vars: dict[str, Any] = analysis_dict.get("collected_dynamic_variables") or {}
 
         # ── 1. Resolve / create Contact ──────────────────────────────────────
         phone = self._determine_patient_phone(webhook_call)
         contact: Contact | None = None
 
-        # Extract identity fields from custom analysis (Title Case keys)
-        patient_name_str: str | None = custom.get("Patient name")
-        patient_email: str | None = custom.get("Patient email")
-        patient_dob: str | None = custom.get("Date of birth")
+        first_name, last_name, full_name = self._extract_name(custom, dynamic_vars)
+        patient_email: str | None = (
+            _nonempty(dynamic_vars.get("email"))
+            or _nonempty(custom.get("Patient email"))
+            or _nonempty(custom.get("email"))
+        )
+        patient_dob: str | None = (
+            _parse_dob(dynamic_vars.get("date_of_birth"))
+            or _parse_dob(dynamic_vars.get("dob"))
+            or _parse_dob(custom.get("Date of birth"))
+        )
         is_new_patient_flag: bool = bool(custom.get("New_patient", False))
-        first_name, last_name, full_name = self._parse_patient_name(patient_name_str)
 
         if phone:
             phone_hash = Contact.find_by_phone_hash(phone)
@@ -139,7 +224,10 @@ class PostCallService:
                 self.session.add(contact)
                 await self.session.flush()
 
-        # ── 2. Build Call record ──────────────────────────────────────────────
+        # ── 2. Resolve call status tags ───────────────────────────────────────
+        primary_status, all_tags = self._parse_call_tags(custom)
+
+        # ── 3. Build Call record ──────────────────────────────────────────────
         duration_ms: int | None = None
         if webhook_call.start_timestamp and webhook_call.end_timestamp:
             duration_ms = webhook_call.end_timestamp - webhook_call.start_timestamp
@@ -154,7 +242,8 @@ class PostCallService:
             recording_url=webhook_call.recording_url,  # scrubbed URL set in webhooks.py
             summary=analysis_dict.get("call_summary"),
             patient_sentiment=analysis_dict.get("user_sentiment"),
-            call_status=self._map_call_status(webhook_call, analysis_dict),
+            call_status=primary_status,
+            call_tags=all_tags,
             patient_status=(
                 PatientStatus.CONTACTED.value
                 if webhook_call.direction == "outbound"
@@ -162,8 +251,15 @@ class PostCallService:
             ),
             call_duration_seconds=(duration_ms // 1000) if duration_ms else None,
             is_new_patient=contact.is_new_patient if contact else is_new_patient_flag,
-            is_complaint=bool(custom.get("Complaining Patient", False)),
-            is_insurance_billing=bool(custom.get("Insurance and Billing", False)),
+            is_complaint=primary_status == CallStatus.COMPLAINT.value
+                or (all_tags is not None and "complaint" in all_tags),
+            is_insurance_billing=(
+                primary_status in (
+                    CallStatus.INSURANCE_VERIFIED.value,
+                    CallStatus.INSURANCE_UNVERIFIED.value,
+                )
+                or bool(custom.get("Insurance and Billing", False))
+            ),
             # Treat the string "None" (from Retell when no detail exists) as NULL
             next_action=_nonempty(custom.get("Appointment Detail")),
         )
@@ -177,13 +273,30 @@ class PostCallService:
         else:
             now = datetime.now(timezone.utc)
             call.call_date = now.date()
-            call.call_time = now.timetz()  # keep UTC offset
+            call.call_time = now.timetz()
 
         self.session.add(call)
+        await self.session.flush()  # ensure call.id is assigned
+
+        # ── 4. Extract tenant-defined custom fields from webhook data ─────
+        from src.app.services.custom_field_service import CustomFieldService
+
+        cf_service = CustomFieldService(self.session)
+        cf_count = await cf_service.extract_and_save_from_webhook(
+            tenant_id=tenant_id,
+            call_id=call.id,
+            custom_analysis_data=custom,
+            collected_dynamic_variables=dynamic_vars,
+        )
 
         logger.info(
-            f"Saved Call {webhook_call.call_id} for tenant {tenant_id} "
-            f"(contact={'found' if contact and contact.id else 'unknown'})"
+            "Saved Call %s for tenant %s (contact=%s, status=%s, tags=%s, custom_fields=%d)",
+            webhook_call.call_id,
+            tenant_id,
+            "found" if contact and contact.id else "unknown",
+            primary_status,
+            all_tags,
+            cf_count,
         )
 
         # Caller (webhooks.py) is responsible for session.commit()

@@ -178,12 +178,18 @@ export interface InstitutionBasicListResponse {
 // ── Calls & Contacts ───────────────────────────────────────────────────
 
 export type CallStatus =
-    | "booked"
-    | "needs_follow_up"
-    | "cancelled"
+    | "appointment_booked"
+    | "appointment_rescheduled"
+    | "appointment_cancelled"
     | "emergency"
-    | "no_action_needed"
-    | "rescheduled";
+    | "complaint"
+    | "needs_callback"
+    | "faq_handled"
+    | "financial_inquiry"
+    | "transferred"
+    | "insurance_verified"
+    | "insurance_unverified"
+    | "no_action_needed";
 
 export type CallDirection = "inbound" | "outbound";
 
@@ -199,6 +205,7 @@ export interface CallRecord {
     retell_call_id: string | null;
     call_direction: string | null;
     call_status: string | null;
+    call_tags: string[];           // all normalized tags for this call
     patient_status: string | null;
     summary: string | null;
     patient_sentiment: string | null;
@@ -209,8 +216,42 @@ export interface CallRecord {
     call_date: string | null;
     call_time: string | null;
     call_duration_seconds: number | null;
+    callback_resolved: boolean;
+    agent_used: string | null;
     created_at: string;
     contact: ContactSummary | null;
+}
+
+export interface CustomFieldValue {
+    field_key: string;
+    field_name: string;
+    field_type: "text" | "number" | "boolean" | "date" | "dropdown";
+    value: string | null;
+    is_phi: boolean;
+    display_order: number;
+}
+
+export interface CustomFieldDefinition {
+    id: string;
+    tenant_id: string;
+    entity_type: string;
+    field_name: string;
+    field_key: string;
+    field_type: string;
+    is_phi: boolean;
+    is_required: boolean;
+    dropdown_options: string[] | null;
+    retell_source: string | null;
+    retell_source_key: string | null;
+    display_order: number;
+    is_active: boolean;
+    created_at: string;
+}
+
+export interface CallDetail extends CallRecord {
+    transcript: string | null;
+    recording_url: string | null;
+    custom_fields: CustomFieldValue[];
 }
 
 export interface CallsListResponse {
@@ -218,6 +259,38 @@ export interface CallsListResponse {
     limit: number;
     offset: number;
     items: CallRecord[];
+}
+
+// ── Dashboard ──────────────────────────────────────────────────────────
+
+export interface CallVolume {
+    today: number;
+    this_week: number;
+    this_month: number;
+    all_time: number;
+}
+
+export interface TagCount {
+    tag: string;
+    label: string;
+    count: number;
+}
+
+export interface CallbackQueueItem {
+    call_id: string;
+    contact_name: string | null;
+    call_date: string | null;
+    call_time: string | null;
+    call_duration_seconds: number | null;
+    summary: string | null;
+    next_action: string | null;
+}
+
+export interface DashboardSummary {
+    call_volume: CallVolume;
+    tag_counts: TagCount[];
+    callback_queue: CallbackQueueItem[];
+    as_of: string;
 }
 
 

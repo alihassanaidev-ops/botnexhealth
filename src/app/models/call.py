@@ -31,14 +31,20 @@ from src.app.database import Base
 
 
 class CallStatus(str, Enum):
-    """Primary outcome tag for a call."""
+    """Primary outcome tag for a call (first normalized tag from Retell 'Call Status' field)."""
 
-    BOOKED = "booked"
-    NEEDS_FOLLOW_UP = "needs_follow_up"
-    CANCELLED = "cancelled"
+    APPOINTMENT_BOOKED = "appointment_booked"
+    APPOINTMENT_RESCHEDULED = "appointment_rescheduled"
+    APPOINTMENT_CANCELLED = "appointment_cancelled"
     EMERGENCY = "emergency"
+    COMPLAINT = "complaint"
+    NEEDS_CALLBACK = "needs_callback"
+    FAQ_HANDLED = "faq_handled"
+    FINANCIAL_INQUIRY = "financial_inquiry"
+    TRANSFERRED = "transferred"
+    INSURANCE_VERIFIED = "insurance_verified"
+    INSURANCE_UNVERIFIED = "insurance_unverified"
     NO_ACTION_NEEDED = "no_action_needed"
-    RESCHEDULED = "rescheduled"
 
 
 class PatientStatus(str, Enum):
@@ -110,7 +116,10 @@ class Call(Base):
 
     # Classification
     patient_sentiment: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Primary status (first normalized tag) — indexed for fast single-tag filtering
     call_status: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    # All tags comma-separated e.g. "complaint,faq_handled" — for multi-tag display & filter
+    call_tags: Mapped[str | None] = mapped_column(Text, nullable=True)
     patient_status: Mapped[str | None] = mapped_column(
         String(50), default=PatientStatus.NOT_CONTACTED.value, nullable=True,
     )
@@ -135,6 +144,7 @@ class Call(Base):
     callback_resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
+    callback_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Metrics
     times_called: Mapped[int] = mapped_column(Integer, default=1, nullable=False)

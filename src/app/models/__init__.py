@@ -8,6 +8,7 @@ from src.app.models.custom_field import (
     CustomFieldValue,
     EntityType,
     FieldType,
+    RetellSource,
 )
 from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
 from src.app.models.tenant import Tenant
@@ -33,6 +34,7 @@ __all__ = [
     "CustomFieldValue",
     "EntityType",
     "FieldType",
+    "RetellSource",
     "AuditLog",
     "AuditAction",
     "AuditActor",

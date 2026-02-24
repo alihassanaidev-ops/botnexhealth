@@ -52,6 +52,13 @@ class FieldType(str, Enum):
     DROPDOWN = "dropdown"
 
 
+class RetellSource(str, Enum):
+    """Which Retell webhook dict a custom field value is sourced from."""
+
+    CUSTOM_ANALYSIS_DATA = "custom_analysis_data"
+    COLLECTED_DYNAMIC_VARIABLES = "collected_dynamic_variables"
+
+
 class CustomFieldDefinition(Base):
     """
     Defines a custom field that a tenant has created.
@@ -106,6 +113,10 @@ class CustomFieldDefinition(Base):
 
     # UI ordering
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Retell webhook auto-population: which dict and key to pull from
+    retell_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    retell_source_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Soft delete
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
