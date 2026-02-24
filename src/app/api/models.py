@@ -599,6 +599,8 @@ class TenantResponse(BaseModel):
     
     has_system_nexhealth_key: bool
     
+    has_retell_secret: bool
+    
     # Optional: Created user
     user: TenantUserResponse | None = None
     
@@ -606,7 +608,7 @@ class TenantResponse(BaseModel):
         from_attributes = True
 
     @classmethod
-    def from_tenant(cls, tenant: Any, user: Any = None) -> "TenantResponse":
+    def from_tenant(cls, tenant: Any, user: Any = None, has_retell_secret: bool = False) -> "TenantResponse":
         """Convert Tenant model to response (no secrets exposed)."""
         from src.app.config import settings
 
@@ -626,5 +628,6 @@ class TenantResponse(BaseModel):
             is_active=tenant.is_active,
             has_nexhealth_key=tenant.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
+            has_retell_secret=has_retell_secret,
             user=user_resp
         )

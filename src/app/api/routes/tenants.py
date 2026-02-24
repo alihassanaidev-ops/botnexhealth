@@ -112,11 +112,22 @@ async def list_tenants(
                 # Keep first user per tenant (the primary tenant user)
                 if u.tenant_id and u.tenant_id not in users_by_tenant:
                     users_by_tenant[u.tenant_id] = u
+                    
+            from src.app.models.tenant_location import TenantLocation
+            retell_result = await session.execute(
+                select(TenantLocation.tenant_id)
+                .where(TenantLocation.tenant_id.in_(tenant_ids))
+                .where(TenantLocation.retell_agent_id.is_not(None))
+                .distinct()
+            )
+            retell_tenant_ids = set(retell_result.scalars().all())
+
         else:
             users_by_tenant = {}
+            retell_tenant_ids = set()
 
         return [
-            TenantResponse.from_tenant(t, user=users_by_tenant.get(t.id))
+            TenantResponse.from_tenant(t, user=users_by_tenant.get(t.id), has_retell_secret=(t.id in retell_tenant_ids))
             for t in tenants
         ]
 
@@ -216,7 +227,7 @@ async def create_tenant(
                 detail="Failed to create tenant locally. External invite rolled back."
             )
 
-        return TenantResponse.from_tenant(tenant, user)
+        return TenantResponse.from_tenant(tenant, user, has_retell_secret=False)
 
 
 @router.get("/{slug}", response_model=TenantResponse)
@@ -240,8 +251,17 @@ async def get_tenant(
             select(User).where(User.tenant_id == tenant.id).limit(1)
         )
         tenant_user = user_result.scalar_one_or_none()
+        
+        from src.app.models.tenant_location import TenantLocation
+        retell_result = await session.execute(
+            select(TenantLocation.tenant_id)
+            .where(TenantLocation.tenant_id == tenant.id)
+            .where(TenantLocation.retell_agent_id.is_not(None))
+            .limit(1)
+        )
+        has_retell = retell_result.scalar_one_or_none() is not None
 
-        return TenantResponse.from_tenant(tenant, user=tenant_user)
+        return TenantResponse.from_tenant(tenant, user=tenant_user, has_retell_secret=has_retell)
 
 
 @router.patch("/{slug}", response_model=TenantResponse)
@@ -272,7 +292,17 @@ async def update_tenant(
         # but explicitly sending null will clear the value (e.g., remove an API key).
         updates = data.model_dump(exclude_unset=True)
         tenant = await service.update(tenant, **updates)
-        return TenantResponse.from_tenant(tenant)
+        
+        from src.app.models.tenant_location import TenantLocation
+        retell_result = await session.execute(
+            select(TenantLocation.tenant_id)
+            .where(TenantLocation.tenant_id == tenant.id)
+            .where(TenantLocation.retell_agent_id.is_not(None))
+            .limit(1)
+        )
+        has_retell = retell_result.scalar_one_or_none() is not None
+        
+        return TenantResponse.from_tenant(tenant, has_retell_secret=has_retell)
 
 
 @router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)

@@ -313,7 +313,7 @@ export default function TenantDetail() {
                                 name="Retell AI"
                                 description="Voice agent configuration."
                                 isConfigured={tenant.has_retell_secret}
-                                onConfigure={() => setActiveTab("credentials")}
+                                onConfigure={() => setActiveTab("locations")}
                             />
                         </div>
                     </div>

@@ -43,4 +43,14 @@ async def get_my_tenant_config(
                 detail="Tenant not found"
             )
             
-        return TenantResponse.from_tenant(tenant, current_user)
+        from src.app.models.tenant_location import TenantLocation
+        from sqlalchemy import select
+        retell_result = await session.execute(
+            select(TenantLocation.tenant_id)
+            .where(TenantLocation.tenant_id == tenant.id)
+            .where(TenantLocation.retell_agent_id.is_not(None))
+            .limit(1)
+        )
+        has_retell = retell_result.scalar_one_or_none() is not None
+            
+        return TenantResponse.from_tenant(tenant, current_user, has_retell_secret=has_retell)
