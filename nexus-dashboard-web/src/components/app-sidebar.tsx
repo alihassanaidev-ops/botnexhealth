@@ -30,6 +30,7 @@ import {
     Armchair,
     LayoutDashboard,
     Phone,
+    Settings2,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
@@ -78,6 +79,11 @@ const navSetup = [
         title: "Operatories",
         url: "/setup/operatories",
         icon: Armchair,
+    },
+    {
+        title: "Custom Fields",
+        url: "/setup/custom-fields",
+        icon: Settings2,
     },
 ]
 

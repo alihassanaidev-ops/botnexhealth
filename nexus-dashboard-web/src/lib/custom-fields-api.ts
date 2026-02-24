@@ -65,6 +65,12 @@ export async function updateFieldDefinition(
     return data;
 }
 
-export async function deactivateFieldDefinition(id: string): Promise<void> {
-    await api.delete(`/tenant/custom-fields/definitions/${id}`);
+export async function deactivateFieldDefinition(
+    id: string,
+    hard = false,
+): Promise<void> {
+    const url = hard
+        ? `/tenant/custom-fields/definitions/${id}?hard=true`
+        : `/tenant/custom-fields/definitions/${id}`;
+    await api.delete(url);
 }

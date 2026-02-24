@@ -199,10 +199,11 @@ async def update_definition(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 @limiter.limit(RATE_WRITE)
-async def deactivate_definition(
+async def delete_definition(
     request: Request,
     definition_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    hard: bool = Query(False),
 ) -> None:
     if not current_user.tenant_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant")
@@ -213,5 +214,5 @@ async def deactivate_definition(
         if not defn:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Definition not found")
 
-        await svc.deactivate_definition(defn)
+        await svc.delete_definition(defn, hard_delete=hard)
         await session.commit()

@@ -13,6 +13,7 @@ import AppointmentTypes from "./pages/AppointmentTypes";
 import ProvidersScheduling from "./pages/ProvidersScheduling";
 import Operatories from "./pages/Operatories";
 import Calls from "./pages/Calls";
+import CustomFields from "./pages/CustomFields";
 
 
 export const router = createBrowserRouter([
@@ -89,6 +90,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["TENANT"]}>
                                 <Operatories />
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "setup/custom-fields",
+                        element: (
+                            <RoleGuard allowed={["TENANT"]}>
+                                <CustomFields />
                             </RoleGuard>
                         ),
                     },

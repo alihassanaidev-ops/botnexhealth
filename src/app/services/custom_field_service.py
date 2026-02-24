@@ -112,8 +112,13 @@ class CustomFieldService:
         await self.session.flush()
         return defn
 
-    async def deactivate_definition(self, defn: CustomFieldDefinition) -> None:
-        defn.is_active = False
+    async def delete_definition(
+        self, defn: CustomFieldDefinition, hard_delete: bool = False,
+    ) -> None:
+        if hard_delete:
+            await self.session.delete(defn)
+        else:
+            defn.is_active = False
         await self.session.flush()
 
     # ── Value retrieval ────────────────────────────────────────────────
