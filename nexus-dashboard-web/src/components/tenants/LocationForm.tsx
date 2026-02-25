@@ -19,11 +19,9 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic } from "@/types";
-import { Loader2 } from "lucide-react";
 
 const US_TIMEZONES = [
     { value: "America/Puerto_Rico", label: "Atlantic Time (Puerto Rico/Virgin Islands)" },
@@ -92,10 +90,8 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                 setIsLoadingNH(false);
             }
         }
-        if (!isEditing) {
-            fetchNHLocations();
-        }
-    }, [isEditing]);
+        fetchNHLocations();
+    }, []);
 
     // Flatten for dropdown display, but keep institution reference for subdomain lookup
     const nexHealthLocations = nexHealthInstitutions.flatMap(inst => inst.locations);
@@ -178,28 +174,41 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
         <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
 
-                {/* NexHealth Location Selection (Create Mode Only) */}
-                {!isEditing && (
-                    <div className="space-y-2">
-                        <Label>Select NexHealth Location (Optional)</Label>
-                        <Select onValueChange={onLocationSelect} disabled={isLoadingNH}>
-                            <SelectTrigger>
-                                <SelectValue placeholder={isLoadingNH ? "Loading locations..." : "Choose a location to auto-fill"} />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {nexHealthLocations.map((loc) => (
-                                    <SelectItem key={loc.id} value={String(loc.id)}>
-                                        {loc.name} (ID: {loc.id})
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                        {isLoadingNH && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-                        <p className="text-sm text-muted-foreground">
-                            Selecting a location will auto-fill the form fields below.
-                        </p>
-                    </div>
-                )}
+                <FormField
+                    control={form.control}
+                    name="nexhealth_location_id"
+                    render={({ field }) => (
+                        <FormItem className="space-y-2">
+                            <FormLabel>Select NexHealth Location (Optional)</FormLabel>
+                            <Select
+                                onValueChange={(val) => {
+                                    field.onChange(val);
+                                    onLocationSelect(val);
+                                }}
+                                value={field.value || ""}
+                                disabled={isLoadingNH}
+                            >
+                                <FormControl>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder={isLoadingNH ? "Loading locations..." : "Choose a location from NexHealth"} />
+                                    </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                    <SelectItem value="">None / Manual Entry</SelectItem>
+                                    {nexHealthLocations.map((loc) => (
+                                        <SelectItem key={loc.id} value={String(loc.id)}>
+                                            {loc.name} (ID: {loc.id})
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <FormMessage />
+                            <p className="text-sm text-muted-foreground">
+                                Selecting a location will auto-fill the form fields below.
+                            </p>
+                        </FormItem>
+                    )}
+                />
 
                 <FormField
                     control={form.control}
@@ -242,19 +251,6 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                     <FormLabel>Subdomain</FormLabel>
                                     <FormControl>
                                         <Input placeholder="e.g. acme-dental" {...field} />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                        <FormField
-                            control={form.control}
-                            name="nexhealth_location_id"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>Location ID</FormLabel>
-                                    <FormControl>
-                                        <Input placeholder="e.g. 12345" {...field} />
                                     </FormControl>
                                     <FormMessage />
                                 </FormItem>
