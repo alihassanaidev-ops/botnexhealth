@@ -18,7 +18,6 @@ from src.app.api.routes.patients import router as patients_router
 from src.app.api.routes.providers import router as providers_router
 from src.app.api.routes.appointment_types import router as appointment_types_router
 
-from src.app.api.routes.tenant_portal import router as tenant_portal_router
 
 # ============================================================================
 # Universal PMS Routes (adapter-based, PMS-agnostic)
@@ -43,7 +42,7 @@ router.include_router(patients_router, prefix="/nexhealth", tags=["NexHealth - P
 router.include_router(providers_router, prefix="/nexhealth", tags=["NexHealth - Providers"])
 router.include_router(appointment_types_router, prefix="/nexhealth", tags=["NexHealth - Appointment Types"])
 
-router.include_router(tenant_portal_router)
+
 
 # ============================================================================
 # Universal PMS Routes

@@ -12,6 +12,7 @@ from src.app.config import settings
 from src.app.retell.functions import router as retell_router
 from src.app.retell.webhooks import router as retell_webhook_router
 from src.app.api.routes.auth import router as auth_router
+from src.app.api.routes.tenant_portal import router as tenant_portal_router
 from src.app.api.routes.tenant_setup import router as tenant_setup_router
 from src.app.api.routes.calls import router as calls_router
 from src.app.api.routes.dashboard import router as dashboard_router
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(tenants_router)
 
     # Tenant portal routes (authenticated tenant users)
+    app.include_router(tenant_portal_router)
     app.include_router(tenant_setup_router)
     app.include_router(calls_router)
     app.include_router(dashboard_router)
