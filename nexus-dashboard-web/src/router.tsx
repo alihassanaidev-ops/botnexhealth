@@ -14,6 +14,7 @@ import ProvidersScheduling from "./pages/ProvidersScheduling";
 import Operatories from "./pages/Operatories";
 import Calls from "./pages/Calls";
 import CustomFields from "./pages/CustomFields";
+import AuditLogs from "./pages/AuditLogs";
 
 
 export const router = createBrowserRouter([
@@ -98,6 +99,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["TENANT"]}>
                                 <CustomFields />
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "setup/audit-logs",
+                        element: (
+                            <RoleGuard allowed={["TENANT"]}>
+                                <AuditLogs />
                             </RoleGuard>
                         ),
                     },

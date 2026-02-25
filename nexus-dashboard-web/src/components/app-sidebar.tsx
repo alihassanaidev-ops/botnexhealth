@@ -31,6 +31,7 @@ import {
     LayoutDashboard,
     Phone,
     Settings2,
+    ShieldCheck,
 } from "lucide-react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
@@ -84,6 +85,11 @@ const navSetup = [
         title: "Custom Fields",
         url: "/setup/custom-fields",
         icon: Settings2,
+    },
+    {
+        title: "Audit Logs",
+        url: "/setup/audit-logs",
+        icon: ShieldCheck,
     },
 ]
 

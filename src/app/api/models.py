@@ -631,3 +631,17 @@ class TenantResponse(BaseModel):
             has_retell_secret=has_retell_secret,
             user=user_resp
         )
+
+
+class AuditLogResponse(BaseModel):
+    """Response model for an audit log."""
+
+    id: str
+    timestamp: datetime
+    actor: str
+    action: str
+    target_resource: str
+    outcome: str
+    audit_metadata: dict[str, Any] | None = None
+    
+    model_config = {"from_attributes": True}

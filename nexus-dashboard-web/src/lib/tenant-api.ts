@@ -143,4 +143,21 @@ export async function triggerSync(locationId?: string): Promise<SyncResult> {
     return data;
 }
 
+// ── Audit Logs ─────────────────────────────────────────────────────────────
+
+export interface AuditLog {
+    id: string;
+    timestamp: string;
+    actor: string;
+    action: string;
+    target_resource: string;
+    outcome: string;
+    audit_metadata?: Record<string, any> | null;
+}
+
+export async function listAuditLogs(): Promise<AuditLog[]> {
+    const { data } = await api.get<AuditLog[]>("/tenant/audit-logs");
+    return data;
+}
+
 
