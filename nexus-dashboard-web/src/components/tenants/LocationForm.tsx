@@ -182,10 +182,13 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                             <FormLabel>Select NexHealth Location (Optional)</FormLabel>
                             <Select
                                 onValueChange={(val) => {
-                                    field.onChange(val);
-                                    onLocationSelect(val);
+                                    const newValue = val === "none" ? "" : val;
+                                    field.onChange(newValue);
+                                    if (val !== "none") {
+                                        onLocationSelect(val);
+                                    }
                                 }}
-                                value={field.value || ""}
+                                value={field.value || "none"}
                                 disabled={isLoadingNH}
                             >
                                 <FormControl>
@@ -194,7 +197,7 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                     </SelectTrigger>
                                 </FormControl>
                                 <SelectContent>
-                                    <SelectItem value="">None / Manual Entry</SelectItem>
+                                    <SelectItem value="none">None / Manual Entry</SelectItem>
                                     {nexHealthLocations.map((loc) => (
                                         <SelectItem key={loc.id} value={String(loc.id)}>
                                             {loc.name} (ID: {loc.id})
