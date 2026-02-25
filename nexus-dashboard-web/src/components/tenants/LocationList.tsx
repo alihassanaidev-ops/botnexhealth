@@ -229,13 +229,13 @@ export function LocationList({ tenantSlug }: LocationListProps) {
             {/* Create / Edit Form View */}
             {viewMode === "form" && (
                 <div className="space-y-4">
-                    <div className="flex items-center gap-4 border-b pb-4">
-                        <Button variant="ghost" size="sm" onClick={() => setViewMode("list")}>
-                            ← Back to Locations
+                    <div className="mb-6">
+                        <Button variant="ghost" size="sm" className="-ml-2 mb-4 text-muted-foreground" onClick={() => setViewMode("list")}>
+                            &larr; Back to Locations
                         </Button>
-                        <div>
-                            <h2 className="text-xl font-semibold">{editingLocation ? "Edit Location" : "Add Location"}</h2>
-                            <p className="text-sm text-muted-foreground">
+                        <div className="border-b pb-4">
+                            <h2 className="text-2xl font-bold tracking-tight">{editingLocation ? "Edit Location" : "Add Location"}</h2>
+                            <p className="text-sm text-muted-foreground mt-1">
                                 {editingLocation
                                     ? `Update settings for ${editingLocation.name}`
                                     : "Create a new location for this tenant"}
