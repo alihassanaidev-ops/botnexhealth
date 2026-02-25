@@ -40,24 +40,24 @@ const PAGE_SIZE = 25
 const POLL_INTERVAL_MS = 30_000
 
 export const STATUS_OPTIONS: { value: string; label: string; color: string }[] = [
-    { value: "appointment_booked",     label: "Appointment Booked",    color: "bg-green-100 text-green-800 border-green-200" },
-    { value: "appointment_rescheduled",label: "Rescheduled",           color: "bg-blue-100 text-blue-800 border-blue-200" },
-    { value: "appointment_cancelled",  label: "Cancelled",             color: "bg-zinc-100 text-zinc-600 border-zinc-200" },
-    { value: "emergency",              label: "Emergency",             color: "bg-red-100 text-red-800 border-red-200" },
-    { value: "complaint",              label: "Complaint",             color: "bg-orange-100 text-orange-800 border-orange-200" },
-    { value: "needs_callback",         label: "Needs Callback",        color: "bg-amber-100 text-amber-800 border-amber-200" },
-    { value: "faq_handled",            label: "FAQ Handled",           color: "bg-sky-100 text-sky-800 border-sky-200" },
-    { value: "financial_inquiry",      label: "Financial Inquiry",     color: "bg-violet-100 text-violet-800 border-violet-200" },
-    { value: "transferred",            label: "Transferred",           color: "bg-teal-100 text-teal-800 border-teal-200" },
-    { value: "insurance_verified",     label: "Insurance Verified",    color: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-    { value: "insurance_unverified",   label: "Insurance Unverified",  color: "bg-rose-100 text-rose-800 border-rose-200" },
-    { value: "no_action_needed",       label: "No Action Needed",      color: "bg-zinc-100 text-zinc-500 border-zinc-200" },
+    { value: "appointment_booked", label: "Appointment Booked", color: "bg-green-100 text-green-800 border-green-200" },
+    { value: "appointment_rescheduled", label: "Rescheduled", color: "bg-blue-100 text-blue-800 border-blue-200" },
+    { value: "appointment_cancelled", label: "Cancelled", color: "bg-zinc-100 text-zinc-600 border-zinc-200" },
+    { value: "emergency", label: "Emergency", color: "bg-red-100 text-red-800 border-red-200" },
+    { value: "complaint", label: "Complaint", color: "bg-orange-100 text-orange-800 border-orange-200" },
+    { value: "needs_callback", label: "Needs Callback", color: "bg-amber-100 text-amber-800 border-amber-200" },
+    { value: "faq_handled", label: "FAQ Handled", color: "bg-sky-100 text-sky-800 border-sky-200" },
+    { value: "financial_inquiry", label: "Financial Inquiry", color: "bg-violet-100 text-violet-800 border-violet-200" },
+    { value: "transferred", label: "Transferred", color: "bg-teal-100 text-teal-800 border-teal-200" },
+    { value: "insurance_verified", label: "Insurance Verified", color: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+    { value: "insurance_unverified", label: "Insurance Unverified", color: "bg-rose-100 text-rose-800 border-rose-200" },
+    { value: "no_action_needed", label: "No Action Needed", color: "bg-zinc-100 text-zinc-500 border-zinc-200" },
 ]
 
 const STATUS_MAP = Object.fromEntries(STATUS_OPTIONS.map((o) => [o.value, o]))
 
 const DIRECTION_OPTIONS = [
-    { value: "inbound",  label: "Inbound" },
+    { value: "inbound", label: "Inbound" },
     { value: "outbound", label: "Outbound" },
 ]
 
@@ -305,6 +305,18 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                             <div>
                                 <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Appointment Detail</p>
                                 <p className="text-sm leading-relaxed rounded-lg border bg-muted/30 p-3">{detail.next_action}</p>
+                            </div>
+                        )}
+
+                        {/* Recording */}
+                        {detail.recording_url && (
+                            <div>
+                                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Call Recording</p>
+                                <div className="rounded-lg border bg-muted/30 p-3 flex items-center justify-center">
+                                    <audio controls className="w-full h-10 outline-none" src={detail.recording_url}>
+                                        Your browser does not support the audio element.
+                                    </audio>
+                                </div>
                             </div>
                         )}
 
