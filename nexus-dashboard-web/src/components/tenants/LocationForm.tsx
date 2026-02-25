@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -21,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { verifyRetellAgent } from "@/lib/admin-api";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic } from "@/types";
 
 const US_TIMEZONES = [
@@ -60,6 +62,8 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
     const isEditing = !!location;
     const [nexHealthInstitutions, setNexHealthInstitutions] = useState<InstitutionBasic[]>([]);
     const [isLoadingNH, setIsLoadingNH] = useState(false);
+    const [isVerifyingAgent, setIsVerifyingAgent] = useState(false);
+    const [agentVerificationStatus, setAgentVerificationStatus] = useState<"idle" | "success" | "error">("idle");
 
     const form = useForm<LocationFormValues>({
         resolver: zodResolver(locationSchema),
@@ -271,9 +275,48 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                             render={({ field }) => (
                                 <FormItem>
                                     <FormLabel>Agent ID</FormLabel>
-                                    <FormControl>
-                                        <Input placeholder="e.g. agent_xxx" {...field} />
-                                    </FormControl>
+                                    <div className="flex items-center gap-2">
+                                        <FormControl>
+                                            <Input
+                                                placeholder="e.g. agent_xxx"
+                                                {...field}
+                                                onChange={(e) => {
+                                                    field.onChange(e);
+                                                    setAgentVerificationStatus("idle");
+                                                }}
+                                            />
+                                        </FormControl>
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            disabled={!field.value || isVerifyingAgent}
+                                            onClick={async () => {
+                                                setIsVerifyingAgent(true);
+                                                setAgentVerificationStatus("idle");
+                                                try {
+                                                    await verifyRetellAgent(field.value || "");
+                                                    setAgentVerificationStatus("success");
+                                                } catch (e) {
+                                                    setAgentVerificationStatus("error");
+                                                } finally {
+                                                    setIsVerifyingAgent(false);
+                                                }
+                                            }}
+                                        >
+                                            {isVerifyingAgent && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                            Verify
+                                        </Button>
+                                    </div>
+                                    {agentVerificationStatus === "success" && (
+                                        <p className="text-sm font-medium text-green-600 flex items-center mt-2">
+                                            <CheckCircle2 className="h-4 w-4 mr-1.5" /> Agent verified successfully
+                                        </p>
+                                    )}
+                                    {agentVerificationStatus === "error" && (
+                                        <p className="text-sm font-medium text-destructive flex items-center mt-2">
+                                            <XCircle className="h-4 w-4 mr-1.5" /> Agent not found or error
+                                        </p>
+                                    )}
                                     <FormMessage />
                                 </FormItem>
                             )}

@@ -73,6 +73,52 @@ async def list_retell_agents(
             detail="Failed to communicate with Retell API"
         )
 
+@router.get("/retell/agents/{agent_id}")
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda *args, **kwargs: f"retell:agent:{kwargs.get('agent_id')}",
+    actor=AuditActor.ADMIN,
+)
+async def verify_retell_agent(
+    agent_id: str,
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """
+    Verify a specific Retell AI agent exists by fetching its details.
+    
+    Used by Admins to verify a manually entered Retell Agent ID.
+    """
+    from src.app.config import settings
+    import httpx
+    
+    if not settings.retell_api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retell API secret not configured"
+        )
+        
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://api.retellai.com/get-agent/{agent_id}",
+                headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
+                timeout=10.0
+            )
+            if response.status_code == 404:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Agent not found"
+                )
+            response.raise_for_status()
+            return response.json()
+    except HTTPException:
+        raise
+    except httpx.HTTPError as e:
+        logger.error(f"Failed to fetch Retell agent {agent_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to communicate with Retell API"
+        )
 
 # =============================================================================
 # Request/Response Models
