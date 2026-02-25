@@ -230,7 +230,7 @@ export function LocationList({ tenantSlug }: LocationListProps) {
             {viewMode === "form" && (
                 <div className="space-y-4">
                     <div className="mb-6">
-                        <Button variant="ghost" size="sm" className="-ml-2 mb-4 text-muted-foreground" onClick={() => setViewMode("list")}>
+                        <Button variant="ghost" size="sm" className="mb-4 text-muted-foreground" onClick={() => setViewMode("list")}>
                             &larr; Back to Locations
                         </Button>
                         <div className="border-b pb-4">

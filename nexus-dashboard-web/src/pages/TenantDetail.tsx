@@ -185,8 +185,8 @@ export default function TenantDetail() {
     return (
         <div className="flex-1 space-y-6 p-8 pt-6">
             {/* Header */}
-            <div className="flex items-center gap-4">
-                <Button variant="ghost" size="icon" onClick={() => navigate("/tenants")}>
+            <div className="flex items-start gap-4">
+                <Button variant="ghost" size="icon" onClick={() => navigate("/tenants")} className="mt-1">
                     <ArrowLeft className="h-4 w-4" />
                 </Button>
                 <div className="flex-1">
