@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
+import { MaskedPHI } from "@/components/ui/masked-phi"
 import {
     Phone,
     PhoneIncoming,
@@ -10,7 +11,6 @@ import {
     UserPlus,
     CheckCircle2,
     RefreshCcw,
-    Shield,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -185,9 +185,12 @@ function CustomFieldsSection({ fields }: { fields: CustomFieldValue[] }) {
                     <div key={f.field_key}>
                         <p className="text-muted-foreground flex items-center gap-1">
                             {f.field_name}
-                            {f.is_phi && <Shield className="h-3 w-3 text-amber-500" />}
                         </p>
-                        <p className="font-medium mt-0.5">{renderFieldValue(f)}</p>
+                        <MaskedPHI
+                            value={renderFieldValue(f)}
+                            isPhi={f.is_phi}
+                            className="font-medium mt-0.5"
+                        />
                     </div>
                 ))}
             </div>
