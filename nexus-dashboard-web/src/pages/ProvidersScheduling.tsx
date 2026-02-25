@@ -264,16 +264,21 @@ export default function ProvidersScheduling() {
                                     {filteredAvailabilities.map((av) => {
                                         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
                                         const isPastDate = !!av.specific_date && av.specific_date < new Date().toISOString().slice(0, 10)
+                                        const isWarning = !hasTypes && !isPastDate
+
+                                        const mutedClass = isWarning ? "text-yellow-700" : "text-muted-foreground"
+                                        const normalClass = isWarning ? "text-yellow-900" : ""
+
                                         return (
                                             <div
                                                 key={av.id}
-                                                className={`rounded-lg border p-4 ${isPastDate ? "border-gray-200 bg-gray-50/50 opacity-60" : !hasTypes ? "border-yellow-200 bg-yellow-50/50" : ""}`}
+                                                className={`rounded-lg border p-4 ${isPastDate ? "border-gray-200 bg-gray-50/50 opacity-60" : isWarning ? "border-yellow-200 bg-yellow-50" : ""}`}
                                             >
                                                 <div className="flex items-start justify-between">
                                                     <div className="space-y-1">
                                                         <div className="flex items-center gap-2">
-                                                            <Clock className="h-4 w-4 text-muted-foreground" />
-                                                            <span className="font-medium">
+                                                            <Clock className={`h-4 w-4 ${mutedClass}`} />
+                                                            <span className={`font-medium ${normalClass}`}>
                                                                 {av.begin_time} - {av.end_time}
                                                             </span>
                                                             {isPastDate && (
@@ -282,30 +287,30 @@ export default function ProvidersScheduling() {
                                                                 </Badge>
                                                             )}
                                                             {av.synced && (
-                                                                <Badge variant="secondary" className="text-xs">
+                                                                <Badge variant={isWarning ? "outline" : "secondary"} className={`text-xs ${isWarning ? "border-yellow-300 text-yellow-800 bg-yellow-100/50" : ""}`}>
                                                                     Synced from PMS
                                                                 </Badge>
                                                             )}
                                                             {!av.synced && (
-                                                                <Badge variant="outline" className="text-xs">
+                                                                <Badge variant="outline" className={`text-xs ${isWarning ? "border-yellow-300 text-yellow-800" : ""}`}>
                                                                     Manual
                                                                 </Badge>
                                                             )}
                                                         </div>
                                                         {av.days && av.days.length > 0 && (
-                                                            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                                                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
                                                                 <Calendar className="h-3 w-3" />
                                                                 {av.days.join(", ")}
                                                             </div>
                                                         )}
                                                         {av.specific_date && (
-                                                            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                                                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
                                                                 <Calendar className="h-3 w-3" />
                                                                 Specific date: {av.specific_date}
                                                             </div>
                                                         )}
-                                                        <div className="text-sm">
-                                                            <span className="text-muted-foreground">Appointment Types: </span>
+                                                        <div className={`text-sm ${normalClass}`}>
+                                                            <span className={mutedClass}>Appointment Types: </span>
                                                             {hasTypes ? (
                                                                 <span>{av.appointment_type_names?.join(", ")}</span>
                                                             ) : (
@@ -318,6 +323,7 @@ export default function ProvidersScheduling() {
                                                     <Button
                                                         variant="outline"
                                                         size="sm"
+                                                        className={isWarning ? "border-yellow-300 text-yellow-800 hover:bg-yellow-100" : ""}
                                                         onClick={() => openEditDialog(av)}
                                                     >
                                                         Edit Linking
