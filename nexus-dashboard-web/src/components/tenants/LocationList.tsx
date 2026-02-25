@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, RefreshCw, Pencil, Trash2, Loader2, X } from "lucide-react";
+import { Plus, RefreshCw, Pencil, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Table,
@@ -228,34 +228,13 @@ export function LocationList({ tenantSlug }: LocationListProps) {
 
             {/* Create / Edit Form View */}
             {viewMode === "form" && (
-                <div className="space-y-4">
-                    <div className="mb-6 border-b pb-4 flex items-start justify-between">
-                        <div>
-                            <h2 className="text-2xl font-bold tracking-tight">{editingLocation ? "Edit Location" : "Add Location"}</h2>
-                            <p className="text-sm text-muted-foreground mt-1">
-                                {editingLocation
-                                    ? `Update settings for ${editingLocation.name}`
-                                    : "Create a new location for this tenant"}
-                            </p>
-                        </div>
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            className="text-muted-foreground hover:bg-muted/50 hover:text-foreground -mt-1 -mr-2"
-                            onClick={() => setViewMode("list")}
-                            title="Close"
-                        >
-                            <X className="h-5 w-5" />
-                        </Button>
-                    </div>
-                    <div className="max-w-2xl">
-                        <LocationForm
-                            tenantSlug={tenantSlug}
-                            location={editingLocation}
-                            onSuccess={handleFormSuccess}
-                            onCancel={() => setViewMode("list")}
-                        />
-                    </div>
+                <div>
+                    <LocationForm
+                        tenantSlug={tenantSlug}
+                        location={editingLocation}
+                        onSuccess={handleFormSuccess}
+                        onCancel={() => setViewMode("list")}
+                    />
                 </div>
             )}
 
