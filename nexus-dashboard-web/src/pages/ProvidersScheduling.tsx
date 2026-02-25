@@ -8,11 +8,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { RefreshCcw, AlertTriangle, Clock, Calendar } from "lucide-react"
-import type { CachedProvider, CachedAvailability, CachedAppointmentType } from "@/types"
+import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
 import {
     listProviders,
     listAvailabilities,
     listAppointmentTypes,
+    listOperatories,
+    createAvailability,
     updateAvailability,
     triggerSync,
 } from "@/lib/tenant-api"
@@ -21,6 +23,7 @@ export default function ProvidersScheduling() {
     const [providers, setProviders] = useState<CachedProvider[]>([])
     const [availabilities, setAvailabilities] = useState<CachedAvailability[]>([])
     const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
+    const [operatories, setOperatories] = useState<CachedOperatory[]>([])
     const [selectedProviderId, setSelectedProviderId] = useState<string>("")
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [loading, setLoading] = useState(true)
@@ -29,9 +32,20 @@ export default function ProvidersScheduling() {
     const [error, setError] = useState<string | null>(null)
     const initialLoadDone = useRef(false)
 
-    // Edit dialog state
+    // Edit target linking state
     const [editTarget, setEditTarget] = useState<CachedAvailability | null>(null)
     const [editTypeIds, setEditTypeIds] = useState<string[]>([])
+
+    // Create new custom work window state
+    const [createDialogOpen, setCreateDialogOpen] = useState(false)
+    const [newWindow, setNewWindow] = useState({
+        appointment_type_ids: [] as string[],
+        operatory_id: "",
+        days: [] as string[],
+        start_time: "09:00",
+        end_time: "17:00",
+    })
+
     const [saving, setSaving] = useState(false)
 
     // Load providers + appointment types once on mount
@@ -39,15 +53,17 @@ export default function ProvidersScheduling() {
         setLoading(true)
         setError(null)
         try {
-            const [p, at] = await Promise.all([
+            const [p, at, ops] = await Promise.all([
                 listProviders(),
                 listAppointmentTypes(),
+                listOperatories(),
             ])
             setProviders(p)
             setAppointmentTypes(at)
+            setOperatories(ops)
             // Auto-select first provider on initial load
             if (p.length > 0 && !initialLoadDone.current) {
-                setSelectedProviderId(p[0].source_id)
+                setSelectedProviderId(p.find(pr => pr.is_active)?.source_id || p[0].source_id)
                 initialLoadDone.current = true
             }
         } catch (err: unknown) {
@@ -121,18 +137,62 @@ export default function ProvidersScheduling() {
         )
     }
 
-    const handleSave = async () => {
+    const handleSaveEdit = async () => {
         if (!editTarget) return
         setSaving(true)
         try {
             await updateAvailability(editTarget.source_id, {
                 appointment_type_ids: editTypeIds,
             })
-            toast.success("Availability updated")
+            toast.success("Work window updated")
             setEditTarget(null)
             await fetchAvailabilities()
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to update"
+            toast.error(message)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const handleCreateWorkWindow = async () => {
+        if (!selectedProviderId) return
+        if (newWindow.appointment_type_ids.length === 0) {
+            toast.error("Please select at least one appointment type")
+            return
+        }
+        if (!newWindow.operatory_id) {
+            toast.error("Please select an operatory")
+            return
+        }
+        if (newWindow.days.length === 0) {
+            toast.error("Please select at least one day")
+            return
+        }
+        if (!newWindow.start_time || !newWindow.end_time) {
+            toast.error("Please provide start and end times")
+            return
+        }
+
+        setSaving(true)
+        try {
+            await createAvailability({
+                provider_id: selectedProviderId,
+                ...newWindow
+            })
+            toast.success("Work window created successfully")
+            setCreateDialogOpen(false)
+            // Reset form
+            setNewWindow({
+                appointment_type_ids: [],
+                operatory_id: "",
+                days: [],
+                start_time: "09:00",
+                end_time: "17:00",
+            })
+            await fetchAvailabilities()
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to create work window"
             toast.error(message)
         } finally {
             setSaving(false)
@@ -166,6 +226,9 @@ export default function ProvidersScheduling() {
                     </p>
                 </div>
                 <div className="flex items-center space-x-2">
+                    <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
+                        Create Work Window
+                    </Button>
                     <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
                         <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
                     </Button>
@@ -185,7 +248,7 @@ export default function ProvidersScheduling() {
                 <Alert className="border-yellow-200 bg-yellow-50 text-yellow-800">
                     <AlertTriangle className="h-4 w-4" />
                     <AlertDescription>
-                        {unlinkedCount} availability schedule{unlinkedCount !== 1 ? "s" : ""} without linked
+                        {unlinkedCount} work window{unlinkedCount !== 1 ? "s" : ""} without linked
                         appointment types. These won't generate bookable slots.
                     </AlertDescription>
                 </Alert>
@@ -242,22 +305,22 @@ export default function ProvidersScheduling() {
                     <Card>
                         <CardHeader>
                             <CardTitle>
-                                Availabilities for {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}
+                                Work Windows for {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}
                             </CardTitle>
                             <CardDescription>
                                 {filteredAvailabilities.length} schedule{filteredAvailabilities.length !== 1 ? "s" : ""} found
                                 {selectedApptTypeId !== "all" ? " (filtered)" : ""}.
-                                Click "Edit Linking" to associate appointment types.
+                                Click "Edit Linking" to associate appointment types. Or create a custom manual Work Window.
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
                             {loadingAvailabilities ? (
-                                <div className="flex justify-center py-6 text-muted-foreground">Loading availabilities...</div>
+                                <div className="flex justify-center py-6 text-muted-foreground">Loading work windows...</div>
                             ) : filteredAvailabilities.length === 0 ? (
                                 <p className="text-center py-6 text-muted-foreground">
                                     {selectedApptTypeId !== "all"
-                                        ? "No availabilities match this appointment type."
-                                        : "No availabilities found for this provider."}
+                                        ? "No work windows match this appointment type."
+                                        : "No work windows found for this provider. Add one above."}
                                 </p>
                             ) : (
                                 <div className="space-y-3">
@@ -379,8 +442,115 @@ export default function ProvidersScheduling() {
                     </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
-                        <Button onClick={handleSave} disabled={saving}>
+                        <Button onClick={handleSaveEdit} disabled={saving}>
                             {saving ? "Saving..." : "Save"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Create Work Window Dialog */}
+            <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Create Custom Work Window</DialogTitle>
+                        <DialogDescription>
+                            Create a manual schedule block. This will not be pushed back to your PMS, but will be used by NexHealth to offer slots.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                        {/* Time */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium">Start Time</label>
+                                <input
+                                    type="time"
+                                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                                    value={newWindow.start_time}
+                                    onChange={(e) => setNewWindow({ ...newWindow, start_time: e.target.value })}
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium">End Time</label>
+                                <input
+                                    type="time"
+                                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                                    value={newWindow.end_time}
+                                    onChange={(e) => setNewWindow({ ...newWindow, end_time: e.target.value })}
+                                />
+                            </div>
+                        </div>
+
+                        {/* Days */}
+                        <div className="space-y-2 pt-2">
+                            <label className="text-sm font-medium">Days</label>
+                            <div className="grid grid-cols-4 gap-2">
+                                {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => (
+                                    <label key={day} className="flex items-center space-x-2 text-sm">
+                                        <Checkbox
+                                            checked={newWindow.days.includes(day)}
+                                            onCheckedChange={(checked) => {
+                                                setNewWindow(prev => ({
+                                                    ...prev,
+                                                    days: checked
+                                                        ? [...prev.days, day]
+                                                        : prev.days.filter(d => d !== day)
+                                                }))
+                                            }}
+                                        />
+                                        <span>{day.substring(0, 3)}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Operatory */}
+                        <div className="space-y-2 pt-2">
+                            <label className="text-sm font-medium">Operatory</label>
+                            <Select value={newWindow.operatory_id} onValueChange={(v) => setNewWindow({ ...newWindow, operatory_id: v })}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select Operatory" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {operatories.map((op) => (
+                                        <SelectItem key={op.source_id} value={op.source_id}>
+                                            {op.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {/* Appointment Types */}
+                        <div className="space-y-2 pt-2">
+                            <label className="text-sm font-medium">Appointment Types</label>
+                            <div className="border rounded-md max-h-40 overflow-y-auto">
+                                {appointmentTypes.map((at) => (
+                                    <label
+                                        key={at.source_id}
+                                        className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                    >
+                                        <Checkbox
+                                            checked={newWindow.appointment_type_ids.includes(at.source_id)}
+                                            onCheckedChange={(checked) => {
+                                                setNewWindow(prev => ({
+                                                    ...prev,
+                                                    appointment_type_ids: checked
+                                                        ? [...prev.appointment_type_ids, at.source_id]
+                                                        : prev.appointment_type_ids.filter(id => id !== at.source_id)
+                                                }))
+                                            }}
+                                        />
+                                        <span className="text-sm truncate" title={at.name}>{at.name}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+                        <Button onClick={handleCreateWorkWindow} disabled={saving}>
+                            {saving ? "Creating..." : "Create Work Window"}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

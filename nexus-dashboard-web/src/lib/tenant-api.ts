@@ -99,6 +99,24 @@ export async function listAvailabilities(
     return data;
 }
 
+export async function createAvailability(
+    payload: {
+        provider_id: string;
+        appointment_type_ids: string[];
+        operatory_id: string;
+        days: string[];
+        start_time: string;
+        end_time: string;
+    },
+    locationId?: string
+): Promise<CachedAvailability> {
+    const { data } = await api.post<CachedAvailability>(
+        `${BASE}/availabilities${qs(locationId)}`,
+        payload
+    );
+    return data;
+}
+
 export async function updateAvailability(
     sourceId: string,
     payload: {

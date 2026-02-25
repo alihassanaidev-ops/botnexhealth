@@ -36,14 +36,14 @@ async def list_descriptors(pms: PMSAdapter = Depends(get_tenant_pms)):
 
 class LinkAvailabilityRequest(BaseModel):
     provider_id: str
-    appointment_type_id: str
+    appointment_type_ids: list[str]
     operatory_id: str
     days: list[str]
     start_time: str
     end_time: str
 
 
-@router.post("/availability")
+@router.post("/availabilities")
 async def link_availability(
     req: LinkAvailabilityRequest,
     pms: PMSAdapter = Depends(get_tenant_pms),
@@ -51,7 +51,7 @@ async def link_availability(
     if not isinstance(pms, SupportsAvailabilityLinking):
         raise HTTPException(400, "This PMS does not require availability linking")
     return await pms.link_availability(
-        req.provider_id, req.appointment_type_id, req.operatory_id,
+        req.provider_id, req.appointment_type_ids, req.operatory_id,
         req.days, req.start_time, req.end_time,
     )
 

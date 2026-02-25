@@ -131,12 +131,12 @@ class SupportsAvailabilityLinking(ABC):
     async def link_availability(
         self,
         provider_id: str,
-        appointment_type_id: str,
+        appointment_type_ids: list[str],
         operatory_id: str,
         days: list[str],
         start_time: str,
         end_time: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         ...
 
     @abstractmethod

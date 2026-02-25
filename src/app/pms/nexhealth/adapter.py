@@ -340,7 +340,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
     async def link_availability(
         self,
         provider_id: str,
-        appointment_type_id: str,
+        appointment_type_ids: list[str],
         operatory_id: str,
         days: list[str],
         start_time: str,
@@ -349,13 +349,15 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         params = self._default_params()
         body = {
             "provider_id": _strip(provider_id),
-            "appointment_type_id": _strip(appointment_type_id),
+            "appointment_type_ids": [_strip(aid) for aid in appointment_type_ids],
             "operatory_id": _strip(operatory_id),
             "days": days,
             "begin_time": start_time,
             "end_time": end_time,
         }
-        return await handle_nexhealth_request(self._client, "POST", "/availabilities", params=params, json=body)
+        return await handle_nexhealth_request(
+            self._client, "POST", "/availabilities", params=params, json={"availability": body}
+        )
 
     async def update_availability(
         self,
