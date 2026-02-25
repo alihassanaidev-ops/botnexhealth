@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, HelpCircle } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -19,22 +19,60 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { verifyRetellAgent } from "@/lib/admin-api";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic } from "@/types";
+import { cn } from "@/lib/utils";
 
 const US_TIMEZONES = [
-    { value: "America/Puerto_Rico", label: "Atlantic Time (Puerto Rico/Virgin Islands)" },
+    { value: "America/Puerto_Rico", label: "Atlantic Time (Puerto Rico/VI)" },
     { value: "America/New_York", label: "Eastern Time (ET)" },
     { value: "America/Chicago", label: "Central Time (CT)" },
     { value: "America/Denver", label: "Mountain Time (MT)" },
-    { value: "America/Phoenix", label: "Mountain Time (Arizona - No DST)" },
+    { value: "America/Phoenix", label: "Mountain Time – Arizona" },
     { value: "America/Los_Angeles", label: "Pacific Time (PT)" },
     { value: "America/Anchorage", label: "Alaska Time (AKT)" },
-    { value: "Pacific/Honolulu", label: "Hawaii-Aleutian Time (HST)" },
+    { value: "Pacific/Honolulu", label: "Hawaii-Aleutian (HST)" },
     { value: "Pacific/Guam", label: "Chamorro Time (Guam)" },
+];
+
+const US_STATES = [
+    { value: "AL", label: "AL — Alabama" }, { value: "AK", label: "AK — Alaska" },
+    { value: "AZ", label: "AZ — Arizona" }, { value: "AR", label: "AR — Arkansas" },
+    { value: "CA", label: "CA — California" }, { value: "CO", label: "CO — Colorado" },
+    { value: "CT", label: "CT — Connecticut" }, { value: "DE", label: "DE — Delaware" },
+    { value: "FL", label: "FL — Florida" }, { value: "GA", label: "GA — Georgia" },
+    { value: "HI", label: "HI — Hawaii" }, { value: "ID", label: "ID — Idaho" },
+    { value: "IL", label: "IL — Illinois" }, { value: "IN", label: "IN — Indiana" },
+    { value: "IA", label: "IA — Iowa" }, { value: "KS", label: "KS — Kansas" },
+    { value: "KY", label: "KY — Kentucky" }, { value: "LA", label: "LA — Louisiana" },
+    { value: "ME", label: "ME — Maine" }, { value: "MD", label: "MD — Maryland" },
+    { value: "MA", label: "MA — Massachusetts" }, { value: "MI", label: "MI — Michigan" },
+    { value: "MN", label: "MN — Minnesota" }, { value: "MS", label: "MS — Mississippi" },
+    { value: "MO", label: "MO — Missouri" }, { value: "MT", label: "MT — Montana" },
+    { value: "NE", label: "NE — Nebraska" }, { value: "NV", label: "NV — Nevada" },
+    { value: "NH", label: "NH — New Hampshire" }, { value: "NJ", label: "NJ — New Jersey" },
+    { value: "NM", label: "NM — New Mexico" }, { value: "NY", label: "NY — New York" },
+    { value: "NC", label: "NC — North Carolina" }, { value: "ND", label: "ND — North Dakota" },
+    { value: "OH", label: "OH — Ohio" }, { value: "OK", label: "OK — Oklahoma" },
+    { value: "OR", label: "OR — Oregon" }, { value: "PA", label: "PA — Pennsylvania" },
+    { value: "RI", label: "RI — Rhode Island" }, { value: "SC", label: "SC — South Carolina" },
+    { value: "SD", label: "SD — South Dakota" }, { value: "TN", label: "TN — Tennessee" },
+    { value: "TX", label: "TX — Texas" }, { value: "UT", label: "UT — Utah" },
+    { value: "VT", label: "VT — Vermont" }, { value: "VA", label: "VA — Virginia" },
+    { value: "WA", label: "WA — Washington" }, { value: "WV", label: "WV — West Virginia" },
+    { value: "WI", label: "WI — Wisconsin" }, { value: "WY", label: "WY — Wyoming" },
+    { value: "DC", label: "DC — Washington D.C." }, { value: "PR", label: "PR — Puerto Rico" },
+    { value: "GU", label: "GU — Guam" },
 ];
 
 const locationSchema = z.object({
@@ -56,9 +94,42 @@ interface LocationFormProps {
     tenantSlug: string;
     location?: Location;
     onSuccess: () => void;
+    onCancel: () => void;
 }
 
-export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormProps) {
+function formatPhone(raw: string): string {
+    const digits = raw.replace(/\D/g, "").slice(0, 10);
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
+function SectionCard({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
+    return (
+        <div className="rounded-lg border bg-card p-6 space-y-4">
+            <div className="space-y-0.5">
+                <h3 className="text-base font-semibold leading-none tracking-tight">{title}</h3>
+                {description && <p className="text-sm text-muted-foreground">{description}</p>}
+            </div>
+            <div className="space-y-4">{children}</div>
+        </div>
+    );
+}
+
+function FieldHint({ text }: { text: string }) {
+    return (
+        <TooltipProvider delayDuration={200}>
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <HelpCircle className="inline h-3.5 w-3.5 ml-1.5 mb-0.5 text-muted-foreground/60 hover:text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs text-xs">{text}</TooltipContent>
+            </Tooltip>
+        </TooltipProvider>
+    );
+}
+
+export function LocationForm({ tenantSlug, location, onSuccess, onCancel }: LocationFormProps) {
     const isEditing = !!location;
     const [nexHealthInstitutions, setNexHealthInstitutions] = useState<InstitutionBasic[]>([]);
     const [isLoadingNH, setIsLoadingNH] = useState(false);
@@ -81,6 +152,8 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
         },
     });
 
+    const isDirty = form.formState.isDirty;
+
     // Fetch NexHealth institutions + locations on mount
     useEffect(() => {
         async function fetchNHLocations() {
@@ -97,32 +170,28 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
         fetchNHLocations();
     }, []);
 
-    // Flatten for dropdown display, but keep institution reference for subdomain lookup
     const nexHealthLocations = nexHealthInstitutions.flatMap(inst => inst.locations);
 
     function onLocationSelect(locationId: string) {
         const selected = nexHealthLocations.find(l => String(l.id) === locationId);
         if (!selected) return;
 
-        // Auto-fill form
-        form.setValue("nexhealth_location_id", String(selected.id));
-        form.setValue("name", selected.name);
-        // Generate slug from name
+        form.setValue("nexhealth_location_id", String(selected.id), { shouldDirty: true });
+        form.setValue("name", selected.name, { shouldDirty: true });
         const slug = selected.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-        form.setValue("slug", slug);
+        form.setValue("slug", slug, { shouldDirty: true });
 
-        if (selected.street_address) form.setValue("address", selected.street_address);
-        if (selected.city) form.setValue("city", selected.city);
-        if (selected.state) form.setValue("state", selected.state);
-        if (selected.phone_number) form.setValue("phone", selected.phone_number);
-        if (selected.tz) form.setValue("timezone", selected.tz);
+        if (selected.street_address) form.setValue("address", selected.street_address, { shouldDirty: true });
+        if (selected.city) form.setValue("city", selected.city, { shouldDirty: true });
+        if (selected.state) form.setValue("state", selected.state, { shouldDirty: true });
+        if (selected.phone_number) form.setValue("phone", formatPhone(selected.phone_number), { shouldDirty: true });
+        if (selected.tz) form.setValue("timezone", selected.tz, { shouldDirty: true });
 
-        // Look up the parent institution to auto-fill subdomain
         const parentInstitution = nexHealthInstitutions.find(inst =>
             inst.locations.some(l => l.id === selected.id)
         );
         if (parentInstitution?.subdomain) {
-            form.setValue("nexhealth_subdomain", parentInstitution.subdomain);
+            form.setValue("nexhealth_subdomain", parentInstitution.subdomain, { shouldDirty: true });
         }
     }
 
@@ -131,12 +200,10 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
             const payload: Record<string, unknown> = {};
 
             if (isEditing) {
-                // PATCH: only send changed fields, skip slug
                 const defaults = form.formState.defaultValues as Record<string, unknown>;
                 for (const [key, val] of Object.entries(values)) {
                     if (key === "slug") continue;
                     if (val !== defaults[key]) {
-                        // Send empty string as null to clear optional fields
                         payload[key] = val === "" ? null : val;
                     }
                 }
@@ -147,9 +214,8 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                 }
 
                 await api.patch(`/admin/tenants/${tenantSlug}/locations/${location!.slug}`, payload);
-                toast.success("Location updated");
+                toast.success("Location updated successfully");
             } else {
-                // POST: validate slug is provided for create
                 if (!values.slug) {
                     form.setError("slug", { message: "Slug is required" });
                     return;
@@ -158,14 +224,13 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                     form.setError("slug", { message: "Slug must be lowercase alphanumeric with hyphens" });
                     return;
                 }
-                // Strip empty optional strings
                 for (const [key, val] of Object.entries(values)) {
                     if (val !== "" && val !== undefined) {
                         payload[key] = val;
                     }
                 }
                 await api.post(`/admin/tenants/${tenantSlug}/locations`, payload);
-                toast.success("Location created");
+                toast.success("Location created successfully");
             }
 
             onSuccess();
@@ -175,111 +240,127 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
     }
 
     return (
-        <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <TooltipProvider>
+            <Form {...form}>
+                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pb-24">
 
-                <FormField
-                    control={form.control}
-                    name="nexhealth_location_id"
-                    render={({ field }) => (
-                        <FormItem className="space-y-2">
-                            <FormLabel>Select NexHealth Location (Optional)</FormLabel>
-                            <Select
-                                onValueChange={(val) => {
-                                    const newValue = val === "none" ? "" : val;
-                                    field.onChange(newValue);
-                                    if (val !== "none") {
-                                        onLocationSelect(val);
-                                    }
-                                }}
-                                value={field.value || "none"}
-                                disabled={isLoadingNH}
-                            >
-                                <FormControl>
-                                    <SelectTrigger>
-                                        <SelectValue placeholder={isLoadingNH ? "Loading locations..." : "Choose a location from NexHealth"} />
-                                    </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                    <SelectItem value="none">None / Manual Entry</SelectItem>
-                                    {nexHealthLocations.map((loc) => (
-                                        <SelectItem key={loc.id} value={String(loc.id)}>
-                                            {loc.name} (ID: {loc.id})
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <FormMessage />
-                            <p className="text-sm text-muted-foreground">
-                                Selecting a location will auto-fill the form fields below.
-                            </p>
-                        </FormItem>
-                    )}
-                />
-
-                <FormField
-                    control={form.control}
-                    name="name"
-                    render={({ field }) => (
-                        <FormItem>
-                            <FormLabel>Location Name</FormLabel>
-                            <FormControl>
-                                <Input placeholder="Main Office" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                        </FormItem>
-                    )}
-                />
-
-                {!isEditing && (
+                    {/* NexHealth Autofill Picker */}
                     <FormField
                         control={form.control}
-                        name="slug"
+                        name="nexhealth_location_id"
                         render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>Slug</FormLabel>
-                                <FormControl>
-                                    <Input placeholder="main-office" {...field} />
-                                </FormControl>
+                            <FormItem className="space-y-2">
+                                <FormLabel>
+                                    Import from NexHealth
+                                    <FieldHint text="Selecting a NexHealth location will auto-fill all fields below. You can still edit them manually." />
+                                </FormLabel>
+                                <Select
+                                    onValueChange={(val) => {
+                                        const newValue = val === "none" ? "" : val;
+                                        field.onChange(newValue);
+                                        if (val !== "none") {
+                                            onLocationSelect(val);
+                                        }
+                                    }}
+                                    value={field.value || "none"}
+                                    disabled={isLoadingNH}
+                                >
+                                    <FormControl>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder={isLoadingNH ? "Loading locations…" : "Select a NexHealth location to auto-fill"} />
+                                        </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent>
+                                        <SelectItem value="none">None — manual entry</SelectItem>
+                                        {nexHealthLocations.map((loc) => (
+                                            <SelectItem key={loc.id} value={String(loc.id)}>
+                                                {loc.name} (ID: {loc.id})
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                                 <FormMessage />
                             </FormItem>
                         )}
                     />
-                )}
 
-                <div className="border-t pt-4">
-                    <p className="text-sm font-medium mb-3">NexHealth Settings</p>
-                    <div className="space-y-4">
+                    {/* Section: Location Info */}
+                    <SectionCard title="Location Info" description="Core details about this location.">
                         <FormField
                             control={form.control}
-                            name="nexhealth_subdomain"
+                            name="name"
                             render={({ field }) => (
                                 <FormItem>
-                                    <FormLabel>Subdomain</FormLabel>
+                                    <FormLabel>Location Name</FormLabel>
                                     <FormControl>
-                                        <Input placeholder="e.g. acme-dental" {...field} />
+                                        <Input placeholder="Main Office" {...field} />
                                     </FormControl>
                                     <FormMessage />
                                 </FormItem>
                             )}
                         />
-                    </div>
-                </div>
+                        {!isEditing && (
+                            <FormField
+                                control={form.control}
+                                name="slug"
+                                render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>
+                                            Slug
+                                            <FieldHint text="URL-safe identifier (e.g. main-office). Auto-generated from name. Cannot be changed after creation." />
+                                        </FormLabel>
+                                        <FormControl>
+                                            <Input placeholder="main-office" {...field} />
+                                        </FormControl>
+                                        <FormMessage />
+                                    </FormItem>
+                                )}
+                            />
+                        )}
+                    </SectionCard>
 
-                <div className="border-t pt-4">
-                    <p className="text-sm font-medium mb-3">Retell AI Settings</p>
-                    <div className="space-y-4">
+                    {/* Section: NexHealth Integration */}
+                    <SectionCard title="NexHealth Integration" description="Connect this location to your NexHealth PMS account.">
+                        <FormField
+                            control={form.control}
+                            name="nexhealth_subdomain"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>
+                                        Subdomain
+                                        <FieldHint text="Found in your NexHealth admin URL, e.g. your-practice.nexhealth.com → your-practice" />
+                                    </FormLabel>
+                                    <FormControl>
+                                        <Input placeholder="acme-dental" {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                    </SectionCard>
+
+                    {/* Section: Retell AI Integration */}
+                    <SectionCard title="Retell AI Integration" description="Link the voice agent assigned to this location.">
                         <FormField
                             control={form.control}
                             name="retell_agent_id"
                             render={({ field }) => (
                                 <FormItem>
-                                    <FormLabel>Agent ID</FormLabel>
+                                    <FormLabel>
+                                        Agent ID
+                                        <FieldHint text="Found in Retell AI dashboard → Agents. Looks like agent_xxxxxxxxxxxxxxxx" />
+                                    </FormLabel>
                                     <div className="flex items-center gap-2">
                                         <FormControl>
                                             <Input
-                                                placeholder="e.g. agent_xxx"
+                                                placeholder="agent_xxx"
                                                 {...field}
+                                                disabled={isVerifyingAgent}
+                                                className={cn(
+                                                    "transition-all",
+                                                    agentVerificationStatus === "success" && "ring-2 ring-green-500/50 border-green-500/50",
+                                                    agentVerificationStatus === "error" && "ring-2 ring-destructive/50 border-destructive/50"
+                                                )}
                                                 onChange={(e) => {
                                                     field.onChange(e);
                                                     setAgentVerificationStatus("idle");
@@ -289,6 +370,8 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                         <Button
                                             type="button"
                                             variant="secondary"
+                                            size="sm"
+                                            className="shrink-0"
                                             disabled={!field.value || isVerifyingAgent}
                                             onClick={async () => {
                                                 setIsVerifyingAgent(true);
@@ -303,31 +386,31 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                                 }
                                             }}
                                         >
-                                            {isVerifyingAgent && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                            Verify
+                                            {isVerifyingAgent
+                                                ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Verifying…</>
+                                                : "Verify"}
                                         </Button>
                                     </div>
                                     {agentVerificationStatus === "success" && (
-                                        <p className="text-sm font-medium text-green-600 flex items-center mt-2">
-                                            <CheckCircle2 className="h-4 w-4 mr-1.5" /> Agent verified successfully
+                                        <p className="text-sm font-medium text-green-600 flex items-center gap-1.5 mt-1.5">
+                                            <CheckCircle2 className="h-4 w-4 shrink-0" />
+                                            Agent verified — this ID is active in Retell
                                         </p>
                                     )}
                                     {agentVerificationStatus === "error" && (
-                                        <p className="text-sm font-medium text-destructive flex items-center mt-2">
-                                            <XCircle className="h-4 w-4 mr-1.5" /> Agent not found or error
+                                        <p className="text-sm font-medium text-destructive flex items-center gap-1.5 mt-1.5">
+                                            <XCircle className="h-4 w-4 shrink-0" />
+                                            Agent not found — check the ID and try again
                                         </p>
                                     )}
                                     <FormMessage />
                                 </FormItem>
                             )}
                         />
-                    </div>
-                </div>
+                    </SectionCard>
 
-
-                <div className="border-t pt-4">
-                    <p className="text-sm font-medium mb-3">Address</p>
-                    <div className="space-y-4">
+                    {/* Section: Address & Contact */}
+                    <SectionCard title="Address & Contact" description="Physical location and contact information.">
                         <FormField
                             control={form.control}
                             name="address"
@@ -341,29 +424,40 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                 </FormItem>
                             )}
                         />
-                        <div className="grid grid-cols-2 gap-4">
-                            <FormField
-                                control={form.control}
-                                name="city"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>City</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="San Francisco" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
+                        <div className="grid grid-cols-3 gap-4">
+                            <div className="col-span-2">
+                                <FormField
+                                    control={form.control}
+                                    name="city"
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>City</FormLabel>
+                                            <FormControl>
+                                                <Input placeholder="San Francisco" {...field} />
+                                            </FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                            </div>
                             <FormField
                                 control={form.control}
                                 name="state"
                                 render={({ field }) => (
                                     <FormItem>
                                         <FormLabel>State</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="CA" {...field} />
-                                        </FormControl>
+                                        <Select onValueChange={field.onChange} value={field.value || ""}>
+                                            <FormControl>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="State" />
+                                                </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent className="max-h-60">
+                                                {US_STATES.map((s) => (
+                                                    <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
                                         <FormMessage />
                                     </FormItem>
                                 )}
@@ -377,7 +471,13 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                     <FormItem>
                                         <FormLabel>Phone</FormLabel>
                                         <FormControl>
-                                            <Input placeholder="(555) 123-4567" {...field} />
+                                            <Input
+                                                placeholder="(555) 123-4567"
+                                                {...field}
+                                                onChange={(e) => {
+                                                    field.onChange(formatPhone(e.target.value));
+                                                }}
+                                            />
                                         </FormControl>
                                         <FormMessage />
                                     </FormItem>
@@ -392,13 +492,13 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                         <Select onValueChange={field.onChange} value={field.value || ""}>
                                             <FormControl>
                                                 <SelectTrigger>
-                                                    <SelectValue placeholder="Select a timezone" />
+                                                    <SelectValue placeholder="Select timezone" />
                                                 </SelectTrigger>
                                             </FormControl>
                                             <SelectContent>
                                                 {US_TIMEZONES.map((tz) => (
                                                     <SelectItem key={tz.value} value={tz.value}>
-                                                        {tz.label} ({tz.value})
+                                                        {tz.label}
                                                     </SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -408,15 +508,44 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                 )}
                             />
                         </div>
+                    </SectionCard>
+
+                </form>
+
+                {/* Sticky Footer */}
+                <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+                    <div className="max-w-2xl px-6 py-3 flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-2">
+                            {isDirty && (
+                                <Badge variant="secondary" className="text-xs font-normal text-muted-foreground">
+                                    Unsaved changes
+                                </Badge>
+                            )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={onCancel}
+                                disabled={form.formState.isSubmitting}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                type="submit"
+                                size="sm"
+                                disabled={form.formState.isSubmitting}
+                                onClick={form.handleSubmit(onSubmit)}
+                            >
+                                {form.formState.isSubmitting
+                                    ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{isEditing ? "Updating…" : "Creating…"}</>
+                                    : isEditing ? "Save Changes" : "Create Location"}
+                            </Button>
+                        </div>
                     </div>
                 </div>
-
-                <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
-                    {form.formState.isSubmitting
-                        ? (isEditing ? "Updating..." : "Creating...")
-                        : (isEditing ? "Update Location" : "Create Location")}
-                </Button>
-            </form>
-        </Form>
+            </Form>
+        </TooltipProvider>
     );
 }

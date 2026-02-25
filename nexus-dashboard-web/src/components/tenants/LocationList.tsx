@@ -253,6 +253,7 @@ export function LocationList({ tenantSlug }: LocationListProps) {
                             tenantSlug={tenantSlug}
                             location={editingLocation}
                             onSuccess={handleFormSuccess}
+                            onCancel={() => setViewMode("list")}
                         />
                     </div>
                 </div>
