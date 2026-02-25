@@ -239,6 +239,8 @@ class PostCallService:
             call_direction=webhook_call.direction,
             agent_used=webhook_call.agent_id,
             transcript=webhook_call.transcript,
+            transcript_with_tool_calls=webhook_call.transcript_with_tool_calls,
+            scrubbed_transcript_with_tool_calls=webhook_call.scrubbed_transcript_with_tool_calls,
             recording_url=webhook_call.recording_url,  # scrubbed URL set in webhooks.py
             summary=analysis_dict.get("call_summary"),
             patient_sentiment=analysis_dict.get("user_sentiment"),

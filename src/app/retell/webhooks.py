@@ -53,6 +53,9 @@ class RetellCallWebhook(BaseModel):
     transcript: str | None = None
     recording_url: str | None = None
     scrubbed_recording_url: str | None = None   # PII-scrubbed version (preferred for HIPAA)
+    # Structured turn-by-turn transcript arrays from Retell
+    transcript_with_tool_calls: list[dict] | None = None        # full unredacted
+    scrubbed_transcript_with_tool_calls: list[dict] | None = None  # PII-scrubbed (HIPAA)
     disconnection_reason: str | None = None
     call_analysis: CallAnalysisData | None = None
     # Dynamic variables collected during the call (name, email, etc.)
@@ -250,6 +253,9 @@ async def handle_retell_webhook(
                     transcript=event.call.transcript,
                     # Prefer PII-scrubbed URL for HIPAA; fall back to raw only if scrubbed absent
                     recording_url=event.call.scrubbed_recording_url or event.call.recording_url,
+                    # Structured JSONB transcripts (turn-by-turn with tool calls)
+                    transcript_with_tool_calls=event.call.transcript_with_tool_calls,
+                    scrubbed_transcript_with_tool_calls=event.call.scrubbed_transcript_with_tool_calls,
                 )
                 
                 # Call service to save to DB (analysis_dict is always a dict now)

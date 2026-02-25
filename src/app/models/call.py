@@ -24,7 +24,7 @@ from sqlalchemy import (
     Time,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.app.database import Base
@@ -111,6 +111,11 @@ class Call(Base):
 
     # Call content
     transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Structured JSONB transcripts from Retell (turn-by-turn with tool calls)
+    # transcript_with_tool_calls: unredacted full conversation (internal use only)
+    # scrubbed_transcript_with_tool_calls: PII-scrubbed version (shown in dashboard by default)
+    transcript_with_tool_calls: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    scrubbed_transcript_with_tool_calls: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 

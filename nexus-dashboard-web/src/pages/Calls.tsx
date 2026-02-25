@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { listCalls, getCall, resolveCallback } from "@/lib/calls-api"
-import type { CallRecord, CallDetail, CallsListResponse, CustomFieldValue } from "@/types"
+import type { CallRecord, CallDetail, CallsListResponse, CustomFieldValue, TranscriptTurn } from "@/types"
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -198,7 +198,114 @@ function CustomFieldsSection({ fields }: { fields: CustomFieldValue[] }) {
     )
 }
 
-// ── Call Detail Dialog ────────────────────────────────────────────────────────
+// ── Transcript Chat UI ──────────────────────────────────────────────────────
+
+function TranscriptChatBubbles({ turns }: { turns: TranscriptTurn[] }) {
+    if (turns.length === 0) {
+        return <p className="text-xs text-muted-foreground italic p-3">No transcript turns available.</p>
+    }
+    return (
+        <div className="space-y-2 p-3">
+            {turns.map((turn, i) => {
+                if (turn.role === "tool_call_invocation") {
+                    return (
+                        <div key={i} className="flex justify-center">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-muted border px-2.5 py-0.5 text-[10px] text-muted-foreground">
+                                ⚙ Agent triggered: <span className="font-medium">{turn.name ?? "action"}</span>
+                            </span>
+                        </div>
+                    )
+                }
+                if (turn.role === "tool_call_result") return null
+                if (!turn.content) return null
+
+                const isAgent = turn.role === "agent"
+                return (
+                    <div key={i} className={`flex ${isAgent ? "justify-start" : "justify-end"}`}>
+                        <div
+                            className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs leading-relaxed shadow-sm ${isAgent
+                                    ? "bg-background border text-foreground rounded-tl-sm"
+                                    : "bg-primary text-primary-foreground rounded-tr-sm"
+                                }`}
+                        >
+                            <p className={`font-semibold mb-0.5 text-[10px] ${isAgent ? "opacity-50" : "opacity-75"
+                                }`}>
+                                {isAgent ? "AI Assistant" : "Caller"}
+                            </p>
+                            {turn.content}
+                        </div>
+                    </div>
+                )
+            })}
+        </div>
+    )
+}
+
+type TranscriptTab = "scrubbed" | "full" | "raw"
+
+function TranscriptSection({ detail }: { detail: CallDetail }) {
+    const [tab, setTab] = useState<TranscriptTab>("scrubbed")
+
+    const hasScrubbed = !!detail.scrubbed_transcript_with_tool_calls?.length
+    const hasFull = !!detail.transcript_with_tool_calls?.length
+    const hasRaw = !!detail.transcript
+
+    if (!hasScrubbed && !hasFull && !hasRaw) return null
+
+    const tabs: { id: TranscriptTab; label: string; available: boolean }[] = [
+        { id: "scrubbed", label: "Scrubbed", available: hasScrubbed },
+        { id: "full", label: "Full", available: hasFull },
+        { id: "raw", label: "Raw Text", available: hasRaw },
+    ]
+
+    // Auto-select best available tab
+    const activeTab = tabs.find(t => t.id === tab && t.available)
+        ? tab
+        : (tabs.find(t => t.available)?.id ?? "scrubbed")
+
+    return (
+        <div>
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1.5">Transcript</p>
+
+            {/* Tab switcher */}
+            <div className="flex gap-1 mb-2">
+                {tabs.map(t => t.available && (
+                    <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setTab(t.id)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${activeTab === t.id
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground hover:bg-muted/70"
+                            }`}
+                    >
+                        {t.label}
+                        {t.id === "scrubbed" && (
+                            <span className="ml-1.5 text-[9px] opacity-60 font-normal">HIPAA ✓</span>
+                        )}
+                    </button>
+                ))}
+            </div>
+
+            {/* Content */}
+            <div className="rounded-lg border bg-muted/30 max-h-64 overflow-y-auto">
+                {activeTab === "scrubbed" && hasScrubbed && (
+                    <TranscriptChatBubbles turns={detail.scrubbed_transcript_with_tool_calls!} />
+                )}
+                {activeTab === "full" && hasFull && (
+                    <TranscriptChatBubbles turns={detail.transcript_with_tool_calls!} />
+                )}
+                {activeTab === "raw" && hasRaw && (
+                    <pre className="text-xs leading-relaxed p-3 whitespace-pre-wrap font-sans">
+                        {detail.transcript}
+                    </pre>
+                )}
+            </div>
+        </div>
+    )
+}
+
+// ── Call Detail Dialog ─────────────────────────────────────────────────────────
 
 interface CallDetailProps {
     callId: string | null
@@ -326,15 +433,8 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                         {/* Custom fields */}
                         <CustomFieldsSection fields={detail.custom_fields} />
 
-                        {/* Transcript */}
-                        {detail.transcript && (
-                            <div>
-                                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Transcript</p>
-                                <pre className="text-xs leading-relaxed rounded-lg border bg-muted/30 p-3 whitespace-pre-wrap font-sans max-h-64 overflow-y-auto">
-                                    {detail.transcript}
-                                </pre>
-                            </div>
-                        )}
+                        {/* Transcript — 3-tab viewer */}
+                        <TranscriptSection detail={detail} />
 
                         {/* Callback resolution */}
                         {isNeedsCallback && !alreadyResolved && (

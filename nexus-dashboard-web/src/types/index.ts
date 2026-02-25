@@ -248,8 +248,25 @@ export interface CustomFieldDefinition {
     created_at: string;
 }
 
+// ── Transcript types ─────────────────────────────────────────────────────
+
+export interface TranscriptTurn {
+    role: "agent" | "user" | "tool_call_invocation" | "tool_call_result";
+    content?: string;
+    name?: string;         // for tool_call_invocation (function name)
+    tool_call_id?: string;
+    arguments?: string;    // for tool_call_invocation
+    time_sec?: number;
+    words?: Array<{ word: string; start: number; end: number }>;
+    metadata?: Record<string, unknown>;
+}
+
 export interface CallDetail extends CallRecord {
+    // Raw plain-text (may contain PHI — kept for completeness)
     transcript: string | null;
+    // Structured JSONB turn-by-turn arrays from Retell
+    transcript_with_tool_calls: TranscriptTurn[] | null;       // unredacted full conversation
+    scrubbed_transcript_with_tool_calls: TranscriptTurn[] | null;  // PII-scrubbed (default UI)
     recording_url: string | null;
     custom_fields: CustomFieldValue[];
 }

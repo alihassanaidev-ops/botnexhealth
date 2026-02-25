@@ -61,6 +61,8 @@ class RetellCallData(BaseModel):
     disconnection_reason: str | None = None
     transcript: str | None = None
     recording_url: str | None = None  # Always mapped from scrubbed_recording_url in webhook handler
+    transcript_with_tool_calls: list[dict] | None = None          # unredacted full conversation
+    scrubbed_transcript_with_tool_calls: list[dict] | None = None  # PII-scrubbed (default for UI)
 
 
 class WebhookEvent(BaseModel):

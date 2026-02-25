@@ -74,7 +74,11 @@ class CustomFieldValueOut(BaseModel):
 
 class CallDetail(CallRecord):
     """Extended call record that includes PHI fields for the detail view."""
+    # Raw plain-text transcript (may contain PHI — kept for internal audit)
     transcript: str | None
+    # Structured JSONB turn-by-turn transcript arrays
+    transcript_with_tool_calls: list[dict] | None       # full unredacted
+    scrubbed_transcript_with_tool_calls: list[dict] | None  # PII-scrubbed (default UI)
     recording_url: str | None
     custom_fields: list[CustomFieldValueOut] = []
 
@@ -292,6 +296,8 @@ async def get_call(
         return CallDetail(
             **base.model_dump(),
             transcript=call.transcript,
+            transcript_with_tool_calls=call.transcript_with_tool_calls,
+            scrubbed_transcript_with_tool_calls=call.scrubbed_transcript_with_tool_calls,
             recording_url=call.recording_url,
             custom_fields=custom_fields,
         )
