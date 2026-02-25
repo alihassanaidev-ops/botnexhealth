@@ -30,6 +30,51 @@ router = APIRouter(prefix="/admin/tenants", tags=["Admin - Tenants"])
 
 
 # =============================================================================
+# Retell Agents API
+# =============================================================================
+
+@router.get("/retell/agents")
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda *args, **kwargs: "retell:agents",
+    actor=AuditActor.ADMIN,
+)
+async def list_retell_agents(
+    _: User = Depends(get_current_admin),
+) -> list[dict[str, Any]]:
+    """
+    List all Retell AI agents available for the configured Retell account.
+    
+    Used by Admins to select a Retell Agent when creating/configuring a Location.
+    Uses the RETELL_API_SECRET from environment variables to authenticate.
+    """
+    from src.app.config import settings
+    import httpx
+    
+    if not settings.retell_api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retell API secret not configured"
+        )
+        
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.retellai.com/list-agents",
+                headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
+                timeout=10.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        logger.error(f"Failed to fetch Retell agents: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to communicate with Retell API"
+        )
+
+
+# =============================================================================
 # Request/Response Models
 # =============================================================================
 

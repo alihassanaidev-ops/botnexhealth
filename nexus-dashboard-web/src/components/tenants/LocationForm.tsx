@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { listRetellAgents, type RetellAgent } from "@/lib/admin-api";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic } from "@/types";
 
 const US_TIMEZONES = [
@@ -61,6 +62,10 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
     const [nexHealthInstitutions, setNexHealthInstitutions] = useState<InstitutionBasic[]>([]);
     const [isLoadingNH, setIsLoadingNH] = useState(false);
 
+    // Retell Agents
+    const [retellAgents, setRetellAgents] = useState<RetellAgent[]>([]);
+    const [isLoadingAgents, setIsLoadingAgents] = useState(false);
+
     const form = useForm<LocationFormValues>({
         resolver: zodResolver(locationSchema),
         defaultValues: {
@@ -91,6 +96,19 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
             }
         }
         fetchNHLocations();
+
+        async function fetchAgents() {
+            setIsLoadingAgents(true);
+            try {
+                const agents = await listRetellAgents();
+                setRetellAgents(agents || []);
+            } catch (error) {
+                console.error("Failed to fetch Retell agents", error);
+            } finally {
+                setIsLoadingAgents(false);
+            }
+        }
+        fetchAgents();
     }, []);
 
     // Flatten for dropdown display, but keep institution reference for subdomain lookup
@@ -271,9 +289,25 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                             render={({ field }) => (
                                 <FormItem>
                                     <FormLabel>Agent ID</FormLabel>
-                                    <FormControl>
-                                        <Input placeholder="e.g. agent_xxx" {...field} />
-                                    </FormControl>
+                                    <Select
+                                        onValueChange={field.onChange}
+                                        value={field.value || ""}
+                                        disabled={isLoadingAgents}
+                                    >
+                                        <FormControl>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder={isLoadingAgents ? "Loading agents..." : "Select a Retell Agent"} />
+                                            </SelectTrigger>
+                                        </FormControl>
+                                        <SelectContent>
+                                            <SelectItem value="none">None</SelectItem>
+                                            {retellAgents.map((agent) => (
+                                                <SelectItem key={agent.agent_id} value={agent.agent_id}>
+                                                    {agent.agent_name} ({agent.agent_id.slice(0, 10)}...)
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                     <FormMessage />
                                 </FormItem>
                             )}
