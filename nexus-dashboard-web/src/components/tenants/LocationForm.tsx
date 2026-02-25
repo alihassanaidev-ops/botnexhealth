@@ -303,7 +303,7 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                             <SelectItem value="none">None</SelectItem>
                                             {retellAgents.map((agent) => (
                                                 <SelectItem key={agent.agent_id} value={agent.agent_id}>
-                                                    {agent.agent_name} ({agent.agent_id.slice(0, 10)}...)
+                                                    {agent.agent_id}
                                                 </SelectItem>
                                             ))}
                                         </SelectContent>
