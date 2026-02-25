@@ -155,8 +155,16 @@ export interface AuditLog {
     audit_metadata?: Record<string, any> | null;
 }
 
-export async function listAuditLogs(): Promise<AuditLog[]> {
-    const { data } = await api.get<AuditLog[]>("/tenant/audit-logs");
+export interface AuditLogPaginatedResponse {
+    items: AuditLog[];
+    total: number;
+    page: number;
+    size: number;
+    pages: number;
+}
+
+export async function listAuditLogs(page: number = 1, size: number = 50): Promise<AuditLogPaginatedResponse> {
+    const { data } = await api.get<AuditLogPaginatedResponse>(`/tenant/audit-logs?page=${page}&size=${size}`);
     return data;
 }
 

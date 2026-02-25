@@ -645,3 +645,13 @@ class AuditLogResponse(BaseModel):
     audit_metadata: dict[str, Any] | None = None
     
     model_config = {"from_attributes": True}
+
+
+class AuditLogPaginatedResponse(BaseModel):
+    """Paginated response model for audit logs."""
+
+    items: list[AuditLogResponse]
+    total: int
+    page: int
+    size: int
+    pages: int

@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
@@ -19,12 +19,17 @@ import { listAuditLogs, AuditLog } from "@/lib/tenant-api";
 export default function AuditLogs() {
     const [logs, setLogs] = useState<AuditLog[]>([]);
     const [loading, setLoading] = useState(true);
+    const [page, setPage] = useState(1);
+    const [total, setTotal] = useState(0);
+    const pageSize = 50;
 
-    async function fetchLogs() {
+    async function fetchLogs(currentPage: number = page) {
         setLoading(true);
         try {
-            const data = await listAuditLogs();
-            setLogs(data);
+            const data = await listAuditLogs(currentPage, pageSize);
+            setLogs(data.items);
+            setTotal(data.total);
+            setPage(currentPage);
         } catch (err: any) {
             console.error("Failed to fetch audit logs:", err);
             toast.error(err.message || "Unknown error occurred.");
@@ -34,7 +39,7 @@ export default function AuditLogs() {
     }
 
     useEffect(() => {
-        fetchLogs();
+        fetchLogs(1);
     }, []);
 
     function renderOutcomeBadge(outcome: string) {
@@ -71,7 +76,7 @@ export default function AuditLogs() {
                         View compliance and system activity across your account.
                     </p>
                 </div>
-                <Button variant="outline" onClick={fetchLogs} disabled={loading}>
+                <Button variant="outline" onClick={() => fetchLogs(page)} disabled={loading}>
                     <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                     Refresh Logs
                 </Button>
@@ -92,33 +97,65 @@ export default function AuditLogs() {
                             No audit logs found.
                         </div>
                     ) : (
-                        <div className="border rounded-md">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Timestamp</TableHead>
-                                        <TableHead>Actor</TableHead>
-                                        <TableHead>Action</TableHead>
-                                        <TableHead>Target Resource</TableHead>
-                                        <TableHead>Outcome</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {logs.map((log) => (
-                                        <TableRow key={log.id}>
-                                            <TableCell className="whitespace-nowrap">
-                                                {format(new Date(log.timestamp), "MMM d, yyyy h:mm a")}
-                                            </TableCell>
-                                            <TableCell>{renderActorBadge(log.actor)}</TableCell>
-                                            <TableCell className="font-mono text-xs">{log.action}</TableCell>
-                                            <TableCell className="text-sm text-muted-foreground max-w-xs truncate" title={log.target_resource}>
-                                                {log.target_resource}
-                                            </TableCell>
-                                            <TableCell>{renderOutcomeBadge(log.outcome)}</TableCell>
+                        <div className="space-y-4">
+                            <div className="border rounded-md">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Timestamp</TableHead>
+                                            <TableHead>Actor</TableHead>
+                                            <TableHead>Action</TableHead>
+                                            <TableHead>Target Resource</TableHead>
+                                            <TableHead>Outcome</TableHead>
                                         </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {logs.map((log) => (
+                                            <TableRow key={log.id}>
+                                                <TableCell className="whitespace-nowrap">
+                                                    {format(new Date(log.timestamp), "MMM d, yyyy h:mm a")}
+                                                </TableCell>
+                                                <TableCell>{renderActorBadge(log.actor)}</TableCell>
+                                                <TableCell className="font-mono text-xs">{log.action}</TableCell>
+                                                <TableCell className="text-sm text-muted-foreground max-w-xs truncate" title={log.target_resource}>
+                                                    {log.target_resource}
+                                                </TableCell>
+                                                <TableCell>{renderOutcomeBadge(log.outcome)}</TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+
+                            {/* Pagination Controls */}
+                            <div className="flex items-center justify-between px-2">
+                                <div className="text-sm text-muted-foreground">
+                                    Showing {Math.min((page - 1) * pageSize + 1, total)} to {Math.min(page * pageSize, total)} of {total} entries
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => fetchLogs(page - 1)}
+                                        disabled={page === 1 || loading}
+                                    >
+                                        <ChevronLeft className="h-4 w-4 mr-1" />
+                                        Previous
+                                    </Button>
+                                    <div className="text-sm font-medium mx-2">
+                                        Page {page} of {Math.max(1, Math.ceil(total / pageSize))}
+                                    </div>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => fetchLogs(page + 1)}
+                                        disabled={page >= Math.ceil(total / pageSize) || loading}
+                                    >
+                                        Next
+                                        <ChevronRight className="h-4 w-4 ml-1" />
+                                    </Button>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </CardContent>
