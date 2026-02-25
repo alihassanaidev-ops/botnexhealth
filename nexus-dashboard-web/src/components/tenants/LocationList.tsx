@@ -10,13 +10,6 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import {
-    Sheet,
-    SheetContent,
-    SheetDescription,
-    SheetHeader,
-    SheetTitle,
-} from "@/components/ui/sheet";
-import {
     Dialog,
     DialogContent,
     DialogDescription,
@@ -42,7 +35,7 @@ interface LocationListProps {
 export function LocationList({ tenantSlug }: LocationListProps) {
     const [locations, setLocations] = useState<Location[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [sheetOpen, setSheetOpen] = useState(false);
+    const [viewMode, setViewMode] = useState<"list" | "form">("list");
     const [editingLocation, setEditingLocation] = useState<Location | undefined>();
     const [deleteTarget, setDeleteTarget] = useState<Location | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
@@ -68,16 +61,16 @@ export function LocationList({ tenantSlug }: LocationListProps) {
 
     function openCreateSheet() {
         setEditingLocation(undefined);
-        setSheetOpen(true);
+        setViewMode("form");
     }
 
     function openEditSheet(location: Location) {
         setEditingLocation(location);
-        setSheetOpen(true);
+        setViewMode("form");
     }
 
     function handleFormSuccess() {
-        setSheetOpen(false);
+        setViewMode("list");
         setEditingLocation(undefined);
         fetchLocations();
     }
@@ -121,20 +114,22 @@ export function LocationList({ tenantSlug }: LocationListProps) {
 
     return (
         <div className="space-y-4">
-            <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">
-                    {locations.length} location{locations.length !== 1 ? "s" : ""}
-                </p>
-                <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={fetchLocations} disabled={isLoading}>
-                        <RefreshCw className={`mr-1 h-3 w-3 ${isLoading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                    <Button size="sm" onClick={openCreateSheet}>
-                        <Plus className="mr-1 h-3 w-3" /> Add Location
-                    </Button>
+            {viewMode === "list" && (
+                <div className="flex items-center justify-between">
+                    <p className="text-sm text-muted-foreground">
+                        {locations.length} location{locations.length !== 1 ? "s" : ""}
+                    </p>
+                    <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={fetchLocations} disabled={isLoading}>
+                            <RefreshCw className={`mr-1 h-3 w-3 ${isLoading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                        <Button size="sm" onClick={openCreateSheet}>
+                            <Plus className="mr-1 h-3 w-3" /> Add Location
+                        </Button>
+                    </div>
                 </div>
-            </div>
+            )}
 
             {syncResult && (
                 <Alert variant={syncResult.success ? "default" : "destructive"}>
@@ -153,102 +148,109 @@ export function LocationList({ tenantSlug }: LocationListProps) {
                 </Alert>
             )}
 
-            <div className="border rounded-md">
-                <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>Name</TableHead>
-                            <TableHead>Slug</TableHead>
-                            <TableHead>NexHealth Loc ID</TableHead>
-                            <TableHead>Retell Agent</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {locations.length === 0 && !isLoading && (
+            {viewMode === "list" && (
+                <div className="border rounded-md">
+                    <Table>
+                        <TableHeader>
                             <TableRow>
-                                <TableCell colSpan={6} className="h-24 text-center">
-                                    No locations found. Add one to get started.
-                                </TableCell>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Slug</TableHead>
+                                <TableHead>NexHealth Loc ID</TableHead>
+                                <TableHead>Retell Agent</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
-                        )}
-                        {locations.map((loc) => (
-                            <TableRow key={loc.id}>
-                                <TableCell className="font-medium">{loc.name}</TableCell>
-                                <TableCell className="font-mono text-sm">{loc.slug}</TableCell>
-                                <TableCell className="font-mono text-sm">
-                                    {loc.nexhealth_location_id || <span className="text-muted-foreground">-</span>}
-                                </TableCell>
-                                <TableCell className="font-mono text-sm">
-                                    {loc.retell_agent_id
-                                        ? <span title={loc.retell_agent_id}>{loc.retell_agent_id.slice(0, 12)}...</span>
-                                        : <span className="text-muted-foreground">-</span>}
-                                </TableCell>
-                                <TableCell>
-                                    <Badge variant={loc.is_active ? "default" : "secondary"}>
-                                        {loc.is_active ? "Active" : "Inactive"}
-                                    </Badge>
-                                </TableCell>
-                                <TableCell className="text-right">
-                                    <div className="flex items-center justify-end gap-1">
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            onClick={() => handleSync(loc.slug)}
-                                            disabled={syncingSlug === loc.slug}
-                                            title="Sync PMS data"
-                                        >
-                                            {syncingSlug === loc.slug ? (
-                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                            ) : (
-                                                <RefreshCw className="h-4 w-4" />
-                                            )}
-                                        </Button>
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            onClick={() => openEditSheet(loc)}
-                                            title="Edit location"
-                                        >
-                                            <Pencil className="h-4 w-4" />
-                                        </Button>
-                                        <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            onClick={() => setDeleteTarget(loc)}
-                                            title="Delete location"
-                                        >
-                                            <Trash2 className="h-4 w-4 text-destructive" />
-                                        </Button>
-                                    </div>
-                                </TableCell>
-                            </TableRow>
-                        ))}
-                    </TableBody>
-                </Table>
-            </div>
+                        </TableHeader>
+                        <TableBody>
+                            {locations.length === 0 && !isLoading && (
+                                <TableRow>
+                                    <TableCell colSpan={6} className="h-24 text-center">
+                                        No locations found. Add one to get started.
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                            {locations.map((loc) => (
+                                <TableRow key={loc.id}>
+                                    <TableCell className="font-medium">{loc.name}</TableCell>
+                                    <TableCell className="font-mono text-sm">{loc.slug}</TableCell>
+                                    <TableCell className="font-mono text-sm">
+                                        {loc.nexhealth_location_id || <span className="text-muted-foreground">-</span>}
+                                    </TableCell>
+                                    <TableCell className="font-mono text-sm">
+                                        {loc.retell_agent_id
+                                            ? <span title={loc.retell_agent_id}>{loc.retell_agent_id.slice(0, 12)}...</span>
+                                            : <span className="text-muted-foreground">-</span>}
+                                    </TableCell>
+                                    <TableCell>
+                                        <Badge variant={loc.is_active ? "default" : "secondary"}>
+                                            {loc.is_active ? "Active" : "Inactive"}
+                                        </Badge>
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        <div className="flex items-center justify-end gap-1">
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => handleSync(loc.slug)}
+                                                disabled={syncingSlug === loc.slug}
+                                                title="Sync PMS data"
+                                            >
+                                                {syncingSlug === loc.slug ? (
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                ) : (
+                                                    <RefreshCw className="h-4 w-4" />
+                                                )}
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => openEditSheet(loc)}
+                                                title="Edit location"
+                                            >
+                                                <Pencil className="h-4 w-4" />
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => setDeleteTarget(loc)}
+                                                title="Delete location"
+                                            >
+                                                <Trash2 className="h-4 w-4 text-destructive" />
+                                            </Button>
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
+            )}
 
-            {/* Create / Edit Sheet */}
-            <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-                <SheetContent className="overflow-y-auto">
-                    <SheetHeader>
-                        <SheetTitle>{editingLocation ? "Edit Location" : "Add Location"}</SheetTitle>
-                        <SheetDescription>
-                            {editingLocation
-                                ? `Update settings for ${editingLocation.name}`
-                                : "Create a new location for this tenant"}
-                        </SheetDescription>
-                    </SheetHeader>
-                    <div className="py-4">
+            {/* Create / Edit Form View */}
+            {viewMode === "form" && (
+                <div className="space-y-4">
+                    <div className="flex items-center gap-4 border-b pb-4">
+                        <Button variant="ghost" size="sm" onClick={() => setViewMode("list")}>
+                            ← Back to Locations
+                        </Button>
+                        <div>
+                            <h2 className="text-xl font-semibold">{editingLocation ? "Edit Location" : "Add Location"}</h2>
+                            <p className="text-sm text-muted-foreground">
+                                {editingLocation
+                                    ? `Update settings for ${editingLocation.name}`
+                                    : "Create a new location for this tenant"}
+                            </p>
+                        </div>
+                    </div>
+                    <div className="max-w-2xl">
                         <LocationForm
                             tenantSlug={tenantSlug}
                             location={editingLocation}
                             onSuccess={handleFormSuccess}
                         />
                     </div>
-                </SheetContent>
-            </Sheet>
+                </div>
+            )}
 
             {/* Delete Confirmation Dialog */}
             <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>

@@ -25,6 +25,18 @@ import api from "@/lib/api";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic } from "@/types";
 import { Loader2 } from "lucide-react";
 
+const US_TIMEZONES = [
+    { value: "America/Puerto_Rico", label: "Atlantic Time (Puerto Rico/Virgin Islands)" },
+    { value: "America/New_York", label: "Eastern Time (ET)" },
+    { value: "America/Chicago", label: "Central Time (CT)" },
+    { value: "America/Denver", label: "Mountain Time (MT)" },
+    { value: "America/Phoenix", label: "Mountain Time (Arizona - No DST)" },
+    { value: "America/Los_Angeles", label: "Pacific Time (PT)" },
+    { value: "America/Anchorage", label: "Alaska Time (AKT)" },
+    { value: "Pacific/Honolulu", label: "Hawaii-Aleutian Time (HST)" },
+    { value: "Pacific/Guam", label: "Chamorro Time (Guam)" },
+];
+
 const locationSchema = z.object({
     name: z.string().min(1, "Name is required"),
     slug: z.string().optional(),
@@ -335,9 +347,20 @@ export function LocationForm({ tenantSlug, location, onSuccess }: LocationFormPr
                                 render={({ field }) => (
                                     <FormItem>
                                         <FormLabel>Timezone</FormLabel>
-                                        <FormControl>
-                                            <Input placeholder="America/Los_Angeles" {...field} />
-                                        </FormControl>
+                                        <Select onValueChange={field.onChange} value={field.value || ""}>
+                                            <FormControl>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Select a timezone" />
+                                                </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent>
+                                                {US_TIMEZONES.map((tz) => (
+                                                    <SelectItem key={tz.value} value={tz.value}>
+                                                        {tz.label} ({tz.value})
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
                                         <FormMessage />
                                     </FormItem>
                                 )}
