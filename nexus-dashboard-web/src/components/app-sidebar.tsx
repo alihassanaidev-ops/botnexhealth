@@ -36,12 +36,15 @@ import {
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 
+type NavItemDef = { title: string; url: string; icon: React.ElementType; exact?: boolean }
+
 // Admin-only nav items
-const adminNav = [
+const adminNav: NavItemDef[] = [
     {
         title: "Admin Dashboard",
         url: "/admin",
         icon: LayoutDashboard,
+        exact: true,
     },
     {
         title: "Tenants",
@@ -56,7 +59,7 @@ const adminNav = [
 ]
 
 // Tenant-only nav items
-const tenantNav = [
+const tenantNav: NavItemDef[] = [
     {
         title: "Dashboard",
         url: "/dashboard",
@@ -70,7 +73,7 @@ const tenantNav = [
 ]
 
 // Tenant setup nav items
-const navSetup = [
+const navSetup: NavItemDef[] = [
     {
         title: "Appointment Types",
         url: "/setup/appointment-types",
@@ -98,7 +101,7 @@ const navSetup = [
     },
 ]
 
-function NavItem({ item, isActive }: { item: { title: string; url: string; icon: React.ElementType }; isActive: boolean }) {
+function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
     return (
         <SidebarMenuItem>
             <SidebarMenuButton
@@ -161,7 +164,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                 <NavItem
                                     key={item.title}
                                     item={item}
-                                    isActive={location.pathname === item.url || location.pathname.startsWith(item.url + "/")}
+                                    isActive={
+                                        item.exact
+                                            ? location.pathname === item.url
+                                            : location.pathname === item.url || location.pathname.startsWith(item.url + "/")
+                                    }
                                 />
                             ))}
                         </SidebarMenu>
