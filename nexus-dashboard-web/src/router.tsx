@@ -14,7 +14,8 @@ import ProvidersScheduling from "./pages/ProvidersScheduling";
 import Operatories from "./pages/Operatories";
 import Calls from "./pages/Calls";
 import CustomFields from "./pages/CustomFields";
-import AuditLogs from "./pages/AuditLogs";
+import AuditLogs from "./pages/AuditLogs"
+import TwilioPhoneNumbers from "./pages/TwilioPhoneNumbers";
 
 
 export const router = createBrowserRouter([
@@ -67,6 +68,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["ADMIN"]}>
                                 <TenantDetail />
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "admin/twilio",
+                        element: (
+                            <RoleGuard allowed={["ADMIN"]}>
+                                <TwilioPhoneNumbers />
                             </RoleGuard>
                         ),
                     },

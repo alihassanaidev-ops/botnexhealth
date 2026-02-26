@@ -27,6 +27,8 @@ dependencies = [
   "redis>=5.0.0",
   # Rate limiting (HIPAA)
   "slowapi>=0.1.9",
+  # Twilio SMS
+  "twilio>=9.0",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,301 @@
+import { useEffect, useState, useCallback } from "react"
+import {
+    Phone,
+    RefreshCw,
+    Send,
+    MessageSquare,
+    Mic,
+    Image,
+    CheckCircle2,
+} from "lucide-react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
+import { toast } from "sonner"
+import { listTwilioPhoneNumbers, sendSms } from "@/lib/admin-api"
+import type { TwilioPhoneNumber } from "@/types"
+
+export default function TwilioPhoneNumbers() {
+    const [numbers, setNumbers] = useState<TwilioPhoneNumber[]>([])
+    const [loading, setLoading] = useState(true)
+    const [refreshing, setRefreshing] = useState(false)
+
+    // SMS Dialog
+    const [smsOpen, setSmsOpen] = useState(false)
+    const [selectedFrom, setSelectedFrom] = useState("")
+    const [toNumber, setToNumber] = useState("")
+    const [smsBody, setSmsBody] = useState("")
+    const [sending, setSending] = useState(false)
+
+    const fetchNumbers = useCallback(async (isRefresh = false) => {
+        if (isRefresh) setRefreshing(true)
+        else setLoading(true)
+        try {
+            const data = await listTwilioPhoneNumbers()
+            setNumbers(data)
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to load phone numbers"
+            toast.error(message)
+        } finally {
+            setLoading(false)
+            setRefreshing(false)
+        }
+    }, [])
+
+    useEffect(() => {
+        fetchNumbers()
+    }, [fetchNumbers])
+
+    function openSmsDialog(phoneNumber: string) {
+        setSelectedFrom(phoneNumber)
+        setToNumber("")
+        setSmsBody("")
+        setSmsOpen(true)
+    }
+
+    async function handleSendSms() {
+        if (!toNumber.trim() || !smsBody.trim()) {
+            toast.error("Recipient and message body are required")
+            return
+        }
+        setSending(true)
+        try {
+            const result = await sendSms({
+                from_number: selectedFrom,
+                to_number: toNumber.trim(),
+                body: smsBody.trim(),
+            })
+            toast.success(`SMS sent — SID: ${result.message_sid}`)
+            setSmsOpen(false)
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to send SMS"
+            toast.error(message)
+        } finally {
+            setSending(false)
+        }
+    }
+
+    const smsCapable = numbers.filter((n) => n.capabilities.sms)
+    const voiceCapable = numbers.filter((n) => n.capabilities.voice)
+
+    return (
+        <div className="flex-1 space-y-6 p-8 pt-6">
+            {/* Header */}
+            <div className="flex items-center justify-between">
+                <div>
+                    <h2 className="text-3xl font-bold tracking-tight">Twilio Phone Numbers</h2>
+                    <p className="text-muted-foreground">
+                        Manage platform phone numbers and send SMS messages.
+                    </p>
+                </div>
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => fetchNumbers(true)}
+                    disabled={refreshing}
+                >
+                    <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+                    Refresh
+                </Button>
+            </div>
+
+            {/* Stats row */}
+            {!loading && (
+                <div className="grid gap-4 md:grid-cols-3">
+                    <Card>
+                        <CardContent className="pt-6">
+                            <div className="flex items-center gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
+                                    <Phone className="h-5 w-5 text-violet-600 dark:text-violet-400" />
+                                </div>
+                                <div>
+                                    <p className="text-2xl font-bold">{numbers.length}</p>
+                                    <p className="text-xs text-muted-foreground">Total Numbers</p>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardContent className="pt-6">
+                            <div className="flex items-center gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                                    <MessageSquare className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                                </div>
+                                <div>
+                                    <p className="text-2xl font-bold">{smsCapable.length}</p>
+                                    <p className="text-xs text-muted-foreground">SMS Capable</p>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardContent className="pt-6">
+                            <div className="flex items-center gap-3">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/30">
+                                    <Mic className="h-5 w-5 text-green-600 dark:text-green-400" />
+                                </div>
+                                <div>
+                                    <p className="text-2xl font-bold">{voiceCapable.length}</p>
+                                    <p className="text-xs text-muted-foreground">Voice Capable</p>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
+
+            {/* Phone Numbers Table */}
+            <Card>
+                <CardHeader>
+                    <CardTitle>Phone Numbers</CardTitle>
+                    <CardDescription>
+                        All incoming phone numbers registered on the Twilio account.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    {loading ? (
+                        <div className="space-y-3">
+                            {Array.from({ length: 4 }).map((_, i) => (
+                                <Skeleton key={i} className="h-14 w-full" />
+                            ))}
+                        </div>
+                    ) : numbers.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                            <Phone className="h-10 w-10 mb-3 opacity-40" />
+                            <p className="font-medium">No phone numbers found</p>
+                            <p className="text-sm">
+                                Make sure TWILLIO_SID and TWILLIO_API_SECRET are configured correctly.
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b text-left text-muted-foreground">
+                                        <th className="pb-3 font-medium">Phone Number</th>
+                                        <th className="pb-3 font-medium">Friendly Name</th>
+                                        <th className="pb-3 font-medium">Capabilities</th>
+                                        <th className="pb-3 font-medium">SID</th>
+                                        <th className="pb-3 font-medium sr-only">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {numbers.map((number) => (
+                                        <tr key={number.sid} className="border-b last:border-0">
+                                            <td className="py-3 font-mono font-medium">
+                                                {number.phone_number}
+                                            </td>
+                                            <td className="py-3 text-muted-foreground">
+                                                {number.friendly_name || "—"}
+                                            </td>
+                                            <td className="py-3">
+                                                <div className="flex gap-1.5 flex-wrap">
+                                                    {number.capabilities.voice && (
+                                                        <Badge variant="secondary" className="gap-1 text-xs">
+                                                            <Mic className="h-3 w-3" />
+                                                            Voice
+                                                        </Badge>
+                                                    )}
+                                                    {number.capabilities.sms && (
+                                                        <Badge variant="secondary" className="gap-1 text-xs">
+                                                            <MessageSquare className="h-3 w-3" />
+                                                            SMS
+                                                        </Badge>
+                                                    )}
+                                                    {number.capabilities.mms && (
+                                                        <Badge variant="secondary" className="gap-1 text-xs">
+                                                            <Image className="h-3 w-3" />
+                                                            MMS
+                                                        </Badge>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td className="py-3 font-mono text-xs text-muted-foreground">
+                                                {number.sid}
+                                            </td>
+                                            <td className="py-3 text-right">
+                                                {number.capabilities.sms && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="gap-1.5"
+                                                        onClick={() => openSmsDialog(number.phone_number)}
+                                                    >
+                                                        <Send className="h-3.5 w-3.5" />
+                                                        Send SMS
+                                                    </Button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            {/* Send SMS Dialog */}
+            <Dialog open={smsOpen} onOpenChange={setSmsOpen}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Send SMS</DialogTitle>
+                        <DialogDescription>
+                            Send an SMS from{" "}
+                            <span className="font-mono font-medium">{selectedFrom}</span>
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                            <Label htmlFor="to-number">To (E.164 format)</Label>
+                            <Input
+                                id="to-number"
+                                placeholder="+12125551234"
+                                value={toNumber}
+                                onChange={(e) => setToNumber(e.target.value)}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="sms-body">Message</Label>
+                            <Textarea
+                                id="sms-body"
+                                placeholder="Type your message..."
+                                rows={4}
+                                maxLength={1600}
+                                value={smsBody}
+                                onChange={(e) => setSmsBody(e.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground text-right">
+                                {smsBody.length} / 1600
+                            </p>
+                        </div>
+                        <Button
+                            className="w-full gap-2"
+                            onClick={handleSendSms}
+                            disabled={sending || !toNumber.trim() || !smsBody.trim()}
+                        >
+                            {sending ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                            ) : (
+                                <CheckCircle2 className="h-4 w-4" />
+                            )}
+                            {sending ? "Sending..." : "Send Message"}
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
+        </div>
+    )
+}

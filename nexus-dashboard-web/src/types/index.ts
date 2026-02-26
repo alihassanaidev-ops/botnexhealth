@@ -278,6 +278,33 @@ export interface CallsListResponse {
     items: CallRecord[];
 }
 
+// ── Twilio ─────────────────────────────────────────────────────────────
+
+export interface TwilioPhoneNumber {
+    sid: string;
+    phone_number: string;
+    friendly_name: string;
+    capabilities: {
+        voice: boolean;
+        sms: boolean;
+        mms: boolean;
+    };
+    status: string | null;
+}
+
+export interface SendSmsRequest {
+    from_number: string;
+    to_number: string;
+    body: string;
+}
+
+export interface SendSmsResponse {
+    message_sid: string;
+    status: string;
+    from_number: string;
+    to_number: string;
+}
+
 // ── Dashboard ──────────────────────────────────────────────────────────
 
 export interface CallVolume {

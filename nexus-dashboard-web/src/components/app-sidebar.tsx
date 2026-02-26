@@ -31,6 +31,7 @@ import {
     Phone,
     Settings2,
     ShieldCheck,
+    MessageSquare,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
@@ -46,6 +47,11 @@ const adminNav = [
         title: "Tenants",
         url: "/tenants",
         icon: Users,
+    },
+    {
+        title: "Phone Numbers",
+        url: "/admin/twilio",
+        icon: MessageSquare,
     },
 ]
 

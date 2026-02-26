@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     retell_api_secret: str | None = None
 
 
+    # Twilio (SMS / phone numbers)
+    twillio_sid: str | None = None          # Account SID (env: TWILLIO_SID)
+    twillio_api_secret: str | None = None   # Auth Token (env: TWILLIO_API_SECRET)
+
     # Database (Supabase PostgreSQL)
     database_url: str | None = None
     encryption_key: str | None = None
