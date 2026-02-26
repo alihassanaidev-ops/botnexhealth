@@ -21,7 +21,8 @@ def _payload(call_id: str = "call-1") -> bytes:
                 "duration_ms": 120000,
                 "recording_url": "https://example.com/rec.mp3",
                 "transcript": "test transcript",
-                "call_analysis": {"call_summary": "test summary"},
+                "call_analysis": {"call_summary": "Patient Name: John Doe scheduled an appointment"},
+                "scrubbed_call_analysis": {"call_summary": "[Patient Name] scheduled an appointment"},
             },
         }
     ).encode("utf-8")

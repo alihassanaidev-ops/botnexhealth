@@ -58,6 +58,7 @@ class RetellCallWebhook(BaseModel):
     scrubbed_transcript_with_tool_calls: list[dict] | None = None  # PII-scrubbed (HIPAA)
     disconnection_reason: str | None = None
     call_analysis: CallAnalysisData | None = None
+    scrubbed_call_analysis: CallAnalysisData | None = None  # PII-scrubbed (preferred for HIPAA)
     # Dynamic variables collected during the call (name, email, etc.)
     collected_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
 
@@ -231,7 +232,9 @@ async def handle_retell_webhook(
                 post_call_service = PostCallService(session)
                 
                 # event.call is RetellCallWebhook, map it to the expected dict for analysis
-                analysis_dict = event.call.call_analysis.model_dump() if event.call.call_analysis else {}
+                # Prefer PII-scrubbed analysis for HIPAA; fall back to raw only if scrubbed absent
+                _analysis_src = event.call.scrubbed_call_analysis or event.call.call_analysis
+                analysis_dict = _analysis_src.model_dump() if _analysis_src else {}
                 # Merge top-level collected_dynamic_variables so the service can use them
                 # as a fallback for name/email when custom_analysis_data fields are missing
                 analysis_dict["collected_dynamic_variables"] = event.call.collected_dynamic_variables or {}
