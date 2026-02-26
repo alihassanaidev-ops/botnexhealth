@@ -42,7 +42,7 @@
   .dark {
     --background: 240 20% 8%;
     --foreground: 210 20% 92%;
-    --card: 240 20% 12%;
+    --card: 240 20% 11%;
     --card-foreground: 210 20% 92%;
     --popover: 240 20% 12%;
     --popover-foreground: 210 20% 92%;
@@ -51,34 +51,28 @@
     --secondary: 240 30% 18%;
     --secondary-foreground: 210 20% 92%;
     --muted: 240 25% 16%;
-    --muted-foreground: 220 15% 55%;
+    --muted-foreground: 220 15% 58%;
     --accent: 260 30% 20%;
     --accent-foreground: 210 20% 92%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 20% 92%;
-    --border: 240 25% 20%;
+    --border: 240 25% 18%;
     --input: 240 25% 20%;
     --ring: 265 85% 65%;
 
-    /* Chart colors updated to match screenshot components */
     --chart-1: 265 85% 65%;
-    /* Purple charts */
     --chart-2: 150 70% 50%;
-    /* Neon Green used for upward trends/accents */
     --chart-3: 180 65% 45%;
-    /* Teal/Cyan */
     --chart-4: 220 60% 60%;
-    /* Light Blue */
     --chart-5: 340 75% 55%;
-    /* Pink */
 
-    --sidebar-background: 240 20% 10%;
+    --sidebar-background: 240 22% 9%;
     --sidebar-foreground: 210 20% 90%;
     --sidebar-primary: 265 85% 65%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 260 30% 18%;
     --sidebar-accent-foreground: 210 20% 90%;
-    --sidebar-border: 240 25% 18%;
+    --sidebar-border: 240 25% 16%;
     --sidebar-ring: 265 85% 65%;
   }
 }
@@ -90,5 +84,65 @@
 
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply tracking-tight;
+  }
+}
+
+/* ── Animations ─────────────────────────────────────────────────────────────── */
+
+@keyframes bar-fill {
+  from {
+    width: 0%;
+  }
+
+  to {
+    width: var(--bar-target-width, 0%);
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes count-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@layer utilities {
+  .animate-bar-fill {
+    animation: bar-fill 0.7s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  }
+
+  .animate-fade-in-up {
+    animation: fade-in-up 0.35s ease-out forwards;
+  }
+
+  .animate-count-fade {
+    animation: count-fade 0.4s ease-out forwards;
   }
 }

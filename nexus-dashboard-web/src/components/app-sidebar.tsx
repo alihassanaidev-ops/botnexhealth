@@ -22,7 +22,6 @@ import {
 import {
     Home,
     Users,
-    User2,
     ChevronUp,
     LogOut,
     CalendarCheck,
@@ -33,7 +32,7 @@ import {
     Settings2,
     ShieldCheck,
 } from "lucide-react"
-import { Link } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 
 // Admin-only nav items
@@ -64,7 +63,7 @@ const tenantNav = [
     },
 ]
 
-// Tenant setup nav items (visible to all authenticated users with a tenant)
+// Tenant setup nav items
 const navSetup = [
     {
         title: "Appointment Types",
@@ -93,10 +92,35 @@ const navSetup = [
     },
 ]
 
+function NavItem({ item, isActive }: { item: { title: string; url: string; icon: React.ElementType }; isActive: boolean }) {
+    return (
+        <SidebarMenuItem>
+            <SidebarMenuButton
+                asChild
+                tooltip={item.title}
+                className={`
+                    relative transition-all duration-150 rounded-md
+                    ${isActive
+                        ? "bg-sidebar-accent text-sidebar-primary font-semibold before:absolute before:left-0 before:top-1 before:bottom-1 before:w-0.5 before:rounded-full before:bg-sidebar-primary"
+                        : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                    }
+                `}
+            >
+                <Link to={item.url} aria-current={isActive ? "page" : undefined}>
+                    <item.icon className={`transition-colors ${isActive ? "text-sidebar-primary" : ""}`} />
+                    <span>{item.title}</span>
+                </Link>
+            </SidebarMenuButton>
+        </SidebarMenuItem>
+    )
+}
+
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { user, signOut } = useAuth();
+    const location = useLocation();
 
     const displayEmail = user?.email ?? "—";
+    const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
     const isAdmin = user?.role === "ADMIN";
     const isTenant = user?.role === "TENANT";
     const mainNav = isAdmin ? adminNav : tenantNav;
@@ -108,12 +132,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     <SidebarMenuItem>
                         <SidebarMenuButton size="lg" asChild>
                             <Link to="/">
-                                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                                    <span className="text-lg font-bold">N</span>
+                                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-600 to-purple-700 text-white shadow-sm shadow-purple-900/30">
+                                    <span className="text-sm font-bold tracking-tight">N</span>
                                 </div>
                                 <div className="flex flex-col gap-0.5 leading-none">
-                                    <span className="font-semibold">Nexus Dental</span>
-                                    <span className="">Dashboard</span>
+                                    <span className="font-semibold text-sidebar-foreground">Nexus Dental</span>
+                                    <span className="text-xs text-sidebar-foreground/50">Dashboard</span>
                                 </div>
                             </Link>
                         </SidebarMenuButton>
@@ -122,36 +146,34 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </SidebarHeader>
             <SidebarContent>
                 <SidebarGroup>
-                    <SidebarGroupLabel>Menu</SidebarGroupLabel>
+                    <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
+                        Menu
+                    </SidebarGroupLabel>
                     <SidebarGroupContent>
                         <SidebarMenu>
                             {mainNav.map((item) => (
-                                <SidebarMenuItem key={item.title}>
-                                    <SidebarMenuButton asChild tooltip={item.title}>
-                                        <Link to={item.url}>
-                                            <item.icon />
-                                            <span>{item.title}</span>
-                                        </Link>
-                                    </SidebarMenuButton>
-                                </SidebarMenuItem>
+                                <NavItem
+                                    key={item.title}
+                                    item={item}
+                                    isActive={location.pathname === item.url || location.pathname.startsWith(item.url + "/")}
+                                />
                             ))}
                         </SidebarMenu>
                     </SidebarGroupContent>
                 </SidebarGroup>
                 {isTenant && (
                     <SidebarGroup>
-                        <SidebarGroupLabel>Practice Setup</SidebarGroupLabel>
+                        <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
+                            Practice Setup
+                        </SidebarGroupLabel>
                         <SidebarGroupContent>
                             <SidebarMenu>
                                 {navSetup.map((item) => (
-                                    <SidebarMenuItem key={item.title}>
-                                        <SidebarMenuButton asChild tooltip={item.title}>
-                                            <Link to={item.url}>
-                                                <item.icon />
-                                                <span>{item.title}</span>
-                                            </Link>
-                                        </SidebarMenuButton>
-                                    </SidebarMenuItem>
+                                    <NavItem
+                                        key={item.title}
+                                        item={item}
+                                        isActive={location.pathname === item.url || location.pathname.startsWith(item.url + "/")}
+                                    />
                                 ))}
                             </SidebarMenu>
                         </SidebarGroupContent>
@@ -165,15 +187,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                             <DropdownMenuTrigger asChild>
                                 <SidebarMenuButton
                                     size="lg"
-                                    className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+                                    className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
                                 >
-                                    <div className="h-8 w-8 rounded-lg bg-zinc-200 flex items-center justify-center">
-                                        <User2 className="h-4 w-4" />
+                                    <div className="h-7 w-7 rounded-md bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center text-white shadow-sm shadow-purple-900/30 shrink-0">
+                                        <span className="text-[11px] font-bold">{initials}</span>
                                     </div>
                                     <div className="grid flex-1 text-left text-sm leading-tight">
-                                        <span className="truncate font-semibold">{displayEmail}</span>
+                                        <span className="truncate font-medium text-sidebar-foreground">{displayEmail}</span>
+                                        <span className="text-[10px] text-sidebar-foreground/40 capitalize">{user?.role?.toLowerCase() ?? ""}</span>
                                     </div>
-                                    <ChevronUp className="ml-auto" />
+                                    <ChevronUp className="ml-auto h-4 w-4 text-sidebar-foreground/40" />
                                 </SidebarMenuButton>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent
@@ -184,17 +207,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                             >
                                 <DropdownMenuLabel className="p-0 font-normal">
                                     <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                                        <div className="h-8 w-8 rounded-lg bg-zinc-200 flex items-center justify-center">
-                                            <User2 className="h-4 w-4" />
+                                        <div className="h-8 w-8 rounded-md bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center text-white">
+                                            <span className="text-xs font-bold">{initials}</span>
                                         </div>
                                         <div className="grid flex-1 text-left text-sm leading-tight">
                                             <span className="truncate font-semibold">{displayEmail}</span>
+                                            <span className="text-[10px] text-muted-foreground capitalize">{user?.role?.toLowerCase() ?? ""}</span>
                                         </div>
                                     </div>
                                 </DropdownMenuLabel>
                                 <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => signOut()}>
-                                    <LogOut />
+                                <DropdownMenuItem onClick={() => signOut()} className="gap-2 text-destructive focus:text-destructive">
+                                    <LogOut className="h-4 w-4" />
                                     Log out
                                 </DropdownMenuItem>
                             </DropdownMenuContent>

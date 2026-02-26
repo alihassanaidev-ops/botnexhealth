@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { Link } from "react-router-dom"
 import {
     Phone,
@@ -57,41 +57,138 @@ const STATUS_COLOR_MAP = Object.fromEntries(
     STATUS_OPTIONS.map((o) => [o.value, o.color])
 )
 
-// ── Volume card ───────────────────────────────────────────────────────────────
+// Semantic bar colors for tag breakdown (dark-mode safe)
+const TAG_BAR_COLOR: Record<string, string> = {
+    appointment_booked: "bg-emerald-500",
+    appointment_rescheduled: "bg-blue-500",
+    appointment_cancelled: "bg-zinc-500",
+    emergency: "bg-red-500",
+    complaint: "bg-orange-500",
+    needs_callback: "bg-amber-500",
+    faq_handled: "bg-sky-500",
+    financial_inquiry: "bg-violet-500",
+    transferred: "bg-teal-500",
+    insurance_verified: "bg-green-500",
+    insurance_unverified: "bg-rose-500",
+    no_action_needed: "bg-zinc-400",
+}
+
+// Per-card icon gradient for volume cards
+const VOLUME_CARD_CONFIG = [
+    {
+        label: "Today",
+        key: "today" as const,
+        icon: CalendarDays,
+        iconBg: "bg-blue-500/15 dark:bg-blue-500/20",
+        iconColor: "text-blue-500",
+    },
+    {
+        label: "This Week",
+        key: "this_week" as const,
+        icon: TrendingUp,
+        iconBg: "bg-violet-500/15 dark:bg-violet-500/20",
+        iconColor: "text-violet-500",
+    },
+    {
+        label: "This Month",
+        key: "this_month" as const,
+        icon: Phone,
+        iconBg: "bg-purple-500/15 dark:bg-purple-500/20",
+        iconColor: "text-purple-500",
+    },
+    {
+        label: "All Time",
+        key: "all_time" as const,
+        icon: Infinity,
+        iconBg: "bg-slate-500/15 dark:bg-slate-400/15",
+        iconColor: "text-slate-400",
+    },
+]
+
+// ── Animated Count Hook ───────────────────────────────────────────────────────
+
+function useAnimatedCount(target: number | undefined, duration = 600): number {
+    const [displayed, setDisplayed] = useState(0)
+    const frameRef = useRef<number | null>(null)
+    const startRef = useRef<number | null>(null)
+    const fromRef = useRef(0)
+
+    useEffect(() => {
+        if (target === undefined) return
+        const from = fromRef.current
+        const to = target
+
+        if (frameRef.current) cancelAnimationFrame(frameRef.current)
+        startRef.current = null
+
+        function tick(timestamp: number) {
+            if (!startRef.current) startRef.current = timestamp
+            const elapsed = timestamp - startRef.current
+            const progress = Math.min(elapsed / duration, 1)
+            // ease-out cubic
+            const eased = 1 - Math.pow(1 - progress, 3)
+            setDisplayed(Math.round(from + (to - from) * eased))
+            if (progress < 1) {
+                frameRef.current = requestAnimationFrame(tick)
+            } else {
+                fromRef.current = to
+            }
+        }
+
+        frameRef.current = requestAnimationFrame(tick)
+        return () => { if (frameRef.current) cancelAnimationFrame(frameRef.current) }
+    }, [target, duration])
+
+    return displayed
+}
+
+// ── Volume Card ───────────────────────────────────────────────────────────────
 
 interface VolumeCardProps {
     label: string
     value: number | undefined
     icon: React.ElementType
+    iconBg: string
+    iconColor: string
     loading: boolean
 }
 
-function VolumeCard({ label, value, icon: Icon, loading }: VolumeCardProps) {
+function VolumeCard({ label, value, icon: Icon, iconBg, iconColor, loading }: VolumeCardProps) {
+    const animatedValue = useAnimatedCount(loading ? undefined : (value ?? 0))
+
+    if (loading) {
+        return (
+            <Card className="p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                    <Skeleton className="h-4 w-20" />
+                    <Skeleton className="h-9 w-9 rounded-lg" />
+                </div>
+                <Skeleton className="h-10 w-16" />
+            </Card>
+        )
+    }
+
     return (
-        <Card>
-            {loading ? (
-                <CardContent className="p-6 space-y-3">
-                    <Skeleton className="h-4 w-24" />
-                    <Skeleton className="h-8 w-16" />
-                </CardContent>
-            ) : (
-                <>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">{label}</CardTitle>
-                        <div className="rounded-md bg-primary/10 p-2 text-primary">
-                            <Icon className="h-4 w-4" />
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-3xl font-bold tabular-nums">{value ?? 0}</div>
-                    </CardContent>
-                </>
-            )}
+        <Card className="group relative overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/20 cursor-default">
+            {/* Subtle top gradient accent */}
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
+                <div className={`rounded-lg p-2.5 ${iconBg} transition-transform duration-200 group-hover:scale-110`}>
+                    <Icon className={`h-4 w-4 ${iconColor}`} />
+                </div>
+            </CardHeader>
+            <CardContent className="pb-5">
+                <div className="text-4xl font-black tabular-nums tracking-tight animate-count-fade">
+                    {animatedValue.toLocaleString()}
+                </div>
+                <p className="text-xs text-muted-foreground/60 mt-1">calls</p>
+            </CardContent>
         </Card>
     )
 }
 
-// ── Callback queue item ───────────────────────────────────────────────────────
+// ── Callback Queue Item ────────────────────────────────────────────────────────
 
 interface QueueItemProps {
     item: CallbackQueueItem
@@ -117,21 +214,25 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
     }
 
     return (
-        <div className="rounded-lg border bg-card p-4 space-y-2">
+        <div className="rounded-lg border border-border/60 bg-card hover:bg-muted/20 transition-colors duration-150 p-3.5 space-y-2">
             <div className="flex items-start justify-between gap-2">
-                <div>
-                    <p className="font-medium text-sm">
-                        {item.contact_name ?? <span className="text-muted-foreground">Unknown caller</span>}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                        {formatDate(item.call_date)} · {formatTime(item.call_time)}
-                        {item.call_duration_seconds ? ` · ${formatDuration(item.call_duration_seconds)}` : ""}
-                    </p>
+                <div className="flex items-start gap-2.5 min-w-0">
+                    {/* Urgency dot */}
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                    <div className="min-w-0">
+                        <p className="font-medium text-sm truncate">
+                            {item.contact_name ?? <span className="text-muted-foreground italic">Unknown caller</span>}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            {formatDate(item.call_date)} · {formatTime(item.call_time)}
+                            {item.call_duration_seconds ? ` · ${formatDuration(item.call_duration_seconds)}` : ""}
+                        </p>
+                    </div>
                 </div>
                 <Button
-                    variant="ghost"
+                    variant={open ? "ghost" : "secondary"}
                     size="sm"
-                    className="text-xs gap-1 shrink-0"
+                    className="text-xs gap-1 shrink-0 h-7"
                     onClick={() => setOpen((o) => !o)}
                 >
                     {open ? "Cancel" : "Resolve"}
@@ -139,13 +240,13 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
             </div>
 
             {item.summary && (
-                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed pl-4">
                     {item.summary}
                 </p>
             )}
 
             {open && (
-                <div className="space-y-2 pt-1">
+                <div className="space-y-2 pt-1 pl-4">
                     <Input
                         placeholder="Resolution note (optional)…"
                         value={note}
@@ -163,6 +264,48 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                     </Button>
                 </div>
             )}
+        </div>
+    )
+}
+
+// ── Animated Tag Bar ──────────────────────────────────────────────────────────
+
+interface TagBarProps {
+    tag: string
+    label: string
+    count: number
+    total: number
+    pct: number
+    colorClass: string
+    barColor: string
+}
+
+function TagBar({ label, count, total, pct, colorClass, barColor }: TagBarProps) {
+    const [width, setWidth] = useState(0)
+
+    useEffect(() => {
+        // Small timeout to ensure CSS transition fires
+        const id = setTimeout(() => setWidth(pct), 60)
+        return () => clearTimeout(id)
+    }, [pct])
+
+    const countPct = total > 0 ? Math.round((count / total) * 100) : 0
+
+    return (
+        <div className="flex items-center gap-3">
+            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium w-40 shrink-0 truncate ${colorClass}`}>
+                {label}
+            </span>
+            <div className="flex-1 bg-muted rounded-full h-2.5 overflow-hidden">
+                <div
+                    className={`h-2.5 rounded-full transition-all duration-700 ease-out ${barColor}`}
+                    style={{ width: `${width}%` }}
+                />
+            </div>
+            <div className="flex items-center gap-1.5 w-16 justify-end shrink-0">
+                <span className="text-sm font-semibold tabular-nums text-foreground">{count}</span>
+                <span className="text-xs text-muted-foreground">({countPct}%)</span>
+            </div>
         </div>
     )
 }
@@ -196,89 +339,104 @@ export default function Dashboard() {
 
     const hour = new Date().getHours()
     const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
+    const todayStr = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })
 
     const callbackQueue = summary?.callback_queue ?? []
     const tagCounts = summary?.tag_counts ?? []
+    const hasCallbacks = callbackQueue.length > 0
+
+    const totalTagCount = tagCounts.reduce((sum, tc) => sum + tc.count, 0)
 
     return (
-        <div className="flex-1 space-y-6 p-8 pt-6">
+        <div className="flex-1 space-y-6 p-8 pt-6 animate-fade-in-up">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h2 className="text-3xl font-bold tracking-tight">
+                    <h2 className="text-2xl font-bold tracking-tight">
                         {greeting}{user?.email ? `, ${user.email.split("@")[0]}` : ""}
                     </h2>
-                    <p className="text-muted-foreground">
-                        Here's your call activity summary.
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                        {todayStr} · Here's your call activity overview.
                     </p>
                 </div>
                 <Button
                     variant="outline"
+                    size="sm"
                     onClick={fetchSummary}
                     disabled={loading}
-                    className="gap-2"
+                    className="gap-2 h-8 text-xs"
                 >
-                    <RefreshCcw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                    <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
                     Refresh
                 </Button>
             </div>
 
             {/* Volume cards */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <VolumeCard label="Today" value={summary?.call_volume.today} icon={CalendarDays} loading={loading} />
-                <VolumeCard label="This Week" value={summary?.call_volume.this_week} icon={TrendingUp} loading={loading} />
-                <VolumeCard label="This Month" value={summary?.call_volume.this_month} icon={Phone} loading={loading} />
-                <VolumeCard label="All Time" value={summary?.call_volume.all_time} icon={Infinity} loading={loading} />
+                {VOLUME_CARD_CONFIG.map(({ label, key, icon, iconBg, iconColor }) => (
+                    <VolumeCard
+                        key={key}
+                        label={label}
+                        value={summary?.call_volume[key]}
+                        icon={icon}
+                        iconBg={iconBg}
+                        iconColor={iconColor}
+                        loading={loading}
+                    />
+                ))}
             </div>
 
             {/* Bottom grid: tag breakdown + callback queue */}
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* Tag breakdown */}
                 <Card>
-                    <CardHeader>
-                        <CardTitle>Call Tags Breakdown</CardTitle>
-                        <CardDescription>Count of all-time calls by primary tag.</CardDescription>
+                    <CardHeader className="pb-4">
+                        <CardTitle className="text-base font-semibold">Call Tags Breakdown</CardTitle>
+                        <CardDescription>All-time calls by primary tag.</CardDescription>
                     </CardHeader>
                     <CardContent>
                         {loading ? (
-                            <div className="space-y-3">
+                            <div className="space-y-4">
                                 {Array.from({ length: 5 }).map((_, i) => (
                                     <div key={i} className="flex items-center gap-3">
-                                        <Skeleton className="h-5 w-28 rounded-full" />
-                                        <Skeleton className="h-3 flex-1" />
-                                        <Skeleton className="h-4 w-8" />
+                                        <Skeleton className="h-5 w-40 rounded-full" />
+                                        <Skeleton className="h-2.5 flex-1 rounded-full" />
+                                        <Skeleton className="h-4 w-16" />
                                     </div>
                                 ))}
                             </div>
                         ) : tagCounts.length === 0 ? (
-                            <p className="text-sm text-muted-foreground text-center py-6">No calls recorded yet.</p>
+                            <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground gap-2">
+                                <Phone className="h-8 w-8 opacity-20" />
+                                <p className="text-sm font-medium">No calls recorded yet.</p>
+                                <p className="text-xs">Tags will appear here once your agent handles calls.</p>
+                            </div>
                         ) : (
-                            <div className="space-y-3">
+                            <div className="space-y-3.5">
                                 {tagCounts.map((tc) => {
                                     const colorClass = STATUS_COLOR_MAP[tc.tag] ?? "bg-zinc-100 text-zinc-600 border-zinc-200"
+                                    const barColor = TAG_BAR_COLOR[tc.tag] ?? "bg-primary/70"
                                     const maxCount = tagCounts[0]?.count ?? 1
                                     const pct = Math.round((tc.count / maxCount) * 100)
                                     return (
-                                        <div key={tc.tag} className="flex items-center gap-3">
-                                            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium w-36 shrink-0 ${colorClass}`}>
-                                                {tc.label}
-                                            </span>
-                                            <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
-                                                <div
-                                                    className="h-2 bg-primary/60 rounded-full transition-all"
-                                                    style={{ width: `${pct}%` }}
-                                                />
-                                            </div>
-                                            <span className="text-sm font-medium tabular-nums w-8 text-right">{tc.count}</span>
-                                        </div>
+                                        <TagBar
+                                            key={tc.tag}
+                                            tag={tc.tag}
+                                            label={tc.label}
+                                            count={tc.count}
+                                            total={totalTagCount}
+                                            pct={pct}
+                                            colorClass={colorClass}
+                                            barColor={barColor}
+                                        />
                                     )
                                 })}
                             </div>
                         )}
 
-                        <div className="mt-4 pt-4 border-t">
+                        <div className="mt-5 pt-4 border-t">
                             <Link to="/calls">
-                                <Button variant="ghost" size="sm" className="gap-1.5 text-xs">
+                                <Button variant="ghost" size="sm" className="gap-1.5 text-xs h-7">
                                     View all calls <ArrowRight className="h-3 w-3" />
                                 </Button>
                             </Link>
@@ -287,15 +445,18 @@ export default function Dashboard() {
                 </Card>
 
                 {/* Callback queue */}
-                <Card>
-                    <CardHeader>
+                <Card className={`transition-all duration-300 ${hasCallbacks ? "border-l-4 border-l-amber-500" : ""}`}>
+                    <CardHeader className="pb-4">
                         <div className="flex items-center justify-between">
                             <div>
-                                <CardTitle className="flex items-center gap-2">
-                                    <Clock className="h-4 w-4 text-amber-500" />
+                                <CardTitle className="text-base font-semibold flex items-center gap-2">
+                                    <Clock className={`h-4 w-4 ${hasCallbacks ? "text-amber-500" : "text-muted-foreground"}`} />
                                     Needs Callback
-                                    {callbackQueue.length > 0 && (
-                                        <Badge variant="destructive" className="text-xs">
+                                    {hasCallbacks && (
+                                        <Badge
+                                            variant="destructive"
+                                            className="text-[10px] h-5 px-1.5 font-semibold"
+                                        >
                                             {callbackQueue.length}
                                         </Badge>
                                     )}
@@ -308,27 +469,36 @@ export default function Dashboard() {
                         {loading ? (
                             <div className="space-y-3">
                                 {Array.from({ length: 3 }).map((_, i) => (
-                                    <Skeleton key={i} className="h-20 w-full rounded-lg" />
+                                    <Skeleton key={i} className="h-16 w-full rounded-lg" />
                                 ))}
                             </div>
                         ) : callbackQueue.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
-                                <CheckCircle2 className="h-10 w-10 mb-3 text-green-400" />
-                                <p className="font-medium text-sm">All caught up!</p>
-                                <p className="text-xs mt-1">No pending callbacks.</p>
+                            <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
+                                <div className="h-12 w-12 rounded-full bg-green-500/10 flex items-center justify-center">
+                                    <CheckCircle2 className="h-6 w-6 text-green-500" />
+                                </div>
+                                <div>
+                                    <p className="font-medium text-sm text-foreground">All caught up!</p>
+                                    <p className="text-xs text-muted-foreground mt-0.5">No pending callbacks right now.</p>
+                                </div>
+                                <Link to="/calls">
+                                    <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7 mt-1">
+                                        View all calls <ArrowRight className="h-3 w-3" />
+                                    </Button>
+                                </Link>
                             </div>
                         ) : (
-                            <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+                            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1 -mr-1">
                                 {callbackQueue.map((item) => (
                                     <QueueItem key={item.call_id} item={item} onResolved={fetchSummary} />
                                 ))}
                             </div>
                         )}
 
-                        {callbackQueue.length > 0 && (
+                        {hasCallbacks && (
                             <div className="mt-4 pt-4 border-t">
                                 <Link to="/calls?tags=needs_callback">
-                                    <Button variant="ghost" size="sm" className="gap-1.5 text-xs">
+                                    <Button variant="ghost" size="sm" className="gap-1.5 text-xs h-7">
                                         <AlertCircle className="h-3 w-3 text-amber-500" />
                                         View all callbacks <ArrowRight className="h-3 w-3" />
                                     </Button>
@@ -340,15 +510,15 @@ export default function Dashboard() {
             </div>
 
             {/* Quick links */}
-            <div className="flex gap-3 flex-wrap">
+            <div className="flex gap-2 flex-wrap">
                 <Link to="/calls">
-                    <Button variant="outline" className="gap-2">
-                        <PhoneIncoming className="h-4 w-4" /> All Calls
+                    <Button variant="outline" size="sm" className="gap-2 h-8 text-xs">
+                        <PhoneIncoming className="h-3.5 w-3.5" /> All Calls
                     </Button>
                 </Link>
                 <Link to="/calls" state={{ tags: ["appointment_booked"] }}>
-                    <Button variant="outline" className="gap-2">
-                        <PhoneOutgoing className="h-4 w-4" /> Booked Today
+                    <Button variant="outline" size="sm" className="gap-2 h-8 text-xs">
+                        <PhoneOutgoing className="h-3.5 w-3.5" /> Booked Today
                     </Button>
                 </Link>
             </div>

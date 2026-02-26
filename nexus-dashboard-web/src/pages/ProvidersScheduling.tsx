@@ -245,7 +245,7 @@ export default function ProvidersScheduling() {
             )}
 
             {unlinkedCount > 0 && !loading && !error && (
-                <Alert className="border-yellow-200 bg-yellow-50 text-yellow-800">
+                <Alert className="border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400">
                     <AlertTriangle className="h-4 w-4" />
                     <AlertDescription>
                         {unlinkedCount} work window{unlinkedCount !== 1 ? "s" : ""} without linked
@@ -329,13 +329,18 @@ export default function ProvidersScheduling() {
                                         const isPastDate = !!av.specific_date && av.specific_date < new Date().toISOString().slice(0, 10)
                                         const isWarning = !hasTypes && !isPastDate
 
-                                        const mutedClass = isWarning ? "text-yellow-700" : "text-muted-foreground"
-                                        const normalClass = isWarning ? "text-yellow-900" : ""
+                                        const mutedClass = isWarning ? "text-amber-500 dark:text-amber-400" : "text-muted-foreground"
+                                        const normalClass = isWarning ? "text-amber-700 dark:text-amber-300" : ""
 
                                         return (
                                             <div
                                                 key={av.id}
-                                                className={`rounded-lg border p-4 ${isPastDate ? "border-gray-200 bg-gray-50/50 opacity-60" : isWarning ? "border-yellow-200 bg-yellow-50" : ""}`}
+                                                className={`rounded-lg border p-4 transition-colors ${isPastDate
+                                                        ? "border-border/40 bg-muted/20 opacity-50"
+                                                        : isWarning
+                                                            ? "border-amber-500/25 bg-amber-500/8 dark:bg-amber-500/[0.06]"
+                                                            : "border-border/60 hover:border-border"
+                                                    }`}
                                             >
                                                 <div className="flex items-start justify-between">
                                                     <div className="space-y-1">
@@ -345,17 +350,27 @@ export default function ProvidersScheduling() {
                                                                 {av.begin_time} - {av.end_time}
                                                             </span>
                                                             {isPastDate && (
-                                                                <Badge variant="outline" className="text-xs text-gray-500 border-gray-300">
+                                                                <Badge variant="outline" className="text-xs text-muted-foreground/60 border-border/40">
                                                                     Expired
                                                                 </Badge>
                                                             )}
                                                             {av.synced && (
-                                                                <Badge variant={isWarning ? "outline" : "secondary"} className={`text-xs ${isWarning ? "border-yellow-300 text-yellow-800 bg-yellow-100/50" : ""}`}>
+                                                                <Badge
+                                                                    variant={isWarning ? "outline" : "secondary"}
+                                                                    className={`text-xs ${isWarning
+                                                                            ? "border-amber-500/40 text-amber-600 dark:text-amber-400 bg-amber-500/10"
+                                                                            : ""
+                                                                        }`}
+                                                                >
                                                                     Synced from PMS
                                                                 </Badge>
                                                             )}
                                                             {!av.synced && (
-                                                                <Badge variant="outline" className={`text-xs ${isWarning ? "border-yellow-300 text-yellow-800" : ""}`}>
+                                                                <Badge
+                                                                    variant="outline"
+                                                                    className={`text-xs ${isWarning ? "border-amber-500/40 text-amber-600 dark:text-amber-400" : ""
+                                                                        }`}
+                                                                >
                                                                     Manual
                                                                 </Badge>
                                                             )}
@@ -377,7 +392,7 @@ export default function ProvidersScheduling() {
                                                             {hasTypes ? (
                                                                 <span>{av.appointment_type_names?.join(", ")}</span>
                                                             ) : (
-                                                                <span className="text-yellow-700 font-medium">
+                                                                <span className="text-amber-600 dark:text-amber-400 font-medium">
                                                                     None linked
                                                                 </span>
                                                             )}
@@ -386,7 +401,7 @@ export default function ProvidersScheduling() {
                                                     <Button
                                                         variant="outline"
                                                         size="sm"
-                                                        className={isWarning ? "border-yellow-300 text-yellow-800 hover:bg-yellow-100" : ""}
+                                                        className={isWarning ? "border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 shrink-0" : "shrink-0"}
                                                         onClick={() => openEditDialog(av)}
                                                     >
                                                         Edit Linking

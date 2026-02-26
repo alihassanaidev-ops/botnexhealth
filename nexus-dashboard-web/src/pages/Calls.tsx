@@ -39,19 +39,20 @@ import type { CallRecord, CallDetail, CallsListResponse, CustomFieldValue, Trans
 const PAGE_SIZE = 25
 const POLL_INTERVAL_MS = 30_000
 
+// Dark-mode-aware colors using opacity modifiers (safe for both light and dark)
 export const STATUS_OPTIONS: { value: string; label: string; color: string }[] = [
-    { value: "appointment_booked", label: "Appointment Booked", color: "bg-green-100 text-green-800 border-green-200" },
-    { value: "appointment_rescheduled", label: "Rescheduled", color: "bg-blue-100 text-blue-800 border-blue-200" },
-    { value: "appointment_cancelled", label: "Cancelled", color: "bg-zinc-100 text-zinc-600 border-zinc-200" },
-    { value: "emergency", label: "Emergency", color: "bg-red-100 text-red-800 border-red-200" },
-    { value: "complaint", label: "Complaint", color: "bg-orange-100 text-orange-800 border-orange-200" },
-    { value: "needs_callback", label: "Needs Callback", color: "bg-amber-100 text-amber-800 border-amber-200" },
-    { value: "faq_handled", label: "FAQ Handled", color: "bg-sky-100 text-sky-800 border-sky-200" },
-    { value: "financial_inquiry", label: "Financial Inquiry", color: "bg-violet-100 text-violet-800 border-violet-200" },
-    { value: "transferred", label: "Transferred", color: "bg-teal-100 text-teal-800 border-teal-200" },
-    { value: "insurance_verified", label: "Insurance Verified", color: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-    { value: "insurance_unverified", label: "Insurance Unverified", color: "bg-rose-100 text-rose-800 border-rose-200" },
-    { value: "no_action_needed", label: "No Action Needed", color: "bg-zinc-100 text-zinc-500 border-zinc-200" },
+    { value: "appointment_booked", label: "Appointment Booked", color: "bg-emerald-500/15 text-emerald-600 border-emerald-500/25 dark:text-emerald-400" },
+    { value: "appointment_rescheduled", label: "Rescheduled", color: "bg-blue-500/15 text-blue-600 border-blue-500/25 dark:text-blue-400" },
+    { value: "appointment_cancelled", label: "Cancelled", color: "bg-zinc-500/15 text-zinc-600 border-zinc-500/25 dark:text-zinc-400" },
+    { value: "emergency", label: "Emergency", color: "bg-red-500/15 text-red-600 border-red-500/25 dark:text-red-400" },
+    { value: "complaint", label: "Complaint", color: "bg-orange-500/15 text-orange-600 border-orange-500/25 dark:text-orange-400" },
+    { value: "needs_callback", label: "Needs Callback", color: "bg-amber-500/15 text-amber-600 border-amber-500/25 dark:text-amber-400" },
+    { value: "faq_handled", label: "FAQ Handled", color: "bg-sky-500/15 text-sky-600 border-sky-500/25 dark:text-sky-400" },
+    { value: "financial_inquiry", label: "Financial Inquiry", color: "bg-violet-500/15 text-violet-600 border-violet-500/25 dark:text-violet-400" },
+    { value: "transferred", label: "Transferred", color: "bg-teal-500/15 text-teal-600 border-teal-500/25 dark:text-teal-400" },
+    { value: "insurance_verified", label: "Insurance Verified", color: "bg-green-500/15 text-green-600 border-green-500/25 dark:text-green-400" },
+    { value: "insurance_unverified", label: "Insurance Unverified", color: "bg-rose-500/15 text-rose-600 border-rose-500/25 dark:text-rose-400" },
+    { value: "no_action_needed", label: "No Action Needed", color: "bg-zinc-500/10 text-zinc-500 border-zinc-500/20 dark:text-zinc-500" },
 ]
 
 const STATUS_MAP = Object.fromEntries(STATUS_OPTIONS.map((o) => [o.value, o]))
@@ -65,7 +66,7 @@ const DIRECTION_OPTIONS = [
 
 function TagBadge({ tag }: { tag: string }) {
     const opt = STATUS_MAP[tag]
-    const cls = opt?.color ?? "bg-zinc-100 text-zinc-600 border-zinc-200"
+    const cls = opt?.color ?? "bg-zinc-500/15 text-zinc-500 border-zinc-500/25"
     const label = opt?.label ?? tag.replace(/_/g, " ")
     return (
         <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
@@ -77,11 +78,11 @@ function TagBadge({ tag }: { tag: string }) {
 function sentimentBadge(sentiment: string | null) {
     if (!sentiment) return <span className="text-xs text-muted-foreground">—</span>
     const map: Record<string, string> = {
-        Positive: "bg-green-100 text-green-700",
-        Negative: "bg-red-100 text-red-700",
-        Neutral: "bg-zinc-100 text-zinc-600",
+        Positive: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+        Negative: "bg-red-500/15 text-red-600 dark:text-red-400",
+        Neutral: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400",
     }
-    const cls = map[sentiment] ?? "bg-zinc-100 text-zinc-600"
+    const cls = map[sentiment] ?? "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400"
     return (
         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
             {sentiment}
@@ -224,8 +225,8 @@ function TranscriptChatBubbles({ turns }: { turns: TranscriptTurn[] }) {
                     <div key={i} className={`flex ${isAgent ? "justify-start" : "justify-end"}`}>
                         <div
                             className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs leading-relaxed shadow-sm ${isAgent
-                                    ? "bg-background border text-foreground rounded-tl-sm"
-                                    : "bg-primary text-primary-foreground rounded-tr-sm"
+                                ? "bg-background border text-foreground rounded-tl-sm"
+                                : "bg-primary text-primary-foreground rounded-tr-sm"
                                 }`}
                         >
                             <p className={`font-semibold mb-0.5 text-[10px] ${isAgent ? "opacity-50" : "opacity-75"
@@ -275,8 +276,8 @@ function TranscriptSection({ detail }: { detail: CallDetail }) {
                         type="button"
                         onClick={() => setTab(t.id)}
                         className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${activeTab === t.id
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted text-muted-foreground hover:bg-muted/70"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground hover:bg-muted/70"
                             }`}
                     >
                         {t.label}
@@ -657,14 +658,14 @@ export default function Calls() {
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                             <thead>
-                                <tr className="border-b border-border bg-muted/40">
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground whitespace-nowrap">Date & Time</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">Patient</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">Direction</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">Tags</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">Sentiment</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground whitespace-nowrap">Duration</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">Summary</th>
+                                <tr className="border-b border-border bg-muted/30">
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Date & Time</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Direction</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Tags</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Sentiment</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Duration</th>
+                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Summary</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -672,14 +673,20 @@ export default function Calls() {
                                     <SkeletonRows />
                                 ) : !data || data.items.length === 0 ? (
                                     <tr>
-                                        <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
-                                            <Phone className="h-10 w-10 mx-auto mb-3 opacity-20" />
-                                            <p className="font-medium">No calls yet</p>
-                                            <p className="text-xs mt-1">
-                                                {hasFilters
-                                                    ? "No calls match your current filters."
-                                                    : "Calls will appear here once your voice agent starts taking calls."}
-                                            </p>
+                                        <td colSpan={7} className="px-4 py-16 text-center">
+                                            <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                                                <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
+                                                    <Phone className="h-6 w-6 opacity-40" />
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium text-sm text-foreground/70">No calls found</p>
+                                                    <p className="text-xs mt-0.5">
+                                                        {hasFilters
+                                                            ? "Try adjusting or clearing your filters."
+                                                            : "Calls will appear here once your voice agent starts taking calls."}
+                                                    </p>
+                                                </div>
+                                            </div>
                                         </td>
                                     </tr>
                                 ) : (
@@ -734,7 +741,7 @@ interface CallRowProps {
 function CallRow({ call, onClick }: CallRowProps) {
     return (
         <tr
-            className="border-b border-border/50 hover:bg-muted/30 cursor-pointer transition-colors"
+            className="border-b border-border/40 hover:bg-muted/40 cursor-pointer transition-colors duration-150"
             onClick={onClick}
         >
             <td className="px-4 py-3 whitespace-nowrap text-xs text-muted-foreground">
