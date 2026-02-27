@@ -46,6 +46,7 @@ export interface Location {
     nexhealth_subdomain: string | null;
     nexhealth_location_id: string | null;
     retell_agent_id: string | null;
+    twilio_from_number: string | null;
     has_retell_secret: boolean;
 
     address: string | null;

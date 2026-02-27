@@ -538,6 +538,7 @@ class LocationCreate(BaseModel):
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
     retell_agent_id: str | None = None
+    twilio_from_number: str | None = None
 
     address: str | None = None
     city: str | None = None
@@ -554,6 +555,7 @@ class LocationUpdate(BaseModel):
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
     retell_agent_id: str | None = None
+    twilio_from_number: str | None = None
 
     address: str | None = None
     city: str | None = None
@@ -573,6 +575,7 @@ class LocationResponse(BaseModel):
     nexhealth_subdomain: str | None
     nexhealth_location_id: str | None
     retell_agent_id: str | None
+    twilio_from_number: str | None
 
     address: str | None
     city: str | None
@@ -593,6 +596,7 @@ class LocationResponse(BaseModel):
             nexhealth_subdomain=loc.nexhealth_subdomain,
             nexhealth_location_id=loc.nexhealth_location_id,
             retell_agent_id=loc.retell_agent_id,
+            twilio_from_number=loc.twilio_from_number,
             address=loc.address,
             city=loc.city,
             state=loc.state,

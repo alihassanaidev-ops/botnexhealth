@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, RefreshCw, Pencil, Trash2, Loader2 } from "lucide-react";
+import { Plus, RefreshCw, Pencil, Trash2, Loader2, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Table,
@@ -157,6 +157,7 @@ export function LocationList({ tenantSlug }: LocationListProps) {
                                 <TableHead>Slug</TableHead>
                                 <TableHead>NexHealth Loc ID</TableHead>
                                 <TableHead>Retell Agent</TableHead>
+                                <TableHead>SMS Number</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
@@ -164,7 +165,7 @@ export function LocationList({ tenantSlug }: LocationListProps) {
                         <TableBody>
                             {locations.length === 0 && !isLoading && (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="h-24 text-center">
+                                    <TableCell colSpan={7} className="h-24 text-center">
                                         No locations found. Add one to get started.
                                     </TableCell>
                                 </TableRow>
@@ -179,6 +180,16 @@ export function LocationList({ tenantSlug }: LocationListProps) {
                                     <TableCell className="font-mono text-sm">
                                         {loc.retell_agent_id
                                             ? <span title={loc.retell_agent_id}>{loc.retell_agent_id.slice(0, 12)}...</span>
+                                            : <span className="text-muted-foreground">-</span>}
+                                    </TableCell>
+                                    <TableCell className="font-mono text-sm">
+                                        {loc.twilio_from_number
+                                            ? (
+                                                <span className="inline-flex items-center gap-1 text-green-600 dark:text-green-400">
+                                                    <MessageSquare className="h-3 w-3 shrink-0" />
+                                                    {loc.twilio_from_number}
+                                                </span>
+                                            )
                                             : <span className="text-muted-foreground">-</span>}
                                     </TableCell>
                                     <TableCell>

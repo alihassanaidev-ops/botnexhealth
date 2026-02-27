@@ -29,8 +29,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import api from "@/lib/api";
-import { verifyRetellAgent } from "@/lib/admin-api";
-import type { Location, InstitutionBasicListResponse, InstitutionBasic } from "@/types";
+import { verifyRetellAgent, listTwilioPhoneNumbers } from "@/lib/admin-api";
+import type { Location, InstitutionBasicListResponse, InstitutionBasic, TwilioPhoneNumber } from "@/types";
 import { cn } from "@/lib/utils";
 
 const US_TIMEZONES = [
@@ -81,6 +81,7 @@ const locationSchema = z.object({
     nexhealth_subdomain: z.string().optional(),
     nexhealth_location_id: z.string().optional(),
     retell_agent_id: z.string().optional(),
+    twilio_from_number: z.string().optional(),
     address: z.string().optional(),
     city: z.string().optional(),
     state: z.string().optional(),
@@ -135,6 +136,8 @@ export function LocationForm({ tenantSlug, location, onSuccess, onCancel }: Loca
     const [isLoadingNH, setIsLoadingNH] = useState(false);
     const [isVerifyingAgent, setIsVerifyingAgent] = useState(false);
     const [agentVerificationStatus, setAgentVerificationStatus] = useState<"idle" | "success" | "error">("idle");
+    const [twilioNumbers, setTwilioNumbers] = useState<TwilioPhoneNumber[]>([]);
+    const [isLoadingTwilio, setIsLoadingTwilio] = useState(false);
 
     const form = useForm<LocationFormValues>({
         resolver: zodResolver(locationSchema),
@@ -144,6 +147,7 @@ export function LocationForm({ tenantSlug, location, onSuccess, onCancel }: Loca
             nexhealth_subdomain: location?.nexhealth_subdomain || "",
             nexhealth_location_id: location?.nexhealth_location_id || "",
             retell_agent_id: location?.retell_agent_id || "",
+            twilio_from_number: location?.twilio_from_number || "",
             address: location?.address || "",
             city: location?.city || "",
             state: location?.state || "",
@@ -168,6 +172,22 @@ export function LocationForm({ tenantSlug, location, onSuccess, onCancel }: Loca
             }
         }
         fetchNHLocations();
+    }, []);
+
+    // Fetch Twilio phone numbers on mount
+    useEffect(() => {
+        async function fetchTwilioNumbers() {
+            setIsLoadingTwilio(true);
+            try {
+                const numbers = await listTwilioPhoneNumbers();
+                setTwilioNumbers(numbers.filter(n => n.capabilities.sms));
+            } catch {
+                // Non-critical — form still works without the list
+            } finally {
+                setIsLoadingTwilio(false);
+            }
+        }
+        fetchTwilioNumbers();
     }, []);
 
     const nexHealthLocations = nexHealthInstitutions.flatMap(inst => inst.locations);
@@ -403,6 +423,54 @@ export function LocationForm({ tenantSlug, location, onSuccess, onCancel }: Loca
                                             Agent not found — check the ID and try again
                                         </p>
                                     )}
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                    </SectionCard>
+
+                    {/* Section: Twilio SMS */}
+                    <SectionCard
+                        title="Twilio SMS"
+                        description="Select the outbound number used to send post-call SMS messages to patients."
+                    >
+                        <FormField
+                            control={form.control}
+                            name="twilio_from_number"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>
+                                        Outbound SMS Number
+                                        <FieldHint text="When a call analysis includes a send_sms message, it will be sent from this number to the patient." />
+                                    </FormLabel>
+                                    <Select
+                                        onValueChange={(val) => field.onChange(val === "none" ? "" : val)}
+                                        value={field.value || "none"}
+                                        disabled={isLoadingTwilio}
+                                    >
+                                        <FormControl>
+                                            <SelectTrigger>
+                                                <SelectValue
+                                                    placeholder={
+                                                        isLoadingTwilio
+                                                            ? "Loading numbers…"
+                                                            : twilioNumbers.length === 0
+                                                            ? "No SMS-capable numbers found"
+                                                            : "Select a Twilio number"
+                                                    }
+                                                />
+                                            </SelectTrigger>
+                                        </FormControl>
+                                        <SelectContent>
+                                            <SelectItem value="none">None — disable auto-SMS</SelectItem>
+                                            {twilioNumbers.map((n) => (
+                                                <SelectItem key={n.sid} value={n.phone_number}>
+                                                    {n.phone_number}
+                                                    {n.friendly_name ? ` — ${n.friendly_name}` : ""}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                     <FormMessage />
                                 </FormItem>
                             )}

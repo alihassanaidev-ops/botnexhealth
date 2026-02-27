@@ -194,8 +194,9 @@ async def handle_retell_webhook(
             return {"status": "duplicate", "reason": reason}
         processing_started = True
 
-        # Resolve tenant from agent_id
+        # Resolve tenant + location from agent_id
         tenant = None
+        location = None
         if event.call.agent_id:
             try:
                 from src.app.database import get_db_session
@@ -205,7 +206,7 @@ async def handle_retell_webhook(
                     tenant_service = TenantService(session)
                     result = await tenant_service.get_location_by_retell_agent_id(event.call.agent_id)
                     if result:
-                        _, tenant = result
+                        location, tenant = result
             except Exception as e:
                 logger.warning(f"Failed to lookup tenant by agent_id {event.call.agent_id}: {e}")
 
@@ -270,7 +271,54 @@ async def handle_retell_webhook(
                 
                 # Commit the transaction so contacts and calls are saved!
                 await session.commit()
-                
+
+            # ── Auto-SMS: fire after commit (non-blocking) ────────────────
+            # Use raw call_analysis (not scrubbed) so patient name is intact.
+            _raw_analysis = event.call.call_analysis
+            _sms_body: str | None = (
+                (_raw_analysis.custom_analysis_data or {}).get("send_sms")
+                if _raw_analysis
+                else None
+            )
+            _patient_phone = (
+                mapped_call_data.from_number
+                if mapped_call_data.direction == "inbound"
+                else mapped_call_data.to_number
+            ) or mapped_call_data.from_number
+
+            if _sms_body and _patient_phone and location and location.twilio_from_number:
+                try:
+                    from twilio.rest import Client as TwilioClient
+                    from src.app.config import settings as _cfg
+
+                    if _cfg.twillio_sid and _cfg.twillio_api_secret:
+                        _twilio = TwilioClient(_cfg.twillio_sid, _cfg.twillio_api_secret)
+                        _msg = _twilio.messages.create(
+                            body=_sms_body,
+                            from_=location.twilio_from_number,
+                            to=_patient_phone,
+                        )
+                        logger.info(
+                            "Auto-SMS sent: sid=%s from=%s to=%s call=%s",
+                            _msg.sid,
+                            location.twilio_from_number,
+                            _patient_phone,
+                            hash_for_logging(event.call.call_id),
+                        )
+                    else:
+                        logger.warning("Auto-SMS skipped: Twilio credentials not configured")
+                except Exception as _sms_err:
+                    logger.error(
+                        "Auto-SMS failed (non-blocking): call=%s error=%s",
+                        hash_for_logging(event.call.call_id),
+                        _sms_err,
+                    )
+            elif location and location.twilio_from_number and not _sms_body:
+                logger.debug(
+                    "Auto-SMS skipped: no send_sms content in call analysis for call=%s",
+                    hash_for_logging(event.call.call_id),
+                )
+
         await _finish_webhook_processing(
             processing_call_id,
             processing_event_type,

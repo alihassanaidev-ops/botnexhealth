@@ -47,6 +47,9 @@ class TenantLocation(Base):
     # Retell — per-location agent
     retell_agent_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
 
+    # Twilio — outbound SMS number for this location (E.164, e.g. +12125551234)
+    twilio_from_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     # Configuration
     timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
 
