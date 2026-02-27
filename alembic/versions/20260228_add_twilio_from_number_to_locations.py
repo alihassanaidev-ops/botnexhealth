@@ -1,7 +1,7 @@
 """add twilio_from_number to tenant_locations
 
 Revision ID: 20260228_twilio_from_number
-Revises: 20260226_add_jsonb_transcripts
+Revises: e1f2a3b4c5d6
 Create Date: 2026-02-28
 """
 
