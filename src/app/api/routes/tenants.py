@@ -8,7 +8,7 @@ from typing import Any, Annotated
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, Field
 
 from src.app.database import get_db_session
@@ -19,7 +19,7 @@ from src.app.services.audit_decorator import audit
 from src.app.services.tenant_service import TenantService
 from src.app.services.supabase_service import SupabaseService
 from src.app.services.supabase_service import SupabaseService
-from src.app.api.models import TenantResponse, InstitutionBasicListResponse
+from src.app.api.models import TenantResponse, InstitutionBasicListResponse, AuditLogPaginatedResponse
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.nexhealth.client import NexHealthClient
@@ -781,3 +781,52 @@ async def sync_location(
             "appointment_types_synced": result.appointment_types_synced,
             "errors": result.errors,
         }
+
+
+@router.get("/audit-logs", response_model=AuditLogPaginatedResponse)
+async def get_all_audit_logs(
+    _: Annotated[User, Depends(get_current_admin)],
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
+    tenant_id: str | None = Query(None, description="Optional tenant ID to filter logs")
+):
+    """
+    Get audit logs across all tenants (Admin only).
+    """
+    from sqlalchemy import select, func
+    from src.app.models.audit_log import AuditLog
+    
+    async with get_db_session() as session:
+        # Base queries
+        count_stmt = select(func.count()).select_from(AuditLog)
+        data_stmt = select(AuditLog)
+        
+        # Apply tenant filter if provided
+        if tenant_id:
+            count_stmt = count_stmt.where(AuditLog.tenant_id == tenant_id)
+            data_stmt = data_stmt.where(AuditLog.tenant_id == tenant_id)
+            
+        # Get total count
+        count_result = await session.execute(count_stmt)
+        total = count_result.scalar() or 0
+        
+        # Get paginated data ordered newest first
+        result = await session.execute(
+            data_stmt
+            .order_by(AuditLog.timestamp.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        items = result.scalars().all()
+        
+        import math
+        pages = math.ceil(total / size) if size > 0 else 0
+        
+        return AuditLogPaginatedResponse(
+            items=items,
+            total=total,
+            page=page,
+            size=size,
+            pages=pages
+        )
+

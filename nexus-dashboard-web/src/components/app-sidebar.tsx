@@ -56,6 +56,11 @@ const adminNav: NavItemDef[] = [
         url: "/admin/twilio",
         icon: MessageSquare,
     },
+    {
+        title: "Audit Logs",
+        url: "/admin/audit-logs",
+        icon: ShieldCheck,
+    },
 ]
 
 // Tenant-only nav items
