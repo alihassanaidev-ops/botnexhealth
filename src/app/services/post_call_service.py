@@ -152,6 +152,24 @@ class PostCallService:
 
         return None, None, None
 
+    @staticmethod
+    def _extract_patient_id(
+        custom: dict[str, Any],
+        dynamic_vars: dict[str, Any],
+    ) -> str | None:
+        """Extract NexHealth patient ID from webhook data.
+
+        The Retell agent stores the patient_id in dynamic variables after
+        a successful lookup_patient or create_patient call. We also check
+        custom_analysis_data as a fallback.
+        """
+        return (
+            _nonempty(dynamic_vars.get("patient_id"))
+            or _nonempty(dynamic_vars.get("nexhealth_patient_id"))
+            or _nonempty(custom.get("patient_id"))
+            or _nonempty(custom.get("nexhealth_patient_id"))
+        )
+
     async def process_call_analyzed_event(
         self,
         tenant_id: str,
@@ -184,13 +202,16 @@ class PostCallService:
         )
         is_new_patient_flag: bool = bool(custom.get("New_patient", False))
 
-        if phone:
-            phone_hash = Contact.find_by_phone_hash(phone)
+        # Extract NexHealth patient ID from webhook data
+        pms_patient_id: str | None = self._extract_patient_id(custom, dynamic_vars)
+
+        if pms_patient_id:
+            # ── Primary path: resolve by PMS Patient ID (unique per tenant) ──
             existing = (
                 await self.session.execute(
                     select(Contact).where(
                         Contact.tenant_id == tenant_id,
-                        Contact.phone_hash == phone_hash,
+                        Contact.nexhealth_patient_id == pms_patient_id,
                     )
                 )
             ).scalar_one_or_none()
@@ -198,31 +219,57 @@ class PostCallService:
             if existing:
                 contact = existing
                 contact.last_agent_interaction_id = webhook_call.agent_id
-                # Enrich: only fill in blanks — never overwrite existing data
-                if first_name and not contact.first_name:
+                # Always update identity fields from the latest call data
+                if first_name:
                     contact.first_name = first_name
                     contact.last_name = last_name
                     contact.full_name = full_name
-                if patient_email and not contact.email_encrypted:
+                if patient_email:
                     contact.email = patient_email
-                if patient_dob and not contact.date_of_birth_encrypted:
+                if patient_dob:
                     contact.date_of_birth = patient_dob
+                if phone:
+                    contact.phone = phone
             else:
+                # New PMS-linked contact
                 contact = Contact(
                     tenant_id=tenant_id,
                     first_name=first_name,
                     last_name=last_name,
                     full_name=full_name,
+                    nexhealth_patient_id=pms_patient_id,
                     is_new_patient=is_new_patient_flag,
                     last_agent_interaction_id=webhook_call.agent_id,
                 )
-                contact.phone = phone
+                if phone:
+                    contact.phone = phone
                 if patient_email:
                     contact.email = patient_email
                 if patient_dob:
                     contact.date_of_birth = patient_dob
                 self.session.add(contact)
                 await self.session.flush()
+        else:
+            # ── Fallback: no PMS ID — create a new Contact per call ──────
+            # We intentionally do NOT reuse by phone_hash here because
+            # we cannot know which patient is calling from a shared phone.
+            # Example: Mother (Jane) calling for her son (Timmy).
+            contact = Contact(
+                tenant_id=tenant_id,
+                first_name=first_name,
+                last_name=last_name,
+                full_name=full_name,
+                is_new_patient=is_new_patient_flag,
+                last_agent_interaction_id=webhook_call.agent_id,
+            )
+            if phone:
+                contact.phone = phone
+            if patient_email:
+                contact.email = patient_email
+            if patient_dob:
+                contact.date_of_birth = patient_dob
+            self.session.add(contact)
+            await self.session.flush()
 
         # ── 2. Resolve call status tags ───────────────────────────────────────
         primary_status, all_tags = self._parse_call_tags(custom)

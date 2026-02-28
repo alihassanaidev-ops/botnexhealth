@@ -5,6 +5,12 @@ HIPAA Compliance:
 - phone_hash enables caller-ID lookups without decrypting every row.
 - Names stored plaintext for clinic staff dashboard reference (per HIPAA scope doc §3.2).
 - All records are tenant-scoped (tenant_id NOT NULL).
+
+Identity Model:
+- The true unique identifier is (tenant_id, nexhealth_patient_id).
+- A single phone number may link to multiple Contact records (e.g. a parent
+  calling for different family members).
+- Contacts without a PMS link are created per-call and not deduplicated.
 """
 
 from __future__ import annotations
@@ -30,9 +36,10 @@ class Contact(Base):
 
     __tablename__ = "contacts"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "phone_hash", name="uq_contact_tenant_phone"),
+        UniqueConstraint("tenant_id", "nexhealth_patient_id", name="uq_contact_tenant_pms"),
         Index("ix_contact_tenant", "tenant_id"),
         Index("ix_contact_tenant_nexhealth", "tenant_id", "nexhealth_patient_id"),
+        Index("ix_contact_tenant_phone", "tenant_id", "phone_hash"),
     )
 
     # Primary key
