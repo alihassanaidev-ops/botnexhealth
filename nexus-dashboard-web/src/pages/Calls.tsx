@@ -130,7 +130,7 @@ function TagFilter({ selected, onChange }: TagToggleProps) {
     }
 
     return (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-2">
             {STATUS_OPTIONS.map((opt) => {
                 const active = selected.includes(opt.value)
                 return (
@@ -138,10 +138,10 @@ function TagFilter({ selected, onChange }: TagToggleProps) {
                         key={opt.value}
                         type="button"
                         onClick={() => toggle(opt.value)}
-                        className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium transition-all
+                        className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors duration-200
                             ${active
-                                ? `${opt.color} ring-2 ring-offset-1 ring-current`
-                                : "border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                                ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                                : "bg-transparent border-input/60 text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground hover:border-input"
                             }`}
                     >
                         {opt.label}
@@ -591,51 +591,55 @@ export default function Calls() {
             </div>
 
             {/* Filters */}
-            <Card>
-                <CardContent className="pt-4 pb-4 space-y-3">
+            <Card className="shadow-sm">
+                <CardContent className="p-5 space-y-5">
                     {/* Row 1: search + direction + dates */}
-                    <div className="flex flex-wrap gap-3 items-end">
-                        <div className="relative flex-1 min-w-[180px] max-w-xs">
-                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+                    <div className="flex flex-wrap items-end gap-4">
+                        <div className="relative flex-1 min-w-[200px] max-w-sm">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                             <Input
-                                placeholder="Search by patient name…"
+                                placeholder="Search by patient name..."
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
-                                className="pl-9"
+                                className="pl-9 h-10 w-full bg-background"
                             />
                         </div>
 
-                        <Select value={directionFilter || "all"} onValueChange={(v) => setDirectionFilter(v === "all" ? "" : v)}>
-                            <SelectTrigger className="w-[140px]">
-                                <SelectValue placeholder="All directions" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All directions</SelectItem>
-                                {DIRECTION_OPTIONS.map((o) => (
-                                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-
-                        <div className="flex flex-col gap-1">
-                            <span className="text-xs text-muted-foreground pl-0.5">From</span>
-                            <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-[145px]" />
+                        <div className="flex-none">
+                            <Select value={directionFilter || "all"} onValueChange={(v) => setDirectionFilter(v === "all" ? "" : v)}>
+                                <SelectTrigger className="w-[160px] h-10 bg-background">
+                                    <SelectValue placeholder="All directions" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All directions</SelectItem>
+                                    {DIRECTION_OPTIONS.map((o) => (
+                                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
-                        <div className="flex flex-col gap-1">
-                            <span className="text-xs text-muted-foreground pl-0.5">To</span>
-                            <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-[145px]" />
+
+                        <div className="flex items-center gap-4">
+                            <div className="flex flex-col gap-1.5">
+                                <span className="text-[11px] font-medium text-muted-foreground ml-1 uppercase tracking-wide">From</span>
+                                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-[145px] h-10 bg-background" />
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                                <span className="text-[11px] font-medium text-muted-foreground ml-1 uppercase tracking-wide">To</span>
+                                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-[145px] h-10 bg-background" />
+                            </div>
                         </div>
 
                         {hasFilters && (
-                            <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1.5 self-end">
-                                <X className="h-3.5 w-3.5" /> Clear
+                            <Button variant="ghost" size="sm" onClick={clearFilters} className="h-10 px-4 ml-auto text-muted-foreground hover:text-foreground">
+                                <X className="h-4 w-4 mr-2" /> Clear filters
                             </Button>
                         )}
                     </div>
 
                     {/* Row 2: tag toggles */}
-                    <div>
-                        <p className="text-xs text-muted-foreground mb-1.5">Filter by tag (select one or more):</p>
+                    <div className="space-y-3 pt-1 border-t border-border/40">
+                        <p className="text-xs font-semibold text-muted-foreground">Filter by tag (select one or more):</p>
                         <TagFilter selected={selectedTags} onChange={setSelectedTags} />
                     </div>
                 </CardContent>
