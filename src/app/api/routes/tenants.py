@@ -179,6 +179,53 @@ async def list_nexhealth_locations(
         
     return await handle_nexhealth_request(client, "GET", "/locations", params=params)
 
+@router.get("/audit-logs", response_model=AuditLogPaginatedResponse)
+async def get_all_audit_logs(
+    _: Annotated[User, Depends(get_current_admin)],
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
+    tenant_id: str | None = Query(None, description="Optional tenant ID to filter logs")
+):
+    """
+    Get audit logs across all tenants (Admin only).
+    """
+    from sqlalchemy import select, func
+    from src.app.models.audit_log import AuditLog
+    
+    async with get_db_session() as session:
+        # Base queries
+        count_stmt = select(func.count()).select_from(AuditLog)
+        data_stmt = select(AuditLog)
+        
+        # Apply tenant filter if provided
+        if tenant_id:
+            count_stmt = count_stmt.where(AuditLog.tenant_id == tenant_id)
+            data_stmt = data_stmt.where(AuditLog.tenant_id == tenant_id)
+            
+        # Get total count
+        count_result = await session.execute(count_stmt)
+        total = count_result.scalar() or 0
+        
+        # Get paginated data ordered newest first
+        result = await session.execute(
+            data_stmt
+            .order_by(AuditLog.timestamp.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        items = result.scalars().all()
+        
+        import math
+        pages = math.ceil(total / size) if size > 0 else 0
+        
+        return AuditLogPaginatedResponse(
+            items=items,
+            total=total,
+            page=page,
+            size=size,
+            pages=pages
+        )
+
 @router.get("", response_model=list[TenantResponse])
 async def list_tenants(
     include_inactive: bool = True,
@@ -781,52 +828,4 @@ async def sync_location(
             "appointment_types_synced": result.appointment_types_synced,
             "errors": result.errors,
         }
-
-
-@router.get("/audit-logs", response_model=AuditLogPaginatedResponse)
-async def get_all_audit_logs(
-    _: Annotated[User, Depends(get_current_admin)],
-    page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=100),
-    tenant_id: str | None = Query(None, description="Optional tenant ID to filter logs")
-):
-    """
-    Get audit logs across all tenants (Admin only).
-    """
-    from sqlalchemy import select, func
-    from src.app.models.audit_log import AuditLog
-    
-    async with get_db_session() as session:
-        # Base queries
-        count_stmt = select(func.count()).select_from(AuditLog)
-        data_stmt = select(AuditLog)
-        
-        # Apply tenant filter if provided
-        if tenant_id:
-            count_stmt = count_stmt.where(AuditLog.tenant_id == tenant_id)
-            data_stmt = data_stmt.where(AuditLog.tenant_id == tenant_id)
-            
-        # Get total count
-        count_result = await session.execute(count_stmt)
-        total = count_result.scalar() or 0
-        
-        # Get paginated data ordered newest first
-        result = await session.execute(
-            data_stmt
-            .order_by(AuditLog.timestamp.desc())
-            .offset((page - 1) * size)
-            .limit(size)
-        )
-        items = result.scalars().all()
-        
-        import math
-        pages = math.ceil(total / size) if size > 0 else 0
-        
-        return AuditLogPaginatedResponse(
-            items=items,
-            total=total,
-            page=page,
-            size=size,
-            pages=pages
-        )
 
