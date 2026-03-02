@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/card";
 import { toast } from "sonner";
 import api from "@/lib/api";
-import type { TenantDetail } from "@/types";
+import type { InstitutionDetail } from "@/types";
 
 const credentialsSchema = z.object({
     nexhealth_api_key: z.string().optional(),
@@ -28,12 +28,12 @@ type CredentialsFormValues = z.infer<typeof credentialsSchema>;
 
 type SectionKey = "nexhealth";
 
-interface TenantCredentialsFormProps {
-    tenant: TenantDetail;
+interface InstitutionCredentialsFormProps {
+    institution: InstitutionDetail;
     onUpdated: () => void;
 }
 
-export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFormProps) {
+export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCredentialsFormProps) {
     const [editingSection, setEditingSection] = useState<SectionKey | null>(null);
     const [isSaving, setIsSaving] = useState(false);
 
@@ -44,13 +44,13 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
         },
     });
 
-    // Reset form when tenant data is refreshed (e.g. after save)
+    // Reset form when institution data is refreshed (e.g. after save)
     useEffect(() => {
         form.reset({
             nexhealth_api_key: "",
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tenant]);
+    }, [institution]);
 
     async function onSubmit(values: CredentialsFormValues) {
         setIsSaving(true);
@@ -77,7 +77,7 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                 return;
             }
 
-            await api.patch(`/admin/tenants/${tenant.slug}`, payload);
+            await api.patch(`/admin/institutions/${institution.slug}`, payload);
             toast.success("Credentials updated");
             setEditingSection(null);
             onUpdated();
@@ -181,8 +181,8 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                     title="NexHealth"
                     description="Sync patients, appointments, and providers from the practice management system."
                     section="nexhealth"
-                    configured={tenant.has_nexhealth_key}
-                    hasSystemKey={tenant.has_system_nexhealth_key}
+                    configured={institution.has_nexhealth_key}
+                    hasSystemKey={institution.has_system_nexhealth_key}
                 >
                     <div className="grid gap-4">
                         <FormField
@@ -194,7 +194,7 @@ export function TenantCredentialsForm({ tenant, onUpdated }: TenantCredentialsFo
                                     <FormControl>
                                         <Input
                                             type="password"
-                                            placeholder={tenant.has_nexhealth_key ? "••••••••" : "Enter API key"}
+                                            placeholder={institution.has_nexhealth_key ? "••••••••" : "Enter API key"}
                                             {...field}
                                         />
                                     </FormControl>

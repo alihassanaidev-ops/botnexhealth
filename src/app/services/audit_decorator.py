@@ -75,8 +75,8 @@ def audit(
                 logger.critical(f"AUDIT CONFIG ERROR in {func.__name__}: {config_error}")
                 target_resource = f"{action}:CONFIGURATION_ERROR"
 
-            # 2. Context Resolution (Tenant, IP, etc.)
-            tenant_id = _resolve_tenant_id(args, kwargs)
+            # 2. Context Resolution (Institution, IP, etc.)
+            institution_id = _resolve_institution_id(args, kwargs)
             client_ip = _resolve_client_ip(args, kwargs)
 
             # Base metadata
@@ -100,7 +100,7 @@ def audit(
                     target_resource=target_resource,
                     outcome=AuditOutcome.SUCCESS,
                     metadata=safe_metadata,
-                    tenant_id=tenant_id,
+                    institution_id=institution_id,
                     request_id=request_id,
                 )
                 return result
@@ -116,7 +116,7 @@ def audit(
                     target_resource=target_resource,
                     outcome=outcome,
                     metadata=safe_metadata,
-                    tenant_id=tenant_id,
+                    institution_id=institution_id,
                     request_id=request_id,
                 )
                 raise
@@ -126,13 +126,13 @@ def audit(
     return decorator
 
 
-def _resolve_tenant_id(args: tuple, kwargs: dict) -> str | None:
-    """Attempt to resolve tenant ID from arguments (Context)."""
+def _resolve_institution_id(args: tuple, kwargs: dict) -> str | None:
+    """Attempt to resolve institution ID from arguments (Context)."""
     for arg in args:
-        if hasattr(arg, "state") and hasattr(arg.state, "tenant"):
-            tenant = getattr(arg.state, "tenant", None)
-            if tenant:
-                return str(tenant.id)
+        if hasattr(arg, "state") and hasattr(arg.state, "institution"):
+            institution = getattr(arg.state, "institution", None)
+            if institution:
+                return str(institution.id)
     return None
 
 

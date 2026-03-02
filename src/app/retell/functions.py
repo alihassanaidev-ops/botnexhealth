@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/retell", tags=["Retell AI"])
 
-# Current call context for tenant resolution
+# Current call context for institution resolution
 _current_call_context: dict[str, Any] = {}
 
 # Registry of available functions
@@ -49,53 +49,43 @@ def get_call_context() -> dict[str, Any]:
     return _current_call_context.copy()
 
 
-async def get_tenant_from_call_context() -> tuple[Optional["Tenant"], Optional["TenantLocation"]]:
+async def get_institution_from_call_context() -> tuple[Optional["Institution"], Optional["InstitutionLocation"]]:
     """
-    Resolve tenant and location from current call context using agent_id.
+    Resolve institution and location from current call context using agent_id.
 
-    Since each Retell agent is mapped 1:1 to a TenantLocation, this
+    Since each Retell agent is mapped 1:1 to an InstitutionLocation, this
     provides automatic location routing — no need for the agent to
     call list_locations or pass location_id.
 
     Resolution order:
-    1. TenantLocation with matching retell_agent_id  -> (tenant, location)
-    2. Tenant with matching retell_agent_id (backward compat) -> (tenant, None)
-    3. Not found -> (None, None)
+    1. InstitutionLocation with matching retell_agent_id  -> (institution, location)
+    2. Not found -> (None, None)
     """
-    from src.app.services.tenant_service import TenantService
+    from src.app.services.institution_service import InstitutionService
     from src.app.database import get_db_session
 
     agent_id = _current_call_context.get("agent_id")
     if not agent_id:
-        logger.warning("Tenant resolution failed: no agent_id in call context")
+        logger.warning("Institution resolution failed: no agent_id in call context")
         return None, None
 
     try:
         async with get_db_session() as session:
-            tenant_service = TenantService(session)
+            institution_service = InstitutionService(session)
 
-            # Primary: location-level agent_id (standard path)
-            result = await tenant_service.get_location_by_retell_agent_id(agent_id)
+            result = await institution_service.get_location_by_retell_agent_id(agent_id)
             if result:
-                location, tenant = result
+                location, institution = result
                 logger.info(
-                    f"Resolved tenant={hash_for_logging(tenant.id)}, "
+                    f"Resolved institution={hash_for_logging(institution.id)}, "
                     f"location={location.slug} from agent_id"
                 )
-                return tenant, location
+                return institution, location
 
-            # Fallback: tenant-level agent_id (backward compat)
-            tenant = await tenant_service.get_by_retell_agent_id(agent_id)
-            if tenant:
-                logger.info(
-                    f"Resolved tenant={hash_for_logging(tenant.id)} "
-                    f"(no location) from agent_id"
-                )
-            else:
-                logger.warning("Tenant resolution failed: no tenant found for agent_id")
-            return tenant, None
+            logger.warning("Institution resolution failed: no location found for agent_id")
+            return None, None
     except Exception as e:
-        logger.error(f"Tenant resolution error: {e}")
+        logger.error(f"Institution resolution error: {e}")
         return None, None
 
 
@@ -150,7 +140,7 @@ async def handle_function_call(
                 detail=f"Unknown function: {request.function_name}",
             )
 
-        # Set call context for tenant resolution in handlers.
+        # Set call context for institution resolution in handlers.
         # agent_id may be at the top level or nested under "call".
         global _current_call_context
         _current_call_context = {

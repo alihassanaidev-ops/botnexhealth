@@ -19,58 +19,58 @@ import {
     SheetTrigger,
 } from "@/components/ui/sheet";
 import { TenantForm } from "@/components/tenants/TenantForm";
-import { Tenant } from "@/types";
+import { InstitutionDetail } from "@/types";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 
-export default function Tenants() {
+export default function Institutions() {
     const navigate = useNavigate();
     const [isOpen, setIsOpen] = useState(false);
-    const [tenants, setTenants] = useState<Tenant[]>([]);
+    const [institutions, setInstitutions] = useState<InstitutionDetail[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
-    const fetchTenants = async () => {
+    const fetchInstitutions = async () => {
         setIsLoading(true);
         try {
-            const { data } = await api.get<Tenant[]>("/admin/tenants");
-            setTenants(data);
+            const { data } = await api.get<InstitutionDetail[]>("/admin/institutions");
+            setInstitutions(data);
         } catch (error) {
-            console.error("Failed to fetch tenants", error);
-            toast.error("Failed to fetch tenants");
+            console.error("Failed to fetch institutions", error);
+            toast.error("Failed to fetch institutions");
         } finally {
             setIsLoading(false);
         }
     };
 
     useEffect(() => {
-        fetchTenants();
+        fetchInstitutions();
     }, []);
 
     const handleSuccess = () => {
         setIsOpen(false);
-        fetchTenants();
+        fetchInstitutions();
     };
 
     return (
         <div className="flex-1 space-y-4 p-8 pt-6">
             <div className="flex items-center justify-between space-y-2">
-                <h2 className="text-3xl font-bold tracking-tight">Tenants</h2>
+                <h2 className="text-3xl font-bold tracking-tight">Institutions</h2>
                 <div className="flex items-center space-x-2">
-                    <Button variant="outline" size="icon" onClick={fetchTenants} disabled={isLoading}>
+                    <Button variant="outline" size="icon" onClick={fetchInstitutions} disabled={isLoading}>
                         <RefreshCcw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
                     </Button>
                     <Sheet open={isOpen} onOpenChange={setIsOpen}>
                         <SheetTrigger asChild>
                             <Button>
-                                <Plus className="mr-2 h-4 w-4" /> Add Tenant
+                                <Plus className="mr-2 h-4 w-4" /> Add Institution
                             </Button>
                         </SheetTrigger>
                         <SheetContent>
                             <SheetHeader>
-                                <SheetTitle>Add New Tenant</SheetTitle>
+                                <SheetTitle>Add New Institution</SheetTitle>
                                 <SheetDescription>
-                                    Create a new tenant. This will trigger an invite email.
+                                    Create a new institution. This will trigger an invite email.
                                 </SheetDescription>
                             </SheetHeader>
                             <div className="py-4">
@@ -91,27 +91,27 @@ export default function Tenants() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {tenants.length === 0 && !isLoading && (
+                        {institutions.length === 0 && !isLoading && (
                             <TableRow>
                                 <TableCell colSpan={4} className="h-24 text-center">
-                                    No tenants found.
+                                    No institutions found.
                                 </TableCell>
                             </TableRow>
                         )}
-                        {tenants.map((tenant) => (
+                        {institutions.map((inst) => (
                             <TableRow
-                                key={tenant.id}
+                                key={inst.id}
                                 className="cursor-pointer"
-                                onClick={() => navigate(`/tenants/${tenant.slug}`)}
+                                onClick={() => navigate(`/institutions/${inst.slug}`)}
                             >
-                                <TableCell className="font-medium">{tenant.name}</TableCell>
-                                <TableCell>{tenant.slug}</TableCell>
+                                <TableCell className="font-medium">{inst.name}</TableCell>
+                                <TableCell>{inst.slug}</TableCell>
                                 <TableCell>
-                                    <Badge variant={tenant.is_active ? "default" : "secondary"}>
-                                        {tenant.is_active ? "Active" : "Inactive"}
+                                    <Badge variant={inst.is_active ? "default" : "secondary"}>
+                                        {inst.is_active ? "Active" : "Inactive"}
                                     </Badge>
                                 </TableCell>
-                                <TableCell className="text-right font-mono text-xs">{tenant.id}</TableCell>
+                                <TableCell className="text-right font-mono text-xs">{inst.id}</TableCell>
                             </TableRow>
                         ))}
                     </TableBody>

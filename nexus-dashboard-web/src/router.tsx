@@ -4,8 +4,8 @@ import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
 import AdminDashboard from "./pages/AdminDashboard";
 import Dashboard from "./pages/Dashboard";
-import Tenants from "./pages/Tenants";
-import TenantDetail from "./pages/TenantDetail";
+import Institutions from "./pages/Tenants";
+import InstitutionDetailPage from "./pages/TenantDetail";
 import Login from "./pages/Login";
 import SetPassword from "./pages/SetPassword";
 import AppLayout from "./components/AppLayout";
@@ -50,25 +50,25 @@ export const router = createBrowserRouter([
                     {
                         path: "dashboard",
                         element: (
-                            <RoleGuard allowed={["TENANT"]}>
+                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
                                 <Dashboard />
                             </RoleGuard>
                         ),
                     },
 
                     {
-                        path: "tenants",
+                        path: "institutions",
                         element: (
                             <RoleGuard allowed={["ADMIN"]}>
-                                <Tenants />
+                                <Institutions />
                             </RoleGuard>
                         ),
                     },
                     {
-                        path: "tenants/:slug",
+                        path: "institutions/:slug",
                         element: (
                             <RoleGuard allowed={["ADMIN"]}>
-                                <TenantDetail />
+                                <InstitutionDetailPage />
                             </RoleGuard>
                         ),
                     },
@@ -91,7 +91,7 @@ export const router = createBrowserRouter([
                     {
                         path: "setup/appointment-types",
                         element: (
-                            <RoleGuard allowed={["TENANT"]}>
+                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
                                 <AppointmentTypes />
                             </RoleGuard>
                         ),
@@ -99,7 +99,7 @@ export const router = createBrowserRouter([
                     {
                         path: "setup/providers",
                         element: (
-                            <RoleGuard allowed={["TENANT"]}>
+                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
                                 <ProvidersScheduling />
                             </RoleGuard>
                         ),
@@ -107,7 +107,7 @@ export const router = createBrowserRouter([
                     {
                         path: "setup/operatories",
                         element: (
-                            <RoleGuard allowed={["TENANT"]}>
+                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
                                 <Operatories />
                             </RoleGuard>
                         ),
@@ -115,7 +115,7 @@ export const router = createBrowserRouter([
                     {
                         path: "setup/custom-fields",
                         element: (
-                            <RoleGuard allowed={["TENANT"]}>
+                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
                                 <CustomFields />
                             </RoleGuard>
                         ),
@@ -123,7 +123,7 @@ export const router = createBrowserRouter([
                     {
                         path: "setup/audit-logs",
                         element: (
-                            <RoleGuard allowed={["TENANT"]}>
+                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
                                 <AuditLogs />
                             </RoleGuard>
                         ),
@@ -131,7 +131,7 @@ export const router = createBrowserRouter([
                     {
                         path: "calls",
                         element: (
-                            <RoleGuard allowed={["TENANT"]}>
+                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
                                 <Calls />
                             </RoleGuard>
                         ),

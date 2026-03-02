@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, RefreshCw, Pencil, Trash2, Loader2, MessageSquare } from "lucide-react";
+import { Plus, RefreshCw, Pencil, Trash2, Loader2, MessageSquare, UserPlus, MailPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
     Table,
     TableBody,
@@ -29,10 +31,10 @@ import api from "@/lib/api";
 import type { Location, SyncResult } from "@/types";
 
 interface LocationListProps {
-    tenantSlug: string;
+    institutionSlug: string;
 }
 
-export function LocationList({ tenantSlug }: LocationListProps) {
+export function LocationList({ institutionSlug }: LocationListProps) {
     const [locations, setLocations] = useState<Location[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"list" | "form">("list");
@@ -42,10 +44,15 @@ export function LocationList({ tenantSlug }: LocationListProps) {
     const [syncingSlug, setSyncingSlug] = useState<string | null>(null);
     const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
 
+    // Invite state
+    const [inviteTarget, setInviteTarget] = useState<Location | null>(null);
+    const [inviteEmail, setInviteEmail] = useState("");
+    const [isInviting, setIsInviting] = useState(false);
+
     const fetchLocations = useCallback(async () => {
         setIsLoading(true);
         try {
-            const { data } = await api.get<Location[]>(`/admin/tenants/${tenantSlug}/locations`);
+            const { data } = await api.get<Location[]>(`/admin/institutions/${institutionSlug}/locations`);
             setLocations(data);
         } catch (error) {
             console.error("Failed to fetch locations", error);
@@ -53,7 +60,7 @@ export function LocationList({ tenantSlug }: LocationListProps) {
         } finally {
             setIsLoading(false);
         }
-    }, [tenantSlug]);
+    }, [institutionSlug]);
 
     useEffect(() => {
         fetchLocations();
@@ -79,7 +86,7 @@ export function LocationList({ tenantSlug }: LocationListProps) {
         if (!deleteTarget) return;
         setIsDeleting(true);
         try {
-            await api.delete(`/admin/tenants/${tenantSlug}/locations/${deleteTarget.slug}`);
+            await api.delete(`/admin/institutions/${institutionSlug}/locations/${deleteTarget.slug}`);
             toast.success(`Location "${deleteTarget.name}" deleted`);
             setDeleteTarget(null);
             fetchLocations();
@@ -95,7 +102,7 @@ export function LocationList({ tenantSlug }: LocationListProps) {
         setSyncResult(null);
         try {
             const { data } = await api.post<SyncResult>(
-                `/admin/tenants/${tenantSlug}/locations/${locationSlug}/sync`
+                `/admin/institutions/${institutionSlug}/locations/${locationSlug}/sync`
             );
             setSyncResult(data);
             if (data.success) {
@@ -109,6 +116,38 @@ export function LocationList({ tenantSlug }: LocationListProps) {
             toast.error(error.response?.data?.detail || "Sync failed");
         } finally {
             setSyncingSlug(null);
+        }
+    }
+
+    async function handleInvite() {
+        if (!inviteTarget || !inviteEmail.trim()) return;
+        setIsInviting(true);
+        try {
+            await api.post(
+                `/admin/institutions/${institutionSlug}/locations/${inviteTarget.slug}/invite`,
+                { email: inviteEmail.trim() }
+            );
+            toast.success(`Invite sent to ${inviteEmail.trim()}`);
+            setInviteTarget(null);
+            setInviteEmail("");
+            fetchLocations();
+        } catch (error: any) {
+            toast.error(error.response?.data?.detail || "Failed to send invite");
+        } finally {
+            setIsInviting(false);
+        }
+    }
+
+    async function handleReinvite(loc: Location) {
+        if (!loc.user) return;
+        try {
+            await api.post(
+                `/admin/institutions/${institutionSlug}/locations/${loc.slug}/reinvite`,
+                { email: loc.user.email }
+            );
+            toast.success(`Re-invite sent to ${loc.user.email}`);
+        } catch (error: any) {
+            toast.error(error.response?.data?.detail || "Failed to re-invite");
         }
     }
 
@@ -158,6 +197,7 @@ export function LocationList({ tenantSlug }: LocationListProps) {
                                 <TableHead>NexHealth Loc ID</TableHead>
                                 <TableHead>Retell Agent</TableHead>
                                 <TableHead>SMS Number</TableHead>
+                                <TableHead>User</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
@@ -165,7 +205,7 @@ export function LocationList({ tenantSlug }: LocationListProps) {
                         <TableBody>
                             {locations.length === 0 && !isLoading && (
                                 <TableRow>
-                                    <TableCell colSpan={7} className="h-24 text-center">
+                                    <TableCell colSpan={8} className="h-24 text-center">
                                         No locations found. Add one to get started.
                                     </TableCell>
                                 </TableRow>
@@ -191,6 +231,37 @@ export function LocationList({ tenantSlug }: LocationListProps) {
                                                 </span>
                                             )
                                             : <span className="text-muted-foreground">-</span>}
+                                    </TableCell>
+                                    <TableCell className="text-sm">
+                                        {loc.user ? (
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="truncate max-w-[160px]" title={loc.user.email}>
+                                                    {loc.user.email}
+                                                </span>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-6 w-6 shrink-0"
+                                                    onClick={() => handleReinvite(loc)}
+                                                    title="Re-send invite"
+                                                >
+                                                    <MailPlus className="h-3.5 w-3.5" />
+                                                </Button>
+                                            </div>
+                                        ) : (
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-7 text-xs"
+                                                onClick={() => {
+                                                    setInviteTarget(loc);
+                                                    setInviteEmail("");
+                                                }}
+                                            >
+                                                <UserPlus className="mr-1 h-3 w-3" />
+                                                Invite
+                                            </Button>
+                                        )}
                                     </TableCell>
                                     <TableCell>
                                         <Badge variant={loc.is_active ? "default" : "secondary"}>
@@ -241,13 +312,55 @@ export function LocationList({ tenantSlug }: LocationListProps) {
             {viewMode === "form" && (
                 <div>
                     <LocationForm
-                        tenantSlug={tenantSlug}
+                        institutionSlug={institutionSlug}
                         location={editingLocation}
                         onSuccess={handleFormSuccess}
                         onCancel={() => setViewMode("list")}
                     />
                 </div>
             )}
+
+            {/* Invite Location User Dialog */}
+            <Dialog open={!!inviteTarget} onOpenChange={(open) => { if (!open) { setInviteTarget(null); setInviteEmail(""); } }}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Invite Location User</DialogTitle>
+                        <DialogDescription>
+                            Send an invite to a user for <strong>{inviteTarget?.name}</strong>. They will receive an email to set up their account with <code>LOCATION</code> role access.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-2 py-2">
+                        <Label htmlFor="invite-email">Email Address</Label>
+                        <Input
+                            id="invite-email"
+                            type="email"
+                            placeholder="user@clinic.com"
+                            value={inviteEmail}
+                            onChange={(e) => setInviteEmail(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") handleInvite(); }}
+                            disabled={isInviting}
+                        />
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => { setInviteTarget(null); setInviteEmail(""); }} disabled={isInviting}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleInvite} disabled={isInviting || !inviteEmail.trim()}>
+                            {isInviting ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Sending...
+                                </>
+                            ) : (
+                                <>
+                                    <UserPlus className="mr-2 h-4 w-4" />
+                                    Send Invite
+                                </>
+                            )}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* Delete Confirmation Dialog */}
             <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>

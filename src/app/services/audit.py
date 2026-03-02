@@ -56,7 +56,7 @@ class AuditEntry:
     target_resource: str
     outcome: AuditOutcome | str
     metadata: dict[str, Any] = field(default_factory=dict)
-    tenant_id: str | None = None
+    institution_id: str | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     request_id: str = field(default_factory=lambda: str(uuid4()))
 
@@ -114,7 +114,7 @@ class PostgresAuditRepository:
                 "request_id": entry.request_id,
                 **entry.metadata
             },
-            tenant_id=entry.tenant_id,
+            institution_id=entry.institution_id,
         )
         # Override timestamp if provided
         audit_log.timestamp = entry.timestamp
@@ -138,7 +138,7 @@ class PostgresAuditRepository:
                         "request_id": entry.request_id,
                         **entry.metadata
                     },
-                    tenant_id=entry.tenant_id,
+                    institution_id=entry.institution_id,
                 )
                 audit_log.timestamp = entry.timestamp
                 session.add(audit_log)
@@ -207,7 +207,7 @@ class AuditService:
         target_resource: str,
         outcome: AuditOutcome | str,
         metadata: dict[str, Any] | None = None,
-        tenant_id: str | None = None,
+        institution_id: str | None = None,
         request_id: str | None = None,
     ) -> None:
         """
@@ -222,7 +222,7 @@ class AuditService:
             target_resource=target_resource,
             outcome=outcome,
             metadata=metadata or {},
-            tenant_id=tenant_id,
+            institution_id=institution_id,
             request_id=request_id or str(uuid4()),
         )
         
@@ -242,7 +242,7 @@ class AuditService:
         target_resource: str,
         outcome: AuditOutcome | str,
         metadata: dict[str, Any] | None = None,
-        tenant_id: str | None = None,
+        institution_id: str | None = None,
         request_id: str | None = None,
     ) -> None:
         """
@@ -257,7 +257,7 @@ class AuditService:
                 target_resource=target_resource,
                 outcome=outcome,
                 metadata=metadata,
-                tenant_id=tenant_id,
+                institution_id=institution_id,
                 request_id=request_id,
             )
         )
@@ -274,7 +274,7 @@ async def audit_context(
     action: AuditAction | str,
     target_resource: str,
     metadata: dict[str, Any] | None = None,
-    tenant_id: str | None = None,
+    institution_id: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Context manager for automatic audit logging with outcome tracking.
@@ -293,7 +293,7 @@ async def audit_context(
         action: What action is being performed
         target_resource: What resource is being accessed
         metadata: Additional context
-        tenant_id: Optional tenant ID
+        institution_id: Optional institution ID
     
     Yields:
         A mutable dict for adding extra metadata during the operation
@@ -310,7 +310,7 @@ async def audit_context(
             target_resource=target_resource,
             outcome=AuditOutcome.SUCCESS,
             metadata={**(metadata or {}), **extra_metadata},
-            tenant_id=tenant_id,
+            institution_id=institution_id,
             request_id=request_id,
         )
     except Exception as e:
@@ -327,7 +327,7 @@ async def audit_context(
                 "error_type": type(e).__name__,
                 "error_message": str(e)[:200],  # Truncate for safety
             },
-            tenant_id=tenant_id,
+            institution_id=institution_id,
             request_id=request_id,
         )
         raise  # Re-raise the original exception
@@ -396,7 +396,7 @@ async def log_audit(
     target_resource: str,
     outcome: AuditOutcome | str,
     metadata: dict[str, Any] | None = None,
-    tenant_id: str | None = None,
+    institution_id: str | None = None,
     request_id: str | None = None,
 ) -> None:
     """
@@ -411,7 +411,7 @@ async def log_audit(
         target_resource=target_resource,
         outcome=outcome,
         metadata=metadata,
-        tenant_id=tenant_id,
+        institution_id=institution_id,
         request_id=request_id,
     )
 
@@ -422,7 +422,7 @@ def log_audit_background(
     target_resource: str,
     outcome: AuditOutcome | str,
     metadata: dict[str, Any] | None = None,
-    tenant_id: str | None = None,
+    institution_id: str | None = None,
     request_id: str | None = None,
 ) -> None:
     """
@@ -437,6 +437,6 @@ def log_audit_background(
         target_resource=target_resource,
         outcome=outcome,
         metadata=metadata,
-        tenant_id=tenant_id,
+        institution_id=institution_id,
         request_id=request_id,
     )

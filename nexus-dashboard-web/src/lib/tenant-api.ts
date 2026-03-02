@@ -1,7 +1,7 @@
 /**
- * Tenant setup API service.
+ * Institution setup API service.
  *
- * All calls go to /tenant/setup/* endpoints which read from
+ * All calls go to /institution/setup/* endpoints which read from
  * cached data where possible (saving NexHealth API costs).
  */
 
@@ -17,7 +17,7 @@ import type {
     SyncResult,
 } from "@/types";
 
-const BASE = "/tenant/setup";
+const BASE = "/institution/setup";
 
 function qs(locationId?: string): string {
     return locationId ? `?location_id=${locationId}` : "";
@@ -147,7 +147,7 @@ export async function triggerSync(locationId?: string): Promise<SyncResult> {
 
 export interface AuditLog {
     id: string;
-    tenant_id?: string;
+    institution_id?: string;
     timestamp: string;
     actor: string;
     action: string;
@@ -165,7 +165,7 @@ export interface AuditLogPaginatedResponse {
 }
 
 export async function listAuditLogs(page: number = 1, size: number = 50): Promise<AuditLogPaginatedResponse> {
-    const { data } = await api.get<AuditLogPaginatedResponse>(`/tenant/audit-logs?page=${page}&size=${size}`);
+    const { data } = await api.get<AuditLogPaginatedResponse>(`/institution/audit-logs?page=${page}&size=${size}`);
     return data;
 }
 

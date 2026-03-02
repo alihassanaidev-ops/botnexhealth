@@ -1,8 +1,8 @@
 """
-Calls routes — tenant-facing API for browsing call records.
+Calls routes — institution-facing API for browsing call records.
 
-All endpoints are tenant-scoped: a user can only see calls belonging
-to their own tenant. PHI fields (transcript, recording_url) are
+All endpoints are institution-scoped: a user can only see calls belonging
+to their own institution. PHI fields (transcript, recording_url) are
 intentionally excluded from the list response but available via the
 detail endpoint.
 """
@@ -27,7 +27,7 @@ from src.app.models.user import User
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tenant/calls", tags=["Calls"])
+router = APIRouter(prefix="/institution/calls", tags=["Calls"])
 
 
 # ── Response models ───────────────────────────────────────────────────────────
@@ -156,16 +156,16 @@ async def list_calls(
     date_to: date | None = Query(None),
 ) -> CallsListResponse:
     """
-    List calls for the authenticated tenant.
+    List calls for the authenticated institution.
 
     Supports filtering by status/tags, direction, date range, and contact
     name/phone search. Returns paginated results ordered newest-first.
     PHI fields (transcript, recording_url) are excluded — use GET /{id} for those.
     """
-    if not current_user.tenant_id:
+    if not current_user.institution_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User is not associated with a tenant",
+            detail="User is not associated with an institution",
         )
 
     # Merge ?status= and ?tags= into one list
@@ -174,7 +174,7 @@ async def list_calls(
         active_tags.append(call_status)
 
     async with get_db_session() as session:
-        conditions = [Call.tenant_id == current_user.tenant_id]
+        conditions = [Call.institution_id == current_user.institution_id]
 
         # Tag filtering: each tag must appear in call_tags (or match call_status)
         for tag in active_tags:
@@ -256,16 +256,16 @@ async def get_call(
     Get full detail for a single call including transcript and recording URL.
 
     PHI note: transcript and recording_url may contain patient health information.
-    Access is restricted to authenticated tenant users for their own tenant only.
+    Access is restricted to authenticated institution users for their own institution only.
     """
-    if not current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant")
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
     async with get_db_session() as session:
         call = (
             await session.execute(
                 select(Call)
-                .where(Call.id == call_id, Call.tenant_id == current_user.tenant_id)
+                .where(Call.id == call_id, Call.institution_id == current_user.institution_id)
                 .options(selectinload(Call.contact))
             )
         ).scalar_one_or_none()
@@ -278,7 +278,7 @@ async def get_call(
 
         cf_svc = CustomFieldService(session)
         cf_pairs = await cf_svc.get_values_for_entity(
-            current_user.tenant_id, "call", call.id,
+            current_user.institution_id, "call", call.id,
         )
         custom_fields = [
             CustomFieldValueOut(
@@ -319,14 +319,14 @@ async def resolve_callback(
 
     Idempotent: resolving an already-resolved call updates the note if provided.
     """
-    if not current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant")
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
     async with get_db_session() as session:
         call = (
             await session.execute(
                 select(Call)
-                .where(Call.id == call_id, Call.tenant_id == current_user.tenant_id)
+                .where(Call.id == call_id, Call.institution_id == current_user.institution_id)
                 .options(selectinload(Call.contact))
             )
         ).scalar_one_or_none()
@@ -342,5 +342,5 @@ async def resolve_callback(
         await session.commit()
         await session.refresh(call)
 
-        logger.info("Callback resolved: call=%s tenant=%s", call_id, current_user.tenant_id)
+        logger.info("Callback resolved: call=%s institution=%s", call_id, current_user.institution_id)
         return _call_to_record(call)

@@ -32,14 +32,14 @@ class CustomFieldService:
 
     async def list_definitions(
         self,
-        tenant_id: str,
+        institution_id: str,
         entity_type: str = EntityType.CALL.value,
         include_inactive: bool = False,
     ) -> list[CustomFieldDefinition]:
         stmt = (
             select(CustomFieldDefinition)
             .where(
-                CustomFieldDefinition.tenant_id == tenant_id,
+                CustomFieldDefinition.institution_id == institution_id,
                 CustomFieldDefinition.entity_type == entity_type,
             )
             .order_by(CustomFieldDefinition.display_order)
@@ -50,19 +50,19 @@ class CustomFieldService:
         return list(result.scalars().all())
 
     async def get_definition(
-        self, tenant_id: str, definition_id: str
+        self, institution_id: str, definition_id: str
     ) -> CustomFieldDefinition | None:
         result = await self.session.execute(
             select(CustomFieldDefinition).where(
                 CustomFieldDefinition.id == definition_id,
-                CustomFieldDefinition.tenant_id == tenant_id,
+                CustomFieldDefinition.institution_id == institution_id,
             )
         )
         return result.scalar_one_or_none()
 
     async def create_definition(
         self,
-        tenant_id: str,
+        institution_id: str,
         *,
         field_name: str,
         field_key: str,
@@ -77,12 +77,12 @@ class CustomFieldService:
     ) -> CustomFieldDefinition:
         if display_order is None:
             # Auto-assign: max existing + 1
-            existing = await self.list_definitions(tenant_id, entity_type, include_inactive=True)
+            existing = await self.list_definitions(institution_id, entity_type, include_inactive=True)
             display_order = max((d.display_order for d in existing), default=-1) + 1
 
         defn = CustomFieldDefinition(
             id=str(uuid4()),
-            tenant_id=tenant_id,
+            institution_id=institution_id,
             entity_type=entity_type,
             field_name=field_name,
             field_key=field_key,
@@ -125,7 +125,7 @@ class CustomFieldService:
 
     async def get_values_for_entity(
         self,
-        tenant_id: str,
+        institution_id: str,
         entity_type: str,
         entity_id: str,
     ) -> list[tuple[CustomFieldDefinition, CustomFieldValue]]:
@@ -137,7 +137,7 @@ class CustomFieldService:
                 CustomFieldValue.field_definition_id == CustomFieldDefinition.id,
             )
             .where(
-                CustomFieldDefinition.tenant_id == tenant_id,
+                CustomFieldDefinition.institution_id == institution_id,
                 CustomFieldDefinition.entity_type == entity_type,
                 CustomFieldDefinition.is_active.is_(True),
                 CustomFieldValue.entity_id == entity_id,
@@ -152,7 +152,7 @@ class CustomFieldService:
 
     async def extract_and_save_from_webhook(
         self,
-        tenant_id: str,
+        institution_id: str,
         call_id: str,
         custom_analysis_data: dict[str, Any],
         collected_dynamic_variables: dict[str, Any],
@@ -166,7 +166,7 @@ class CustomFieldService:
             RetellSource.COLLECTED_DYNAMIC_VARIABLES.value: collected_dynamic_variables,
         }
 
-        definitions = await self.list_definitions(tenant_id, EntityType.CALL.value)
+        definitions = await self.list_definitions(institution_id, EntityType.CALL.value)
         # Only those with a retell_source_key mapping
         mapped = [d for d in definitions if d.retell_source_key]
 
@@ -175,7 +175,7 @@ class CustomFieldService:
 
         # Pre-load existing values for this call so we can upsert
         existing_stmt = select(CustomFieldValue).where(
-            CustomFieldValue.tenant_id == tenant_id,
+            CustomFieldValue.institution_id == institution_id,
             CustomFieldValue.entity_type == EntityType.CALL.value,
             CustomFieldValue.entity_id == call_id,
         )
@@ -210,7 +210,7 @@ class CustomFieldService:
             else:
                 cfv = CustomFieldValue(
                     id=str(uuid4()),
-                    tenant_id=tenant_id,
+                    institution_id=institution_id,
                     field_definition_id=defn.id,
                     entity_type=EntityType.CALL.value,
                     entity_id=call_id,
@@ -223,8 +223,8 @@ class CustomFieldService:
         if saved:
             await self.session.flush()
             logger.info(
-                "Saved %d custom field values for call %s (tenant %s)",
-                saved, call_id, tenant_id,
+                "Saved %d custom field values for call %s (institution %s)",
+                saved, call_id, institution_id,
             )
 
         return saved

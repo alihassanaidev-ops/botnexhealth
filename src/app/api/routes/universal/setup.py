@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
-from src.app.pms.factory import get_tenant_pms
+from src.app.pms.factory import get_institution_pms
 from src.app.pms.models import SetupStep
 
 router = APIRouter(prefix="/setup", tags=["Setup"])
 
 
 @router.get("/capabilities")
-async def get_capabilities(pms: PMSAdapter = Depends(get_tenant_pms)):
+async def get_capabilities(pms: PMSAdapter = Depends(get_institution_pms)):
     return {
         "source": pms.source,
         "can_create_appointment_types": isinstance(pms, SupportsAppointmentTypeCreation),
@@ -21,14 +21,14 @@ async def get_capabilities(pms: PMSAdapter = Depends(get_tenant_pms)):
 
 
 @router.get("/steps", response_model=list[SetupStep])
-async def get_setup_steps(pms: PMSAdapter = Depends(get_tenant_pms)):
+async def get_setup_steps(pms: PMSAdapter = Depends(get_institution_pms)):
     return await pms.get_setup_steps()
 
 
 # ── NexHealth-specific admin setup ──────────────────────────────────────
 
 @router.get("/descriptors")
-async def list_descriptors(pms: PMSAdapter = Depends(get_tenant_pms)):
+async def list_descriptors(pms: PMSAdapter = Depends(get_institution_pms)):
     if not isinstance(pms, SupportsAppointmentTypeCreation):
         raise HTTPException(400, "This PMS does not use descriptors")
     return await pms.list_pms_descriptors()
@@ -46,7 +46,7 @@ class LinkAvailabilityRequest(BaseModel):
 @router.post("/availabilities")
 async def link_availability(
     req: LinkAvailabilityRequest,
-    pms: PMSAdapter = Depends(get_tenant_pms),
+    pms: PMSAdapter = Depends(get_institution_pms),
 ):
     if not isinstance(pms, SupportsAvailabilityLinking):
         raise HTTPException(400, "This PMS does not require availability linking")
@@ -57,7 +57,7 @@ async def link_availability(
 
 
 @router.get("/availabilities")
-async def list_availabilities(pms: PMSAdapter = Depends(get_tenant_pms)):
+async def list_availabilities(pms: PMSAdapter = Depends(get_institution_pms)):
     if not isinstance(pms, SupportsAvailabilityLinking):
         raise HTTPException(400, "This PMS does not use availability linking")
     return await pms.list_availabilities()
@@ -76,7 +76,7 @@ class UpdateAvailabilityRequest(BaseModel):
 async def update_availability(
     availability_id: str,
     req: UpdateAvailabilityRequest,
-    pms: PMSAdapter = Depends(get_tenant_pms),
+    pms: PMSAdapter = Depends(get_institution_pms),
 ):
     if not isinstance(pms, SupportsAvailabilityLinking):
         raise HTTPException(400, "This PMS does not support availability updates")

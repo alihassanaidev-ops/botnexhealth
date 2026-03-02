@@ -22,7 +22,8 @@ class UserRole(str, Enum):
     User roles for authorization.
     """
     ADMIN = "ADMIN"
-    TENANT = "TENANT"
+    INSTITUTION = "INSTITUTION"
+    LOCATION = "LOCATION"
 
 
 class User(Base):
@@ -32,8 +33,9 @@ class User(Base):
     Fields:
     - id: Supabase auth.users.id (UUID) — set explicitly, not auto-generated
     - email: User's email address (login credential)
-    - role: User role (ADMIN, TENANT)
-    - tenant_id: Tenant this user belongs to (nullable for ADMIN)
+    - role: User role (ADMIN, INSTITUTION, LOCATION)
+    - institution_id: Institution this user belongs to (nullable for ADMIN)
+    - location_id: Location this user is scoped to (nullable, only for LOCATION role)
     - is_active: Whether the user can log in
     - failed_login_attempts: Consecutive failed login attempts since last success
     - locked_until: Account locked until this UTC timestamp (None = not locked)
@@ -55,12 +57,18 @@ class User(Base):
 
     role: Mapped[str] = mapped_column(
         String(50),
-        default=UserRole.TENANT.value,
+        default=UserRole.INSTITUTION.value,
         nullable=False
     )
 
-    tenant_id: Mapped[str | None] = mapped_column(
-        ForeignKey("tenants.id"),
+    institution_id: Mapped[str | None] = mapped_column(
+        ForeignKey("institutions.id"),
+        nullable=True,
+        index=True
+    )
+
+    location_id: Mapped[str | None] = mapped_column(
+        ForeignKey("institution_locations.id"),
         nullable=True,
         index=True
     )

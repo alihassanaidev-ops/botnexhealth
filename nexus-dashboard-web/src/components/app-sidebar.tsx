@@ -47,8 +47,8 @@ const adminNav: NavItemDef[] = [
         exact: true,
     },
     {
-        title: "Tenants",
-        url: "/tenants",
+        title: "Institutions",
+        url: "/institutions",
         icon: Users,
     },
     {
@@ -63,8 +63,8 @@ const adminNav: NavItemDef[] = [
     },
 ]
 
-// Tenant-only nav items
-const tenantNav: NavItemDef[] = [
+// Institution-only nav items
+const institutionNav: NavItemDef[] = [
     {
         title: "Dashboard",
         url: "/dashboard",
@@ -77,7 +77,7 @@ const tenantNav: NavItemDef[] = [
     },
 ]
 
-// Tenant setup nav items
+// Institution setup nav items
 const navSetup: NavItemDef[] = [
     {
         title: "Appointment Types",
@@ -136,8 +136,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const displayEmail = user?.email ?? "—";
     const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
     const isAdmin = user?.role === "ADMIN";
-    const isTenant = user?.role === "TENANT";
-    const mainNav = isAdmin ? adminNav : tenantNav;
+    const isInstitution = user?.role === "INSTITUTION" || user?.role === "LOCATION";
+    const mainNav = isAdmin ? adminNav : institutionNav;
 
     return (
         <Sidebar collapsible="icon" {...props}>
@@ -179,7 +179,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                         </SidebarMenu>
                     </SidebarGroupContent>
                 </SidebarGroup>
-                {isTenant && (
+                {isInstitution && (
                     <SidebarGroup>
                         <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
                             Practice Setup

@@ -3,7 +3,7 @@ Authentication routes.
 
 Two login flows:
 1. POST /auth/token          — Admin login with local email+password (bcrypt)
-2. POST /auth/supabase/token — Tenant login via Supabase token exchange
+2. POST /auth/supabase/token — Institution login via Supabase token exchange
 """
 
 import logging
@@ -46,7 +46,8 @@ class UserRead(BaseModel):
     email: str
     role: str
     is_active: bool
-    tenant_id: str | None = None
+    institution_id: str | None = None
+    location_id: str | None = None
 
 
 @router.post("/supabase/token", response_model=Token)
@@ -55,7 +56,7 @@ async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) 
     """
     Exchange a Supabase access token for a local JWT.
 
-    Unified Login Flow (Admins & Tenants):
+    Unified Login Flow (Admins & Institutions):
     1. Frontend authenticates with Supabase (email + password / magic link)
     2. Frontend sends the Supabase access_token here
     3. We verify it server-side via Supabase admin API
@@ -138,7 +139,7 @@ async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) 
                     "reason": "account_locked",
                     "locked_until": user.locked_until.isoformat(),
                 },
-                tenant_id=user.tenant_id,
+                institution_id=user.institution_id,
             )
             raise HTTPException(
                 status_code=status.HTTP_423_LOCKED,
@@ -163,7 +164,7 @@ async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) 
                 target_resource=target_resource,
                 outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
                 metadata={**audit_meta, "reason": "account_inactive"},
-                tenant_id=user.tenant_id,
+                institution_id=user.institution_id,
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -181,7 +182,8 @@ async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) 
         data={
             "sub": user.id,
             "role": user.role,
-            "tenant_id": user.tenant_id,
+            "institution_id": user.institution_id,
+            "location_id": user.location_id,
         },
         expires_delta=timedelta(minutes=15),
     )
@@ -192,7 +194,7 @@ async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) 
         target_resource=target_resource,
         outcome=AuditOutcome.SUCCESS,
         metadata=audit_meta,
-        tenant_id=user.tenant_id,
+        institution_id=user.institution_id,
     )
 
     return Token(access_token=access_token, token_type="bearer")
@@ -245,7 +247,7 @@ async def unlock_user_account(
             "target_user_id": user_id,
             "was_locked": was_locked,
         },
-        tenant_id=target_user.tenant_id,
+        institution_id=target_user.institution_id,
     )
 
     return UnlockResponse(

@@ -40,17 +40,19 @@ class SupabaseService:
         else:
             logger.warning("Supabase credentials not configured. Supabase operations will fail.")
 
-    def invite_user(self, email: str, tenant_id: str | None = None, role: str | None = None) -> Any:
+    def invite_user(self, email: str, institution_id: str | None = None, role: str | None = None, location_id: str | None = None) -> Any:
         """
         Invite a user via Supabase Admin API.
 
-        Stores tenant_id and role in app_metadata (not user_metadata) so that
-        end-users cannot modify their own tenant/role via client SDKs.
+        Stores institution_id, role, and (for LOCATION users) location_id in
+        app_metadata (not user_metadata) so that end-users cannot modify their
+        own institution/role/location via client SDKs.
 
         Args:
             email: User's email address
-            tenant_id: Tenant ID to store in app_metadata
+            institution_id: Institution ID to store in app_metadata
             role: Role to store in app_metadata
+            location_id: Location ID to store in app_metadata (LOCATION role only)
 
         Returns:
             Supabase UserResponse object
@@ -58,16 +60,18 @@ class SupabaseService:
         if not self.client:
             raise RuntimeError("Supabase client is not initialized.")
 
-        # Use app_metadata for tenant_id and role — this is admin-only and
+        # Use app_metadata for institution_id, role, and location_id — this is admin-only and
         # cannot be modified by the user via Supabase client SDKs.
         # user_metadata is user-editable and must NOT be used for access control.
         user_metadata: dict[str, Any] = {}
-        if tenant_id:
-            user_metadata["tenant_id"] = tenant_id
+        if institution_id:
+            user_metadata["institution_id"] = institution_id
         if role:
             user_metadata["role"] = role
+        if location_id:
+            user_metadata["location_id"] = location_id
 
-        logger.info(f"Inviting user to Supabase (tenant_id={tenant_id}, role={role})")
+        logger.info(f"Inviting user to Supabase (institution_id={institution_id}, role={role}, location_id={location_id})")
 
         try:
             options: dict[str, Any] = {"data": user_metadata}

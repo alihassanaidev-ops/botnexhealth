@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 
 from src.app.pms.base import PMSAdapter
-from src.app.pms.factory import get_tenant_pms
+from src.app.pms.factory import get_institution_pms
 from src.app.pms.models import BookingRequest, BookingResult
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/appointments", tags=["Appointments"])
 @router.post("", response_model=BookingResult)
 async def book_appointment(
     req: BookingRequest,
-    pms: PMSAdapter = Depends(get_tenant_pms),
+    pms: PMSAdapter = Depends(get_institution_pms),
 ):
     return await pms.book_appointment(req)
 
@@ -20,7 +20,7 @@ async def book_appointment(
 @router.patch("/{appointment_id}/cancel", response_model=BookingResult)
 async def cancel_appointment(
     appointment_id: str,
-    pms: PMSAdapter = Depends(get_tenant_pms),
+    pms: PMSAdapter = Depends(get_institution_pms),
 ):
     return await pms.cancel_appointment(appointment_id)
 
@@ -29,6 +29,6 @@ async def cancel_appointment(
 async def reschedule_appointment(
     old_appointment_id: str,
     req: BookingRequest,
-    pms: PMSAdapter = Depends(get_tenant_pms),
+    pms: PMSAdapter = Depends(get_institution_pms),
 ):
     return await pms.reschedule_appointment(old_appointment_id, req)

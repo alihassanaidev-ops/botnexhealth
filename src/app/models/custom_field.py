@@ -1,12 +1,12 @@
-"""Custom field models for tenant-defined fields on Contacts and Calls.
+"""Custom field models for institution-defined fields on Contacts and Calls.
 
 HIPAA Compliance:
 - Fields marked is_phi=True have values stored AES-256-GCM encrypted.
 - Non-PHI values stored plaintext for queryability (workflow automation).
-- All records are tenant-scoped (tenant_id NOT NULL).
+- All records are institution-scoped (institution_id NOT NULL).
 
 EAV Pattern:
-- CustomFieldDefinition: what fields exist per tenant + entity type
+- CustomFieldDefinition: what fields exist per institution + entity type
 - CustomFieldValue: actual values per contact/call row
 """
 
@@ -32,7 +32,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
-from src.app.models.tenant import decrypt_value, encrypt_value
+from src.app.models.institution import decrypt_value, encrypt_value
 
 
 class EntityType(str, Enum):
@@ -61,9 +61,9 @@ class RetellSource(str, Enum):
 
 class CustomFieldDefinition(Base):
     """
-    Defines a custom field that a tenant has created.
+    Defines a custom field that an institution has created.
 
-    Tenants can create custom fields for contacts or calls,
+    Institutions can create custom fields for contacts or calls,
     choosing the field type, whether it contains PHI, and
     optionally providing dropdown options.
     """
@@ -71,10 +71,10 @@ class CustomFieldDefinition(Base):
     __tablename__ = "custom_field_definitions"
     __table_args__ = (
         UniqueConstraint(
-            "tenant_id", "entity_type", "field_key",
-            name="uq_custom_field_tenant_entity_key",
+            "institution_id", "entity_type", "field_key",
+            name="uq_custom_field_institution_entity_key",
         ),
-        Index("ix_custom_field_def_tenant_entity", "tenant_id", "entity_type"),
+        Index("ix_custom_field_def_institution_entity", "institution_id", "entity_type"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -83,9 +83,9 @@ class CustomFieldDefinition(Base):
         default=lambda: str(uuid4()),
     )
 
-    tenant_id: Mapped[str] = mapped_column(
+    institution_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
         nullable=False,
     )
 
@@ -149,7 +149,7 @@ class CustomFieldValue(Base):
             "field_definition_id", "entity_id",
             name="uq_custom_field_value_def_entity",
         ),
-        Index("ix_custom_field_val_tenant_entity", "tenant_id", "entity_type", "entity_id"),
+        Index("ix_custom_field_val_institution_entity", "institution_id", "entity_type", "entity_id"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -158,9 +158,9 @@ class CustomFieldValue(Base):
         default=lambda: str(uuid4()),
     )
 
-    tenant_id: Mapped[str] = mapped_column(
+    institution_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
         nullable=False,
     )
 

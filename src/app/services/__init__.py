@@ -1,5 +1,5 @@
 """Services for business logic."""
 
-from src.app.services.tenant_service import TenantService
+from src.app.services.institution_service import InstitutionService
 
-__all__ = ["TenantService"]
+__all__ = ["InstitutionService"]

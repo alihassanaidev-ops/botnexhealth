@@ -1,6 +1,6 @@
-"""Custom field definition CRUD for tenants.
+"""Custom field definition CRUD for institutions.
 
-Allows tenants to define additional fields on calls (or contacts) that
+Allows institutions to define additional fields on calls (or contacts) that
 auto-populate from Retell webhook data via retell_source / retell_source_key.
 """
 
@@ -22,7 +22,7 @@ from src.app.services.custom_field_service import CustomFieldService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tenant/custom-fields", tags=["Custom Fields"])
+router = APIRouter(prefix="/institution/custom-fields", tags=["Custom Fields"])
 
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -80,7 +80,7 @@ class UpdateFieldDefinitionRequest(BaseModel):
 
 class FieldDefinitionResponse(BaseModel):
     id: str
-    tenant_id: str
+    institution_id: str
     entity_type: str
     field_name: str
     field_key: str
@@ -98,7 +98,7 @@ class FieldDefinitionResponse(BaseModel):
 def _defn_to_response(d) -> FieldDefinitionResponse:
     return FieldDefinitionResponse(
         id=d.id,
-        tenant_id=d.tenant_id,
+        institution_id=d.institution_id,
         entity_type=d.entity_type,
         field_name=d.field_name,
         field_key=d.field_key,
@@ -125,13 +125,13 @@ async def list_definitions(
     entity_type: str = Query(EntityType.CALL.value),
     include_inactive: bool = Query(False),
 ) -> list[FieldDefinitionResponse]:
-    if not current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant")
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
     async with get_db_session() as session:
         svc = CustomFieldService(session)
         definitions = await svc.list_definitions(
-            current_user.tenant_id, entity_type, include_inactive,
+            current_user.institution_id, entity_type, include_inactive,
         )
         return [_defn_to_response(d) for d in definitions]
 
@@ -147,13 +147,13 @@ async def create_definition(
     body: CreateFieldDefinitionRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> FieldDefinitionResponse:
-    if not current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant")
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
     async with get_db_session() as session:
         svc = CustomFieldService(session)
         defn = await svc.create_definition(
-            current_user.tenant_id,
+            current_user.institution_id,
             field_name=body.field_name,
             field_key=body.field_key,
             field_type=body.field_type,
@@ -178,12 +178,12 @@ async def update_definition(
     body: UpdateFieldDefinitionRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> FieldDefinitionResponse:
-    if not current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant")
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
     async with get_db_session() as session:
         svc = CustomFieldService(session)
-        defn = await svc.get_definition(current_user.tenant_id, definition_id)
+        defn = await svc.get_definition(current_user.institution_id, definition_id)
         if not defn:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Definition not found")
 
@@ -205,12 +205,12 @@ async def delete_definition(
     current_user: Annotated[User, Depends(get_current_active_user)],
     hard: bool = Query(False),
 ) -> None:
-    if not current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant")
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
     async with get_db_session() as session:
         svc = CustomFieldService(session)
-        defn = await svc.get_definition(current_user.tenant_id, definition_id)
+        defn = await svc.get_definition(current_user.institution_id, definition_id)
         if not defn:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Definition not found")
 

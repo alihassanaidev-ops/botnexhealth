@@ -123,7 +123,7 @@ async def _finish_webhook_processing(
     event_type: str,
     *,
     status: str,
-    tenant_id: str | None = None,
+    institution_id: str | None = None,
     error: str | None = None,
 ) -> None:
     """Update idempotency row after webhook processing finishes."""
@@ -143,7 +143,7 @@ async def _finish_webhook_processing(
         if not row:
             return
         row.status = status
-        row.tenant_id = tenant_id or row.tenant_id
+        row.institution_id = institution_id or row.institution_id
         row.last_error = error
         row.updated_at = datetime.now(timezone.utc)
 
@@ -194,21 +194,21 @@ async def handle_retell_webhook(
             return {"status": "duplicate", "reason": reason}
         processing_started = True
 
-        # Resolve tenant + location from agent_id
-        tenant = None
+        # Resolve institution + location from agent_id
+        institution = None
         location = None
         if event.call.agent_id:
             try:
                 from src.app.database import get_db_session
-                from src.app.services.tenant_service import TenantService
+                from src.app.services.institution_service import InstitutionService
 
                 async with get_db_session() as session:
-                    tenant_service = TenantService(session)
-                    result = await tenant_service.get_location_by_retell_agent_id(event.call.agent_id)
+                    institution_service = InstitutionService(session)
+                    result = await institution_service.get_location_by_retell_agent_id(event.call.agent_id)
                     if result:
-                        location, tenant = result
+                        location, institution = result
             except Exception as e:
-                logger.warning(f"Failed to lookup tenant by agent_id {event.call.agent_id}: {e}")
+                logger.warning(f"Failed to lookup institution by agent_id {event.call.agent_id}: {e}")
 
         # Audit webhook received
         from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
@@ -221,11 +221,11 @@ async def handle_retell_webhook(
                 "event_type": event.event,
                 "call_id": hash_for_logging(event.call.call_id),
             },
-            tenant_id=tenant.id if tenant else None,
+            institution_id=institution.id if institution else None,
         )
 
-        # Process Contact & Call records if we identified the tenant clinic
-        if tenant:
+        # Process Contact & Call records if we identified the institution
+        if institution:
             from src.app.database import get_db_session
             from src.app.services.post_call_service import PostCallService
             
@@ -264,7 +264,7 @@ async def handle_retell_webhook(
                 
                 # Call service to save to DB (analysis_dict is always a dict now)
                 await post_call_service.process_call_analyzed_event(
-                    tenant_id=tenant.id,
+                    institution_id=institution.id,
                     webhook_call=mapped_call_data,
                     analysis=analysis_dict,
                 )
@@ -323,7 +323,7 @@ async def handle_retell_webhook(
             processing_call_id,
             processing_event_type,
             status="COMPLETED",
-            tenant_id=tenant.id if tenant else None,
+            institution_id=institution.id if institution else None,
         )
 
         return {

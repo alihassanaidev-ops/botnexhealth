@@ -14,19 +14,19 @@ import { Input } from "@/components/ui/input"
 import { toast } from "sonner"
 import api from "@/lib/api"
 
-const tenantSchema = z.object({
+const institutionSchema = z.object({
     name: z.string().min(2, { message: "Name must be at least 2 characters." }),
     slug: z.string().min(2, { message: "Slug is required." }).regex(/^[a-z0-9-]+$/, { message: "Slug must be lowercase alphanumeric with hyphens." }),
     email: z.string().email({ message: "Invalid email address." }),
 })
 
-interface TenantFormProps {
+interface InstitutionFormProps {
     onSuccess: () => void
 }
 
-export function TenantForm({ onSuccess }: TenantFormProps) {
-    const form = useForm<z.infer<typeof tenantSchema>>({
-        resolver: zodResolver(tenantSchema),
+export function TenantForm({ onSuccess }: InstitutionFormProps) {
+    const form = useForm<z.infer<typeof institutionSchema>>({
+        resolver: zodResolver(institutionSchema),
         defaultValues: {
             name: "",
             slug: "",
@@ -34,15 +34,15 @@ export function TenantForm({ onSuccess }: TenantFormProps) {
         },
     })
 
-    async function onSubmit(values: z.infer<typeof tenantSchema>) {
+    async function onSubmit(values: z.infer<typeof institutionSchema>) {
         try {
-            await api.post("/admin/tenants", values)
-            toast.success("Tenant created successfully")
+            await api.post("/admin/institutions", values)
+            toast.success("Institution created successfully")
             form.reset()
             onSuccess()
         } catch (error: any) {
-            console.error("Failed to create tenant", error)
-            toast.error(error.response?.data?.detail || "Failed to create tenant")
+            console.error("Failed to create institution", error)
+            toast.error(error.response?.data?.detail || "Failed to create institution")
         }
     }
 
@@ -54,7 +54,7 @@ export function TenantForm({ onSuccess }: TenantFormProps) {
                     name="name"
                     render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Tenant Name</FormLabel>
+                            <FormLabel>Institution Name</FormLabel>
                             <FormControl>
                                 <Input placeholder="Acme Dental" {...field} />
                             </FormControl>
@@ -88,7 +88,7 @@ export function TenantForm({ onSuccess }: TenantFormProps) {
                         </FormItem>
                     )}
                 />
-                <Button type="submit" className="w-full">Create Tenant</Button>
+                <Button type="submit" className="w-full">Create Institution</Button>
             </form>
         </Form>
     )

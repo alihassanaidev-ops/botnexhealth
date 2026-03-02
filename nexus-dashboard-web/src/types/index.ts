@@ -1,12 +1,13 @@
 export interface User {
     id: string;
     email: string;
-    role: "ADMIN" | "TENANT";
+    role: "ADMIN" | "INSTITUTION" | "LOCATION";
     is_active?: boolean;
-    tenant_id?: string;
+    institution_id?: string;
+    location_id?: string;
 }
 
-export interface Tenant {
+export interface Institution {
     id: string;
     name: string;
     slug: string;
@@ -15,14 +16,14 @@ export interface Tenant {
     updated_at?: string;
 }
 
-export interface TenantUser {
+export interface InstitutionUser {
     id: string;
     email: string;
     role: string;
     is_active: boolean;
 }
 
-export interface TenantDetail {
+export interface InstitutionDetail {
     id: string;
     name: string;
     slug: string;
@@ -33,12 +34,20 @@ export interface TenantDetail {
     has_system_nexhealth_key: boolean;
     has_retell_secret: boolean;
 
-    user: TenantUser | null;
+    user: InstitutionUser | null;
+}
+
+
+export interface LocationUser {
+    id: string;
+    email: string;
+    role: string;
+    is_active: boolean;
 }
 
 export interface Location {
     id: string;
-    tenant_id: string;
+    institution_id: string;
     name: string;
     slug: string;
     is_active: boolean;
@@ -54,6 +63,8 @@ export interface Location {
     state: string | null;
     phone: string | null;
     timezone: string | null;
+
+    user: LocationUser | null;
 }
 
 export interface SyncResult {
@@ -66,7 +77,7 @@ export interface SyncResult {
     errors: string[];
 }
 
-// ── Tenant Setup Types ─────────────────────────────────────────────────
+// ── Institution Setup Types ─────────────────────────────────────────────────
 
 export interface LocationInfo {
     id: string;
@@ -234,7 +245,7 @@ export interface CustomFieldValue {
 
 export interface CustomFieldDefinition {
     id: string;
-    tenant_id: string;
+    institution_id: string;
     entity_type: string;
     field_name: string;
     field_key: string;

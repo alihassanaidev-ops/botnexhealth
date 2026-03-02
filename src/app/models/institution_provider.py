@@ -1,4 +1,4 @@
-"""TenantOperatory model — cached PMS operatory (room/chair) data per location."""
+"""InstitutionProvider model — cached PMS provider data per location."""
 
 from __future__ import annotations
 
@@ -12,29 +12,29 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.app.database import Base
 
 
-class TenantOperatory(Base):
+class InstitutionProvider(Base):
     """
-    Locally cached operatory data synced from PMS (NexHealth).
+    Locally cached provider data synced from PMS (NexHealth).
 
-    No PHI stored — only room/chair name and source IDs.
+    No PHI stored — only provider name, specialty, and source IDs.
     """
 
-    __tablename__ = "tenant_operatories"
+    __tablename__ = "institution_providers"
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         primary_key=True,
         default=lambda: str(uuid4()),
     )
-    tenant_id: Mapped[str] = mapped_column(
+    institution_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     location_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenant_locations.id", ondelete="CASCADE"),
+        ForeignKey("institution_locations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -42,7 +42,11 @@ class TenantOperatory(Base):
     source: Mapped[str] = mapped_column(String(50), nullable=False)  # "nexhealth"
     source_id: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    specialty: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     synced_at: Mapped[datetime] = mapped_column(
@@ -50,4 +54,4 @@ class TenantOperatory(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<TenantOperatory(id={self.id}, name='{self.name}', source={self.source})>"
+        return f"<InstitutionProvider(id={self.id}, name='{self.name}', source={self.source})>"

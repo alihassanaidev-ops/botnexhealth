@@ -7,13 +7,13 @@ from fastapi import FastAPI
 
 from src.app.api.routes import router as api_router
 from src.app.api.routes import public_router
-from src.app.api.routes.tenants import router as tenants_router
+from src.app.api.routes.admin_institutions import router as institutions_router
 from src.app.config import settings
 from src.app.retell.functions import router as retell_router
 from src.app.retell.webhooks import router as retell_webhook_router
 from src.app.api.routes.auth import router as auth_router
-from src.app.api.routes.tenant_portal import router as tenant_portal_router
-from src.app.api.routes.tenant_setup import router as tenant_setup_router
+from src.app.api.routes.institution_portal import router as institution_portal_router
+from src.app.api.routes.institution_setup import router as institution_setup_router
 from src.app.api.routes.calls import router as calls_router
 from src.app.api.routes.dashboard import router as dashboard_router
 from src.app.api.routes.custom_fields import router as custom_fields_router
@@ -103,10 +103,10 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
 
-    # Add tenant middleware (after CORS, before routes)
+    # Add institution middleware (after CORS, before routes)
     if settings.database_url:
-        from src.app.middleware.tenant import TenantMiddleware
-        app.add_middleware(TenantMiddleware)
+        from src.app.middleware.institution import InstitutionMiddleware
+        app.add_middleware(InstitutionMiddleware)
 
     # Public health check endpoints (no auth, for container probes)
     app.include_router(public_router, tags=["Health"])
@@ -118,11 +118,11 @@ def create_app() -> FastAPI:
     
     # Admin routes
     app.include_router(auth_router)
-    app.include_router(tenants_router)
+    app.include_router(institutions_router)
 
-    # Tenant portal routes (authenticated tenant users)
-    app.include_router(tenant_portal_router)
-    app.include_router(tenant_setup_router)
+    # Institution portal routes (authenticated institution users)
+    app.include_router(institution_portal_router)
+    app.include_router(institution_setup_router)
     app.include_router(calls_router)
     app.include_router(dashboard_router)
     app.include_router(custom_fields_router)

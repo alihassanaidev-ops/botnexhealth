@@ -27,8 +27,8 @@ from src.app.pms.models import (
 from src.app.pms.nexhealth import mappers
 
 if TYPE_CHECKING:
-    from src.app.models.tenant import Tenant
-    from src.app.models.tenant_location import TenantLocation
+    from src.app.models.institution import Institution
+    from src.app.models.institution_location import InstitutionLocation
     from src.app.nexhealth.client import NexHealthClient
 
 logger = logging.getLogger(__name__)
@@ -44,23 +44,23 @@ def _strip(prefixed_id: str) -> str:
 class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking):
     source = "nexhealth"
 
-    def __init__(self, client: NexHealthClient, tenant: Tenant, *, subdomain: str | None = None, location_id: str | None = None) -> None:
+    def __init__(self, client: NexHealthClient, institution: Institution, *, subdomain: str | None = None, location_id: str | None = None) -> None:
         self._client = client
-        self._tenant = tenant
+        self._institution = institution
         self._subdomain = subdomain
         self._location_id = location_id
 
     @classmethod
-    async def create(cls, tenant: Tenant, location: TenantLocation | None = None) -> NexHealthAdapter:
-        """Factory: build a tenant-specific NexHealth client and wrap it.
+    async def create(cls, institution: Institution, location: InstitutionLocation | None = None) -> NexHealthAdapter:
+        """Factory: build an institution-specific NexHealth client and wrap it.
 
         If a location is provided, its subdomain/location_id override the
-        tenant-level defaults (falling back to tenant values when unset).
+        institution-level defaults (falling back to institution values when unset).
         """
         from src.app.config import Settings, settings as global_settings
         from src.app.nexhealth.client import NexHealthClient
 
-        # Location overrides tenant, tenant overrides global
+        # Location overrides institution, institution overrides global
         subdomain = (
             (location.nexhealth_subdomain if location else None)
             or global_settings.nexhealth_subdomain
@@ -70,14 +70,14 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             or global_settings.nexhealth_location_id
         )
 
-        tenant_settings = Settings(
-            nexhealth_api_key=tenant.nexhealth_api_key or global_settings.nexhealth_api_key,
+        institution_settings = Settings(
+            nexhealth_api_key=institution.nexhealth_api_key or global_settings.nexhealth_api_key,
             nexhealth_subdomain=subdomain,
             nexhealth_location_id=location_id,
         )
-        client = NexHealthClient(config=tenant_settings)
+        client = NexHealthClient(config=institution_settings)
         await client.__aenter__()
-        return cls(client, tenant, subdomain=subdomain, location_id=location_id)
+        return cls(client, institution, subdomain=subdomain, location_id=location_id)
 
     async def close(self) -> None:
         if self._client:

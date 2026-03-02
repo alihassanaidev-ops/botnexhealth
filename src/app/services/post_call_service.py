@@ -172,7 +172,7 @@ class PostCallService:
 
     async def process_call_analyzed_event(
         self,
-        tenant_id: str,
+        institution_id: str,
         webhook_call: RetellCallData,
         analysis: dict[str, Any] | None,
     ) -> Call:
@@ -206,11 +206,11 @@ class PostCallService:
         pms_patient_id: str | None = self._extract_patient_id(custom, dynamic_vars)
 
         if pms_patient_id:
-            # ── Primary path: resolve by PMS Patient ID (unique per tenant) ──
+            # ── Primary path: resolve by PMS Patient ID (unique per institution) ──
             existing = (
                 await self.session.execute(
                     select(Contact).where(
-                        Contact.tenant_id == tenant_id,
+                        Contact.institution_id == institution_id,
                         Contact.nexhealth_patient_id == pms_patient_id,
                     )
                 )
@@ -233,7 +233,7 @@ class PostCallService:
             else:
                 # New PMS-linked contact
                 contact = Contact(
-                    tenant_id=tenant_id,
+                    institution_id=institution_id,
                     first_name=first_name,
                     last_name=last_name,
                     full_name=full_name,
@@ -255,7 +255,7 @@ class PostCallService:
             # we cannot know which patient is calling from a shared phone.
             # Example: Mother (Jane) calling for her son (Timmy).
             contact = Contact(
-                tenant_id=tenant_id,
+                institution_id=institution_id,
                 first_name=first_name,
                 last_name=last_name,
                 full_name=full_name,
@@ -280,7 +280,7 @@ class PostCallService:
             duration_ms = webhook_call.end_timestamp - webhook_call.start_timestamp
 
         call = Call(
-            tenant_id=tenant_id,
+            institution_id=institution_id,
             contact_id=contact.id if contact else None,
             retell_call_id=webhook_call.call_id,
             call_direction=webhook_call.direction,
@@ -327,21 +327,21 @@ class PostCallService:
         self.session.add(call)
         await self.session.flush()  # ensure call.id is assigned
 
-        # ── 4. Extract tenant-defined custom fields from webhook data ─────
+        # ── 4. Extract institution-defined custom fields from webhook data ─────
         from src.app.services.custom_field_service import CustomFieldService
 
         cf_service = CustomFieldService(self.session)
         cf_count = await cf_service.extract_and_save_from_webhook(
-            tenant_id=tenant_id,
+            institution_id=institution_id,
             call_id=call.id,
             custom_analysis_data=custom,
             collected_dynamic_variables=dynamic_vars,
         )
 
         logger.info(
-            "Saved Call %s for tenant %s (contact=%s, status=%s, tags=%s, custom_fields=%d)",
+            "Saved Call %s for institution %s (contact=%s, status=%s, tags=%s, custom_fields=%d)",
             webhook_call.call_id,
-            tenant_id,
+            institution_id,
             "found" if contact and contact.id else "unknown",
             primary_status,
             all_tags,

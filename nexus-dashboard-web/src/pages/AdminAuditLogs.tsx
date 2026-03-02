@@ -23,13 +23,13 @@ export default function AdminAuditLogs() {
     const [loading, setLoading] = useState(true);
     const [page, setPage] = useState(1);
     const [total, setTotal] = useState(0);
-    const [tenantIdFilter, setTenantIdFilter] = useState("");
+    const [institutionIdFilter, setInstitutionIdFilter] = useState("");
     const pageSize = 50;
 
-    async function fetchLogs(currentPage: number = page, tenantId: string = tenantIdFilter) {
+    async function fetchLogs(currentPage: number = page, institutionId: string = institutionIdFilter) {
         setLoading(true);
         try {
-            const data = await listAdminAuditLogs(currentPage, pageSize, tenantId || undefined);
+            const data = await listAdminAuditLogs(currentPage, pageSize, institutionId || undefined);
             setLogs(data.items);
             setTotal(data.total);
             setPage(currentPage);
@@ -42,12 +42,12 @@ export default function AdminAuditLogs() {
     }
 
     useEffect(() => {
-        // Debounce fetching if filtering by tenant ID
+        // Debounce fetching if filtering by institution ID
         const timer = setTimeout(() => {
-            fetchLogs(1, tenantIdFilter);
+            fetchLogs(1, institutionIdFilter);
         }, 300);
         return () => clearTimeout(timer);
-    }, [tenantIdFilter]);
+    }, [institutionIdFilter]);
 
     function renderOutcomeBadge(outcome: string) {
         if (outcome === "SUCCESS") {
@@ -80,17 +80,17 @@ export default function AdminAuditLogs() {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Platform Audit Logs</h1>
                     <p className="text-muted-foreground mt-2">
-                        View compliance and system activity across all tenants.
+                        View compliance and system activity across all institutions.
                     </p>
                 </div>
                 <div className="flex items-center space-x-4">
                     <div className="relative">
                         <Input
                             type="text"
-                            placeholder="Filter by Tenant ID..."
+                            placeholder="Filter by Institution ID..."
                             className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 min-w-[300px]"
-                            value={tenantIdFilter}
-                            onChange={(e) => setTenantIdFilter(e.target.value)}
+                            value={institutionIdFilter}
+                            onChange={(e) => setInstitutionIdFilter(e.target.value)}
                         />
                     </div>
                     <Button variant="outline" onClick={() => fetchLogs(page)} disabled={loading}>
@@ -103,7 +103,7 @@ export default function AdminAuditLogs() {
             <Card>
                 <CardHeader>
                     <CardTitle>Global Activity Log</CardTitle>
-                    <CardDescription>A chronological record of actions performed across all tenants.</CardDescription>
+                    <CardDescription>A chronological record of actions performed across all institutions.</CardDescription>
                 </CardHeader>
                 <CardContent>
                     {loading && logs.length === 0 ? (
@@ -121,7 +121,7 @@ export default function AdminAuditLogs() {
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead>Timestamp</TableHead>
-                                            <TableHead>Tenant ID</TableHead>
+                                            <TableHead>Institution ID</TableHead>
                                             <TableHead>Actor</TableHead>
                                             <TableHead>Action</TableHead>
                                             <TableHead>Target Resource</TableHead>
@@ -135,7 +135,7 @@ export default function AdminAuditLogs() {
                                                     {format(new Date(log.timestamp), "MMM d, yyyy h:mm a")}
                                                 </TableCell>
                                                 <TableCell className="font-mono text-xs text-muted-foreground">
-                                                    {log.tenant_id}
+                                                    {log.institution_id}
                                                 </TableCell>
                                                 <TableCell>{renderActorBadge(log.actor)}</TableCell>
                                                 <TableCell className="font-mono text-xs">{log.action}</TableCell>

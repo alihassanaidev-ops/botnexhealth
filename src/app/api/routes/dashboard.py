@@ -1,8 +1,8 @@
 """
-Dashboard summary route — tenant-facing API for call volume metrics and queues.
+Dashboard summary route — institution-facing API for call volume metrics and queues.
 
 Provides aggregate call statistics and the needs-callback queue used on
-the tenant dashboard page.
+the institution dashboard page.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from src.app.models.user import User
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tenant/dashboard", tags=["Dashboard"])
+router = APIRouter(prefix="/institution/dashboard", tags=["Dashboard"])
 
 
 # ── Response models ───────────────────────────────────────────────────────────
@@ -89,15 +89,15 @@ async def get_dashboard_summary(
 ) -> DashboardSummary:
     """
     Return call volume metrics, per-tag counts, and the unresolved callback queue
-    for the authenticated tenant.
+    for the authenticated institution.
     """
-    if not current_user.tenant_id:
+    if not current_user.institution_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User is not associated with a tenant",
+            detail="User is not associated with an institution",
         )
 
-    tenant_id = current_user.tenant_id
+    institution_id = current_user.institution_id
     now = datetime.now(timezone.utc)
     today = now.date()
 
@@ -107,7 +107,7 @@ async def get_dashboard_summary(
 
     async with get_db_session() as session:
         # ── Volume counts ─────────────────────────────────────────────────
-        base = select(func.count(Call.id)).where(Call.tenant_id == tenant_id)
+        base = select(func.count(Call.id)).where(Call.institution_id == institution_id)
 
         today_count: int = (
             await session.execute(base.where(Call.call_date == today))
@@ -129,7 +129,7 @@ async def get_dashboard_summary(
         tag_rows = (
             await session.execute(
                 select(Call.call_status, func.count(Call.id).label("cnt"))
-                .where(Call.tenant_id == tenant_id, Call.call_status.isnot(None))
+                .where(Call.institution_id == institution_id, Call.call_status.isnot(None))
                 .group_by(Call.call_status)
                 .order_by(func.count(Call.id).desc())
             )
@@ -151,7 +151,7 @@ async def get_dashboard_summary(
                 .join(Contact, Call.contact_id == Contact.id, isouter=True)
                 .where(
                     and_(
-                        Call.tenant_id == tenant_id,
+                        Call.institution_id == institution_id,
                         Call.call_status == CallStatus.NEEDS_CALLBACK.value,
                         Call.callback_resolved.is_(False),
                     )

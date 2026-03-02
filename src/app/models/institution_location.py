@@ -1,4 +1,4 @@
-"""TenantLocation model — physical practice within a tenant (institution)."""
+"""InstitutionLocation model — physical practice within an institution."""
 
 from __future__ import annotations
 
@@ -10,28 +10,28 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
-from src.app.models.tenant import decrypt_value, encrypt_value
+from src.app.models.institution import decrypt_value, encrypt_value
 
 
-class TenantLocation(Base):
+class InstitutionLocation(Base):
     """
-    A physical practice location within a tenant institution.
+    A physical practice location within an institution.
 
-    Tenant = institution/dental group, TenantLocation = individual office.
+    Institution = dental group, InstitutionLocation = individual office.
     Each location can have its own NexHealth subdomain/location_id,
     Retell agent, and address info.
     """
 
-    __tablename__ = "tenant_locations"
+    __tablename__ = "institution_locations"
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         primary_key=True,
         default=lambda: str(uuid4()),
     )
-    tenant_id: Mapped[str] = mapped_column(
+    institution_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -71,6 +71,6 @@ class TenantLocation(Base):
     # =========================================================================
     # Methods
     # =========================================================================
-    
+
     def __repr__(self) -> str:
-        return f"<TenantLocation(id={self.id}, tenant_id={self.tenant_id}, name='{self.name}')>"
+        return f"<InstitutionLocation(id={self.id}, institution_id={self.institution_id}, name='{self.name}')>"

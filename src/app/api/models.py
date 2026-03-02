@@ -578,43 +578,43 @@ class EmrApptDescriptorListResponse(NexHealthResponse):
     data: list[EmrApptDescriptor]
 
 
-class TenantUserResponse(BaseModel):
-    """User details in tenant response."""
+class InstitutionUserResponse(BaseModel):
+    """User details in institution response."""
     id: str
     email: str
     role: str
     is_active: bool
 
 
-class TenantResponse(BaseModel):
-    """Response model for tenant (no secrets)."""
+class InstitutionResponse(BaseModel):
+    """Response model for institution (no secrets)."""
     id: str
     name: str
     slug: str
     is_active: bool
-    
-    
+
+
     # Credential presence indicators
     has_nexhealth_key: bool
-    
+
     has_system_nexhealth_key: bool
-    
+
     has_retell_secret: bool
-    
+
     # Optional: Created user
-    user: TenantUserResponse | None = None
-    
+    user: InstitutionUserResponse | None = None
+
     class Config:
         from_attributes = True
 
     @classmethod
-    def from_tenant(cls, tenant: Any, user: Any = None, has_retell_secret: bool = False) -> "TenantResponse":
-        """Convert Tenant model to response (no secrets exposed)."""
+    def from_institution(cls, institution: Any, user: Any = None, has_retell_secret: bool = False) -> "InstitutionResponse":
+        """Convert Institution model to response (no secrets exposed)."""
         from src.app.config import settings
 
         user_resp = None
         if user:
-            user_resp = TenantUserResponse(
+            user_resp = InstitutionUserResponse(
                 id=str(user.id),
                 email=user.email,
                 role=user.role,
@@ -622,11 +622,11 @@ class TenantResponse(BaseModel):
             )
 
         return cls(
-            id=str(tenant.id),
-            name=tenant.name,
-            slug=tenant.slug,
-            is_active=tenant.is_active,
-            has_nexhealth_key=tenant.nexhealth_api_key_encrypted is not None,
+            id=str(institution.id),
+            name=institution.name,
+            slug=institution.slug,
+            is_active=institution.is_active,
+            has_nexhealth_key=institution.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
             has_retell_secret=has_retell_secret,
             user=user_resp
@@ -638,6 +638,7 @@ class AuditLogResponse(BaseModel):
 
     id: str
     timestamp: datetime
+    institution_id: str | None = None
     actor: str
     action: str
     target_resource: str

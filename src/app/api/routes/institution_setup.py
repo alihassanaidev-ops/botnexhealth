@@ -1,5 +1,5 @@
 """
-Tenant setup routes — tenant-facing API for managing practice configuration.
+Institution setup routes — institution-facing API for managing practice configuration.
 
 Reads from cached tables where possible (reduces NexHealth API costs).
 Proxies mutations to PMS and refreshes the local cache.
@@ -18,49 +18,49 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.api.deps import get_current_active_user
 from src.app.database import get_db_session
-from src.app.models.tenant import Tenant
-from src.app.models.tenant_appointment_type import TenantAppointmentType
-from src.app.models.tenant_descriptor import TenantDescriptor
-from src.app.models.tenant_location import TenantLocation
-from src.app.models.tenant_operatory import TenantOperatory
-from src.app.models.tenant_provider import TenantProvider
+from src.app.models.institution import Institution
+from src.app.models.institution_appointment_type import InstitutionAppointmentType
+from src.app.models.institution_descriptor import InstitutionDescriptor
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.institution_operatory import InstitutionOperatory
+from src.app.models.institution_provider import InstitutionProvider
 from src.app.models.user import User
 from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
-from src.app.pms.factory import get_adapter_for_tenant_location
+from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.services.sync_service import SyncService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tenant/setup", tags=["Tenant Setup"])
+router = APIRouter(prefix="/institution/setup", tags=["Institution Setup"])
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 
-async def _resolve_tenant_location(
+async def _resolve_institution_location(
     user: User,
     session: AsyncSession,
     location_id: str | None = None,
-) -> tuple[Tenant, TenantLocation]:
-    """Resolve the tenant and location for the current user."""
-    if not user.tenant_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "User is not associated with a tenant")
+) -> tuple[Institution, InstitutionLocation]:
+    """Resolve the institution and location for the current user."""
+    if not user.institution_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "User is not associated with an institution")
 
-    tenant = (
+    institution = (
         await session.execute(
-            select(Tenant).where(Tenant.id == user.tenant_id, Tenant.is_active == True)
+            select(Institution).where(Institution.id == user.institution_id, Institution.is_active == True)
         )
     ).scalar_one_or_none()
-    if not tenant:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found")
+    if not institution:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Institution not found")
 
     if location_id:
         location = (
             await session.execute(
-                select(TenantLocation).where(
-                    TenantLocation.id == location_id,
-                    TenantLocation.tenant_id == tenant.id,
-                    TenantLocation.is_active == True,
+                select(InstitutionLocation).where(
+                    InstitutionLocation.id == location_id,
+                    InstitutionLocation.institution_id == institution.id,
+                    InstitutionLocation.is_active == True,
                 )
             )
         ).scalar_one_or_none()
@@ -68,23 +68,23 @@ async def _resolve_tenant_location(
         # Default: first active location
         location = (
             await session.execute(
-                select(TenantLocation)
-                .where(TenantLocation.tenant_id == tenant.id, TenantLocation.is_active == True)
-                .order_by(TenantLocation.created_at)
+                select(InstitutionLocation)
+                .where(InstitutionLocation.institution_id == institution.id, InstitutionLocation.is_active == True)
+                .order_by(InstitutionLocation.created_at)
                 .limit(1)
             )
         ).scalar_one_or_none()
 
     if not location:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No active location found for tenant")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No active location found for institution")
 
-    return tenant, location
+    return institution, location
 
 
-async def _get_adapter(tenant: Tenant, location: TenantLocation) -> PMSAdapter:
-    """Get PMS adapter for tenant+location."""
+async def _get_adapter(institution: Institution, location: InstitutionLocation) -> PMSAdapter:
+    """Get PMS adapter for institution+location."""
     try:
-        return await get_adapter_for_tenant_location(tenant, location)
+        return await get_adapter_for_institution_location(institution, location)
     except Exception as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"PMS not configured: {e}")
 
@@ -218,19 +218,19 @@ async def get_setup_overview(
 ):
     """Get setup overview: location info, PMS capabilities, and cached data counts."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
-        adapter = await _get_adapter(tenant, location)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
 
         # Counts from cache
         counts: dict[str, int] = {}
         for label, model in [
-            ("providers", TenantProvider),
-            ("appointment_types", TenantAppointmentType),
-            ("operatories", TenantOperatory),
-            ("descriptors", TenantDescriptor),
+            ("providers", InstitutionProvider),
+            ("appointment_types", InstitutionAppointmentType),
+            ("operatories", InstitutionOperatory),
+            ("descriptors", InstitutionDescriptor),
         ]:
             q = select(model).where(
-                model.tenant_id == tenant.id, model.location_id == location.id
+                model.institution_id == institution.id, model.location_id == location.id
             )
             result = await session.execute(q)
             counts[label] = len(result.scalars().all())
@@ -244,22 +244,22 @@ async def get_setup_overview(
         )
 
 
-# ── Locations (for tenant with multiple) ─────────────────────────────────
+# ── Locations (for institution with multiple) ─────────────────────────────
 
 
 @router.get("/locations", response_model=list[LocationInfoResponse])
-async def list_tenant_locations(
+async def list_institution_locations(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
-    """List active locations for the tenant."""
-    if not current_user.tenant_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "User is not associated with a tenant")
+    """List active locations for the institution."""
+    if not current_user.institution_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "User is not associated with an institution")
 
     async with get_db_session() as session:
         result = await session.execute(
-            select(TenantLocation)
-            .where(TenantLocation.tenant_id == current_user.tenant_id, TenantLocation.is_active == True)
-            .order_by(TenantLocation.name)
+            select(InstitutionLocation)
+            .where(InstitutionLocation.institution_id == current_user.institution_id, InstitutionLocation.is_active == True)
+            .order_by(InstitutionLocation.name)
         )
         return [LocationInfoResponse.model_validate(loc) for loc in result.scalars().all()]
 
@@ -272,17 +272,17 @@ async def list_providers(
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_id: str | None = Query(None),
 ):
-    """List cached providers for the tenant location."""
+    """List cached providers for the institution location."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
         result = await session.execute(
-            select(TenantProvider)
+            select(InstitutionProvider)
             .where(
-                TenantProvider.tenant_id == tenant.id,
-                TenantProvider.location_id == location.id,
-                TenantProvider.is_active == True,
+                InstitutionProvider.institution_id == institution.id,
+                InstitutionProvider.location_id == location.id,
+                InstitutionProvider.is_active == True,
             )
-            .order_by(TenantProvider.name)
+            .order_by(InstitutionProvider.name)
         )
         return [CachedProviderResponse.model_validate(p) for p in result.scalars().all()]
 
@@ -295,17 +295,17 @@ async def list_appointment_types(
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_id: str | None = Query(None),
 ):
-    """List cached appointment types for the tenant location."""
+    """List cached appointment types for the institution location."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
         result = await session.execute(
-            select(TenantAppointmentType)
+            select(InstitutionAppointmentType)
             .where(
-                TenantAppointmentType.tenant_id == tenant.id,
-                TenantAppointmentType.location_id == location.id,
-                TenantAppointmentType.is_active == True,
+                InstitutionAppointmentType.institution_id == institution.id,
+                InstitutionAppointmentType.location_id == location.id,
+                InstitutionAppointmentType.is_active == True,
             )
-            .order_by(TenantAppointmentType.name)
+            .order_by(InstitutionAppointmentType.name)
         )
         return [CachedAppointmentTypeResponse.model_validate(at) for at in result.scalars().all()]
 
@@ -318,8 +318,8 @@ async def create_appointment_type(
 ):
     """Create appointment type via PMS and cache locally."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
-        adapter = await _get_adapter(tenant, location)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
 
         if not isinstance(adapter, SupportsAppointmentTypeCreation):
             raise HTTPException(400, "This PMS does not support creating appointment types")
@@ -335,7 +335,7 @@ async def create_appointment_type(
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         await sync_svc._upsert_appointment_type(
-            tenant_id=tenant.id,
+            institution_id=institution.id,
             location_id=location.id,
             source=result.source,
             source_id=result.id,
@@ -347,10 +347,10 @@ async def create_appointment_type(
         await session.flush()
 
         # Return the cached row
-        stmt = select(TenantAppointmentType).where(
-            TenantAppointmentType.tenant_id == tenant.id,
-            TenantAppointmentType.location_id == location.id,
-            TenantAppointmentType.source_id == result.id,
+        stmt = select(InstitutionAppointmentType).where(
+            InstitutionAppointmentType.institution_id == institution.id,
+            InstitutionAppointmentType.location_id == location.id,
+            InstitutionAppointmentType.source_id == result.id,
         )
         cached = (await session.execute(stmt)).scalar_one_or_none()
         if not cached:
@@ -367,8 +367,8 @@ async def delete_appointment_type(
 ):
     """Delete appointment type via PMS and remove from cache."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
-        adapter = await _get_adapter(tenant, location)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
 
         # Strip prefix if present (e.g., "nh-123" -> "123")
         raw_id = source_id.removeprefix("nh-")
@@ -381,10 +381,10 @@ async def delete_appointment_type(
             )
 
         # Remove from cache
-        stmt = select(TenantAppointmentType).where(
-            TenantAppointmentType.tenant_id == tenant.id,
-            TenantAppointmentType.location_id == location.id,
-            TenantAppointmentType.source_id == source_id,
+        stmt = select(InstitutionAppointmentType).where(
+            InstitutionAppointmentType.institution_id == institution.id,
+            InstitutionAppointmentType.location_id == location.id,
+            InstitutionAppointmentType.source_id == source_id,
         )
         cached = (await session.execute(stmt)).scalar_one_or_none()
         if cached:
@@ -399,16 +399,16 @@ async def list_operatories(
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_id: str | None = Query(None),
 ):
-    """List cached operatories for the tenant location."""
+    """List cached operatories for the institution location."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
         result = await session.execute(
-            select(TenantOperatory)
+            select(InstitutionOperatory)
             .where(
-                TenantOperatory.tenant_id == tenant.id,
-                TenantOperatory.location_id == location.id,
+                InstitutionOperatory.institution_id == institution.id,
+                InstitutionOperatory.location_id == location.id,
             )
-            .order_by(TenantOperatory.name)
+            .order_by(InstitutionOperatory.name)
         )
         return [CachedOperatoryResponse.model_validate(op) for op in result.scalars().all()]
 
@@ -421,17 +421,17 @@ async def list_descriptors(
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_id: str | None = Query(None),
 ):
-    """List cached EMR descriptors for the tenant location."""
+    """List cached EMR descriptors for the institution location."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
         result = await session.execute(
-            select(TenantDescriptor)
+            select(InstitutionDescriptor)
             .where(
-                TenantDescriptor.tenant_id == tenant.id,
-                TenantDescriptor.location_id == location.id,
-                TenantDescriptor.is_active == True,
+                InstitutionDescriptor.institution_id == institution.id,
+                InstitutionDescriptor.location_id == location.id,
+                InstitutionDescriptor.is_active == True,
             )
-            .order_by(TenantDescriptor.name)
+            .order_by(InstitutionDescriptor.name)
         )
         return [CachedDescriptorResponse.model_validate(d) for d in result.scalars().all()]
 
@@ -445,10 +445,10 @@ async def list_availabilities(
     location_id: str | None = Query(None),
     provider_source_id: str | None = Query(None, description="Filter by provider"),
 ):
-    """Fetch availabilities live from PMS for the tenant location."""
+    """Fetch availabilities live from PMS for the institution location."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
-        adapter = await _get_adapter(tenant, location)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
 
         # Build extra params for the PMS call
         extra: dict[str, Any] = {}
@@ -500,8 +500,8 @@ async def update_availability(
 ):
     """Update availability via PMS (e.g. link appointment types)."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
-        adapter = await _get_adapter(tenant, location)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
 
         if not isinstance(adapter, SupportsAvailabilityLinking):
             raise HTTPException(400, "This PMS does not support availability updates")
@@ -549,11 +549,11 @@ async def trigger_sync(
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_id: str | None = Query(None),
 ):
-    """Trigger a fresh sync from PMS for the tenant location."""
+    """Trigger a fresh sync from PMS for the institution location."""
     async with get_db_session() as session:
-        tenant, location = await _resolve_tenant_location(current_user, session, location_id)
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
         sync_svc = SyncService(session)
-        result = await sync_svc.sync_location(tenant, location)
+        result = await sync_svc.sync_location(institution, location)
         return {
             "success": result.success,
             "location": result.location_slug,

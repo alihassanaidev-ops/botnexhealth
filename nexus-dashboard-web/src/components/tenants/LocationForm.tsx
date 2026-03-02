@@ -92,7 +92,7 @@ const locationSchema = z.object({
 type LocationFormValues = z.infer<typeof locationSchema>;
 
 interface LocationFormProps {
-    tenantSlug: string;
+    institutionSlug: string;
     location?: Location;
     onSuccess: () => void;
     onCancel: () => void;
@@ -130,7 +130,7 @@ function FieldHint({ text }: { text: string }) {
     );
 }
 
-export function LocationForm({ tenantSlug, location, onSuccess, onCancel }: LocationFormProps) {
+export function LocationForm({ institutionSlug, location, onSuccess, onCancel }: LocationFormProps) {
     const isEditing = !!location;
     const [nexHealthInstitutions, setNexHealthInstitutions] = useState<InstitutionBasic[]>([]);
     const [isLoadingNH, setIsLoadingNH] = useState(false);
@@ -163,7 +163,7 @@ export function LocationForm({ tenantSlug, location, onSuccess, onCancel }: Loca
         async function fetchNHLocations() {
             setIsLoadingNH(true);
             try {
-                const { data } = await api.get<InstitutionBasicListResponse>("/admin/tenants/nexhealth/locations");
+                const { data } = await api.get<InstitutionBasicListResponse>("/admin/institutions/nexhealth/locations");
                 setNexHealthInstitutions(data.data);
             } catch (error) {
                 console.error("Failed to fetch NexHealth locations", error);
@@ -233,7 +233,7 @@ export function LocationForm({ tenantSlug, location, onSuccess, onCancel }: Loca
                     return;
                 }
 
-                await api.patch(`/admin/tenants/${tenantSlug}/locations/${location!.slug}`, payload);
+                await api.patch(`/admin/institutions/${institutionSlug}/locations/${location!.slug}`, payload);
                 toast.success("Location updated successfully");
             } else {
                 if (!values.slug) {
@@ -249,7 +249,7 @@ export function LocationForm({ tenantSlug, location, onSuccess, onCancel }: Loca
                         payload[key] = val;
                     }
                 }
-                await api.post(`/admin/tenants/${tenantSlug}/locations`, payload);
+                await api.post(`/admin/institutions/${institutionSlug}/locations`, payload);
                 toast.success("Location created successfully");
             }
 

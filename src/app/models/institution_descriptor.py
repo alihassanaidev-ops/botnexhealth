@@ -1,4 +1,4 @@
-"""TenantDescriptor model — cached EMR appointment descriptor data per location."""
+"""InstitutionDescriptor model — cached EMR appointment descriptor data per location."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.app.database import Base
 
 
-class TenantDescriptor(Base):
+class InstitutionDescriptor(Base):
     """
     Locally cached EMR appointment descriptor (procedure code) data synced from PMS.
 
@@ -24,22 +24,22 @@ class TenantDescriptor(Base):
     No PHI stored — only descriptor metadata.
     """
 
-    __tablename__ = "tenant_descriptors"
+    __tablename__ = "institution_descriptors"
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         primary_key=True,
         default=lambda: str(uuid4()),
     )
-    tenant_id: Mapped[str] = mapped_column(
+    institution_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     location_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenant_locations.id", ondelete="CASCADE"),
+        ForeignKey("institution_locations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -58,4 +58,4 @@ class TenantDescriptor(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<TenantDescriptor(id={self.id}, name='{self.name}', code='{self.code}')>"
+        return f"<InstitutionDescriptor(id={self.id}, name='{self.name}', code='{self.code}')>"

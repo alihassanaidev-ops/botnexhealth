@@ -25,12 +25,12 @@ from src.app.models import (  # noqa: F401 — side-effect import
     CustomFieldDefinition,
     CustomFieldValue,
     RetellWebhookEvent,
-    Tenant,
-    TenantAppointmentType,
-    TenantDescriptor,
-    TenantLocation,
-    TenantOperatory,
-    TenantProvider,
+    Institution,
+    InstitutionAppointmentType,
+    InstitutionDescriptor,
+    InstitutionLocation,
+    InstitutionOperatory,
+    InstitutionProvider,
 )
 from src.app.models.user import User  # noqa: F401
 

@@ -32,17 +32,17 @@ export async function listCalls(filters: CallsFilters = {}): Promise<CallsListRe
     if (filters.date_to) params.set("date_to", filters.date_to);
 
     const q = params.toString() ? `?${params.toString()}` : "";
-    const { data } = await api.get<CallsListResponse>(`/tenant/calls${q}`);
+    const { data } = await api.get<CallsListResponse>(`/institution/calls${q}`);
     return data;
 }
 
 export async function getCall(callId: string): Promise<CallDetail> {
-    const { data } = await api.get<CallDetail>(`/tenant/calls/${callId}`);
+    const { data } = await api.get<CallDetail>(`/institution/calls/${callId}`);
     return data;
 }
 
 export async function resolveCallback(callId: string, note?: string): Promise<CallRecord> {
-    const { data } = await api.patch<CallRecord>(`/tenant/calls/${callId}/resolve`, {
+    const { data } = await api.patch<CallRecord>(`/institution/calls/${callId}/resolve`, {
         note: note ?? null,
     });
     return data;

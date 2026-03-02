@@ -1,7 +1,7 @@
 /**
  * Custom Fields API service.
  *
- * CRUD operations for tenant custom field definitions.
+ * CRUD operations for institution custom field definitions.
  */
 
 import api from "@/lib/api";
@@ -39,7 +39,7 @@ export async function listFieldDefinitions(
     params.set("entity_type", entityType);
     if (includeInactive) params.set("include_inactive", "true");
     const { data } = await api.get<CustomFieldDefinition[]>(
-        `/tenant/custom-fields/definitions?${params.toString()}`,
+        `/institution/custom-fields/definitions?${params.toString()}`,
     );
     return data;
 }
@@ -48,7 +48,7 @@ export async function createFieldDefinition(
     payload: CreateFieldDefinitionPayload,
 ): Promise<CustomFieldDefinition> {
     const { data } = await api.post<CustomFieldDefinition>(
-        "/tenant/custom-fields/definitions",
+        "/institution/custom-fields/definitions",
         payload,
     );
     return data;
@@ -59,7 +59,7 @@ export async function updateFieldDefinition(
     payload: UpdateFieldDefinitionPayload,
 ): Promise<CustomFieldDefinition> {
     const { data } = await api.patch<CustomFieldDefinition>(
-        `/tenant/custom-fields/definitions/${id}`,
+        `/institution/custom-fields/definitions/${id}`,
         payload,
     );
     return data;
@@ -70,7 +70,7 @@ export async function deactivateFieldDefinition(
     hard = false,
 ): Promise<void> {
     const url = hard
-        ? `/tenant/custom-fields/definitions/${id}?hard=true`
-        : `/tenant/custom-fields/definitions/${id}`;
+        ? `/institution/custom-fields/definitions/${id}?hard=true`
+        : `/institution/custom-fields/definitions/${id}`;
     await api.delete(url);
 }

@@ -1,7 +1,7 @@
 """Retell function handlers — PMS-agnostic via adapter pattern.
 
-All handlers resolve the tenant and location automatically from the
-call context (agent_id → TenantLocation mapping). Since each Retell
+All handlers resolve the institution and location automatically from the
+call context (agent_id → InstitutionLocation mapping). Since each Retell
 agent maps 1:1 to a location, the agent never needs to specify
 location_id — the backend routes automatically.
 
@@ -15,12 +15,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.app.models.audit_log import AuditAction, AuditActor
-from src.app.models.tenant import Tenant
-from src.app.models.tenant_location import TenantLocation
+from src.app.models.institution import Institution
+from src.app.models.institution_location import InstitutionLocation
 from src.app.pms.base import PMSAdapter
-from src.app.pms.factory import get_adapter_for_tenant, get_adapter_for_tenant_location
+from src.app.pms.factory import get_adapter_for_institution, get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
-from src.app.retell.functions import get_tenant_from_call_context, register_function
+from src.app.retell.functions import get_institution_from_call_context, register_function
 from src.app.retell.security import hash_for_logging
 from src.app.services.audit_decorator import audit
 
@@ -34,34 +34,34 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ResolvedContext:
-    """Resolved tenant, location, and PMS adapter from call context."""
+    """Resolved institution, location, and PMS adapter from call context."""
 
-    tenant: Tenant
-    location: TenantLocation | None
+    institution: Institution
+    location: InstitutionLocation | None
     adapter: PMSAdapter
 
 
 async def _resolve_context() -> ResolvedContext:
     """Resolve PMS adapter and location from current Retell call context.
 
-    Returns a ResolvedContext containing the tenant, location (if mapped),
-    and the scoped PMS adapter. Since each Retell agent is mapped 1:1 to a
-    TenantLocation, the location is automatically resolved — the agent
+    Returns a ResolvedContext containing the institution, location (if mapped),
+    and the scoped PMS adapter. Since each Retell agent is mapped 1:1 to an
+    InstitutionLocation, the location is automatically resolved — the agent
     does not need to call list_locations or pass location_id.
 
     Raises:
-        ValueError: If no tenant can be resolved from the agent_id.
+        ValueError: If no institution can be resolved from the agent_id.
     """
-    tenant, location = await get_tenant_from_call_context()
-    if not tenant:
-        raise ValueError("No tenant resolved from call context. Check agent_id mapping.")
+    institution, location = await get_institution_from_call_context()
+    if not institution:
+        raise ValueError("No institution resolved from call context. Check agent_id mapping.")
 
     if location:
-        adapter = await get_adapter_for_tenant_location(tenant, location)
+        adapter = await get_adapter_for_institution_location(institution, location)
     else:
-        adapter = await get_adapter_for_tenant(tenant)
+        adapter = await get_adapter_for_institution(institution)
 
-    return ResolvedContext(tenant=tenant, location=location, adapter=adapter)
+    return ResolvedContext(institution=institution, location=location, adapter=adapter)
 
 
 # ============================================================================
@@ -125,7 +125,7 @@ def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
 async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
     """Return the auto-resolved location for this Retell agent.
 
-    Since each agent maps 1:1 to a TenantLocation, this returns
+    Since each agent maps 1:1 to an InstitutionLocation, this returns
     exactly one location — no PMS API call needed.
     """
     try:
@@ -151,7 +151,7 @@ async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
             "message": f"Your location is {ctx.location.name}.",
         }
 
-    # Fallback: tenant-only (no location mapped), fetch from PMS
+    # Fallback: institution-only (no location mapped), fetch from PMS
     try:
         locations = await ctx.adapter.list_locations()
         return {

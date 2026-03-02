@@ -1,5 +1,5 @@
 """Middleware package."""
 
-from src.app.middleware.tenant import TenantMiddleware, get_tenant_from_request
+from src.app.middleware.institution import InstitutionMiddleware, get_institution_from_request
 
-__all__ = ["TenantMiddleware", "get_tenant_from_request"]
+__all__ = ["InstitutionMiddleware", "get_institution_from_request"]

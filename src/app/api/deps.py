@@ -98,3 +98,31 @@ async def get_current_admin(
             detail="The user doesn't have enough privileges"
         )
     return current_user
+
+
+async def get_current_institution_user(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+) -> User:
+    """
+    Ensure user has INSTITUTION role.
+    """
+    if current_user.role != UserRole.INSTITUTION.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires INSTITUTION role"
+        )
+    return current_user
+
+
+async def get_current_institution_or_location_user(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+) -> User:
+    """
+    Ensure user has INSTITUTION or LOCATION role.
+    """
+    if current_user.role not in (UserRole.INSTITUTION.value, UserRole.LOCATION.value):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires INSTITUTION or LOCATION role"
+        )
+    return current_user

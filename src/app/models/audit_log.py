@@ -61,14 +61,16 @@ class AuditAction(str, Enum):
 
     
     # Admin operations
-    TENANT_CREATE = "TENANT_CREATE"
-    TENANT_UPDATE = "TENANT_UPDATE"
-    TENANT_DELETE = "TENANT_DELETE"
+    INSTITUTION_CREATE = "INSTITUTION_CREATE"
+    INSTITUTION_UPDATE = "INSTITUTION_UPDATE"
+    INSTITUTION_DELETE = "INSTITUTION_DELETE"
     LOCATION_CREATE = "LOCATION_CREATE"
     LOCATION_UPDATE = "LOCATION_UPDATE"
     LOCATION_DELETE = "LOCATION_DELETE"
     LOCATION_SYNC = "LOCATION_SYNC"
-    
+    LOCATION_USER_CREATE = "LOCATION_USER_CREATE"
+    LOCATION_USER_DELETE = "LOCATION_USER_DELETE"
+
     # Auth operations
     LOGIN = "LOGIN"
     ACCOUNT_UNLOCK = "ACCOUNT_UNLOCK"
@@ -151,17 +153,17 @@ class AuditLog(Base):
     )
     
     # Additional context (NO PHI should be stored here)
-    # Example: {"request_id": "...", "ip_address": "...", "tenant_id": "..."}
+    # Example: {"request_id": "...", "ip_address": "...", "institution_id": "..."}
     audit_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         JSON,
         nullable=True
     )
     
-    # Optional: Tenant association for multi-tenant filtering
-    tenant_id: Mapped[str | None] = mapped_column(
+    # Optional: Institution association for multi-institution filtering
+    institution_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         nullable=True,
-        index=True  # For tenant-scoped queries
+        index=True  # For institution-scoped queries
     )
     
     def __repr__(self) -> str:
@@ -182,11 +184,11 @@ class AuditLog(Base):
         target_resource: str,
         outcome: AuditOutcome | str,
         audit_metadata: dict[str, Any] | None = None,
-        tenant_id: str | None = None,
+        institution_id: str | None = None,
     ) -> "AuditLog":
         """
         Factory method for creating audit log entries.
-        
+
         Accepts both Enum values and strings for flexibility.
         """
         return cls(
@@ -195,5 +197,5 @@ class AuditLog(Base):
             target_resource=target_resource,
             outcome=outcome.value if isinstance(outcome, AuditOutcome) else outcome,
             audit_metadata=audit_metadata,
-            tenant_id=tenant_id,
+            institution_id=institution_id,
         )

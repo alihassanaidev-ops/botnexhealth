@@ -1,4 +1,4 @@
-"""TenantAppointmentType model — cached PMS appointment type data per location."""
+"""InstitutionAppointmentType model — cached PMS appointment type data per location."""
 
 from __future__ import annotations
 
@@ -13,29 +13,29 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.app.database import Base
 
 
-class TenantAppointmentType(Base):
+class InstitutionAppointmentType(Base):
     """
     Locally cached appointment type data synced from PMS (NexHealth).
 
     No PHI stored — only type names, durations, and source metadata.
     """
 
-    __tablename__ = "tenant_appointment_types"
+    __tablename__ = "institution_appointment_types"
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         primary_key=True,
         default=lambda: str(uuid4()),
     )
-    tenant_id: Mapped[str] = mapped_column(
+    institution_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     location_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenant_locations.id", ondelete="CASCADE"),
+        ForeignKey("institution_locations.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -54,4 +54,4 @@ class TenantAppointmentType(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<TenantAppointmentType(id={self.id}, name='{self.name}', source={self.source})>"
+        return f"<InstitutionAppointmentType(id={self.id}, name='{self.name}', source={self.source})>"

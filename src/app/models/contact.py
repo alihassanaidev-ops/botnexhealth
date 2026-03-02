@@ -4,10 +4,10 @@ HIPAA Compliance:
 - Email, phone, and DOB are AES-256-GCM encrypted at application level.
 - phone_hash enables caller-ID lookups without decrypting every row.
 - Names stored plaintext for clinic staff dashboard reference (per HIPAA scope doc §3.2).
-- All records are tenant-scoped (tenant_id NOT NULL).
+- All records are institution-scoped (institution_id NOT NULL).
 
 Identity Model:
-- The true unique identifier is (tenant_id, nexhealth_patient_id).
+- The true unique identifier is (institution_id, nexhealth_patient_id).
 - A single phone number may link to multiple Contact records (e.g. a parent
   calling for different family members).
 - Contacts without a PMS link are created per-call and not deduplicated.
@@ -24,22 +24,22 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.app.database import Base
-from src.app.models.tenant import decrypt_value, encrypt_value
+from src.app.models.institution import decrypt_value, encrypt_value
 
 
 class Contact(Base):
     """
-    A patient or caller associated with a tenant (clinic).
+    A patient or caller associated with an institution (clinic).
 
-    One row per unique caller per tenant. Linked to Call records.
+    One row per unique caller per institution. Linked to Call records.
     """
 
     __tablename__ = "contacts"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "nexhealth_patient_id", name="uq_contact_tenant_pms"),
-        Index("ix_contact_tenant", "tenant_id"),
-        Index("ix_contact_tenant_nexhealth", "tenant_id", "nexhealth_patient_id"),
-        Index("ix_contact_tenant_phone", "tenant_id", "phone_hash"),
+        UniqueConstraint("institution_id", "nexhealth_patient_id", name="uq_contact_institution_pms"),
+        Index("ix_contact_institution", "institution_id"),
+        Index("ix_contact_institution_nexhealth", "institution_id", "nexhealth_patient_id"),
+        Index("ix_contact_institution_phone", "institution_id", "phone_hash"),
     )
 
     # Primary key
@@ -49,10 +49,10 @@ class Contact(Base):
         default=lambda: str(uuid4()),
     )
 
-    # Tenant isolation (NOT NULL — every contact belongs to exactly one clinic)
-    tenant_id: Mapped[str] = mapped_column(
+    # Institution isolation (NOT NULL — every contact belongs to exactly one clinic)
+    institution_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -139,4 +139,4 @@ class Contact(Base):
         return cls._hash_phone(phone)
 
     def __repr__(self) -> str:
-        return f"<Contact(id={self.id}, tenant_id={self.tenant_id}, name='{self.full_name}')>"
+        return f"<Contact(id={self.id}, institution_id={self.institution_id}, name='{self.full_name}')>"

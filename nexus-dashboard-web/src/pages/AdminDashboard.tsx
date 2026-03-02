@@ -16,20 +16,20 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import { StatsCard } from "@/components/dashboard/StatsCard"
-import type { TenantDetail } from "@/types"
-import { listTenantsDetailed } from "@/lib/admin-api"
+import type { InstitutionDetail } from "@/types"
+import { listInstitutionsDetailed } from "@/lib/admin-api"
 
 export default function AdminDashboard() {
     const { user } = useAuth()
-    const [tenants, setTenants] = useState<TenantDetail[]>([])
+    const [institutions, setInstitutions] = useState<InstitutionDetail[]>([])
     const [loading, setLoading] = useState(true)
 
-    const fetchTenants = useCallback(async () => {
+    const fetchInstitutions = useCallback(async () => {
         try {
-            const data = await listTenantsDetailed()
-            setTenants(data)
+            const data = await listInstitutionsDetailed()
+            setInstitutions(data)
         } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : "Failed to load tenants"
+            const message = error instanceof Error ? error.message : "Failed to load institutions"
             toast.error(message)
         } finally {
             setLoading(false)
@@ -37,12 +37,12 @@ export default function AdminDashboard() {
     }, [])
 
     useEffect(() => {
-        fetchTenants()
-    }, [fetchTenants])
+        fetchInstitutions()
+    }, [fetchInstitutions])
 
-    const activeTenants = tenants.filter((t) => t.is_active)
-    const inactiveTenants = tenants.filter((t) => !t.is_active)
-    const fullyConfigured = tenants.filter(
+    const activeInstitutions = institutions.filter((t) => t.is_active)
+    const inactiveInstitutions = institutions.filter((t) => !t.is_active)
+    const fullyConfigured = institutions.filter(
         (t) =>
             t.is_active &&
             (t.has_nexhealth_key || t.has_system_nexhealth_key) &&
@@ -50,8 +50,8 @@ export default function AdminDashboard() {
     )
 
     const integrationCounts = {
-        nexhealth: tenants.filter((t) => t.has_nexhealth_key || t.has_system_nexhealth_key).length,
-        retell: tenants.filter((t) => t.has_retell_secret).length,
+        nexhealth: institutions.filter((t) => t.has_nexhealth_key || t.has_system_nexhealth_key).length,
+        retell: institutions.filter((t) => t.has_retell_secret).length,
     }
 
     const hour = new Date().getHours()
@@ -66,13 +66,13 @@ export default function AdminDashboard() {
                         {greeting}{user?.email ? `, ${user.email.split("@")[0]}` : ""}
                     </h2>
                     <p className="text-muted-foreground">
-                        Platform overview and tenant management.
+                        Platform overview and institution management.
                     </p>
                 </div>
-                <Link to="/tenants">
+                <Link to="/institutions">
                     <Button variant="outline" className="gap-2">
                         <Plus className="h-4 w-4" />
-                        Add Tenant
+                        Add Institution
                     </Button>
                 </Link>
             </div>
@@ -93,21 +93,21 @@ export default function AdminDashboard() {
             ) : (
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                     <StatsCard
-                        title="Total Tenants"
-                        value={String(tenants.length)}
+                        title="Total Institutions"
+                        value={String(institutions.length)}
                         description="All registered practices"
                         icon={Building2}
                     />
                     <StatsCard
                         title="Active"
-                        value={String(activeTenants.length)}
-                        description="Currently active tenants"
+                        value={String(activeInstitutions.length)}
+                        description="Currently active institutions"
                         icon={CheckCircle2}
                     />
                     <StatsCard
                         title="Inactive"
-                        value={String(inactiveTenants.length)}
-                        description="Disabled or paused tenants"
+                        value={String(inactiveInstitutions.length)}
+                        description="Disabled or paused institutions"
                         icon={XCircle}
                     />
                     <StatsCard
@@ -125,7 +125,7 @@ export default function AdminDashboard() {
                     <CardHeader>
                         <CardTitle>Integration Coverage</CardTitle>
                         <CardDescription>
-                            Number of tenants with each integration configured.
+                            Number of institutions with each integration configured.
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
@@ -141,17 +141,17 @@ export default function AdminDashboard() {
                 </Card>
             )}
 
-            {/* Tenant Table */}
+            {/* Institution Table */}
             <Card>
                 <CardHeader>
                     <div className="flex items-center justify-between">
                         <div>
-                            <CardTitle>Tenants</CardTitle>
+                            <CardTitle>Institutions</CardTitle>
                             <CardDescription>
                                 All registered practices on the platform.
                             </CardDescription>
                         </div>
-                        <Link to="/tenants">
+                        <Link to="/institutions">
                             <Button variant="ghost" size="sm" className="gap-1">
                                 View All
                                 <ArrowRight className="h-3 w-3" />
@@ -166,10 +166,10 @@ export default function AdminDashboard() {
                                 <Skeleton key={i} className="h-12 w-full" />
                             ))}
                         </div>
-                    ) : tenants.length === 0 ? (
+                    ) : institutions.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                             <Users className="h-10 w-10 mb-2" />
-                            <p>No tenants yet.</p>
+                            <p>No institutions yet.</p>
                         </div>
                     ) : (
                         <div className="overflow-x-auto">
@@ -185,25 +185,25 @@ export default function AdminDashboard() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {tenants.map((tenant) => (
-                                        <tr key={tenant.id} className="border-b last:border-0">
-                                            <td className="py-3 font-medium">{tenant.name}</td>
+                                    {institutions.map((inst) => (
+                                        <tr key={inst.id} className="border-b last:border-0">
+                                            <td className="py-3 font-medium">{inst.name}</td>
                                             <td className="py-3 text-muted-foreground text-xs">
-                                                {tenant.user?.email ?? "—"}
+                                                {inst.user?.email ?? "—"}
                                             </td>
                                             <td className="py-3">
-                                                <Badge variant={tenant.is_active ? "default" : "secondary"}>
-                                                    {tenant.is_active ? "Active" : "Inactive"}
+                                                <Badge variant={inst.is_active ? "default" : "secondary"}>
+                                                    {inst.is_active ? "Active" : "Inactive"}
                                                 </Badge>
                                             </td>
                                             <td className="py-3">
-                                                <span className={`inline-block h-2.5 w-2.5 rounded-full ${tenant.has_nexhealth_key || tenant.has_system_nexhealth_key ? "bg-green-500" : "bg-gray-300"}`} />
+                                                <span className={`inline-block h-2.5 w-2.5 rounded-full ${inst.has_nexhealth_key || inst.has_system_nexhealth_key ? "bg-green-500" : "bg-gray-300"}`} />
                                             </td>
                                             <td className="py-3">
-                                                <span className={`inline-block h-2.5 w-2.5 rounded-full ${tenant.has_retell_secret ? "bg-green-500" : "bg-gray-300"}`} />
+                                                <span className={`inline-block h-2.5 w-2.5 rounded-full ${inst.has_retell_secret ? "bg-green-500" : "bg-gray-300"}`} />
                                             </td>
                                             <td className="py-3 text-right">
-                                                <Link to={`/tenants/${tenant.slug}`}>
+                                                <Link to={`/institutions/${inst.slug}`}>
                                                     <Button variant="ghost" size="sm">
                                                         View
                                                     </Button>

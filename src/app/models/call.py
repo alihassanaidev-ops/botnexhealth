@@ -1,8 +1,8 @@
 """Call model for storing post-call records.
 
 HIPAA Compliance:
-- All records are tenant-scoped (tenant_id NOT NULL).
-- Transcript and summary may contain PHI references — stored in tenant-isolated rows.
+- All records are institution-scoped (institution_id NOT NULL).
+- Transcript and summary may contain PHI references — stored in institution-isolated rows.
 - retell_call_id UNIQUE constraint ensures webhook idempotency.
 """
 
@@ -63,7 +63,7 @@ class CallDirection(str, Enum):
 
 class Call(Base):
     """
-    A single call record linked to a contact and tenant.
+    A single call record linked to a contact and institution.
 
     Created during post-call webhook processing. The retell_call_id
     serves as an idempotency key to prevent duplicate records.
@@ -71,10 +71,10 @@ class Call(Base):
 
     __tablename__ = "calls"
     __table_args__ = (
-        Index("ix_call_tenant", "tenant_id"),
-        Index("ix_call_tenant_status", "tenant_id", "call_status"),
-        Index("ix_call_tenant_date", "tenant_id", "call_date"),
-        Index("ix_call_tenant_contact", "tenant_id", "contact_id"),
+        Index("ix_call_institution", "institution_id"),
+        Index("ix_call_institution_status", "institution_id", "call_status"),
+        Index("ix_call_institution_date", "institution_id", "call_date"),
+        Index("ix_call_institution_contact", "institution_id", "contact_id"),
     )
 
     # Primary key
@@ -84,10 +84,10 @@ class Call(Base):
         default=lambda: str(uuid4()),
     )
 
-    # Tenant isolation
-    tenant_id: Mapped[str] = mapped_column(
+    # Institution isolation
+    institution_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -174,6 +174,6 @@ class Call(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<Call(id={self.id}, tenant_id={self.tenant_id}, "
+            f"<Call(id={self.id}, institution_id={self.institution_id}, "
             f"status={self.call_status}, direction={self.call_direction})>"
         )

@@ -1,4 +1,4 @@
-"""Tenant model for multi-tenant architecture."""
+"""Institution model for multi-institution architecture."""
 
 from __future__ import annotations
 
@@ -51,73 +51,73 @@ def _get_encryption_key() -> bytes:
 def encrypt_value(value: str | None) -> str | None:
     """
     Encrypt a string value using AES-256-GCM.
-    
+
     Returns base64-encoded string containing IV + ciphertext + auth tag.
     """
     if value is None:
         return None
-    
+
     key = _get_encryption_key()
     aesgcm = AESGCM(key)
-    
+
     # 96-bit (12 byte) IV as recommended for GCM
     iv = secrets.token_bytes(12)
-    
+
     # Encrypt (GCM automatically appends 16-byte auth tag)
     ciphertext = aesgcm.encrypt(iv, value.encode("utf-8"), None)
-    
+
     # Combine: iv (12) + ciphertext + tag (16)
     encrypted_data = iv + ciphertext
-    
+
     return base64.urlsafe_b64encode(encrypted_data).decode("ascii")
 
 
 def decrypt_value(value: str | None) -> str | None:
     """
     Decrypt a string value encrypted with AES-256-GCM.
-    
+
     Expects base64-encoded string containing IV + ciphertext + auth tag.
     """
     if value is None:
         return None
-    
+
     key = _get_encryption_key()
     aesgcm = AESGCM(key)
-    
+
     # Decode base64
     encrypted_data = base64.urlsafe_b64decode(value)
-    
+
     # Extract IV (first 12 bytes) and ciphertext+tag (rest)
     iv = encrypted_data[:12]
     ciphertext = encrypted_data[12:]
-    
+
     # Decrypt (GCM verifies auth tag automatically)
     plaintext = aesgcm.decrypt(iv, ciphertext, None)
-    
+
     return plaintext.decode("utf-8")
 
 
-class Tenant(Base):
+class Institution(Base):
     """
-    Tenant model storing per-client configuration and credentials.
-    
+    Institution model storing per-client configuration and credentials.
+
     All API keys/secrets are stored encrypted.
     """
-    
-    __tablename__ = "tenants"
-    
+
+    __tablename__ = "institutions"
+
     # Primary key
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         primary_key=True,
         default=lambda: str(uuid4())
     )
-    
-    # Tenant identifiers
+
+    # Institution identifiers
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    
+
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -133,20 +133,20 @@ class Tenant(Base):
         onupdate=func.now(),
         nullable=False
     )
-    
+
     # =========================================================================
     # Encrypted field properties
     # =========================================================================
-    
+
     @property
     def nexhealth_api_key(self) -> str | None:
         """Decrypt and return NexHealth API key."""
         return decrypt_value(self.nexhealth_api_key_encrypted)
-    
+
     @nexhealth_api_key.setter
     def nexhealth_api_key(self, value: str | None) -> None:
         """Encrypt and store NexHealth API key."""
         self.nexhealth_api_key_encrypted = encrypt_value(value)
-    
+
     def __repr__(self) -> str:
-        return f"<Tenant(id={self.id}, name='{self.name}', slug='{self.slug}')>"
+        return f"<Institution(id={self.id}, name='{self.name}', slug='{self.slug}')>"
