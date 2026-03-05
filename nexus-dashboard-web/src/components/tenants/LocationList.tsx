@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, RefreshCw, Pencil, Trash2, Loader2, MessageSquare, UserPlus, MailPlus } from "lucide-react";
+import { Plus, RefreshCw, Pencil, Trash2, Loader2, MessageSquare, UserPlus, MailPlus, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,13 +19,10 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
-import {
-    Alert,
-    AlertDescription,
-    AlertTitle,
-} from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { LocationForm } from "./LocationForm";
+import { LocationHoursDialog } from "./LocationHoursDialog";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import type { Location, SyncResult } from "@/types";
@@ -39,6 +36,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
     const [isLoading, setIsLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"list" | "form">("list");
     const [editingLocation, setEditingLocation] = useState<Location | undefined>();
+    const [hoursTarget, setHoursTarget] = useState<Location | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<Location | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const [syncingSlug, setSyncingSlug] = useState<string | null>(null);
@@ -286,6 +284,14 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                                             <Button
                                                 variant="ghost"
                                                 size="icon"
+                                                onClick={() => setHoursTarget(loc)}
+                                                title="Operating Hours & Breaks"
+                                            >
+                                                <Clock className="h-4 w-4" />
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
                                                 onClick={() => openEditSheet(loc)}
                                                 title="Edit location"
                                             >
@@ -319,6 +325,13 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                     />
                 </div>
             )}
+
+            {/* Location Hours Dialog */}
+            <LocationHoursDialog
+                institutionSlug={institutionSlug}
+                location={hoursTarget}
+                onClose={() => setHoursTarget(null)}
+            />
 
             {/* Invite Location User Dialog */}
             <Dialog open={!!inviteTarget} onOpenChange={(open) => { if (!open) { setInviteTarget(null); setInviteEmail(""); } }}>

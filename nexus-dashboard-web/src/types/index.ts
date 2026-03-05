@@ -77,6 +77,40 @@ export interface SyncResult {
     errors: string[];
 }
 
+// ── Operating Hours & Breaks ────────────────────────────────────────────────
+
+export interface OperatingHoursResponse {
+    id: string;
+    location_id: string;
+    day_of_week: number;
+    is_open: boolean;
+    open_time: string | null;  // HH:MM
+    close_time: string | null; // HH:MM
+}
+
+export interface OperatingHoursEntry {
+    day_of_week: number;
+    is_open: boolean;
+    open_time: string | null;
+    close_time: string | null;
+}
+
+export interface BreakResponse {
+    id: string;
+    location_id: string;
+    name: string;
+    day_of_week: number | null;
+    start_time: string; // HH:MM
+    end_time: string;   // HH:MM
+}
+
+export interface BreakCreateRequest {
+    name: string;
+    day_of_week: number | null;
+    start_time: string;
+    end_time: string;
+}
+
 // ── Institution Setup Types ─────────────────────────────────────────────────
 
 export interface LocationInfo {
