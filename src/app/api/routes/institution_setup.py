@@ -564,3 +564,198 @@ async def trigger_sync(
 
             "errors": result.errors,
         }
+
+
+# ── Operating Hours (institution-facing) ─────────────────────────────────
+
+
+class OperatingHoursEntry(BaseModel):
+    day_of_week: int
+    is_open: bool = True
+    open_time: str | None = None
+    close_time: str | None = None
+
+
+class OperatingHoursResponse(BaseModel):
+    id: str
+    location_id: str
+    day_of_week: int
+    is_open: bool
+    open_time: str | None = None
+    close_time: str | None = None
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_model(cls, m: Any) -> "OperatingHoursResponse":
+        return cls(
+            id=str(m.id),
+            location_id=str(m.location_id),
+            day_of_week=m.day_of_week,
+            is_open=m.is_open,
+            open_time=m.open_time.strftime("%H:%M") if m.open_time else None,
+            close_time=m.close_time.strftime("%H:%M") if m.close_time else None,
+        )
+
+
+class BulkOperatingHoursRequest(BaseModel):
+    hours: list[OperatingHoursEntry]
+
+
+class BreakCreateRequest(BaseModel):
+    name: str
+    day_of_week: int | None = None
+    start_time: str
+    end_time: str
+
+
+class BreakResponse(BaseModel):
+    id: str
+    location_id: str
+    name: str
+    day_of_week: int | None = None
+    start_time: str
+    end_time: str
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_model(cls, m: Any) -> "BreakResponse":
+        return cls(
+            id=str(m.id),
+            location_id=str(m.location_id),
+            name=m.name,
+            day_of_week=m.day_of_week,
+            start_time=m.start_time.strftime("%H:%M"),
+            end_time=m.end_time.strftime("%H:%M"),
+        )
+
+
+@router.get("/operating-hours", response_model=list[OperatingHoursResponse])
+async def get_operating_hours(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
+):
+    """View operating hours for the institution location."""
+    from src.app.models.location_operating_hours import LocationOperatingHours
+
+    async with get_db_session() as session:
+        _, location = await _resolve_institution_location(current_user, session, location_id)
+        result = await session.execute(
+            select(LocationOperatingHours)
+            .where(LocationOperatingHours.location_id == location.id)
+            .order_by(LocationOperatingHours.day_of_week)
+        )
+        return [OperatingHoursResponse.from_model(h) for h in result.scalars().all()]
+
+
+@router.put("/operating-hours", response_model=list[OperatingHoursResponse])
+async def set_operating_hours(
+    data: BulkOperatingHoursRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
+):
+    """Bulk-set operating hours (replaces existing) for the institution location."""
+    from datetime import time as dt_time
+    from sqlalchemy import delete as sa_delete
+    from src.app.models.location_operating_hours import LocationOperatingHours
+
+    async with get_db_session() as session:
+        _, location = await _resolve_institution_location(current_user, session, location_id)
+
+        # Validate no duplicate days
+        days_seen: set[int] = set()
+        for entry in data.hours:
+            if entry.day_of_week in days_seen:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Duplicate day_of_week: {entry.day_of_week}")
+            days_seen.add(entry.day_of_week)
+
+        # Replace all
+        await session.execute(
+            sa_delete(LocationOperatingHours).where(LocationOperatingHours.location_id == location.id)
+        )
+
+        new_rows = []
+        for entry in data.hours:
+            open_t = dt_time.fromisoformat(entry.open_time) if entry.open_time else None
+            close_t = dt_time.fromisoformat(entry.close_time) if entry.close_time else None
+            row = LocationOperatingHours(
+                location_id=location.id,
+                day_of_week=entry.day_of_week,
+                is_open=entry.is_open,
+                open_time=open_t,
+                close_time=close_t,
+            )
+            session.add(row)
+            new_rows.append(row)
+
+        await session.flush()
+        return [OperatingHoursResponse.from_model(r) for r in new_rows]
+
+
+# ── Breaks (institution-facing) ──────────────────────────────────────────
+
+
+@router.get("/breaks", response_model=list[BreakResponse])
+async def get_breaks(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
+):
+    """View breaks for the institution location."""
+    from src.app.models.location_break import LocationBreak
+
+    async with get_db_session() as session:
+        _, location = await _resolve_institution_location(current_user, session, location_id)
+        result = await session.execute(
+            select(LocationBreak)
+            .where(LocationBreak.location_id == location.id)
+            .order_by(LocationBreak.day_of_week.nulls_first(), LocationBreak.start_time)
+        )
+        return [BreakResponse.from_model(b) for b in result.scalars().all()]
+
+
+@router.post("/breaks", response_model=BreakResponse, status_code=201)
+async def create_break(
+    data: BreakCreateRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
+):
+    """Add a break for the institution location."""
+    from datetime import time as dt_time
+    from src.app.models.location_break import LocationBreak
+
+    async with get_db_session() as session:
+        _, location = await _resolve_institution_location(current_user, session, location_id)
+        brk = LocationBreak(
+            location_id=location.id,
+            name=data.name,
+            day_of_week=data.day_of_week,
+            start_time=dt_time.fromisoformat(data.start_time),
+            end_time=dt_time.fromisoformat(data.end_time),
+        )
+        session.add(brk)
+        await session.flush()
+        return BreakResponse.from_model(brk)
+
+
+@router.delete("/breaks/{break_id}", status_code=204)
+async def delete_break(
+    break_id: str,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
+):
+    """Remove a break from the institution location."""
+    from src.app.models.location_break import LocationBreak
+
+    async with get_db_session() as session:
+        _, location = await _resolve_institution_location(current_user, session, location_id)
+        result = await session.execute(
+            select(LocationBreak).where(
+                LocationBreak.id == break_id,
+                LocationBreak.location_id == location.id,
+            )
+        )
+        brk = result.scalar_one_or_none()
+        if not brk:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Break not found")
+        await session.delete(brk)

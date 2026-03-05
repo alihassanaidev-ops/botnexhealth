@@ -26,7 +26,9 @@ router = APIRouter(prefix="/admin/twilio", tags=["Admin - Twilio"])
 
 
 def _get_twilio_client():
-    """Initialise and return a Twilio REST client using platform credentials."""
+    """Initialise and return a Twilio REST client using platform credentials.
+    Note: Prefer using SmsService over calling this directly to ensure SMS logging.
+    """
     from twilio.rest import Client
 
     from src.app.config import settings
@@ -58,6 +60,7 @@ class SendSmsRequest(BaseModel):
     from_number: str = Field(..., description="Twilio phone number to send from (E.164)")
     to_number: str = Field(..., description="Recipient phone number (E.164)")
     body: str = Field(..., min_length=1, max_length=1600, description="SMS message body")
+    institution_location_id: str = Field(..., description="Location UUID associated with this message")
 
 
 class SendSmsResponse(BaseModel):
@@ -123,25 +126,37 @@ async def send_sms(
     The `from_number` must be an active Twilio number on the account.
     Both numbers must be in E.164 format (e.g. +12125551234).
     """
+    from src.app.database import get_db_session
+    from src.app.services.sms_service import SmsService
+    from src.app.models.sms_history_log import SmsStatus
+    
     try:
-        client = _get_twilio_client()
-        message = client.messages.create(
-            body=body.body,
-            from_=body.from_number,
-            to=body.to_number,
-        )
-        logger.info(
-            "SMS sent: sid=%s from=%s to=%s",
-            message.sid,
-            body.from_number,
-            body.to_number,
-        )
-        return SendSmsResponse(
-            message_sid=message.sid,
-            status=message.status,
-            from_number=body.from_number,
-            to_number=body.to_number,
-        )
+        async with get_db_session() as session:
+            sms_service = SmsService(session)
+            log_record = await sms_service.send_sms(
+                from_number=body.from_number,
+                to_number=body.to_number,
+                body=body.body,
+                institution_location_id=body.institution_location_id
+            )
+            
+            # Commit the SMS history log regardless of Twilio success/failure
+            await session.commit()
+            
+            if log_record.status == SmsStatus.FAILED.value:
+                # If it's a configuration error throw 503, otherwise 502
+                code = status.HTTP_503_SERVICE_UNAVAILABLE if "credentials" in str(log_record.error_message) else status.HTTP_502_BAD_GATEWAY
+                raise HTTPException(
+                    status_code=code,
+                    detail=f"Failed to send SMS: {log_record.error_message}",
+                )
+
+            return SendSmsResponse(
+                message_sid=log_record.message_sid or "",
+                status=log_record.status,
+                from_number=body.from_number,
+                to_number=body.to_number,
+            )
     except HTTPException:
         raise
     except Exception as e:

@@ -287,32 +287,39 @@ async def handle_retell_webhook(
             ) or mapped_call_data.from_number
 
             if _sms_body and _patient_phone and location and location.twilio_from_number:
-                try:
-                    from twilio.rest import Client as TwilioClient
-                    from src.app.config import settings as _cfg
+                import asyncio
+                from src.app.database import get_db_session
+                from src.app.services.sms_service import SmsService
+                
+                async def _send_auto_sms():
+                    try:
+                        # Find the contact related to this call if any
+                        contact_id = None
+                        if getattr(mapped_call_data, "contact_id", None):
+                             # Depending on how PostCallService assigns Contact IDs
+                             contact_id = getattr(mapped_call_data, "contact_id")
+                             
+                        async with get_db_session() as sms_session:
+                            sms_service = SmsService(sms_session)
+                            await sms_service.send_sms(
+                                from_number=location.twilio_from_number, # type: ignore
+                                to_number=_patient_phone,
+                                body=_sms_body,
+                                institution_location_id=location.id,
+                                call_id=mapped_call_data.id if hasattr(mapped_call_data, "id") else None,
+                                patient_contact_id=contact_id
+                            )
+                            await sms_session.commit()
+                    except Exception as _sms_err:
+                         logger.error(
+                             "Auto-SMS background task failed: call=%s error=%s",
+                             hash_for_logging(event.call.call_id),
+                             _sms_err,
+                         )
+                
+                # Fire and forget without blocking webhook response
+                asyncio.create_task(_send_auto_sms())
 
-                    if _cfg.twillio_sid and _cfg.twillio_api_secret:
-                        _twilio = TwilioClient(_cfg.twillio_sid, _cfg.twillio_api_secret)
-                        _msg = _twilio.messages.create(
-                            body=_sms_body,
-                            from_=location.twilio_from_number,
-                            to=_patient_phone,
-                        )
-                        logger.info(
-                            "Auto-SMS sent: sid=%s from=%s to=%s call=%s",
-                            _msg.sid,
-                            location.twilio_from_number,
-                            _patient_phone,
-                            hash_for_logging(event.call.call_id),
-                        )
-                    else:
-                        logger.warning("Auto-SMS skipped: Twilio credentials not configured")
-                except Exception as _sms_err:
-                    logger.error(
-                        "Auto-SMS failed (non-blocking): call=%s error=%s",
-                        hash_for_logging(event.call.call_id),
-                        _sms_err,
-                    )
             elif location and location.twilio_from_number and not _sms_body:
                 logger.debug(
                     "Auto-SMS skipped: no send_sms content in call analysis for call=%s",
