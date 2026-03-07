@@ -22,6 +22,7 @@ import {
 import {
     Home,
     Users,
+    Building2,
     ChevronUp,
     LogOut,
     CalendarCheck,
@@ -62,8 +63,27 @@ const adminNav: NavItemDef[] = [
     },
 ]
 
-// Institution-only nav items
-const institutionNav: NavItemDef[] = [
+const institutionAdminNav: NavItemDef[] = [
+    {
+        title: "Institution Admin",
+        url: "/institution-admin",
+        icon: Building2,
+        exact: true,
+    },
+    {
+        title: "Dashboard",
+        url: "/dashboard",
+        icon: Home,
+    },
+    {
+        title: "Calls",
+        url: "/calls",
+        icon: Phone,
+    },
+]
+
+// Location admin/staff nav items
+const locationNav: NavItemDef[] = [
     {
         title: "Dashboard",
         url: "/dashboard",
@@ -134,7 +154,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         user?.role === "INSTITUTION_ADMIN" ||
         user?.role === "LOCATION_ADMIN" ||
         user?.role === "STAFF";
-    const mainNav = isAdmin ? adminNav : institutionNav;
+    const mainNav = isAdmin
+        ? adminNav
+        : user?.role === "INSTITUTION_ADMIN"
+            ? institutionAdminNav
+            : locationNav;
     const setupNav = user?.role === "STAFF"
         ? navSetup.filter((item) => item.url !== "/setup/audit-logs")
         : navSetup;

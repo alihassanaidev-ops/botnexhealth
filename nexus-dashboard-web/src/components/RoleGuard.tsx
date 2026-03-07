@@ -13,7 +13,11 @@ export default function RoleGuard({ allowed, children }: RoleGuardProps) {
     if (!user) return null
 
     if (!allowed.includes(user.role)) {
-        const home = user.role === "SUPER_ADMIN" ? "/admin" : "/dashboard"
+        const home = user.role === "SUPER_ADMIN"
+            ? "/admin"
+            : user.role === "INSTITUTION_ADMIN"
+                ? "/institution-admin"
+                : "/dashboard"
         return <Navigate to={home} replace />
     }
 
