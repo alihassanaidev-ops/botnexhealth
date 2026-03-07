@@ -90,12 +90,26 @@ async def get_current_admin(
     current_user: Annotated[User, Depends(get_current_active_user)]
 ) -> User:
     """
-    Ensure user is an administrator.
+    Backwards-compatible alias for super admin checks.
     """
-    if current_user.role != UserRole.ADMIN.value:
+    if current_user.role != UserRole.SUPER_ADMIN.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="The user doesn't have enough privileges"
+        )
+    return current_user
+
+
+async def get_current_super_admin(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+) -> User:
+    """
+    Ensure user is a SUPER_ADMIN.
+    """
+    if current_user.role != UserRole.SUPER_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires SUPER_ADMIN role",
         )
     return current_user
 
@@ -104,12 +118,78 @@ async def get_current_institution_user(
     current_user: Annotated[User, Depends(get_current_active_user)]
 ) -> User:
     """
-    Ensure user has INSTITUTION role.
+    Backwards-compatible alias for institution admin checks.
     """
-    if current_user.role != UserRole.INSTITUTION.value:
+    if current_user.role != UserRole.INSTITUTION_ADMIN.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requires INSTITUTION role"
+            detail="Requires INSTITUTION_ADMIN role"
+        )
+    return current_user
+
+
+async def get_current_institution_admin(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+) -> User:
+    """
+    Ensure user has INSTITUTION_ADMIN role.
+    """
+    if current_user.role != UserRole.INSTITUTION_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires INSTITUTION_ADMIN role",
+        )
+    return current_user
+
+
+async def get_current_location_admin(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+) -> User:
+    """
+    Ensure user has LOCATION_ADMIN role.
+    """
+    if current_user.role != UserRole.LOCATION_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires LOCATION_ADMIN role",
+        )
+    if not current_user.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location-scoped account is missing location assignment",
+        )
+    return current_user
+
+
+async def get_current_institution_or_location_admin(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+) -> User:
+    """
+    Ensure user has INSTITUTION_ADMIN or LOCATION_ADMIN role.
+    """
+    if current_user.role not in (UserRole.INSTITUTION_ADMIN.value, UserRole.LOCATION_ADMIN.value):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires INSTITUTION_ADMIN or LOCATION_ADMIN role",
+        )
+    return current_user
+
+
+async def get_current_location_staff_or_admin(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+) -> User:
+    """
+    Ensure user has LOCATION_ADMIN or STAFF role.
+    """
+    if current_user.role not in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires LOCATION_ADMIN or STAFF role",
+        )
+    if not current_user.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location-scoped account is missing location assignment",
         )
     return current_user
 
@@ -118,11 +198,15 @@ async def get_current_institution_or_location_user(
     current_user: Annotated[User, Depends(get_current_active_user)]
 ) -> User:
     """
-    Ensure user has INSTITUTION or LOCATION role.
+    Ensure user has any institution-scoped role.
     """
-    if current_user.role not in (UserRole.INSTITUTION.value, UserRole.LOCATION.value):
+    if current_user.role not in (
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requires INSTITUTION or LOCATION role"
+            detail="Requires INSTITUTION_ADMIN, LOCATION_ADMIN, or STAFF role"
         )
     return current_user

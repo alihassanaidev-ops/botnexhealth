@@ -592,6 +592,7 @@ class InstitutionResponse(BaseModel):
     name: str
     slug: str
     is_active: bool
+    location_limit: int = 1
 
 
     # Credential presence indicators
@@ -626,6 +627,7 @@ class InstitutionResponse(BaseModel):
             name=institution.name,
             slug=institution.slug,
             is_active=institution.is_active,
+            location_limit=getattr(institution, "location_limit", 1),
             has_nexhealth_key=institution.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
             has_retell_secret=has_retell_secret,

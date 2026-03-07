@@ -23,7 +23,7 @@ import { useAuth } from "@/context/AuthContext"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
 import { getDashboardSummary } from "@/lib/dashboard-api"
 import { resolveCallback } from "@/lib/calls-api"
-import { STATUS_OPTIONS } from "@/pages/Calls"
+import { STATUS_OPTIONS } from "@/lib/constants"
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

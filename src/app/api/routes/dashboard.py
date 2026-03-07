@@ -18,9 +18,12 @@ from sqlalchemy import and_, func, select
 from src.app.api.deps import get_current_active_user
 from src.app.api.rate_limit import RATE_READ, limiter
 from src.app.database import get_db_session
+from src.app.models.audit_log import AuditAction, AuditOutcome
 from src.app.models.call import Call, CallStatus
 from src.app.models.contact import Contact
-from src.app.models.user import User
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.user import User, UserRole
+from src.app.services.audit import log_audit_background
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +109,23 @@ async def get_dashboard_summary(
     month_start = today.replace(day=1)
 
     async with get_db_session() as session:
+        extra_conditions = []
+        if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+            if not current_user.location_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No location assignment")
+            location_result = await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.id == current_user.location_id,
+                    InstitutionLocation.institution_id == institution_id,
+                )
+            )
+            location = location_result.scalar_one_or_none()
+            if not location or not location.retell_agent_id:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid location scope")
+            extra_conditions.append(Call.agent_used == location.retell_agent_id)
+
         # ── Volume counts ─────────────────────────────────────────────────
-        base = select(func.count(Call.id)).where(Call.institution_id == institution_id)
+        base = select(func.count(Call.id)).where(Call.institution_id == institution_id, *extra_conditions)
 
         today_count: int = (
             await session.execute(base.where(Call.call_date == today))
@@ -129,7 +147,7 @@ async def get_dashboard_summary(
         tag_rows = (
             await session.execute(
                 select(Call.call_status, func.count(Call.id).label("cnt"))
-                .where(Call.institution_id == institution_id, Call.call_status.isnot(None))
+                .where(Call.institution_id == institution_id, Call.call_status.isnot(None), *extra_conditions)
                 .group_by(Call.call_status)
                 .order_by(func.count(Call.id).desc())
             )
@@ -154,6 +172,7 @@ async def get_dashboard_summary(
                         Call.institution_id == institution_id,
                         Call.call_status == CallStatus.NEEDS_CALLBACK.value,
                         Call.callback_resolved.is_(False),
+                        *extra_conditions,
                     )
                 )
                 .order_by(Call.call_date.asc(), Call.created_at.asc())
@@ -174,7 +193,7 @@ async def get_dashboard_summary(
             for call, contact in callback_rows
         ]
 
-        return DashboardSummary(
+        response = DashboardSummary(
             call_volume=CallVolume(
                 today=today_count,
                 this_week=week_count,
@@ -185,3 +204,16 @@ async def get_dashboard_summary(
             callback_queue=callback_queue,
             as_of=now.isoformat(),
         )
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.VIEW_DASHBOARD,
+            target_resource="dashboard:summary",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": institution_id,
+                "location_id": current_user.location_id,
+            },
+            institution_id=institution_id,
+        )
+        return response

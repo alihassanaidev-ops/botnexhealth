@@ -133,6 +133,7 @@ class InstitutionCreate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
+    location_limit: int = Field(1, ge=1, le=500, description="Maximum number of locations this institution can have")
 
 
 class InstitutionUpdate(BaseModel):
@@ -146,6 +147,7 @@ class InstitutionUpdate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
+    location_limit: int | None = Field(None, ge=1, le=500)
 
 
 
@@ -322,7 +324,7 @@ async def create_institution(
             response = supabase_service.invite_user(
                 email=data.email,
                 institution_id=str(institution.id),
-                role=UserRole.INSTITUTION.value
+                role=UserRole.INSTITUTION_ADMIN.value
             )
             if hasattr(response, 'user') and hasattr(response.user, 'id'):
                 supabase_user_id = str(response.user.id)
@@ -346,7 +348,7 @@ async def create_institution(
         user = User(
             id=supabase_user_id,
             email=data.email,
-            role=UserRole.INSTITUTION.value,
+            role=UserRole.INSTITUTION_ADMIN.value,
             institution_id=institution.id,
             is_active=True
         )
@@ -694,6 +696,16 @@ async def create_location(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
+        active_locations = await institution_service.list_locations(institution.id, include_inactive=False)
+        if len(active_locations) >= institution.location_limit:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Institution '{slug}' reached its location limit "
+                    f"({institution.location_limit}). Increase plan limit before adding more locations."
+                ),
+            )
+
         existing = await institution_service.get_location_by_slug(data.slug)
         if existing:
             raise HTTPException(
@@ -736,7 +748,7 @@ async def list_locations(
             user_result = await session.execute(
                 select(User).where(
                     User.location_id.in_(location_ids),
-                    User.role == UserRole.LOCATION.value,
+                    User.role == UserRole.LOCATION_ADMIN.value,
                 )
             )
             for u in user_result.scalars().all():
@@ -889,13 +901,13 @@ async def invite_location_user(
     _: User = Depends(get_current_admin),
 ):
     """
-    Invite a user with LOCATION role scoped to a specific location.
+    Invite a user with LOCATION_ADMIN role scoped to a specific location.
 
     Flow mirrors create_institution:
     1. Validate institution + location exist
     2. Check email uniqueness
     3. Invite via Supabase
-    4. Create local User with role=LOCATION, institution_id, location_id
+    4. Create local User with role=LOCATION_ADMIN, institution_id, location_id
     """
     async with get_db_session() as session:
         institution_service = InstitutionService(session)
@@ -925,7 +937,7 @@ async def invite_location_user(
         existing_loc_user = await session.execute(
             select(User).where(
                 User.location_id == location.id,
-                User.role == UserRole.LOCATION.value,
+                User.role == UserRole.LOCATION_ADMIN.value,
             )
         )
         if existing_loc_user.scalar_one_or_none():
@@ -940,7 +952,7 @@ async def invite_location_user(
             response = supabase_service.invite_user(
                 email=data.email,
                 institution_id=str(institution.id),
-                role=UserRole.LOCATION.value,
+                role=UserRole.LOCATION_ADMIN.value,
                 location_id=str(location.id),
             )
             if hasattr(response, 'user') and hasattr(response.user, 'id'):
@@ -964,7 +976,7 @@ async def invite_location_user(
         user = User(
             id=supabase_user_id,
             email=data.email,
-            role=UserRole.LOCATION.value,
+            role=UserRole.LOCATION_ADMIN.value,
             institution_id=institution.id,
             location_id=location.id,
             is_active=True,
@@ -1007,7 +1019,7 @@ async def list_location_users(
         result = await session.execute(
             select(User).where(
                 User.location_id == location.id,
-                User.role == UserRole.LOCATION.value,
+                User.role.in_([UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value]),
             )
         )
         users = result.scalars().all()

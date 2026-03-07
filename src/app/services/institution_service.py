@@ -52,11 +52,13 @@ class InstitutionService:
         slug: str,
         *,
         nexhealth_api_key: str | None = None,
+        location_limit: int = 1,
     ) -> Institution:
         """Create a new institution."""
         institution = Institution(
             name=name,
             slug=slug,
+            location_limit=location_limit,
         )
 
         # Set encrypted fields via properties

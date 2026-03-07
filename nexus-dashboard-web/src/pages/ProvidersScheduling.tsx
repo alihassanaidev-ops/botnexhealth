@@ -222,7 +222,7 @@ export default function ProvidersScheduling() {
                 <div>
                     <h2 className="text-3xl font-bold tracking-tight">Providers & Scheduling</h2>
                     <p className="text-muted-foreground">
-                        Link appointment types to provider availabilities so NexHealth can generate bookable slots.
+                        Link appointment types to provider availabilities so your scheduling engine can generate bookable slots.
                     </p>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -470,7 +470,7 @@ export default function ProvidersScheduling() {
                     <DialogHeader>
                         <DialogTitle>Create Custom Work Window</DialogTitle>
                         <DialogDescription>
-                            Create a manual schedule block. This will not be pushed back to your PMS, but will be used by NexHealth to offer slots.
+                            Create a manual schedule block. This will not be pushed back to your PMS, but it will be used to offer booking slots.
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-2">

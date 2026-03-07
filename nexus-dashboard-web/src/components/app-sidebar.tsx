@@ -29,7 +29,6 @@ import {
     Armchair,
     LayoutDashboard,
     Phone,
-    Settings2,
     ShieldCheck,
     MessageSquare,
 } from "lucide-react"
@@ -95,11 +94,6 @@ const navSetup: NavItemDef[] = [
         icon: Armchair,
     },
     {
-        title: "Custom Fields",
-        url: "/setup/custom-fields",
-        icon: Settings2,
-    },
-    {
         title: "Audit Logs",
         url: "/setup/audit-logs",
         icon: ShieldCheck,
@@ -135,9 +129,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
     const displayEmail = user?.email ?? "—";
     const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
-    const isAdmin = user?.role === "ADMIN";
-    const isInstitution = user?.role === "INSTITUTION" || user?.role === "LOCATION";
+    const isAdmin = user?.role === "SUPER_ADMIN";
+    const isInstitution =
+        user?.role === "INSTITUTION_ADMIN" ||
+        user?.role === "LOCATION_ADMIN" ||
+        user?.role === "STAFF";
     const mainNav = isAdmin ? adminNav : institutionNav;
+    const setupNav = user?.role === "STAFF"
+        ? navSetup.filter((item) => item.url !== "/setup/audit-logs")
+        : navSetup;
 
     return (
         <Sidebar collapsible="icon" {...props}>
@@ -186,7 +186,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                         </SidebarGroupLabel>
                         <SidebarGroupContent>
                             <SidebarMenu>
-                                {navSetup.map((item) => (
+                                {setupNav.map((item) => (
                                     <NavItem
                                         key={item.title}
                                         item={item}

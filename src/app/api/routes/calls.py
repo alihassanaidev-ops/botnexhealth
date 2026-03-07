@@ -21,9 +21,12 @@ from sqlalchemy.orm import selectinload
 from src.app.api.deps import get_current_active_user
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
+from src.app.models.audit_log import AuditAction, AuditOutcome
 from src.app.models.call import Call
 from src.app.models.contact import Contact
-from src.app.models.user import User
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.user import User, UserRole
+from src.app.services.audit import log_audit_background
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,6 @@ class ContactSummary(BaseModel):
 
 class CallRecord(BaseModel):
     id: str
-    retell_call_id: str | None
     call_direction: str | None
     call_status: str | None
     call_tags: list[str]          # all normalized tags for this call
@@ -57,7 +59,6 @@ class CallRecord(BaseModel):
     call_time: str | None
     call_duration_seconds: int | None
     callback_resolved: bool
-    agent_used: str | None
     created_at: str
     contact: ContactSummary | None
 
@@ -115,7 +116,6 @@ def _call_to_record(call: Call) -> CallRecord:
         )
     return CallRecord(
         id=call.id,
-        retell_call_id=call.retell_call_id,
         call_direction=call.call_direction,
         call_status=call.call_status,
         call_tags=_tags_from_db(call.call_tags),
@@ -130,10 +130,32 @@ def _call_to_record(call: Call) -> CallRecord:
         call_time=str(call.call_time) if call.call_time else None,
         call_duration_seconds=call.call_duration_seconds,
         callback_resolved=call.callback_resolved,
-        agent_used=call.agent_used,
         created_at=call.created_at.isoformat(),
         contact=contact_out,
     )
+
+
+async def _location_agent_filter(session, current_user: User) -> str | None:
+    """
+    For location-scoped roles, return the mapped Retell agent id to enforce call visibility.
+    """
+    if current_user.role not in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+        return None
+    if not current_user.location_id or not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Location assignment required")
+
+    location_result = await session.execute(
+        select(InstitutionLocation).where(
+            InstitutionLocation.id == current_user.location_id,
+            InstitutionLocation.institution_id == current_user.institution_id,
+        )
+    )
+    location = location_result.scalar_one_or_none()
+    if not location:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assigned location not found")
+    if not location.retell_agent_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Assigned location has no agent mapping")
+    return location.retell_agent_id
 
 
 # ── List calls ────────────────────────────────────────────────────────────────
@@ -175,6 +197,9 @@ async def list_calls(
 
     async with get_db_session() as session:
         conditions = [Call.institution_id == current_user.institution_id]
+        location_agent_id = await _location_agent_filter(session, current_user)
+        if location_agent_id:
+            conditions.append(Call.agent_used == location_agent_id)
 
         # Tag filtering: each tag must appear in call_tags (or match call_status)
         for tag in active_tags:
@@ -234,12 +259,26 @@ async def list_calls(
             )
         ).scalars().all()
 
-        return CallsListResponse(
+        response = CallsListResponse(
             total=total,
             limit=limit,
             offset=offset,
             items=[_call_to_record(c) for c in rows],
         )
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.VIEW_CALLS,
+            target_resource="calls:list",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": current_user.institution_id,
+                "location_id": current_user.location_id,
+                "result_count": len(response.items),
+            },
+            institution_id=current_user.institution_id,
+        )
+        return response
 
 
 # ── Call detail ───────────────────────────────────────────────────────────────
@@ -257,15 +296,21 @@ async def get_call(
 
     PHI note: transcript and recording_url may contain patient health information.
     Access is restricted to authenticated institution users for their own institution only.
+    Vendor-specific identifiers are intentionally excluded from this response.
     """
     if not current_user.institution_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
     async with get_db_session() as session:
+        conditions = [Call.id == call_id, Call.institution_id == current_user.institution_id]
+        location_agent_id = await _location_agent_filter(session, current_user)
+        if location_agent_id:
+            conditions.append(Call.agent_used == location_agent_id)
+
         call = (
             await session.execute(
                 select(Call)
-                .where(Call.id == call_id, Call.institution_id == current_user.institution_id)
+                .where(*conditions)
                 .options(selectinload(Call.contact))
             )
         ).scalar_one_or_none()
@@ -293,7 +338,7 @@ async def get_call(
         ]
 
         base = _call_to_record(call)
-        return CallDetail(
+        response = CallDetail(
             **base.model_dump(),
             transcript=call.transcript,
             transcript_with_tool_calls=call.transcript_with_tool_calls,
@@ -301,6 +346,19 @@ async def get_call(
             recording_url=call.recording_url,
             custom_fields=custom_fields,
         )
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.VIEW_CALL_DETAIL,
+            target_resource=f"call:{call.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": current_user.institution_id,
+                "location_id": current_user.location_id,
+            },
+            institution_id=current_user.institution_id,
+        )
+        return response
 
 
 # ── Resolve callback ──────────────────────────────────────────────────────────
@@ -323,10 +381,15 @@ async def resolve_callback(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
     async with get_db_session() as session:
+        conditions = [Call.id == call_id, Call.institution_id == current_user.institution_id]
+        location_agent_id = await _location_agent_filter(session, current_user)
+        if location_agent_id:
+            conditions.append(Call.agent_used == location_agent_id)
+
         call = (
             await session.execute(
                 select(Call)
-                .where(Call.id == call_id, Call.institution_id == current_user.institution_id)
+                .where(*conditions)
                 .options(selectinload(Call.contact))
             )
         ).scalar_one_or_none()
@@ -343,4 +406,17 @@ async def resolve_callback(
         await session.refresh(call)
 
         logger.info("Callback resolved: call=%s institution=%s", call_id, current_user.institution_id)
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.LOCATION_UPDATE,
+            target_resource=f"call:{call.id}/callback",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": current_user.institution_id,
+                "location_id": current_user.location_id,
+                "note_set": body.note is not None,
+            },
+            institution_id=current_user.institution_id,
+        )
         return _call_to_record(call)

@@ -44,7 +44,7 @@ class SupabaseService:
         """
         Invite a user via Supabase Admin API.
 
-        Stores institution_id, role, and (for LOCATION users) location_id in
+        Stores institution_id, role, and (for location-scoped users) location_id in
         app_metadata (not user_metadata) so that end-users cannot modify their
         own institution/role/location via client SDKs.
 
@@ -52,7 +52,7 @@ class SupabaseService:
             email: User's email address
             institution_id: Institution ID to store in app_metadata
             role: Role to store in app_metadata
-            location_id: Location ID to store in app_metadata (LOCATION role only)
+            location_id: Location ID to store in app_metadata (LOCATION_ADMIN / STAFF)
 
         Returns:
             Supabase UserResponse object
@@ -140,4 +140,3 @@ class SupabaseService:
 
             logger.critical(f"CRITICAL: Failed to delete Supabase user {user_id}: {e}")
             return False
-

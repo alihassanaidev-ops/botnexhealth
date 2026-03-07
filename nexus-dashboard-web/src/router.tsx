@@ -13,7 +13,6 @@ import AppointmentTypes from "./pages/AppointmentTypes";
 import ProvidersScheduling from "./pages/ProvidersScheduling";
 import Operatories from "./pages/Operatories";
 import Calls from "./pages/Calls";
-import CustomFields from "./pages/CustomFields";
 import AuditLogs from "./pages/AuditLogs"
 import AdminAuditLogs from "./pages/AdminAuditLogs"
 import TwilioPhoneNumbers from "./pages/TwilioPhoneNumbers";
@@ -42,7 +41,7 @@ export const router = createBrowserRouter([
                     {
                         path: "admin",
                         element: (
-                            <RoleGuard allowed={["ADMIN"]}>
+                            <RoleGuard allowed={["SUPER_ADMIN"]}>
                                 <AdminDashboard />
                             </RoleGuard>
                         ),
@@ -50,7 +49,7 @@ export const router = createBrowserRouter([
                     {
                         path: "dashboard",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <Dashboard />
                             </RoleGuard>
                         ),
@@ -59,7 +58,7 @@ export const router = createBrowserRouter([
                     {
                         path: "institutions",
                         element: (
-                            <RoleGuard allowed={["ADMIN"]}>
+                            <RoleGuard allowed={["SUPER_ADMIN"]}>
                                 <Institutions />
                             </RoleGuard>
                         ),
@@ -67,7 +66,7 @@ export const router = createBrowserRouter([
                     {
                         path: "institutions/:slug",
                         element: (
-                            <RoleGuard allowed={["ADMIN"]}>
+                            <RoleGuard allowed={["SUPER_ADMIN"]}>
                                 <InstitutionDetailPage />
                             </RoleGuard>
                         ),
@@ -75,7 +74,7 @@ export const router = createBrowserRouter([
                     {
                         path: "admin/twilio",
                         element: (
-                            <RoleGuard allowed={["ADMIN"]}>
+                            <RoleGuard allowed={["SUPER_ADMIN"]}>
                                 <TwilioPhoneNumbers />
                             </RoleGuard>
                         ),
@@ -83,7 +82,7 @@ export const router = createBrowserRouter([
                     {
                         path: "admin/audit-logs",
                         element: (
-                            <RoleGuard allowed={["ADMIN"]}>
+                            <RoleGuard allowed={["SUPER_ADMIN"]}>
                                 <AdminAuditLogs />
                             </RoleGuard>
                         ),
@@ -91,7 +90,7 @@ export const router = createBrowserRouter([
                     {
                         path: "setup/appointment-types",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <AppointmentTypes />
                             </RoleGuard>
                         ),
@@ -99,7 +98,7 @@ export const router = createBrowserRouter([
                     {
                         path: "setup/providers",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <ProvidersScheduling />
                             </RoleGuard>
                         ),
@@ -107,23 +106,15 @@ export const router = createBrowserRouter([
                     {
                         path: "setup/operatories",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <Operatories />
-                            </RoleGuard>
-                        ),
-                    },
-                    {
-                        path: "setup/custom-fields",
-                        element: (
-                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
-                                <CustomFields />
                             </RoleGuard>
                         ),
                     },
                     {
                         path: "setup/audit-logs",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
                                 <AuditLogs />
                             </RoleGuard>
                         ),
@@ -131,7 +122,7 @@ export const router = createBrowserRouter([
                     {
                         path: "calls",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION", "LOCATION"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <Calls />
                             </RoleGuard>
                         ),

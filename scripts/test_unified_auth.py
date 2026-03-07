@@ -2,6 +2,9 @@ import asyncio
 import sys
 import os
 
+# This is a manual script, not a pytest test module.
+__test__ = False
+
 # Add project root to python path
 sys.path.append(os.getcwd())
 
@@ -9,7 +12,6 @@ from fastapi.testclient import TestClient
 from unittest.mock import MagicMock, patch, AsyncMock
 from src.app.main import app
 from src.app.models.user import User, UserRole
-from src.app.services.supabase_service import SupabaseService
 
 # Mock Supabase Service
 mock_supabase_service = MagicMock()
@@ -23,16 +25,15 @@ mock_session = AsyncMock()
 mock_result = MagicMock()
 mock_user = User(
     email="admin@example.com",
-    role=UserRole.ADMIN.value,
-    tenant_id=None,
+    role=UserRole.SUPER_ADMIN.value,
+    institution_id=None,
     is_active=True,
-    id="local-user-id-123",
-    supabase_id="supabase-uid-123"
+    id="supabase-uid-123",
 )
 mock_result.scalar_one_or_none.return_value = mock_user
 mock_session.execute.return_value = mock_result
 
-async def test_unified_auth():
+async def run_unified_auth():
     print("Starting Unified Auth Test...")
     
     with patch("src.app.api.routes.auth.SupabaseService", return_value=mock_supabase_service):
@@ -61,4 +62,4 @@ async def test_unified_auth():
             print("✅ Verified Supabase Token Validation Call")
 
 if __name__ == "__main__":
-    asyncio.run(test_unified_auth())
+    asyncio.run(run_unified_auth())

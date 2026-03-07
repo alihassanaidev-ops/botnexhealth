@@ -15,8 +15,10 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
 import { listAuditLogs, AuditLog } from "@/lib/tenant-api";
+import { useAuth } from "@/context/AuthContext";
 
 export default function AuditLogs() {
+    const { user } = useAuth();
     const [logs, setLogs] = useState<AuditLog[]>([]);
     const [loading, setLoading] = useState(true);
     const [page, setPage] = useState(1);
@@ -26,7 +28,10 @@ export default function AuditLogs() {
     async function fetchLogs(currentPage: number = page) {
         setLoading(true);
         try {
-            const data = await listAuditLogs(currentPage, pageSize);
+            const scope = user?.role === "LOCATION_ADMIN"
+                ? "location"
+                : "institution";
+            const data = await listAuditLogs(currentPage, pageSize, scope);
             setLogs(data.items);
             setTotal(data.total);
             setPage(currentPage);
@@ -55,9 +60,9 @@ export default function AuditLogs() {
     function renderActorBadge(actor: string) {
         switch (actor) {
             case "RETELL_AGENT":
-                return <Badge variant="outline" className="text-blue-600 border-blue-200 bg-blue-50">Retell AI</Badge>;
+                return <Badge variant="outline" className="text-blue-600 border-blue-200 bg-blue-50">Automation</Badge>;
             case "ADMIN":
-                return <Badge variant="outline" className="text-purple-600 border-purple-200 bg-purple-50">Admin</Badge>;
+                return <Badge variant="outline" className="text-purple-600 border-purple-200 bg-purple-50">Super Admin</Badge>;
             case "SYSTEM":
                 return <Badge variant="outline" className="text-gray-600 border-gray-200 bg-gray-50">System</Badge>;
             case "API_CLIENT":
@@ -73,7 +78,7 @@ export default function AuditLogs() {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Audit Logs</h1>
                     <p className="text-muted-foreground mt-2">
-                        View compliance and system activity across your account.
+                        View compliance and system activity for your allowed scope.
                     </p>
                 </div>
                 <Button variant="outline" onClick={() => fetchLogs(page)} disabled={loading}>

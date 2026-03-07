@@ -339,7 +339,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                     <DialogHeader>
                         <DialogTitle>Invite Location User</DialogTitle>
                         <DialogDescription>
-                            Send an invite to a user for <strong>{inviteTarget?.name}</strong>. They will receive an email to set up their account with <code>LOCATION</code> role access.
+                            Send an invite to a user for <strong>{inviteTarget?.name}</strong>. They will receive an email to set up their account with <code>LOCATION_ADMIN</code> role access.
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-2 py-2">

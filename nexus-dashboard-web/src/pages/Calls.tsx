@@ -4,6 +4,7 @@ import {
     Phone,
     PhoneIncoming,
     PhoneOutgoing,
+    CalendarIcon,
     Search,
     ChevronLeft,
     ChevronRight,
@@ -11,12 +12,18 @@ import {
     UserPlus,
     CheckCircle2,
     RefreshCcw,
+    PlusCircle,
 } from "lucide-react"
+import { format } from "date-fns"
+import type { DateRange } from "react-day-picker"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Separator } from "@/components/ui/separator"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Calendar } from "@/components/ui/calendar"
 import {
     Select,
     SelectContent,
@@ -25,6 +32,14 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import {
+    DropdownMenu,
+    DropdownMenuCheckboxItem,
+    DropdownMenuContent,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
     Dialog,
     DialogContent,
     DialogHeader,
@@ -32,6 +47,8 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { listCalls, getCall, resolveCallback } from "@/lib/calls-api"
+import { STATUS_OPTIONS, DIRECTION_OPTIONS } from "@/lib/constants"
+import { cn } from "@/lib/utils"
 import type { CallRecord, CallDetail, CallsListResponse, CustomFieldValue, TranscriptTurn } from "@/types"
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -39,28 +56,7 @@ import type { CallRecord, CallDetail, CallsListResponse, CustomFieldValue, Trans
 const PAGE_SIZE = 25
 const POLL_INTERVAL_MS = 30_000
 
-// Dark-mode-aware colors using opacity modifiers (safe for both light and dark)
-export const STATUS_OPTIONS: { value: string; label: string; color: string }[] = [
-    { value: "appointment_booked", label: "Appointment Booked", color: "bg-emerald-500/15 text-emerald-600 border-emerald-500/25 dark:text-emerald-400" },
-    { value: "appointment_rescheduled", label: "Rescheduled", color: "bg-blue-500/15 text-blue-600 border-blue-500/25 dark:text-blue-400" },
-    { value: "appointment_cancelled", label: "Cancelled", color: "bg-zinc-500/15 text-zinc-600 border-zinc-500/25 dark:text-zinc-400" },
-    { value: "emergency", label: "Emergency", color: "bg-red-500/15 text-red-600 border-red-500/25 dark:text-red-400" },
-    { value: "complaint", label: "Complaint", color: "bg-orange-500/15 text-orange-600 border-orange-500/25 dark:text-orange-400" },
-    { value: "needs_callback", label: "Needs Callback", color: "bg-amber-500/15 text-amber-600 border-amber-500/25 dark:text-amber-400" },
-    { value: "faq_handled", label: "FAQ Handled", color: "bg-sky-500/15 text-sky-600 border-sky-500/25 dark:text-sky-400" },
-    { value: "financial_inquiry", label: "Financial Inquiry", color: "bg-violet-500/15 text-violet-600 border-violet-500/25 dark:text-violet-400" },
-    { value: "transferred", label: "Transferred", color: "bg-teal-500/15 text-teal-600 border-teal-500/25 dark:text-teal-400" },
-    { value: "insurance_verified", label: "Insurance Verified", color: "bg-green-500/15 text-green-600 border-green-500/25 dark:text-green-400" },
-    { value: "insurance_unverified", label: "Insurance Unverified", color: "bg-rose-500/15 text-rose-600 border-rose-500/25 dark:text-rose-400" },
-    { value: "no_action_needed", label: "No Action Needed", color: "bg-zinc-500/10 text-zinc-500 border-zinc-500/20 dark:text-zinc-500" },
-]
-
 const STATUS_MAP = Object.fromEntries(STATUS_OPTIONS.map((o) => [o.value, o]))
-
-const DIRECTION_OPTIONS = [
-    { value: "inbound", label: "Inbound" },
-    { value: "outbound", label: "Outbound" },
-]
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
 
@@ -115,40 +111,169 @@ function formatDateTime(dateStr: string | null, timeStr: string | null): string 
 
 // ── Tag filter toggle ─────────────────────────────────────────────────────────
 
-interface TagToggleProps {
-    selected: string[]
-    onChange: (tags: string[]) => void
+interface CallsFacetedFilterProps {
+    title?: string
+    options: { label: string; value: string; color?: string }[]
+    selectedValues: Set<string>
+    onSelectedChange: (values: Set<string>) => void
 }
 
-function TagFilter({ selected, onChange }: TagToggleProps) {
-    function toggle(value: string) {
-        onChange(
-            selected.includes(value)
-                ? selected.filter((t) => t !== value)
-                : [...selected, value]
-        )
-    }
+function CallsFacetedFilter({
+    title,
+    options,
+    selectedValues,
+    onSelectedChange,
+}: CallsFacetedFilterProps) {
+    return (
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-8">
+                    <PlusCircle className="mr-2 h-4 w-4" />
+                    {title}
+                    {selectedValues.size > 0 && (
+                        <>
+                            <Separator orientation="vertical" className="mx-2 h-4" />
+                            <Badge
+                                variant="secondary"
+                                className="rounded-sm px-1 font-normal lg:hidden"
+                            >
+                                {selectedValues.size}
+                            </Badge>
+                            <div className="hidden space-x-1 lg:flex items-center">
+                                {selectedValues.size > 2 ? (
+                                    <Badge
+                                        variant="secondary"
+                                        className="rounded-sm px-1 font-normal"
+                                    >
+                                        {selectedValues.size} selected
+                                    </Badge>
+                                ) : (
+                                    options
+                                        .filter((option) => selectedValues.has(option.value))
+                                        .map((option) => (
+                                            <Badge
+                                                variant="secondary"
+                                                key={option.value}
+                                                className="rounded-sm px-1 font-normal"
+                                            >
+                                                {option.label}
+                                            </Badge>
+                                        ))
+                                )}
+                            </div>
+                        </>
+                    )}
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-[200px]" align="start">
+                <DropdownMenuLabel>Filter by status</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {options.map((option) => {
+                    const isSelected = selectedValues.has(option.value)
+                    return (
+                        <DropdownMenuCheckboxItem
+                            key={option.value}
+                            checked={isSelected}
+                            onCheckedChange={(checked) => {
+                                const next = new Set(selectedValues)
+                                if (checked) {
+                                    next.add(option.value)
+                                } else {
+                                    next.delete(option.value)
+                                }
+                                onSelectedChange(next)
+                            }}
+                        >
+                            {option.label}
+                        </DropdownMenuCheckboxItem>
+                    )
+                })}
+                {selectedValues.size > 0 && (
+                    <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuCheckboxItem
+                            className="justify-center text-center font-medium"
+                            onCheckedChange={() => onSelectedChange(new Set())}
+                            checked={false}
+                        >
+                            Clear filters
+                        </DropdownMenuCheckboxItem>
+                    </>
+                )}
+            </DropdownMenuContent>
+        </DropdownMenu>
+    )
+}
+
+function parseDateString(value: string): Date | undefined {
+    if (!value) return undefined
+    const [year, month, day] = value.split("-").map(Number)
+    if (!year || !month || !day) return undefined
+    const parsed = new Date(year, month - 1, day)
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed
+}
+
+function formatDateParam(value: Date): string {
+    return format(value, "yyyy-MM-dd")
+}
+
+interface CallsDateRangeFilterProps {
+    from: string
+    to: string
+    onChange: (next: { from: string; to: string }) => void
+}
+
+function CallsDateRangeFilter({ from, to, onChange }: CallsDateRangeFilterProps) {
+    const fromDate = parseDateString(from)
+    const toDate = parseDateString(to)
+    const selectedRange: DateRange | undefined = (fromDate || toDate)
+        ? { from: fromDate, to: toDate }
+        : undefined
+
+    const label = selectedRange?.from
+        ? selectedRange.to
+            ? `${format(selectedRange.from, "MMM d, yyyy")} - ${format(selectedRange.to, "MMM d, yyyy")}`
+            : format(selectedRange.from, "MMM d, yyyy")
+        : "Date range"
 
     return (
-        <div className="flex flex-wrap gap-2">
-            {STATUS_OPTIONS.map((opt) => {
-                const active = selected.includes(opt.value)
-                return (
-                    <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => toggle(opt.value)}
-                        className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors duration-200
-                            ${active
-                                ? "bg-primary text-primary-foreground border-primary shadow-sm"
-                                : "bg-transparent border-input/60 text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground hover:border-input"
-                            }`}
-                    >
-                        {opt.label}
-                    </button>
-                )
-            })}
-        </div>
+        <Popover>
+            <PopoverTrigger asChild>
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 w-[215px] justify-start text-left font-normal"
+                >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    <span className={cn(!selectedRange?.from && "text-muted-foreground")}>{label}</span>
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                    mode="range"
+                    numberOfMonths={2}
+                    selected={selectedRange}
+                    onSelect={(range) => onChange({
+                        from: range?.from ? formatDateParam(range.from) : "",
+                        to: range?.to ? formatDateParam(range.to) : "",
+                    })}
+                    initialFocus
+                />
+                {selectedRange?.from && (
+                    <div className="border-t p-2">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => onChange({ from: "", to: "" })}
+                        >
+                            Clear
+                        </Button>
+                    </div>
+                )}
+            </PopoverContent>
+        </Popover>
     )
 }
 
@@ -591,59 +716,66 @@ export default function Calls() {
             </div>
 
             {/* Filters */}
-            <Card className="shadow-sm">
-                <CardContent className="p-5 space-y-5">
-                    {/* Row 1: search + direction + dates */}
-                    <div className="flex flex-wrap items-end gap-4">
-                        <div className="relative flex-1 min-w-[200px] max-w-sm">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                            <Input
-                                placeholder="Search by patient name..."
-                                value={search}
-                                onChange={(e) => setSearch(e.target.value)}
-                                className="pl-9 h-10 w-full bg-background"
-                            />
-                        </div>
-
-                        <div className="flex-none">
-                            <Select value={directionFilter || "all"} onValueChange={(v) => setDirectionFilter(v === "all" ? "" : v)}>
-                                <SelectTrigger className="w-[160px] h-10 bg-background">
-                                    <SelectValue placeholder="All directions" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All directions</SelectItem>
-                                    {DIRECTION_OPTIONS.map((o) => (
-                                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <div className="flex items-center gap-4">
-                            <div className="flex flex-col gap-1.5">
-                                <span className="text-[11px] font-medium text-muted-foreground ml-1 uppercase tracking-wide">From</span>
-                                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-[145px] h-10 bg-background" />
-                            </div>
-                            <div className="flex flex-col gap-1.5">
-                                <span className="text-[11px] font-medium text-muted-foreground ml-1 uppercase tracking-wide">To</span>
-                                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-[145px] h-10 bg-background" />
-                            </div>
-                        </div>
-
-                        {hasFilters && (
-                            <Button variant="ghost" size="sm" onClick={clearFilters} className="h-10 px-4 ml-auto text-muted-foreground hover:text-foreground">
-                                <X className="h-4 w-4 mr-2" /> Clear filters
-                            </Button>
-                        )}
+            <div className="flex items-center justify-between">
+                <div className="flex flex-1 items-center space-x-2 overflow-x-auto pb-2 -mb-2">
+                    <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                        <Input
+                            placeholder="Search patient..."
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            className="h-8 pl-8 w-[150px] lg:w-[250px]"
+                        />
                     </div>
+                    <CallsFacetedFilter
+                        title="Status"
+                        options={STATUS_OPTIONS}
+                        selectedValues={new Set(selectedTags)}
+                        onSelectedChange={(s) => setSelectedTags(Array.from(s))}
+                    />
+                    <Select value={directionFilter || "all"} onValueChange={(v) => setDirectionFilter(v === "all" ? "" : v)}>
+                        <SelectTrigger className="h-8 w-[150px]">
+                            <SelectValue placeholder="Direction" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">Direction</SelectItem>
+                            {DIRECTION_OPTIONS.map((o) => (
+                                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <Separator orientation="vertical" className="mx-1 h-6 hidden sm:block" />
+                    <CallsDateRangeFilter
+                        from={dateFrom}
+                        to={dateTo}
+                        onChange={({ from, to }) => {
+                            setDateFrom(from)
+                            setDateTo(to)
+                        }}
+                    />
 
-                    {/* Row 2: tag toggles */}
-                    <div className="space-y-3 pt-1 border-t border-border/40">
-                        <p className="text-xs font-semibold text-muted-foreground">Filter by tag (select one or more):</p>
-                        <TagFilter selected={selectedTags} onChange={setSelectedTags} />
-                    </div>
-                </CardContent>
-            </Card>
+                    {hasFilters && (
+                        <Button
+                            variant="ghost"
+                            onClick={clearFilters}
+                            className="h-8 px-2 lg:px-3 text-muted-foreground hidden sm:flex"
+                        >
+                            Reset
+                            <X className="ml-2 h-4 w-4" />
+                        </Button>
+                    )}
+                </div>
+                {/* Mobile Clear Button */}
+                {hasFilters && (
+                    <Button
+                        variant="ghost"
+                        onClick={clearFilters}
+                        className="h-8 px-2 sm:hidden text-muted-foreground ml-2"
+                    >
+                        <X className="h-4 w-4" />
+                    </Button>
+                )}
+            </div>
 
             {/* Table */}
             <Card>

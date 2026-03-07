@@ -6,7 +6,7 @@ export default function RoleRedirect() {
 
     if (!user) return null
 
-    if (user.role === "ADMIN") {
+    if (user.role === "SUPER_ADMIN") {
         return <Navigate to="/admin" replace />
     }
 

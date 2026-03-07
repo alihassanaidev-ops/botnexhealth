@@ -21,9 +21,10 @@ class UserRole(str, Enum):
     """
     User roles for authorization.
     """
-    ADMIN = "ADMIN"
-    INSTITUTION = "INSTITUTION"
-    LOCATION = "LOCATION"
+    SUPER_ADMIN = "SUPER_ADMIN"
+    INSTITUTION_ADMIN = "INSTITUTION_ADMIN"
+    LOCATION_ADMIN = "LOCATION_ADMIN"
+    STAFF = "STAFF"
 
 
 class User(Base):
@@ -33,9 +34,9 @@ class User(Base):
     Fields:
     - id: Supabase auth.users.id (UUID) — set explicitly, not auto-generated
     - email: User's email address (login credential)
-    - role: User role (ADMIN, INSTITUTION, LOCATION)
-    - institution_id: Institution this user belongs to (nullable for ADMIN)
-    - location_id: Location this user is scoped to (nullable, only for LOCATION role)
+    - role: User role (SUPER_ADMIN, INSTITUTION_ADMIN, LOCATION_ADMIN, STAFF)
+    - institution_id: Institution this user belongs to (nullable for SUPER_ADMIN)
+    - location_id: Location this user is scoped to (nullable for INSTITUTION_ADMIN)
     - is_active: Whether the user can log in
     - failed_login_attempts: Consecutive failed login attempts since last success
     - locked_until: Account locked until this UTC timestamp (None = not locked)
@@ -57,7 +58,7 @@ class User(Base):
 
     role: Mapped[str] = mapped_column(
         String(50),
-        default=UserRole.INSTITUTION.value,
+        default=UserRole.INSTITUTION_ADMIN.value,
         nullable=False
     )
 

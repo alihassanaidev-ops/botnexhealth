@@ -24,7 +24,7 @@ from src.app.models.institution_descriptor import InstitutionDescriptor
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.institution_operatory import InstitutionOperatory
 from src.app.models.institution_provider import InstitutionProvider
-from src.app.models.user import User
+from src.app.models.user import User, UserRole
 from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.services.sync_service import SyncService
@@ -53,6 +53,14 @@ async def _resolve_institution_location(
     ).scalar_one_or_none()
     if not institution:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Institution not found")
+
+    # Location-scoped users are hard-limited to their own location.
+    if user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+        if not user.location_id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Location-scoped user missing location assignment")
+        if location_id and str(location_id) != str(user.location_id):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot access another location")
+        location_id = str(user.location_id)
 
     if location_id:
         location = (
@@ -95,7 +103,6 @@ async def _get_adapter(institution: Institution, location: InstitutionLocation) 
 class CachedProviderResponse(BaseModel):
     id: str
     source_id: str
-    source: str
     name: str | None = None
     first_name: str | None = None
     last_name: str | None = None
@@ -109,7 +116,6 @@ class CachedProviderResponse(BaseModel):
 class CachedAppointmentTypeResponse(BaseModel):
     id: str
     source_id: str
-    source: str
     name: str
     duration_minutes: int | None = None
     source_metadata: dict | None = None
@@ -122,7 +128,6 @@ class CachedAppointmentTypeResponse(BaseModel):
 class CachedOperatoryResponse(BaseModel):
     id: str
     source_id: str
-    source: str
     name: str
     is_active: bool = True
     synced_at: datetime | None = None
@@ -133,7 +138,6 @@ class CachedOperatoryResponse(BaseModel):
 class CachedDescriptorResponse(BaseModel):
     id: str
     source_id: str
-    source: str
     name: str
     descriptor_type: str | None = None
     code: str | None = None
@@ -147,7 +151,6 @@ class CachedDescriptorResponse(BaseModel):
 class CachedAvailabilityResponse(BaseModel):
     id: str
     source_id: str
-    source: str
     provider_source_id: str | None = None
     provider_name: str | None = None
     operatory_source_id: str | None = None
@@ -170,8 +173,6 @@ class LocationInfoResponse(BaseModel):
     id: str
     name: str
     slug: str
-    nexhealth_subdomain: str | None = None
-    nexhealth_location_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -237,7 +238,7 @@ async def get_setup_overview(
 
         return SetupOverviewResponse(
             location=LocationInfoResponse.model_validate(location),
-            pms_source=adapter.source,
+            pms_source=None,
             can_create_appointment_types=isinstance(adapter, SupportsAppointmentTypeCreation),
             can_link_availability=isinstance(adapter, SupportsAvailabilityLinking),
             counts=counts,
@@ -256,11 +257,22 @@ async def list_institution_locations(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "User is not associated with an institution")
 
     async with get_db_session() as session:
-        result = await session.execute(
-            select(InstitutionLocation)
-            .where(InstitutionLocation.institution_id == current_user.institution_id, InstitutionLocation.is_active == True)
-            .order_by(InstitutionLocation.name)
-        )
+        if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+            if not current_user.location_id:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Location-scoped user missing location assignment")
+            result = await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.id == current_user.location_id,
+                    InstitutionLocation.institution_id == current_user.institution_id,
+                    InstitutionLocation.is_active == True,
+                )
+            )
+        else:
+            result = await session.execute(
+                select(InstitutionLocation)
+                .where(InstitutionLocation.institution_id == current_user.institution_id, InstitutionLocation.is_active == True)
+                .order_by(InstitutionLocation.name)
+            )
         return [LocationInfoResponse.model_validate(loc) for loc in result.scalars().all()]
 
 
@@ -470,7 +482,6 @@ async def list_availabilities(
             results.append(CachedAvailabilityResponse(
                 id=str(item.get("id", "")),
                 source_id=f"nh-{item['id']}" if item.get("id") else "",
-                source="nexhealth",
                 provider_source_id=f"nh-{item['provider_id']}" if item.get("provider_id") else None,
                 provider_name=item.get("provider_name"),
                 operatory_source_id=f"nh-{item['operatory_id']}" if item.get("operatory_id") else None,
@@ -521,7 +532,6 @@ async def update_availability(
         return CachedAvailabilityResponse(
             id=str(updated.get("id", source_id)),
             source_id=f"nh-{updated.get('id', source_id)}",
-            source="nexhealth",
             provider_source_id=f"nh-{updated['provider_id']}" if updated.get("provider_id") else None,
             provider_name=updated.get("provider_name"),
             operatory_source_id=f"nh-{updated['operatory_id']}" if updated.get("operatory_id") else None,

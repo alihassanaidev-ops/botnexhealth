@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -193,7 +192,6 @@ export default function AppointmentTypes() {
                                     <TableHead>Name</TableHead>
                                     <TableHead>Duration</TableHead>
                                     <TableHead>EMR Descriptors</TableHead>
-                                    <TableHead>Source</TableHead>
                                     <TableHead className="text-right">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
@@ -209,9 +207,6 @@ export default function AppointmentTypes() {
                                         </TableCell>
                                         <TableCell className="max-w-[300px] truncate text-sm text-muted-foreground">
                                             {getDescriptorNames(type)}
-                                        </TableCell>
-                                        <TableCell>
-                                            <Badge variant="outline">{type.source}</Badge>
                                         </TableCell>
                                         <TableCell className="text-right">
                                             <Button

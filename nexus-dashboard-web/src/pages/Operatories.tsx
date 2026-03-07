@@ -86,7 +86,6 @@ export default function Operatories() {
                                     <TableHead>Name</TableHead>
                                     <TableHead>PMS ID</TableHead>
                                     <TableHead>Status</TableHead>
-                                    <TableHead>Source</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -98,9 +97,6 @@ export default function Operatories() {
                                             <Badge variant={op.is_active ? "default" : "secondary"}>
                                                 {op.is_active ? "Active" : "Inactive"}
                                             </Badge>
-                                        </TableCell>
-                                        <TableCell>
-                                            <Badge variant="outline">{op.source}</Badge>
                                         </TableCell>
                                     </TableRow>
                                 ))}

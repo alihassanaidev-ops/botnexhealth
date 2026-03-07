@@ -76,7 +76,8 @@ def audit(
                 target_resource = f"{action}:CONFIGURATION_ERROR"
 
             # 2. Context Resolution (Institution, IP, etc.)
-            institution_id = _resolve_institution_id(args, kwargs)
+            actor_ctx = _resolve_actor_context(args, kwargs)
+            institution_id = _resolve_institution_id(args, kwargs, actor_ctx.get("institution_id"))
             client_ip = _resolve_client_ip(args, kwargs)
 
             # Base metadata
@@ -84,6 +85,12 @@ def audit(
                 "request_id": request_id,
                 "function_name": func.__name__,
             }
+            if actor_ctx.get("actor_user_id"):
+                safe_metadata["actor_user_id"] = actor_ctx["actor_user_id"]
+            if actor_ctx.get("actor_role"):
+                safe_metadata["actor_role"] = actor_ctx["actor_role"]
+            if actor_ctx.get("location_id"):
+                safe_metadata["location_id"] = actor_ctx["location_id"]
             if client_ip:
                 safe_metadata["ip_address"] = client_ip
             if config_error:
@@ -126,14 +133,36 @@ def audit(
     return decorator
 
 
-def _resolve_institution_id(args: tuple, kwargs: dict) -> str | None:
+def _resolve_institution_id(args: tuple, kwargs: dict, fallback: str | None = None) -> str | None:
     """Attempt to resolve institution ID from arguments (Context)."""
     for arg in args:
         if hasattr(arg, "state") and hasattr(arg.state, "institution"):
             institution = getattr(arg.state, "institution", None)
             if institution:
                 return str(institution.id)
-    return None
+    return fallback
+
+
+def _resolve_actor_context(args: tuple, kwargs: dict) -> dict[str, str | None]:
+    """
+    Resolve actor user metadata when a route function receives `current_user` dependency.
+    """
+    candidate_values = list(args) + list(kwargs.values())
+    for value in candidate_values:
+        # User model shape: id, role, institution_id, location_id.
+        if all(hasattr(value, attr) for attr in ("id", "role", "institution_id", "location_id")):
+            return {
+                "actor_user_id": str(getattr(value, "id", None)) if getattr(value, "id", None) else None,
+                "actor_role": str(getattr(value, "role", None)) if getattr(value, "role", None) else None,
+                "institution_id": str(getattr(value, "institution_id", None)) if getattr(value, "institution_id", None) else None,
+                "location_id": str(getattr(value, "location_id", None)) if getattr(value, "location_id", None) else None,
+            }
+    return {
+        "actor_user_id": None,
+        "actor_role": None,
+        "institution_id": None,
+        "location_id": None,
+    }
 
 
 def _resolve_client_ip(args: tuple, kwargs: dict) -> str | None:

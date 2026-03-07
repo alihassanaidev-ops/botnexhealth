@@ -1,15 +1,16 @@
 
 import os
 import sys
-import json
 import logging
 from dotenv import load_dotenv
+
+# This is a manual script, not a pytest test module.
+__test__ = False
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from src.app.retell.security import RetellSignatureVerifier
-from retell.lib.webhook_auth import sign_request_body
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,11 @@ def test_verification():
         return
 
     verifier = RetellSignatureVerifier(api_key)
+    try:
+        from retell.lib.webhook_auth import sign_request_body
+    except Exception as exc:
+        logger.error("Could not import Retell signing helper: %s", exc)
+        return
 
     # Case 1: Compact JSON
     payload_compact = '{"foo":"bar"}'

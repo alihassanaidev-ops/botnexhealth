@@ -1,7 +1,11 @@
 export interface User {
     id: string;
     email: string;
-    role: "ADMIN" | "INSTITUTION" | "LOCATION";
+    role:
+    | "SUPER_ADMIN"
+    | "INSTITUTION_ADMIN"
+    | "LOCATION_ADMIN"
+    | "STAFF";
     is_active?: boolean;
     institution_id?: string;
     location_id?: string;
@@ -117,9 +121,6 @@ export interface LocationInfo {
     id: string;
     name: string;
     slug: string;
-    nexhealth_subdomain: string | null;
-    nexhealth_location_id: string | null;
-
 }
 
 export interface SetupOverview {
@@ -133,7 +134,6 @@ export interface SetupOverview {
 export interface CachedProvider {
     id: string;
     source_id: string;
-    source: string;
     name: string | null;
     first_name: string | null;
     last_name: string | null;
@@ -145,7 +145,6 @@ export interface CachedProvider {
 export interface CachedAppointmentType {
     id: string;
     source_id: string;
-    source: string;
     name: string;
     duration_minutes: number | null;
     source_metadata: {
@@ -159,7 +158,6 @@ export interface CachedAppointmentType {
 export interface CachedOperatory {
     id: string;
     source_id: string;
-    source: string;
     name: string;
     is_active: boolean;
     synced_at: string | null;
@@ -168,7 +166,6 @@ export interface CachedOperatory {
 export interface CachedDescriptor {
     id: string;
     source_id: string;
-    source: string;
     name: string;
     descriptor_type: string | null;
     code: string | null;
@@ -180,7 +177,6 @@ export interface CachedDescriptor {
 export interface CachedAvailability {
     id: string;
     source_id: string;
-    source: string;
     provider_source_id: string | null;
     provider_name: string | null;
     operatory_source_id: string | null;
@@ -248,7 +244,6 @@ export interface ContactSummary {
 
 export interface CallRecord {
     id: string;
-    retell_call_id: string | null;
     call_direction: string | null;
     call_status: string | null;
     call_tags: string[];           // all normalized tags for this call
@@ -263,7 +258,6 @@ export interface CallRecord {
     call_time: string | null;
     call_duration_seconds: number | null;
     callback_resolved: boolean;
-    agent_used: string | null;
     created_at: string;
     contact: ContactSummary | null;
 }
@@ -310,7 +304,7 @@ export interface TranscriptTurn {
 export interface CallDetail extends CallRecord {
     // Raw plain-text (may contain PHI — kept for completeness)
     transcript: string | null;
-    // Structured JSONB turn-by-turn arrays from Retell
+    // Structured JSONB turn-by-turn arrays from the voice platform
     transcript_with_tool_calls: TranscriptTurn[] | null;       // unredacted full conversation
     scrubbed_transcript_with_tool_calls: TranscriptTurn[] | null;  // PII-scrubbed (default UI)
     recording_url: string | null;
@@ -382,5 +376,3 @@ export interface DashboardSummary {
     callback_queue: CallbackQueueItem[];
     as_of: string;
 }
-
-

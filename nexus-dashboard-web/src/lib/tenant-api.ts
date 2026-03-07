@@ -164,9 +164,23 @@ export interface AuditLogPaginatedResponse {
     pages: number;
 }
 
-export async function listAuditLogs(page: number = 1, size: number = 50): Promise<AuditLogPaginatedResponse> {
+export async function listInstitutionAuditLogs(page: number = 1, size: number = 50): Promise<AuditLogPaginatedResponse> {
     const { data } = await api.get<AuditLogPaginatedResponse>(`/institution/audit-logs?page=${page}&size=${size}`);
     return data;
 }
 
+export async function listLocationAuditLogs(page: number = 1, size: number = 50): Promise<AuditLogPaginatedResponse> {
+    const { data } = await api.get<AuditLogPaginatedResponse>(`/institution/location/audit-logs?page=${page}&size=${size}`);
+    return data;
+}
+
+export async function listAuditLogs(
+    page: number = 1,
+    size: number = 50,
+    scope: "institution" | "location" = "institution",
+): Promise<AuditLogPaginatedResponse> {
+    return scope === "location"
+        ? listLocationAuditLogs(page, size)
+        : listInstitutionAuditLogs(page, size);
+}
 
