@@ -834,6 +834,172 @@ async def invite_staff(
     return {"message": f"Staff invite sent to {data.email}"}
 
 
+# =============================================================================
+# ROI Configuration & Calculation
+# =============================================================================
+
+
+class ROIConfigRequest(BaseModel):
+    avg_appointment_value: float = Field(..., ge=0, description="Average appointment revenue ($)")
+    avg_new_patient_value: float = Field(..., ge=0, description="Average new patient first-visit revenue ($)")
+    monthly_subscription_cost: float = Field(..., ge=0, description="Monthly Nexus subscription cost ($)")
+    staff_hourly_rate: float = Field(..., ge=0, description="Front desk staff hourly rate ($)")
+    avg_call_duration_minutes: float = Field(4.0, ge=0, description="Avg manual call handling time (minutes)")
+
+
+class ROIConfigResponse(BaseModel):
+    avg_appointment_value: float
+    avg_new_patient_value: float
+    monthly_subscription_cost: float
+    staff_hourly_rate: float
+    avg_call_duration_minutes: float
+
+
+class ROICalculationResponse(BaseModel):
+    # Inputs used
+    config: ROIConfigResponse
+    # Raw metrics
+    total_calls_month: int
+    appointments_booked_month: int
+    new_patients_month: int
+    # Calculated values
+    revenue_from_bookings: float
+    revenue_from_new_patients: float
+    total_revenue_generated: float
+    staff_time_saved_hours: float
+    staff_cost_saved: float
+    total_value: float
+    monthly_cost: float
+    net_value: float
+    roi_percentage: float
+
+
+@router.get("/roi/config", response_model=ROIConfigResponse | None)
+async def get_roi_config(
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    async with get_db_session() as session:
+        svc = InstitutionService(session)
+        institution = await svc.get_by_id(current_user.institution_id)
+        if not institution or not institution.roi_config:
+            return None
+        return ROIConfigResponse(**institution.roi_config)
+
+
+@router.put("/roi/config", response_model=ROIConfigResponse)
+async def update_roi_config(
+    data: ROIConfigRequest,
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    config_dict = data.model_dump()
+
+    async with get_db_session() as session:
+        svc = InstitutionService(session)
+        institution = await svc.get_by_id(current_user.institution_id)
+        if not institution:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found")
+        institution.roi_config = config_dict
+
+    log_audit_background(
+        actor=current_user.id,
+        action=AuditAction.INSTITUTION_UPDATE,
+        target_resource="institution:roi_config",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={"actor_role": current_user.role, "config": config_dict},
+        institution_id=current_user.institution_id,
+    )
+    return ROIConfigResponse(**config_dict)
+
+
+@router.get("/roi/calculate", response_model=ROICalculationResponse)
+async def calculate_roi(
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    from datetime import date, datetime, timezone as tz
+    from src.app.models.call import Call, CallStatus
+
+    async with get_db_session() as session:
+        svc = InstitutionService(session)
+        institution = await svc.get_by_id(current_user.institution_id)
+        if not institution or not institution.roi_config:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="ROI configuration not set. Please configure ROI settings first.",
+            )
+
+        config = ROIConfigResponse(**institution.roi_config)
+        institution_id = current_user.institution_id
+        today = datetime.now(tz.utc).date()
+        month_start = today.replace(day=1)
+
+        total_calls_month = (
+            await session.execute(
+                select(func.count(Call.id)).where(
+                    Call.institution_id == institution_id,
+                    Call.call_date >= month_start,
+                )
+            )
+        ).scalar_one()
+
+        appointments_booked_month = (
+            await session.execute(
+                select(func.count(Call.id)).where(
+                    Call.institution_id == institution_id,
+                    Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
+                    Call.call_date >= month_start,
+                )
+            )
+        ).scalar_one()
+
+        new_patients_month = (
+            await session.execute(
+                select(func.count(Call.id)).where(
+                    Call.institution_id == institution_id,
+                    Call.is_new_patient.is_(True),
+                    Call.call_date >= month_start,
+                )
+            )
+        ).scalar_one()
+
+    # Calculate ROI
+    revenue_from_bookings = appointments_booked_month * config.avg_appointment_value
+    revenue_from_new_patients = new_patients_month * config.avg_new_patient_value
+    total_revenue_generated = revenue_from_bookings + revenue_from_new_patients
+
+    staff_time_saved_hours = round((total_calls_month * config.avg_call_duration_minutes) / 60, 2)
+    staff_cost_saved = round(staff_time_saved_hours * config.staff_hourly_rate, 2)
+
+    total_value = round(total_revenue_generated + staff_cost_saved, 2)
+    monthly_cost = config.monthly_subscription_cost
+    net_value = round(total_value - monthly_cost, 2)
+    roi_percentage = round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else 0.0
+
+    return ROICalculationResponse(
+        config=config,
+        total_calls_month=total_calls_month,
+        appointments_booked_month=appointments_booked_month,
+        new_patients_month=new_patients_month,
+        revenue_from_bookings=round(revenue_from_bookings, 2),
+        revenue_from_new_patients=round(revenue_from_new_patients, 2),
+        total_revenue_generated=round(total_revenue_generated, 2),
+        staff_time_saved_hours=staff_time_saved_hours,
+        staff_cost_saved=staff_cost_saved,
+        total_value=total_value,
+        monthly_cost=monthly_cost,
+        net_value=net_value,
+        roi_percentage=roi_percentage,
+    )
+
+
 @router.get("/audit-logs", response_model=AuditLogPaginatedResponse)
 async def get_my_audit_logs(
     current_user: Annotated[User, Depends(get_current_institution_admin)],

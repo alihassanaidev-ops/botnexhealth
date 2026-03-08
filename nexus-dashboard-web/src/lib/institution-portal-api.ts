@@ -136,6 +136,47 @@ export async function inviteStaff(locSlug: string, email: string): Promise<void>
     await api.post(`/institution/locations/${locSlug}/invite-staff`, { email })
 }
 
+// ROI Configuration & Calculation
+
+export interface ROIConfig {
+    avg_appointment_value: number
+    avg_new_patient_value: number
+    monthly_subscription_cost: number
+    staff_hourly_rate: number
+    avg_call_duration_minutes: number
+}
+
+export interface ROICalculation {
+    config: ROIConfig
+    total_calls_month: number
+    appointments_booked_month: number
+    new_patients_month: number
+    revenue_from_bookings: number
+    revenue_from_new_patients: number
+    total_revenue_generated: number
+    staff_time_saved_hours: number
+    staff_cost_saved: number
+    total_value: number
+    monthly_cost: number
+    net_value: number
+    roi_percentage: number
+}
+
+export async function getROIConfig(): Promise<ROIConfig | null> {
+    const { data } = await api.get<ROIConfig | null>("/institution/roi/config")
+    return data
+}
+
+export async function updateROIConfig(config: ROIConfig): Promise<ROIConfig> {
+    const { data } = await api.put<ROIConfig>("/institution/roi/config", config)
+    return data
+}
+
+export async function calculateROI(): Promise<ROICalculation> {
+    const { data } = await api.get<ROICalculation>("/institution/roi/calculate")
+    return data
+}
+
 export async function deactivateInstitutionUser(userId: string): Promise<void> {
     await api.post(`/institution/users/${userId}/deactivate`)
 }

@@ -119,6 +119,9 @@ class Institution(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     location_limit: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
 
+    # ROI configuration (institution-configurable)
+    roi_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
