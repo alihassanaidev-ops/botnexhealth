@@ -31,6 +31,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     useEffect(() => { locationRef.current = location; }, [location]);
     useEffect(() => { userRef.current = user; }, [user]);
 
+    const hasInviteOrRecoveryHash = useCallback((): boolean => {
+        const hash = window.location.hash || "";
+        return hash.includes("type=invite") || hash.includes("type=recovery");
+    }, []);
+
     // ---- Token exchange helper ----
     const exchangeToken = useCallback(async (supabaseAccessToken: string): Promise<boolean> => {
         try {
@@ -98,8 +103,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // ---- Session restore on mount + auth state changes ----
     useEffect(() => {
-        const hash = window.location.hash;
-        const isInviteOrRecovery = hash && (hash.includes('type=invite') || hash.includes('type=recovery'));
+        const isInviteOrRecovery = hasInviteOrRecoveryHash();
 
         // Initial session check
         supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -125,8 +129,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (event === 'PASSWORD_RECOVERY') {
                 navigate("/set-password");
             } else if (event === 'SIGNED_IN' && session?.user) {
-                if (isInviteOrRecovery) {
-                    navigate("/set-password");
+                const inviteOrRecoveryNow = hasInviteOrRecoveryHash();
+                if (inviteOrRecoveryNow) {
+                    if (locationRef.current.pathname !== "/set-password") {
+                        navigate("/set-password");
+                    }
                 } else if (!userRef.current) {
                     const ok = await completeSignIn(session.access_token);
                     if (ok) {
@@ -149,7 +156,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         return () => subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [hasInviteOrRecoveryHash]);
 
     // ---- Sign in with email + password ----
     const signInWithSupabase = async (email: string, password: string) => {
@@ -166,8 +173,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const updatePassword = async (password: string) => {
         const { error } = await supabase.auth.updateUser({ password });
         if (error) throw error;
+
+        // After password set, complete backend token exchange + profile fetch
+        // so role redirect works immediately without forcing a manual re-login.
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+            throw new Error("Password updated, but session is missing. Please sign in again.");
+        }
+
+        const ok = await completeSignIn(session.access_token);
+        if (!ok) {
+            throw new Error("Password updated, but sign-in bootstrap failed. Please sign in again.");
+        }
+
+        // Clear invite/recovery hash to prevent redirecting back to /set-password.
+        if (window.location.hash) {
+            window.history.replaceState(null, document.title, window.location.pathname);
+        }
+
         toast.success("Password updated successfully");
-        navigate("/");
+        navigate("/", { replace: true });
     };
 
     return (
