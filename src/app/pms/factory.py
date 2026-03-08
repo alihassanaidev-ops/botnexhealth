@@ -54,7 +54,7 @@ async def get_adapter_for_institution_location(institution: "Institution", locat
 async def get_institution_pms(
     request: Request,
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
-    location_id: str | None = Query(None),
+    loc_id: str | None = Query(None, alias="location_id"),
 ) -> PMSAdapter:
     """FastAPI dependency — resolve institution/location from authenticated user token."""
     from sqlalchemy import select
@@ -65,7 +65,7 @@ async def get_institution_pms(
     if not current_user.institution_id:
         raise HTTPException(status_code=400, detail="User is not associated with an institution")
 
-    scoped_location_id = str(location_id) if location_id else None
+    scoped_location_id = str(loc_id) if loc_id else None
     path_location_id = request.path_params.get("location_id")
     if path_location_id is not None:
         path_location_id = str(path_location_id)
