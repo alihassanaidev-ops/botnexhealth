@@ -17,7 +17,9 @@ export default function RoleGuard({ allowed, children }: RoleGuardProps) {
             ? "/admin"
             : user.role === "INSTITUTION_ADMIN"
                 ? "/institution-admin"
-                : "/dashboard"
+                : user.role === "LOCATION_ADMIN"
+                    ? "/location-admin"
+                    : "/dashboard"
         return <Navigate to={home} replace />
     }
 

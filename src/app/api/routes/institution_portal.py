@@ -96,6 +96,27 @@ class InviteUserRequest(BaseModel):
     email: str = Field(..., description="Invitee email")
 
 
+class InstitutionUserInviteRequest(BaseModel):
+    email: str = Field(..., description="Invitee email")
+    role: str = Field(..., description="INSTITUTION_ADMIN | LOCATION_ADMIN | STAFF")
+    location_slug: str | None = Field(None, description="Required for LOCATION_ADMIN and STAFF")
+
+
+class InstitutionUserRowResponse(BaseModel):
+    id: str
+    email: str
+    role: str
+    is_active: bool
+    institution_id: str | None
+    location_id: str | None
+    location_name: str | None
+
+
+class UserActionResponse(BaseModel):
+    message: str
+    user_id: str
+
+
 def _sanitize_target_resource(value: str) -> str:
     """
     Remove vendor names from institution-facing audit resources.
@@ -133,6 +154,20 @@ def _sanitize_audit_item(item: AuditLog) -> AuditLogResponse:
         outcome=item.outcome,
         audit_metadata=_sanitize_audit_metadata(item.audit_metadata),
     )
+
+
+def _validate_invite_role(role: str) -> str:
+    normalized = role.strip().upper()
+    allowed = {
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+    }
+    if normalized not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid role '{role}'. Allowed: {', '.join(sorted(allowed))}",
+        )
+    return normalized
 
 
 def _assert_location_scope(current_user: User, location_id: str) -> None:
@@ -334,6 +369,283 @@ async def invite_institution_admin(
         institution_id=current_user.institution_id,
     )
     return {"message": f"Institution admin invite sent to {data.email}"}
+
+
+@router.get("/users", response_model=list[InstitutionUserRowResponse])
+async def list_institution_users(
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    """
+    List all institution-scoped users (institution admins, location admins, staff)
+    for institution admin user management.
+    """
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+
+        users = (
+            await session.execute(
+                select(User).where(
+                    User.institution_id == current_user.institution_id,
+                    User.role.in_(
+                        [
+                            UserRole.INSTITUTION_ADMIN.value,
+                            UserRole.LOCATION_ADMIN.value,
+                            UserRole.STAFF.value,
+                        ]
+                    ),
+                )
+            )
+        ).scalars().all()
+
+        location_ids = [u.location_id for u in users if u.location_id]
+        location_name_by_id: dict[str, str] = {}
+        if location_ids:
+            location_rows = (
+                await session.execute(
+                    select(InstitutionLocation).where(InstitutionLocation.id.in_(location_ids))
+                )
+            ).scalars().all()
+            location_name_by_id = {str(loc.id): loc.name for loc in location_rows}
+
+        return [
+            InstitutionUserRowResponse(
+                id=str(user.id),
+                email=user.email,
+                role=user.role,
+                is_active=user.is_active,
+                institution_id=str(user.institution_id) if user.institution_id else None,
+                location_id=str(user.location_id) if user.location_id else None,
+                location_name=location_name_by_id.get(str(user.location_id)) if user.location_id else None,
+            )
+            for user in users
+        ]
+
+
+@router.post("/users/invite", response_model=UserActionResponse, status_code=status.HTTP_201_CREATED)
+async def invite_institution_user(
+    data: InstitutionUserInviteRequest,
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    """
+    Invite institution users with role + optional location assignment.
+
+    - INSTITUTION_ADMIN: no location assignment
+    - LOCATION_ADMIN: location_slug required
+    """
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    role = _validate_invite_role(data.role)
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+
+        existing = await session.execute(select(User).where(User.email == data.email))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+
+        location_id: str | None = None
+        if role == UserRole.LOCATION_ADMIN.value:
+            if not data.location_slug:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="location_slug is required for LOCATION_ADMIN",
+                )
+            location = (
+                await session.execute(
+                    select(InstitutionLocation).where(
+                        InstitutionLocation.slug == data.location_slug,
+                        InstitutionLocation.institution_id == current_user.institution_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if not location:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            location_id = str(location.id)
+
+        supabase = SupabaseService()
+        response = supabase.invite_user(
+            email=data.email,
+            institution_id=current_user.institution_id,
+            role=role,
+            location_id=location_id,
+        )
+        supabase_user_id = None
+        if hasattr(response, "user") and hasattr(response.user, "id"):
+            supabase_user_id = str(response.user.id)
+        elif isinstance(response, dict) and "id" in response:
+            supabase_user_id = str(response["id"])
+        if not supabase_user_id:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invite did not return user id")
+
+        created = User(
+            id=supabase_user_id,
+            email=data.email,
+            role=role,
+            institution_id=current_user.institution_id,
+            location_id=location_id,
+            is_active=True,
+        )
+        session.add(created)
+
+    log_audit_background(
+        actor=current_user.id,
+        action=AuditAction.LOCATION_USER_CREATE,
+        target_resource=f"user:{data.email}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "created_role": role,
+            "institution_id": current_user.institution_id,
+            "location_slug": data.location_slug,
+            "location_id": location_id,
+        },
+        institution_id=current_user.institution_id,
+    )
+    return UserActionResponse(message=f"Invite sent to {data.email}", user_id=supabase_user_id)
+
+
+@router.post("/users/{user_id}/deactivate", response_model=UserActionResponse)
+async def deactivate_institution_user(
+    user_id: str,
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    """
+    Deactivate institution-scoped user immediately.
+    """
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+    if str(current_user.id) == str(user_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate your own account")
+
+    async with get_db_session() as session:
+        target = (
+            await session.execute(
+                select(User).where(
+                    User.id == user_id,
+                    User.institution_id == current_user.institution_id,
+                    User.role.in_(
+                        [
+                            UserRole.INSTITUTION_ADMIN.value,
+                            UserRole.LOCATION_ADMIN.value,
+                            UserRole.STAFF.value,
+                        ]
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
+        if not target:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+        target.is_active = False
+
+    log_audit_background(
+        actor=current_user.id,
+        action=AuditAction.LOCATION_USER_DELETE,
+        target_resource=f"user:{user_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "institution_id": current_user.institution_id,
+            "deactivated_user_id": user_id,
+        },
+        institution_id=current_user.institution_id,
+    )
+    return UserActionResponse(message="User deactivated", user_id=user_id)
+
+
+@router.post("/users/{user_id}/reinvite", response_model=UserActionResponse)
+async def reinvite_institution_user(
+    user_id: str,
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    """
+    Reinvite an institution-scoped user: deletes old Supabase user and
+    creates a fresh invite/local user row with a new UUID.
+    """
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    async with get_db_session() as session:
+        target = (
+            await session.execute(
+                select(User).where(
+                    User.id == user_id,
+                    User.institution_id == current_user.institution_id,
+                    User.role.in_(
+                        [
+                            UserRole.INSTITUTION_ADMIN.value,
+                            UserRole.LOCATION_ADMIN.value,
+                            UserRole.STAFF.value,
+                        ]
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
+        if not target:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        if str(target.id) == str(current_user.id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot reinvite your own account")
+
+        old_user_id = str(target.id)
+        old_email = target.email
+        old_role = target.role
+        old_location_id = str(target.location_id) if target.location_id else None
+        old_is_active = target.is_active
+
+        supabase = SupabaseService()
+        try:
+            supabase.delete_user(old_user_id)
+        except Exception:
+            # Continue: if already deleted on Supabase, reinvite should still proceed.
+            pass
+
+        response = supabase.invite_user(
+            email=old_email,
+            institution_id=current_user.institution_id,
+            role=old_role,
+            location_id=old_location_id,
+        )
+        new_supabase_user_id = None
+        if hasattr(response, "user") and hasattr(response.user, "id"):
+            new_supabase_user_id = str(response.user.id)
+        elif isinstance(response, dict) and "id" in response:
+            new_supabase_user_id = str(response["id"])
+        if not new_supabase_user_id:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invite did not return user id")
+
+        await session.delete(target)
+        await session.flush()
+
+        replacement = User(
+            id=new_supabase_user_id,
+            email=old_email,
+            role=old_role,
+            institution_id=current_user.institution_id,
+            location_id=old_location_id,
+            is_active=old_is_active,
+        )
+        session.add(replacement)
+
+    log_audit_background(
+        actor=current_user.id,
+        action=AuditAction.LOCATION_USER_CREATE,
+        target_resource=f"user:{old_email}:reinvite",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "institution_id": current_user.institution_id,
+            "old_user_id": old_user_id,
+            "new_user_id": new_supabase_user_id,
+            "role": old_role,
+            "location_id": old_location_id,
+        },
+        institution_id=current_user.institution_id,
+    )
+    return UserActionResponse(message=f"Reinvite sent to {old_email}", user_id=new_supabase_user_id)
 
 
 @router.post("/locations/{loc_slug}/invite-location-admin", status_code=status.HTTP_201_CREATED)

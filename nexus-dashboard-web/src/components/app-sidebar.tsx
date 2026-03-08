@@ -82,8 +82,26 @@ const institutionAdminNav: NavItemDef[] = [
     },
 ]
 
-// Location admin/staff nav items
-const locationNav: NavItemDef[] = [
+const locationAdminNav: NavItemDef[] = [
+    {
+        title: "Location Admin",
+        url: "/location-admin",
+        icon: Building2,
+        exact: true,
+    },
+    {
+        title: "Dashboard",
+        url: "/dashboard",
+        icon: Home,
+    },
+    {
+        title: "Calls",
+        url: "/calls",
+        icon: Phone,
+    },
+]
+
+const staffNav: NavItemDef[] = [
     {
         title: "Dashboard",
         url: "/dashboard",
@@ -158,7 +176,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ? adminNav
         : user?.role === "INSTITUTION_ADMIN"
             ? institutionAdminNav
-            : locationNav;
+            : user?.role === "LOCATION_ADMIN"
+                ? locationAdminNav
+                : staffNav;
     const setupNav = user?.role === "STAFF"
         ? navSetup.filter((item) => item.url !== "/setup/audit-logs")
         : navSetup;

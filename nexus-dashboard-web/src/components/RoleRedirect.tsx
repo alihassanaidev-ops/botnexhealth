@@ -14,5 +14,9 @@ export default function RoleRedirect() {
         return <Navigate to="/institution-admin" replace />
     }
 
+    if (user.role === "LOCATION_ADMIN") {
+        return <Navigate to="/location-admin" replace />
+    }
+
     return <Navigate to="/dashboard" replace />
 }

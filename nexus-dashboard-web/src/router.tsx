@@ -17,6 +17,7 @@ import AuditLogs from "./pages/AuditLogs"
 import AdminAuditLogs from "./pages/AdminAuditLogs"
 import TwilioPhoneNumbers from "./pages/TwilioPhoneNumbers";
 import InstitutionAdminPanel from "./pages/InstitutionAdminPanel";
+import LocationAdminPanel from "./pages/LocationAdminPanel";
 
 
 export const router = createBrowserRouter([
@@ -61,6 +62,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <InstitutionAdminPanel />
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "location-admin",
+                        element: (
+                            <RoleGuard allowed={["LOCATION_ADMIN"]}>
+                                <LocationAdminPanel />
                             </RoleGuard>
                         ),
                     },
