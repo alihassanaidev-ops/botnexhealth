@@ -36,6 +36,7 @@ import {
     type InstitutionUserRow,
 } from "@/lib/institution-portal-api"
 import type { DashboardSummary, OperatingHoursEntry } from "@/types"
+import { formatRoleLabel } from "@/lib/utils"
 
 const DAYS = [
     { value: 0, label: "Monday" },
@@ -587,7 +588,7 @@ export default function InstitutionAdminPanel() {
                                 return (
                                     <TableRow key={row.id}>
                                         <TableCell className="font-medium">{row.email}</TableCell>
-                                        <TableCell>{row.role}</TableCell>
+                                        <TableCell>{formatRoleLabel(row.role)}</TableCell>
                                         <TableCell>{row.location_name || "All Locations"}</TableCell>
                                         <TableCell>{row.is_active ? "Active" : "Inactive"}</TableCell>
                                         <TableCell className="text-right">

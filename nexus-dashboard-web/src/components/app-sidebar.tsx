@@ -35,6 +35,7 @@ import {
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
+import { formatRoleLabel } from "@/lib/utils"
 
 type NavItemDef = { title: string; url: string; icon: React.ElementType; exact?: boolean }
 
@@ -256,7 +257,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     </div>
                                     <div className="grid flex-1 text-left text-sm leading-tight">
                                         <span className="truncate font-medium text-sidebar-foreground">{displayEmail}</span>
-                                        <span className="text-[10px] text-sidebar-foreground/40 capitalize">{user?.role?.toLowerCase() ?? ""}</span>
+                                        <span className="text-[10px] text-sidebar-foreground/40">{formatRoleLabel(user?.role)}</span>
                                     </div>
                                     <ChevronUp className="ml-auto h-4 w-4 text-sidebar-foreground/40" />
                                 </SidebarMenuButton>
@@ -274,7 +275,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         </div>
                                         <div className="grid flex-1 text-left text-sm leading-tight">
                                             <span className="truncate font-semibold">{displayEmail}</span>
-                                            <span className="text-[10px] text-muted-foreground capitalize">{user?.role?.toLowerCase() ?? ""}</span>
+                                            <span className="text-[10px] text-muted-foreground">{formatRoleLabel(user?.role)}</span>
                                         </div>
                                     </div>
                                 </DropdownMenuLabel>

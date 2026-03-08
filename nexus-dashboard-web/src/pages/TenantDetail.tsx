@@ -35,6 +35,7 @@ import { LocationList } from "@/components/tenants/LocationList";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import type { InstitutionDetail } from "@/types";
+import { formatRoleLabel } from "@/lib/utils";
 
 const overviewSchema = z.object({
     name: z.string().min(2, "Name must be at least 2 characters"),
@@ -271,7 +272,7 @@ export default function InstitutionDetailPage() {
                                         </div>
                                         <div className="space-y-1">
                                             <dt className="text-muted-foreground">Role</dt>
-                                            <dd className="capitalize text-muted-foreground">{institution.user.role}</dd>
+                                            <dd className="text-muted-foreground">{formatRoleLabel(institution.user.role)}</dd>
                                         </div>
                                         <div className="space-y-1">
                                             <dt className="text-muted-foreground">Status</dt>
