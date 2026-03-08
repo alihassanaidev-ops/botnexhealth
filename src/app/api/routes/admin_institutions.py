@@ -244,7 +244,12 @@ async def list_institutions(
         institution_ids = [t.id for t in institutions]
         if institution_ids:
             user_result = await session.execute(
-                select(User).where(User.institution_id.in_(institution_ids))
+                select(User)
+                .where(
+                    User.institution_id.in_(institution_ids),
+                    User.role == UserRole.INSTITUTION_ADMIN.value,
+                )
+                .order_by(User.created_at.asc())
             )
             users_by_institution: dict[str, User] = {}
             for u in user_result.scalars().all():
@@ -388,7 +393,13 @@ async def get_institution(
 
         # Fetch institution's primary user
         user_result = await session.execute(
-            select(User).where(User.institution_id == institution.id).limit(1)
+            select(User)
+            .where(
+                User.institution_id == institution.id,
+                User.role == UserRole.INSTITUTION_ADMIN.value,
+            )
+            .order_by(User.created_at.asc())
+            .limit(1)
         )
         institution_user = user_result.scalar_one_or_none()
 
