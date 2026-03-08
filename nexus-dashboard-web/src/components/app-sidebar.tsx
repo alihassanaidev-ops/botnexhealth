@@ -32,8 +32,11 @@ import {
     Phone,
     ShieldCheck,
     MessageSquare,
+    Moon,
+    Sun,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
+import { useTheme } from "next-themes"
 import { useAuth } from "@/context/AuthContext"
 import { formatRoleLabel } from "@/lib/utils"
 
@@ -170,6 +173,7 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { user, signOut } = useAuth();
     const location = useLocation();
+    const { theme, setTheme } = useTheme();
 
     const displayEmail = user?.email ?? "—";
     const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
@@ -284,6 +288,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         </div>
                                     </div>
                                 </DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                    onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                                    className="gap-2"
+                                >
+                                    {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                                    {theme === "dark" ? "Light mode" : "Dark mode"}
+                                </DropdownMenuItem>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem onClick={() => signOut()} className="gap-2 text-destructive focus:text-destructive">
                                     <LogOut className="h-4 w-4" />
