@@ -78,6 +78,17 @@ export async function listInstitutionPortalLocations(): Promise<InstitutionPorta
     return data
 }
 
+export async function updateLocationTimezone(
+    locSlug: string,
+    timezone: string,
+): Promise<InstitutionPortalLocation> {
+    const { data } = await api.patch<InstitutionPortalLocation>(
+        `/institution/locations/${locSlug}/timezone`,
+        { timezone },
+    )
+    return data
+}
+
 export async function getAggregateDashboard(): Promise<AggregateDashboardResponse> {
     const { data } = await api.get<AggregateDashboardResponse>("/institution/dashboard/aggregate")
     return data

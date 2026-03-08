@@ -24,9 +24,11 @@ import {
     getLocationOperatingHours,
     listInstitutionPortalLocations,
     updateLocationOperatingHours,
+    updateLocationTimezone,
     type AggregateDashboardResponse,
     type InstitutionPortalLocation,
 } from "@/lib/institution-portal-api"
+import { SUPPORTED_TIMEZONES } from "@/lib/timezones"
 import type { DashboardSummary, OperatingHoursEntry } from "@/types"
 
 const DAYS = [
@@ -184,6 +186,8 @@ export default function InstitutionAdminPanel() {
     const [drilldownLocationSlug, setDrilldownLocationSlug] = useState("")
     const [drilldownSummary, setDrilldownSummary] = useState<DashboardSummary | null>(null)
     const [drilldownLoading, setDrilldownLoading] = useState(false)
+    const [timezoneDraftBySlug, setTimezoneDraftBySlug] = useState<Record<string, string>>({})
+    const [timezoneSavingSlug, setTimezoneSavingSlug] = useState<string | null>(null)
 
     const loadData = useCallback(async () => {
         setLoading(true)
@@ -232,6 +236,42 @@ export default function InstitutionAdminPanel() {
 
         void fetchDrilldown()
     }, [drilldownLocationSlug])
+
+    useEffect(() => {
+        setTimezoneDraftBySlug((prev) => {
+            const next: Record<string, string> = {}
+            for (const location of locations) {
+                next[location.slug] = prev[location.slug] ?? location.timezone ?? "UTC"
+            }
+            return next
+        })
+    }, [locations])
+
+    async function handleSaveTimezone(location: InstitutionPortalLocation) {
+        const selectedTimezone = timezoneDraftBySlug[location.slug] ?? location.timezone ?? "UTC"
+        const currentTimezone = location.timezone ?? "UTC"
+        if (selectedTimezone === currentTimezone) return
+
+        setTimezoneSavingSlug(location.slug)
+        try {
+            const updated = await updateLocationTimezone(location.slug, selectedTimezone)
+            setLocations((prev) =>
+                prev.map((row) =>
+                    row.slug === location.slug
+                        ? {
+                            ...row,
+                            timezone: updated.timezone,
+                        }
+                        : row,
+                ),
+            )
+            toast.success(`Timezone updated for ${location.name}`)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.detail || "Failed to update timezone")
+        } finally {
+            setTimezoneSavingSlug(null)
+        }
+    }
 
     const summary = aggregate?.summary
     const comparisonRows = aggregate?.clinic_comparison ?? []
@@ -433,7 +473,7 @@ export default function InstitutionAdminPanel() {
                         Locations
                     </CardTitle>
                     <CardDescription>
-                        View assigned locations and edit working hours only.
+                        View assigned locations and edit timezone or working hours.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -448,20 +488,57 @@ export default function InstitutionAdminPanel() {
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {locations.map((location) => (
-                                <TableRow key={location.id}>
-                                    <TableCell className="font-medium">{location.name}</TableCell>
-                                    <TableCell>{location.phone || "—"}</TableCell>
-                                    <TableCell>{location.timezone || "—"}</TableCell>
-                                    <TableCell>{location.is_active ? "Active" : "Inactive"}</TableCell>
-                                    <TableCell className="text-right">
-                                        <Button variant="outline" size="sm" onClick={() => setSelectedLocation(location)}>
-                                            <Settings2 className="mr-2 h-4 w-4" />
-                                            Edit Hours
-                                        </Button>
-                                    </TableCell>
-                                </TableRow>
-                            ))}
+                            {locations.map((location) => {
+                                const selectedTimezone = timezoneDraftBySlug[location.slug] ?? location.timezone ?? "UTC"
+                                const currentTimezone = location.timezone ?? "UTC"
+                                const timezoneChanged = selectedTimezone !== currentTimezone
+                                const savingTimezone = timezoneSavingSlug === location.slug
+                                return (
+                                    <TableRow key={location.id}>
+                                        <TableCell className="font-medium">{location.name}</TableCell>
+                                        <TableCell>{location.phone || "—"}</TableCell>
+                                        <TableCell className="min-w-64">
+                                            <Select
+                                                value={selectedTimezone}
+                                                onValueChange={(value) =>
+                                                    setTimezoneDraftBySlug((prev) => ({
+                                                        ...prev,
+                                                        [location.slug]: value,
+                                                    }))
+                                                }
+                                            >
+                                                <SelectTrigger>
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {SUPPORTED_TIMEZONES.map((tz) => (
+                                                        <SelectItem key={tz.value} value={tz.value}>
+                                                            {tz.label}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </TableCell>
+                                        <TableCell>{location.is_active ? "Active" : "Inactive"}</TableCell>
+                                        <TableCell className="text-right">
+                                            <div className="flex justify-end gap-2">
+                                                <Button
+                                                    variant="secondary"
+                                                    size="sm"
+                                                    disabled={!timezoneChanged || savingTimezone}
+                                                    onClick={() => void handleSaveTimezone(location)}
+                                                >
+                                                    {savingTimezone ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save TZ"}
+                                                </Button>
+                                                <Button variant="outline" size="sm" onClick={() => setSelectedLocation(location)}>
+                                                    <Settings2 className="mr-2 h-4 w-4" />
+                                                    Edit Hours
+                                                </Button>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                )
+                            })}
                             {!locations.length && (
                                 <TableRow>
                                     <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">

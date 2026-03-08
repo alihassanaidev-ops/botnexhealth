@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import time as dt_time
 import re
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -68,6 +69,10 @@ class OperatingHoursResponse(BaseModel):
 
 class BulkOperatingHoursRequest(BaseModel):
     hours: list[OperatingHoursEntry] = Field(..., min_length=1, max_length=7)
+
+
+class LocationTimezoneUpdateRequest(BaseModel):
+    timezone: str = Field(..., min_length=1, max_length=64, description="IANA timezone, e.g. America/New_York")
 
 
 class InstitutionLocationLiteResponse(BaseModel):
@@ -318,6 +323,60 @@ async def set_location_operating_hours(
             new_rows.append(row)
         await session.flush()
         return [OperatingHoursResponse.from_model(r) for r in new_rows]
+
+
+@router.patch("/locations/{loc_slug}/timezone", response_model=InstitutionLocationLiteResponse)
+async def update_location_timezone(
+    loc_slug: str,
+    data: LocationTimezoneUpdateRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+):
+    """
+    Institution admins can update timezone for any location in their institution.
+    Location admins can update timezone for their own location.
+    Staff cannot modify timezone.
+    """
+    if current_user.role == UserRole.STAFF.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Staff cannot update timezone",
+        )
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    timezone_value = data.timezone.strip()
+    try:
+        ZoneInfo(timezone_value)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid timezone '{timezone_value}'",
+        )
+
+    async with get_db_session() as session:
+        svc = InstitutionService(session)
+        location = await svc.get_location_by_slug(loc_slug)
+        if not location or location.institution_id != current_user.institution_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+        _assert_location_scope(current_user, str(location.id))
+
+        location.timezone = timezone_value
+        await session.flush()
+
+    log_audit_background(
+        actor=current_user.id,
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"institution:location:{loc_slug}:timezone",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "location_slug": loc_slug,
+            "timezone": timezone_value,
+        },
+        institution_id=current_user.institution_id,
+    )
+
+    return InstitutionLocationLiteResponse.from_model(location)
 
 
 @router.post("/users/invite-institution-admin", status_code=status.HTTP_201_CREATED)

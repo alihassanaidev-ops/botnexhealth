@@ -30,20 +30,9 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { verifyRetellAgent, listTwilioPhoneNumbers } from "@/lib/admin-api";
+import { SUPPORTED_TIMEZONES } from "@/lib/timezones";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic, TwilioPhoneNumber } from "@/types";
 import { cn } from "@/lib/utils";
-
-const US_TIMEZONES = [
-    { value: "America/Puerto_Rico", label: "Atlantic Time (Puerto Rico/VI)" },
-    { value: "America/New_York", label: "Eastern Time (ET)" },
-    { value: "America/Chicago", label: "Central Time (CT)" },
-    { value: "America/Denver", label: "Mountain Time (MT)" },
-    { value: "America/Phoenix", label: "Mountain Time – Arizona" },
-    { value: "America/Los_Angeles", label: "Pacific Time (PT)" },
-    { value: "America/Anchorage", label: "Alaska Time (AKT)" },
-    { value: "Pacific/Honolulu", label: "Hawaii-Aleutian (HST)" },
-    { value: "Pacific/Guam", label: "Chamorro Time (Guam)" },
-];
 
 const US_STATES = [
     { value: "AL", label: "AL — Alabama" }, { value: "AK", label: "AK — Alaska" },
@@ -564,7 +553,7 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
                                                 </SelectTrigger>
                                             </FormControl>
                                             <SelectContent>
-                                                {US_TIMEZONES.map((tz) => (
+                                                {SUPPORTED_TIMEZONES.map((tz) => (
                                                     <SelectItem key={tz.value} value={tz.value}>
                                                         {tz.label}
                                                     </SelectItem>
