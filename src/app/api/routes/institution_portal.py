@@ -20,7 +20,7 @@ from src.app.api.deps import (
 )
 from src.app.api.models import AuditLogPaginatedResponse, AuditLogResponse
 from src.app.database import get_db_session
-from src.app.models.user import User, UserRole
+from src.app.models.user import User, UserRole, InviteStatus
 from src.app.models.audit_log import AuditLog
 from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.services.institution_service import InstitutionService
@@ -112,6 +112,7 @@ class InstitutionUserRowResponse(BaseModel):
     email: str
     role: str
     is_active: bool
+    invite_status: str
     institution_id: str | None
     location_id: str | None
     location_name: str | None
@@ -411,6 +412,7 @@ async def invite_institution_admin(
             email=data.email,
             role=UserRole.INSTITUTION_ADMIN.value,
             institution_id=current_user.institution_id,
+            invite_status=InviteStatus.PENDING.value,
             is_active=True,
         )
         session.add(user)
@@ -475,6 +477,7 @@ async def list_institution_users(
                 email=user.email,
                 role=user.role,
                 is_active=user.is_active,
+                invite_status=user.invite_status,
                 institution_id=str(user.institution_id) if user.institution_id else None,
                 location_id=str(user.location_id) if user.location_id else None,
                 location_name=location_name_by_id.get(str(user.location_id)) if user.location_id else None,
@@ -546,6 +549,7 @@ async def invite_institution_user(
             role=role,
             institution_id=current_user.institution_id,
             location_id=location_id,
+            invite_status=InviteStatus.PENDING.value,
             is_active=True,
         )
         session.add(created)
@@ -685,6 +689,7 @@ async def reinvite_institution_user(
             role=old_role,
             institution_id=current_user.institution_id,
             location_id=old_location_id,
+            invite_status=InviteStatus.PENDING.value,
             is_active=old_is_active,
         )
         session.add(replacement)
@@ -746,6 +751,7 @@ async def invite_location_admin(
             role=UserRole.LOCATION_ADMIN.value,
             institution_id=current_user.institution_id,
             location_id=location.id,
+            invite_status=InviteStatus.PENDING.value,
             is_active=True,
         )
         session.add(user)
@@ -807,6 +813,7 @@ async def invite_staff(
             role=UserRole.STAFF.value,
             institution_id=current_user.institution_id,
             location_id=location.id,
+            invite_status=InviteStatus.PENDING.value,
             is_active=True,
         )
         session.add(user)

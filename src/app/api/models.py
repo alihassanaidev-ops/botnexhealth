@@ -584,6 +584,7 @@ class InstitutionUserResponse(BaseModel):
     email: str
     role: str
     is_active: bool
+    invite_status: str
 
 
 class InstitutionResponse(BaseModel):
@@ -619,7 +620,8 @@ class InstitutionResponse(BaseModel):
                 id=str(user.id),
                 email=user.email,
                 role=user.role,
-                is_active=user.is_active
+                is_active=user.is_active,
+                invite_status=user.invite_status,
             )
 
         return cls(

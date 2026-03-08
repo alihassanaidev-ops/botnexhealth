@@ -17,7 +17,7 @@ from sqlalchemy import select
 from src.app.api.deps import get_current_active_user, get_current_admin
 from src.app.config import settings
 from src.app.database import get_db_session
-from src.app.models.user import User
+from src.app.models.user import User, InviteStatus
 from src.app.services.auth import AuthService
 from src.app.services.supabase_service import SupabaseService
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
@@ -45,6 +45,7 @@ class UserRead(BaseModel):
     email: str
     role: str
     is_active: bool
+    invite_status: str = "ACCEPTED"
     institution_id: str | None = None
     location_id: str | None = None
 
@@ -173,6 +174,10 @@ async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) 
         # Step 5: Success — reset lockout state
         user.failed_login_attempts = 0
         user.locked_until = None
+
+        # Step 6: Mark invite as accepted on first successful login
+        if user.invite_status == InviteStatus.PENDING.value:
+            user.invite_status = InviteStatus.ACCEPTED.value
         # session auto-commits on exit
 
     # --- Issue local JWT (sub = user UUID) ---

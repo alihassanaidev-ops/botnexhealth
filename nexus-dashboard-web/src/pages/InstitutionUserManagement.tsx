@@ -205,7 +205,21 @@ export default function InstitutionUserManagement() {
                                         <TableCell className="font-medium">{row.email}</TableCell>
                                         <TableCell>{formatRoleLabel(row.role)}</TableCell>
                                         <TableCell>{row.location_name || "All Locations"}</TableCell>
-                                        <TableCell>{row.is_active ? "Active" : "Inactive"}</TableCell>
+                                        <TableCell>
+                                            {row.invite_status === "PENDING" ? (
+                                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-yellow-50 text-yellow-700 ring-yellow-600/20 dark:bg-yellow-900/20 dark:text-yellow-400 dark:ring-yellow-900/10">
+                                                    Pending
+                                                </span>
+                                            ) : row.is_active ? (
+                                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10">
+                                                    Active
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-gray-50 text-gray-600 ring-gray-500/10 dark:bg-gray-900/20 dark:text-gray-400 dark:ring-gray-700/10">
+                                                    Inactive
+                                                </span>
+                                            )}
+                                        </TableCell>
                                         <TableCell className="text-right">
                                             <div className="flex justify-end gap-2">
                                                 <Button

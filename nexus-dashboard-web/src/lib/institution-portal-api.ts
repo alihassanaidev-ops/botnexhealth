@@ -63,6 +63,7 @@ export interface InstitutionUserRow {
     email: string
     role: "INSTITUTION_ADMIN" | "LOCATION_ADMIN" | "STAFF"
     is_active: boolean
+    invite_status: "PENDING" | "ACCEPTED"
     institution_id: string | null
     location_id: string | null
     location_name: string | null

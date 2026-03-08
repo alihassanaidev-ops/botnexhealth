@@ -27,6 +27,12 @@ class UserRole(str, Enum):
     STAFF = "STAFF"
 
 
+class InviteStatus(str, Enum):
+    """Invite acceptance status."""
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+
+
 class User(Base):
     """
     User model for authentication.
@@ -72,6 +78,13 @@ class User(Base):
         ForeignKey("institution_locations.id"),
         nullable=True,
         index=True
+    )
+
+    invite_status: Mapped[str] = mapped_column(
+        String(20),
+        default=InviteStatus.PENDING.value,
+        nullable=False,
+        server_default="PENDING",
     )
 
     is_active: Mapped[bool] = mapped_column(

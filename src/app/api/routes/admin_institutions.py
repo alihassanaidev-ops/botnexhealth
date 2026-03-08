@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from src.app.database import get_db_session
 from src.app.api.deps import get_current_admin
 from src.app.models.audit_log import AuditAction, AuditActor
-from src.app.models.user import User, UserRole
+from src.app.models.user import User, UserRole, InviteStatus
 from src.app.services.audit_decorator import audit
 from src.app.services.institution_service import InstitutionService
 from src.app.services.supabase_service import SupabaseService
@@ -355,7 +355,8 @@ async def create_institution(
             email=data.email,
             role=UserRole.INSTITUTION_ADMIN.value,
             institution_id=institution.id,
-            is_active=True
+            invite_status=InviteStatus.PENDING.value,
+            is_active=True,
         )
         session.add(user)
 

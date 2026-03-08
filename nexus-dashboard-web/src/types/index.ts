@@ -25,6 +25,7 @@ export interface InstitutionUser {
     email: string;
     role: string;
     is_active: boolean;
+    invite_status: "PENDING" | "ACCEPTED";
 }
 
 export interface InstitutionDetail {

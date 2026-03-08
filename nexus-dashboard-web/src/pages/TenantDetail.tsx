@@ -288,6 +288,19 @@ export default function InstitutionDetailPage() {
                                             </dd>
                                         </div>
                                         <div className="space-y-1">
+                                            <dt className="text-muted-foreground">Invite</dt>
+                                            <dd>
+                                                <span
+                                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${institution.user.invite_status === "ACCEPTED"
+                                                        ? "bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10"
+                                                        : "bg-yellow-50 text-yellow-700 ring-yellow-600/20 dark:bg-yellow-900/20 dark:text-yellow-400 dark:ring-yellow-900/10"
+                                                        }`}
+                                                >
+                                                    {institution.user.invite_status === "ACCEPTED" ? "Accepted" : "Pending"}
+                                                </span>
+                                            </dd>
+                                        </div>
+                                        <div className="space-y-1">
                                             <dt className="text-muted-foreground">User ID</dt>
                                             <dd className="font-mono text-xs text-muted-foreground">{institution.user.id}</dd>
                                         </div>
