@@ -11,11 +11,11 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, func, select
 
-from src.app.api.deps import get_current_active_user
+from src.app.api.deps import get_current_active_user, get_current_institution_admin
 from src.app.api.rate_limit import RATE_READ, limiter
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditOutcome
@@ -63,6 +63,38 @@ class DashboardSummary(BaseModel):
     as_of: str                                 # ISO timestamp of when this was computed
 
 
+class AggregateSummaryCards(BaseModel):
+    total_calls_today: int
+    total_calls_week: int
+    total_calls_month: int
+    total_calls_all_time: int
+    appointments_booked_month: int
+    new_patients_month: int
+    booking_rate_month: float
+    open_callbacks: int
+
+
+class LocationComparisonRow(BaseModel):
+    location_id: str
+    location_name: str
+    location_slug: str
+    status: str
+    calls_today: int
+    calls_this_month: int
+    appointments_booked_month: int
+    new_patients_month: int
+    booking_rate_month: float
+    avg_call_duration_seconds: float
+    open_callbacks: int
+
+
+class AggregateDashboardResponse(BaseModel):
+    summary: AggregateSummaryCards
+    tag_distribution: list[TagCount]
+    clinic_comparison: list[LocationComparisonRow]
+    as_of: str
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 TAG_LABELS: dict[str, str] = {
@@ -89,6 +121,7 @@ TAG_LABELS: dict[str, str] = {
 async def get_dashboard_summary(
     request: Request,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_slug: str | None = Query(None),
 ) -> DashboardSummary:
     """
     Return call volume metrics, per-tag counts, and the unresolved callback queue
@@ -123,6 +156,19 @@ async def get_dashboard_summary(
             if not location or not location.retell_agent_id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid location scope")
             extra_conditions.append(Call.agent_used == location.retell_agent_id)
+        elif current_user.role == UserRole.INSTITUTION_ADMIN.value and location_slug:
+            location_result = await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.slug == location_slug,
+                    InstitutionLocation.institution_id == institution_id,
+                )
+            )
+            scoped_location = location_result.scalar_one_or_none()
+            if not scoped_location:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            if not scoped_location.retell_agent_id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Location has no agent mapping")
+            extra_conditions.append(Call.agent_used == scoped_location.retell_agent_id)
 
         # ── Volume counts ─────────────────────────────────────────────────
         base = select(func.count(Call.id)).where(Call.institution_id == institution_id, *extra_conditions)
@@ -213,6 +259,202 @@ async def get_dashboard_summary(
                 "actor_role": current_user.role,
                 "institution_id": institution_id,
                 "location_id": current_user.location_id,
+                "location_slug": location_slug,
+            },
+            institution_id=institution_id,
+        )
+        return response
+
+
+@router.get("/aggregate", response_model=AggregateDashboardResponse)
+@limiter.limit(RATE_READ)
+async def get_aggregate_dashboard(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+) -> AggregateDashboardResponse:
+    """
+    Institution-admin aggregate dashboard across all locations.
+
+    Returns summary cards, tag distribution, and clinic comparison metrics.
+    """
+    if not current_user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is not associated with an institution",
+        )
+
+    institution_id = current_user.institution_id
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    week_start = date.fromisocalendar(today.year, today.isocalendar().week, 1)
+    month_start = today.replace(day=1)
+
+    async with get_db_session() as session:
+        locations = (
+            await session.execute(
+                select(InstitutionLocation).where(InstitutionLocation.institution_id == institution_id)
+            )
+        ).scalars().all()
+
+        # Institution-wide summary cards
+        base = select(func.count(Call.id)).where(Call.institution_id == institution_id)
+        total_calls_today = (await session.execute(base.where(Call.call_date == today))).scalar_one()
+        total_calls_week = (await session.execute(base.where(Call.call_date >= week_start))).scalar_one()
+        total_calls_month = (await session.execute(base.where(Call.call_date >= month_start))).scalar_one()
+        total_calls_all_time = (await session.execute(base)).scalar_one()
+
+        appointments_booked_month = (
+            await session.execute(
+                select(func.count(Call.id)).where(
+                    Call.institution_id == institution_id,
+                    Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
+                    Call.call_date >= month_start,
+                )
+            )
+        ).scalar_one()
+        new_patients_month = (
+            await session.execute(
+                select(func.count(Call.id)).where(
+                    Call.institution_id == institution_id,
+                    Call.is_new_patient.is_(True),
+                    Call.call_date >= month_start,
+                )
+            )
+        ).scalar_one()
+        open_callbacks = (
+            await session.execute(
+                select(func.count(Call.id)).where(
+                    Call.institution_id == institution_id,
+                    Call.call_status == CallStatus.NEEDS_CALLBACK.value,
+                    Call.callback_resolved.is_(False),
+                )
+            )
+        ).scalar_one()
+        booking_rate_month = (
+            round((appointments_booked_month / total_calls_month) * 100, 2)
+            if total_calls_month
+            else 0.0
+        )
+
+        # Institution-wide tag distribution
+        tag_rows = (
+            await session.execute(
+                select(Call.call_status, func.count(Call.id).label("cnt"))
+                .where(
+                    Call.institution_id == institution_id,
+                    Call.call_status.isnot(None),
+                )
+                .group_by(Call.call_status)
+                .order_by(func.count(Call.id).desc())
+            )
+        ).all()
+        tag_distribution = [
+            TagCount(
+                tag=row.call_status,
+                label=TAG_LABELS.get(row.call_status, row.call_status.replace("_", " ").title()),
+                count=row.cnt,
+            )
+            for row in tag_rows
+        ]
+
+        # Per-location metrics grouped by agent_used
+        metrics_rows = (
+            await session.execute(
+                select(
+                    Call.agent_used.label("agent_used"),
+                    func.sum(case((Call.call_date == today, 1), else_=0)).label("calls_today"),
+                    func.sum(case((Call.call_date >= month_start, 1), else_=0)).label("calls_this_month"),
+                    func.sum(
+                        case(
+                            (
+                                and_(
+                                    Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
+                                    Call.call_date >= month_start,
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ).label("appointments_booked_month"),
+                    func.sum(
+                        case(
+                            (
+                                and_(
+                                    Call.is_new_patient.is_(True),
+                                    Call.call_date >= month_start,
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ).label("new_patients_month"),
+                    func.sum(
+                        case(
+                            (
+                                and_(
+                                    Call.call_status == CallStatus.NEEDS_CALLBACK.value,
+                                    Call.callback_resolved.is_(False),
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ).label("open_callbacks"),
+                    func.avg(Call.call_duration_seconds).label("avg_duration"),
+                )
+                .where(Call.institution_id == institution_id)
+                .group_by(Call.agent_used)
+            )
+        ).all()
+        metrics_by_agent = {row.agent_used: row for row in metrics_rows}
+
+        clinic_comparison: list[LocationComparisonRow] = []
+        for loc in locations:
+            loc_metrics = metrics_by_agent.get(loc.retell_agent_id)
+            calls_month = int(loc_metrics.calls_this_month or 0) if loc_metrics else 0
+            bookings_month = int(loc_metrics.appointments_booked_month or 0) if loc_metrics else 0
+            clinic_comparison.append(
+                LocationComparisonRow(
+                    location_id=str(loc.id),
+                    location_name=loc.name,
+                    location_slug=loc.slug,
+                    status="Active" if loc.is_active else "Inactive",
+                    calls_today=int(loc_metrics.calls_today or 0) if loc_metrics else 0,
+                    calls_this_month=calls_month,
+                    appointments_booked_month=bookings_month,
+                    new_patients_month=int(loc_metrics.new_patients_month or 0) if loc_metrics else 0,
+                    booking_rate_month=round((bookings_month / calls_month) * 100, 2) if calls_month else 0.0,
+                    avg_call_duration_seconds=round(float(loc_metrics.avg_duration or 0), 2) if loc_metrics else 0.0,
+                    open_callbacks=int(loc_metrics.open_callbacks or 0) if loc_metrics else 0,
+                )
+            )
+
+        clinic_comparison.sort(key=lambda row: row.calls_this_month, reverse=True)
+
+        response = AggregateDashboardResponse(
+            summary=AggregateSummaryCards(
+                total_calls_today=total_calls_today,
+                total_calls_week=total_calls_week,
+                total_calls_month=total_calls_month,
+                total_calls_all_time=total_calls_all_time,
+                appointments_booked_month=appointments_booked_month,
+                new_patients_month=new_patients_month,
+                booking_rate_month=booking_rate_month,
+                open_callbacks=open_callbacks,
+            ),
+            tag_distribution=tag_distribution,
+            clinic_comparison=clinic_comparison,
+            as_of=now.isoformat(),
+        )
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.VIEW_DASHBOARD,
+            target_resource="dashboard:aggregate",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": institution_id,
+                "location_count": len(clinic_comparison),
             },
             institution_id=institution_id,
         )

@@ -8,7 +8,10 @@
 import api from "@/lib/api";
 import type { DashboardSummary } from "@/types";
 
-export async function getDashboardSummary(): Promise<DashboardSummary> {
-    const { data } = await api.get<DashboardSummary>("/institution/dashboard/summary");
+export async function getDashboardSummary(locationSlug?: string): Promise<DashboardSummary> {
+    const params = new URLSearchParams();
+    if (locationSlug) params.set("location_slug", locationSlug);
+    const q = params.toString() ? `?${params.toString()}` : "";
+    const { data } = await api.get<DashboardSummary>(`/institution/dashboard/summary${q}`);
     return data;
 }
