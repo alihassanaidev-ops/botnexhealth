@@ -34,7 +34,9 @@ async function forceSignOut(): Promise<void> {
 async function refreshBackendToken(): Promise<string> {
     const { data, error: refreshError } = await supabase.auth.refreshSession();
     if (refreshError || !data.session) {
-        throw new Error("Supabase session refresh failed");
+        const err = new Error("Supabase session refresh failed");
+        (err as Error & { code?: string }).code = "NO_SUPABASE_SESSION";
+        throw err;
     }
 
     const exchangeRes = await axios.post(
@@ -46,6 +48,14 @@ async function refreshBackendToken(): Promise<string> {
     const newBackendToken: string = exchangeRes.data.access_token;
     setToken(newBackendToken);
     return newBackendToken;
+}
+
+function shouldForceLogoutFromRefreshError(error: unknown): boolean {
+    const err = error as { code?: string; response?: { status?: number } };
+    if (err?.code === "NO_SUPABASE_SESSION") return true;
+
+    const status = err?.response?.status;
+    return status === 401 || status === 403 || status === 423;
 }
 
 async function getRefreshedToken(): Promise<string> {
@@ -73,7 +83,13 @@ api.interceptors.request.use(
 api.interceptors.response.use(
     (response) => response,
     async (error) => {
-        const originalRequest = error.config;
+        const originalRequest = error?.config;
+        const requestUrl: string = String(originalRequest?.url ?? "");
+
+        // Never recurse on token-exchange requests.
+        if (requestUrl.includes("/auth/supabase/token")) {
+            return Promise.reject(error);
+        }
 
         if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
             originalRequest._retry = true;
@@ -81,10 +97,17 @@ api.interceptors.response.use(
             try {
                 const newBackendToken = await getRefreshedToken();
                 // Retry original request
+                if (!originalRequest.headers) {
+                    originalRequest.headers = {};
+                }
                 originalRequest.headers.Authorization = `Bearer ${newBackendToken}`;
                 return api(originalRequest);
-            } catch {
-                await forceSignOut();
+            } catch (refreshError) {
+                // Only force logout for hard auth failures; keep session for transient failures.
+                if (shouldForceLogoutFromRefreshError(refreshError)) {
+                    await forceSignOut();
+                }
+                return Promise.reject(refreshError);
             }
         }
 

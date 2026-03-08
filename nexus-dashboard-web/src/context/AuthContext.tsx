@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import axios from "axios";
 import api from "@/lib/api";
 import { User } from "@/types";
 import { supabase } from "@/lib/supabase";
@@ -7,6 +8,8 @@ import { toast } from "sonner";
 import { useNavigate, useLocation } from "react-router-dom";
 
 const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — HIPAA automatic logoff
+const EXCHANGE_MAX_ATTEMPTS = 3;
+const EXCHANGE_RETRY_DELAY_MS = 250;
 
 interface AuthContextType {
     user: User | null;
@@ -24,6 +27,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const navigate = useNavigate();
     const location = useLocation();
     const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const signInFlowRef = useRef<Promise<boolean> | null>(null);
+    const lastAuthFailureRef = useRef<string | null>(null);
 
     // Use refs so the onAuthStateChange callback always has current values
     const locationRef = useRef(location);
@@ -36,18 +41,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return hash.includes("type=invite") || hash.includes("type=recovery");
     }, []);
 
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
     // ---- Token exchange helper ----
     const exchangeToken = useCallback(async (supabaseAccessToken: string): Promise<boolean> => {
-        try {
-            const { data } = await api.post<{ access_token: string }>("/auth/supabase/token", {
-                access_token: supabaseAccessToken,
-            });
-            setToken(data.access_token);
-            return true;
-        } catch (err) {
-            console.error("Token exchange failed", err);
-            return false;
+        const authUrl = `${api.defaults.baseURL}/auth/supabase/token`;
+        lastAuthFailureRef.current = null;
+
+        for (let attempt = 1; attempt <= EXCHANGE_MAX_ATTEMPTS; attempt += 1) {
+            try {
+                // Use plain axios here to avoid auth interceptor recursion during bootstrap.
+                const { data } = await axios.post<{ access_token: string }>(
+                    authUrl,
+                    { access_token: supabaseAccessToken },
+                    { headers: { "Content-Type": "application/json" } },
+                );
+                setToken(data.access_token);
+                return true;
+            } catch (err: any) {
+                const status = err?.response?.status as number | undefined;
+                const detail = err?.response?.data?.detail as string | undefined;
+                const retryable = !status || status === 429 || status >= 500;
+                console.error(`Token exchange failed (attempt ${attempt}/${EXCHANGE_MAX_ATTEMPTS})`, err);
+
+                if (retryable && attempt < EXCHANGE_MAX_ATTEMPTS) {
+                    await sleep(EXCHANGE_RETRY_DELAY_MS * attempt);
+                    continue;
+                }
+                lastAuthFailureRef.current = detail || (status ? `Authentication failed (${status})` : "Authentication failed");
+                return false;
+            }
         }
+
+        return false;
     }, []);
 
     // ---- Fetch backend user profile ----
@@ -56,8 +82,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const { data } = await api.get<User>("/auth/users/me");
             setUser(data);
             return true;
-        } catch (error) {
+        } catch (error: any) {
             console.error("Failed to fetch user profile", error);
+            const status = error?.response?.status as number | undefined;
+            const detail = error?.response?.data?.detail as string | undefined;
+            lastAuthFailureRef.current = detail || (status ? `Failed to fetch user profile (${status})` : "Failed to fetch user profile");
             return false;
         }
     }, []);
@@ -68,6 +97,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!exchanged) return false;
         return await fetchUserProfile();
     }, [exchangeToken, fetchUserProfile]);
+
+    const completeSignInSingleFlight = useCallback((supabaseAccessToken: string): Promise<boolean> => {
+        if (!signInFlowRef.current) {
+            signInFlowRef.current = completeSignIn(supabaseAccessToken).finally(() => {
+                signInFlowRef.current = null;
+            });
+        }
+        return signInFlowRef.current;
+    }, [completeSignIn]);
 
     // ---- Sign out (clears everything) ----
     const signOut = useCallback(async () => {
@@ -112,9 +150,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     navigate("/set-password");
                     setIsLoading(false);
                 } else {
-                    const ok = await completeSignIn(session.access_token);
+                    const ok = await completeSignInSingleFlight(session.access_token);
                     if (!ok) {
-                        toast.error("Failed to load user profile. Please log in again.");
+                        toast.error(lastAuthFailureRef.current || "Failed to load user profile. Please log in again.");
                         await signOut();
                     }
                     setIsLoading(false);
@@ -135,7 +173,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         navigate("/set-password");
                     }
                 } else if (!userRef.current) {
-                    const ok = await completeSignIn(session.access_token);
+                    const ok = await completeSignInSingleFlight(session.access_token);
                     if (ok) {
                         const loc = locationRef.current;
                         const from = (loc.state as Record<string, { pathname?: string }>)?.from?.pathname || "/";
@@ -143,7 +181,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                             navigate(from, { replace: true });
                         }
                     } else {
-                        toast.error("Login failed. Please try again.");
+                        toast.error(lastAuthFailureRef.current || "Login failed. Please try again.");
                         await signOut();
                     }
                 }
@@ -181,7 +219,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             throw new Error("Password updated, but session is missing. Please sign in again.");
         }
 
-        const ok = await completeSignIn(session.access_token);
+        const ok = await completeSignInSingleFlight(session.access_token);
         if (!ok) {
             throw new Error("Password updated, but sign-in bootstrap failed. Please sign in again.");
         }

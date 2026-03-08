@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -23,7 +22,7 @@ from src.app.services.auth import AuthService
 from src.app.services.supabase_service import SupabaseService
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.services.audit import log_audit_background
-from src.app.api.rate_limit import limiter, RATE_AUTH
+from src.app.api.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,7 @@ class UserRead(BaseModel):
 
 
 @router.post("/supabase/token", response_model=Token)
-@limiter.limit(RATE_AUTH)
+@limiter.limit("30/minute")
 async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) -> Token:
     """
     Exchange a Supabase access token for a local JWT.
