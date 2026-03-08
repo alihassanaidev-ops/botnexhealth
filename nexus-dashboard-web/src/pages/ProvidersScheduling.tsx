@@ -18,8 +18,11 @@ import {
     updateAvailability,
     triggerSync,
 } from "@/lib/tenant-api"
+import { useAuth } from "@/context/AuthContext"
 
 export default function ProvidersScheduling() {
+    const { user } = useAuth()
+    const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [providers, setProviders] = useState<CachedProvider[]>([])
     const [availabilities, setAvailabilities] = useState<CachedAvailability[]>([])
     const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
@@ -104,6 +107,7 @@ export default function ProvidersScheduling() {
     }, [selectedProviderId])
 
     const handleSync = async () => {
+        if (!canManage) return
         setSyncing(true)
         try {
             const result = await triggerSync()
@@ -138,6 +142,7 @@ export default function ProvidersScheduling() {
     }
 
     const handleSaveEdit = async () => {
+        if (!canManage) return
         if (!editTarget) return
         setSaving(true)
         try {
@@ -156,6 +161,7 @@ export default function ProvidersScheduling() {
     }
 
     const handleCreateWorkWindow = async () => {
+        if (!canManage) return
         if (!selectedProviderId) return
         if (newWindow.appointment_type_ids.length === 0) {
             toast.error("Please select at least one appointment type")
@@ -226,12 +232,16 @@ export default function ProvidersScheduling() {
                     </p>
                 </div>
                 <div className="flex items-center space-x-2">
-                    <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
-                        Create Work Window
-                    </Button>
-                    <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
-                        <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                    </Button>
+                    {canManage && (
+                        <>
+                            <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
+                                Create Work Window
+                            </Button>
+                            <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
+                                <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                            </Button>
+                        </>
+                    )}
                 </div>
             </div>
 
@@ -239,7 +249,7 @@ export default function ProvidersScheduling() {
                 <Alert variant="destructive">
                     <AlertTriangle className="h-4 w-4" />
                     <AlertDescription>
-                        {error}. Please try refreshing the page or click Sync.
+                        {error}. Please try refreshing the page{canManage ? " or click Sync." : "."}
                     </AlertDescription>
                 </Alert>
             )}
@@ -259,7 +269,11 @@ export default function ProvidersScheduling() {
             ) : providers.length === 0 ? (
                 <Card>
                     <CardContent className="py-8 text-center text-muted-foreground">
-                        <p>No providers found. Click "Sync" to fetch from your PMS.</p>
+                        <p>
+                            {canManage
+                                ? 'No providers found. Click "Sync" to fetch from your PMS.'
+                                : "No providers found for your location."}
+                        </p>
                     </CardContent>
                 </Card>
             ) : (
@@ -310,7 +324,9 @@ export default function ProvidersScheduling() {
                             <CardDescription>
                                 {filteredAvailabilities.length} schedule{filteredAvailabilities.length !== 1 ? "s" : ""} found
                                 {selectedApptTypeId !== "all" ? " (filtered)" : ""}.
-                                Click "Edit Linking" to associate appointment types. Or create a custom manual Work Window.
+                                {canManage
+                                    ? ' Click "Edit Linking" to associate appointment types, or create a custom Work Window.'
+                                    : " Read-only view."}
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
@@ -320,7 +336,9 @@ export default function ProvidersScheduling() {
                                 <p className="text-center py-6 text-muted-foreground">
                                     {selectedApptTypeId !== "all"
                                         ? "No work windows match this appointment type."
-                                        : "No work windows found for this provider. Add one above."}
+                                        : canManage
+                                            ? "No work windows found for this provider. Add one above."
+                                            : "No work windows found for this provider."}
                                 </p>
                             ) : (
                                 <div className="space-y-3">
@@ -398,14 +416,16 @@ export default function ProvidersScheduling() {
                                                             )}
                                                         </div>
                                                     </div>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className={isWarning ? "border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 shrink-0" : "shrink-0"}
-                                                        onClick={() => openEditDialog(av)}
-                                                    >
-                                                        Edit Linking
-                                                    </Button>
+                                                    {canManage && (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className={isWarning ? "border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 shrink-0" : "shrink-0"}
+                                                            onClick={() => openEditDialog(av)}
+                                                        >
+                                                            Edit Linking
+                                                        </Button>
+                                                    )}
                                                 </div>
                                             </div>
                                         )
@@ -417,159 +437,163 @@ export default function ProvidersScheduling() {
                 </>
             )}
 
-            {/* Edit Linking Dialog */}
-            <Dialog open={!!editTarget} onOpenChange={() => setEditTarget(null)}>
-                <DialogContent className="max-w-md">
-                    <DialogHeader>
-                        <DialogTitle>Link Appointment Types</DialogTitle>
-                        <DialogDescription>
-                            {editTarget?.begin_time} - {editTarget?.end_time}
-                            {editTarget?.days ? ` (${editTarget.days.join(", ")})` : ""}
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-2 py-2">
-                        {appointmentTypes.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">
-                                No appointment types configured. Create some first.
-                            </p>
-                        ) : (
-                            <div className="border rounded-md max-h-64 overflow-y-auto">
-                                {appointmentTypes.map((at) => (
-                                    <label
-                                        key={at.source_id}
-                                        className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
-                                        onClick={() => toggleTypeId(at.source_id)}
-                                    >
-                                        <Checkbox
-                                            checked={editTypeIds.includes(at.source_id)}
-                                            onCheckedChange={() => toggleTypeId(at.source_id)}
+            {canManage && (
+                <>
+                    {/* Edit Linking Dialog */}
+                    <Dialog open={!!editTarget} onOpenChange={() => setEditTarget(null)}>
+                        <DialogContent className="max-w-md">
+                            <DialogHeader>
+                                <DialogTitle>Link Appointment Types</DialogTitle>
+                                <DialogDescription>
+                                    {editTarget?.begin_time} - {editTarget?.end_time}
+                                    {editTarget?.days ? ` (${editTarget.days.join(", ")})` : ""}
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-2 py-2">
+                                {appointmentTypes.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">
+                                        No appointment types configured. Create some first.
+                                    </p>
+                                ) : (
+                                    <div className="border rounded-md max-h-64 overflow-y-auto">
+                                        {appointmentTypes.map((at) => (
+                                            <label
+                                                key={at.source_id}
+                                                className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                onClick={() => toggleTypeId(at.source_id)}
+                                            >
+                                                <Checkbox
+                                                    checked={editTypeIds.includes(at.source_id)}
+                                                    onCheckedChange={() => toggleTypeId(at.source_id)}
+                                                />
+                                                <span className="text-sm">{at.name}</span>
+                                                {at.duration_minutes && (
+                                                    <span className="text-xs text-muted-foreground ml-auto">
+                                                        {at.duration_minutes} min
+                                                    </span>
+                                                )}
+                                            </label>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <DialogFooter>
+                                <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
+                                <Button onClick={handleSaveEdit} disabled={saving}>
+                                    {saving ? "Saving..." : "Save"}
+                                </Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
+
+                    {/* Create Work Window Dialog */}
+                    <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+                        <DialogContent className="max-w-md">
+                            <DialogHeader>
+                                <DialogTitle>Create Custom Work Window</DialogTitle>
+                                <DialogDescription>
+                                    Create a manual schedule block. This will not be pushed back to your PMS, but it will be used to offer booking slots.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 py-2">
+                                {/* Time */}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Start Time</label>
+                                        <input
+                                            type="time"
+                                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                                            value={newWindow.start_time}
+                                            onChange={(e) => setNewWindow({ ...newWindow, start_time: e.target.value })}
                                         />
-                                        <span className="text-sm">{at.name}</span>
-                                        {at.duration_minutes && (
-                                            <span className="text-xs text-muted-foreground ml-auto">
-                                                {at.duration_minutes} min
-                                            </span>
-                                        )}
-                                    </label>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
-                        <Button onClick={handleSaveEdit} disabled={saving}>
-                            {saving ? "Saving..." : "Save"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
-
-            {/* Create Work Window Dialog */}
-            <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-                <DialogContent className="max-w-md">
-                    <DialogHeader>
-                        <DialogTitle>Create Custom Work Window</DialogTitle>
-                        <DialogDescription>
-                            Create a manual schedule block. This will not be pushed back to your PMS, but it will be used to offer booking slots.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4 py-2">
-                        {/* Time */}
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-1">
-                                <label className="text-sm font-medium">Start Time</label>
-                                <input
-                                    type="time"
-                                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
-                                    value={newWindow.start_time}
-                                    onChange={(e) => setNewWindow({ ...newWindow, start_time: e.target.value })}
-                                />
-                            </div>
-                            <div className="space-y-1">
-                                <label className="text-sm font-medium">End Time</label>
-                                <input
-                                    type="time"
-                                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
-                                    value={newWindow.end_time}
-                                    onChange={(e) => setNewWindow({ ...newWindow, end_time: e.target.value })}
-                                />
-                            </div>
-                        </div>
-
-                        {/* Days */}
-                        <div className="space-y-2 pt-2">
-                            <label className="text-sm font-medium">Days</label>
-                            <div className="grid grid-cols-4 gap-2">
-                                {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => (
-                                    <label key={day} className="flex items-center space-x-2 text-sm">
-                                        <Checkbox
-                                            checked={newWindow.days.includes(day)}
-                                            onCheckedChange={(checked) => {
-                                                setNewWindow(prev => ({
-                                                    ...prev,
-                                                    days: checked
-                                                        ? [...prev.days, day]
-                                                        : prev.days.filter(d => d !== day)
-                                                }))
-                                            }}
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">End Time</label>
+                                        <input
+                                            type="time"
+                                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                                            value={newWindow.end_time}
+                                            onChange={(e) => setNewWindow({ ...newWindow, end_time: e.target.value })}
                                         />
-                                        <span>{day.substring(0, 3)}</span>
-                                    </label>
-                                ))}
-                            </div>
-                        </div>
+                                    </div>
+                                </div>
 
-                        {/* Operatory */}
-                        <div className="space-y-2 pt-2">
-                            <label className="text-sm font-medium">Operatory</label>
-                            <Select value={newWindow.operatory_id} onValueChange={(v) => setNewWindow({ ...newWindow, operatory_id: v })}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select Operatory" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {operatories.map((op) => (
-                                        <SelectItem key={op.source_id} value={op.source_id}>
-                                            {op.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                                {/* Days */}
+                                <div className="space-y-2 pt-2">
+                                    <label className="text-sm font-medium">Days</label>
+                                    <div className="grid grid-cols-4 gap-2">
+                                        {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => (
+                                            <label key={day} className="flex items-center space-x-2 text-sm">
+                                                <Checkbox
+                                                    checked={newWindow.days.includes(day)}
+                                                    onCheckedChange={(checked) => {
+                                                        setNewWindow(prev => ({
+                                                            ...prev,
+                                                            days: checked
+                                                                ? [...prev.days, day]
+                                                                : prev.days.filter(d => d !== day)
+                                                        }))
+                                                    }}
+                                                />
+                                                <span>{day.substring(0, 3)}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
 
-                        {/* Appointment Types */}
-                        <div className="space-y-2 pt-2">
-                            <label className="text-sm font-medium">Appointment Types</label>
-                            <div className="border rounded-md max-h-40 overflow-y-auto">
-                                {appointmentTypes.map((at) => (
-                                    <label
-                                        key={at.source_id}
-                                        className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
-                                    >
-                                        <Checkbox
-                                            checked={newWindow.appointment_type_ids.includes(at.source_id)}
-                                            onCheckedChange={(checked) => {
-                                                setNewWindow(prev => ({
-                                                    ...prev,
-                                                    appointment_type_ids: checked
-                                                        ? [...prev.appointment_type_ids, at.source_id]
-                                                        : prev.appointment_type_ids.filter(id => id !== at.source_id)
-                                                }))
-                                            }}
-                                        />
-                                        <span className="text-sm truncate" title={at.name}>{at.name}</span>
-                                    </label>
-                                ))}
+                                {/* Operatory */}
+                                <div className="space-y-2 pt-2">
+                                    <label className="text-sm font-medium">Operatory</label>
+                                    <Select value={newWindow.operatory_id} onValueChange={(v) => setNewWindow({ ...newWindow, operatory_id: v })}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Operatory" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {operatories.map((op) => (
+                                                <SelectItem key={op.source_id} value={op.source_id}>
+                                                    {op.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+
+                                {/* Appointment Types */}
+                                <div className="space-y-2 pt-2">
+                                    <label className="text-sm font-medium">Appointment Types</label>
+                                    <div className="border rounded-md max-h-40 overflow-y-auto">
+                                        {appointmentTypes.map((at) => (
+                                            <label
+                                                key={at.source_id}
+                                                className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                            >
+                                                <Checkbox
+                                                    checked={newWindow.appointment_type_ids.includes(at.source_id)}
+                                                    onCheckedChange={(checked) => {
+                                                        setNewWindow(prev => ({
+                                                            ...prev,
+                                                            appointment_type_ids: checked
+                                                                ? [...prev.appointment_type_ids, at.source_id]
+                                                                : prev.appointment_type_ids.filter(id => id !== at.source_id)
+                                                        }))
+                                                    }}
+                                                />
+                                                <span className="text-sm truncate" title={at.name}>{at.name}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                    </div>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
-                        <Button onClick={handleCreateWorkWindow} disabled={saving}>
-                            {saving ? "Creating..." : "Create Work Window"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                            <DialogFooter>
+                                <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+                                <Button onClick={handleCreateWorkWindow} disabled={saving}>
+                                    {saving ? "Creating..." : "Create Work Window"}
+                                </Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
+                </>
+            )}
         </div>
     )
 }

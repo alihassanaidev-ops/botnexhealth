@@ -13,7 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, field_validator
 
-from src.app.api.deps import get_current_active_user
+from src.app.api.deps import get_current_active_user, get_current_institution_admin
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
 from src.app.models.custom_field import EntityType, FieldType, RetellSource
@@ -145,7 +145,7 @@ async def list_definitions(
 async def create_definition(
     request: Request,
     body: CreateFieldDefinitionRequest,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
 ) -> FieldDefinitionResponse:
     if not current_user.institution_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
@@ -176,7 +176,7 @@ async def update_definition(
     request: Request,
     definition_id: str,
     body: UpdateFieldDefinitionRequest,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
 ) -> FieldDefinitionResponse:
     if not current_user.institution_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
@@ -202,7 +202,7 @@ async def update_definition(
 async def delete_definition(
     request: Request,
     definition_id: str,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
     hard: bool = Query(False),
 ) -> None:
     if not current_user.institution_id:

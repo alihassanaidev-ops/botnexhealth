@@ -7,8 +7,11 @@ import { toast } from "sonner"
 import { RefreshCcw } from "lucide-react"
 import type { CachedOperatory } from "@/types"
 import { listOperatories, triggerSync } from "@/lib/tenant-api"
+import { useAuth } from "@/context/AuthContext"
 
 export default function Operatories() {
+    const { user } = useAuth()
+    const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [operatories, setOperatories] = useState<CachedOperatory[]>([])
     const [loading, setLoading] = useState(true)
     const [syncing, setSyncing] = useState(false)
@@ -31,6 +34,7 @@ export default function Operatories() {
     }, [fetchData])
 
     const handleSync = async () => {
+        if (!canManage) return
         setSyncing(true)
         try {
             const result = await triggerSync()
@@ -58,9 +62,11 @@ export default function Operatories() {
                     </p>
                 </div>
                 <div className="flex items-center space-x-2">
-                    <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
-                        <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                    </Button>
+                    {canManage && (
+                        <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
+                            <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                        </Button>
+                    )}
                 </div>
             </div>
 
@@ -77,7 +83,9 @@ export default function Operatories() {
                     ) : operatories.length === 0 ? (
                         <div className="text-center py-8 text-muted-foreground">
                             <p>No operatories found.</p>
-                            <p className="text-sm mt-1">Click "Sync" to fetch from your PMS.</p>
+                            <p className="text-sm mt-1">
+                                {canManage ? 'Click "Sync" to fetch from your PMS.' : "No operatories are currently configured."}
+                            </p>
                         </div>
                     ) : (
                         <Table>

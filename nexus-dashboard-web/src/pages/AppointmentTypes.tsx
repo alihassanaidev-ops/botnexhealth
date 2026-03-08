@@ -16,8 +16,11 @@ import {
     deleteAppointmentType,
     triggerSync,
 } from "@/lib/tenant-api"
+import { useAuth } from "@/context/AuthContext"
 
 export default function AppointmentTypes() {
+    const { user } = useAuth()
+    const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [types, setTypes] = useState<CachedAppointmentType[]>([])
     const [descriptors, setDescriptors] = useState<CachedDescriptor[]>([])
     const [loading, setLoading] = useState(true)
@@ -57,6 +60,7 @@ export default function AppointmentTypes() {
     }, [fetchData])
 
     const handleSync = async () => {
+        if (!canManage) return
         setSyncing(true)
         try {
             const result = await triggerSync()
@@ -77,6 +81,7 @@ export default function AppointmentTypes() {
     }
 
     const handleCreate = async () => {
+        if (!canManage) return
         if (!newName.trim()) {
             toast.error("Name is required")
             return
@@ -101,6 +106,7 @@ export default function AppointmentTypes() {
     }
 
     const handleDelete = async () => {
+        if (!canManage) return
         if (!deleteTarget) return
         setDeleting(true)
         try {
@@ -160,12 +166,16 @@ export default function AppointmentTypes() {
                     </p>
                 </div>
                 <div className="flex items-center space-x-2">
-                    <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
-                        <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                    </Button>
-                    <Button onClick={() => setCreateOpen(true)}>
-                        <Plus className="mr-2 h-4 w-4" /> Create
-                    </Button>
+                    {canManage && (
+                        <>
+                            <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
+                                <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                            </Button>
+                            <Button onClick={() => setCreateOpen(true)}>
+                                <Plus className="mr-2 h-4 w-4" /> Create
+                            </Button>
+                        </>
+                    )}
                 </div>
             </div>
 
@@ -183,7 +193,11 @@ export default function AppointmentTypes() {
                     ) : types.length === 0 ? (
                         <div className="text-center py-8 text-muted-foreground">
                             <p>No appointment types found.</p>
-                            <p className="text-sm mt-1">Click "Sync" to fetch from your PMS, or "Create" to add a new one.</p>
+                            <p className="text-sm mt-1">
+                                {canManage
+                                    ? 'Click "Sync" to fetch from your PMS, or "Create" to add a new one.'
+                                    : "No appointment types are currently configured."}
+                            </p>
                         </div>
                     ) : (
                         <Table>
@@ -192,7 +206,7 @@ export default function AppointmentTypes() {
                                     <TableHead>Name</TableHead>
                                     <TableHead>Duration</TableHead>
                                     <TableHead>EMR Descriptors</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
+                                    {canManage && <TableHead className="text-right">Actions</TableHead>}
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -208,15 +222,17 @@ export default function AppointmentTypes() {
                                         <TableCell className="max-w-[300px] truncate text-sm text-muted-foreground">
                                             {getDescriptorNames(type)}
                                         </TableCell>
-                                        <TableCell className="text-right">
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                onClick={() => setDeleteTarget(type)}
-                                            >
-                                                <Trash2 className="h-4 w-4 text-destructive" />
-                                            </Button>
-                                        </TableCell>
+                                        {canManage && (
+                                            <TableCell className="text-right">
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    onClick={() => setDeleteTarget(type)}
+                                                >
+                                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                                </Button>
+                                            </TableCell>
+                                        )}
                                     </TableRow>
                                 ))}
                             </TableBody>
@@ -225,102 +241,106 @@ export default function AppointmentTypes() {
                 </CardContent>
             </Card>
 
-            {/* Create Dialog */}
-            <Dialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (!open) resetCreateForm() }}>
-                <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-                    <DialogHeader>
-                        <DialogTitle>Create Appointment Type</DialogTitle>
-                        <DialogDescription>
-                            Define a new appointment type. Optionally link EMR descriptors to map to PMS procedure codes.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4 py-2">
-                        <div className="space-y-2">
-                            <Label htmlFor="name">Name</Label>
-                            <Input
-                                id="name"
-                                placeholder="e.g. Adult Cleaning"
-                                value={newName}
-                                onChange={(e) => setNewName(e.target.value)}
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="duration">Duration (minutes)</Label>
-                            <Input
-                                id="duration"
-                                type="number"
-                                min={5}
-                                max={480}
-                                value={newDuration}
-                                onChange={(e) => setNewDuration(Number(e.target.value))}
-                            />
-                        </div>
-                        {descriptors.length > 0 && (
-                            <div className="space-y-2">
-                                <Label>
-                                    <Tag className="h-3 w-3 inline mr-1" />
-                                    EMR Descriptors ({selectedDescriptorIds.length} selected)
-                                </Label>
-                                <Input
-                                    placeholder="Search descriptors..."
-                                    value={descriptorSearch}
-                                    onChange={(e) => setDescriptorSearch(e.target.value)}
-                                />
-                                <div className="border rounded-md max-h-48 overflow-y-auto">
-                                    {filteredDescriptors.length === 0 ? (
-                                        <p className="p-3 text-sm text-muted-foreground">No descriptors found.</p>
-                                    ) : (
-                                        filteredDescriptors.map((d) => (
-                                            <label
-                                                key={d.source_id}
-                                                className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
-                                                onClick={() => toggleDescriptor(d.source_id)}
-                                            >
-                                                <Checkbox
-                                                    checked={selectedDescriptorIds.includes(d.source_id)}
-                                                    onCheckedChange={() => toggleDescriptor(d.source_id)}
-                                                />
-                                                <span className="text-sm">
-                                                    {d.code && <span className="font-mono text-xs mr-1">{d.code}</span>}
-                                                    {d.name}
-                                                </span>
-                                            </label>
-                                        ))
-                                    )}
+            {canManage && (
+                <>
+                    {/* Create Dialog */}
+                    <Dialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (!open) resetCreateForm() }}>
+                        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+                            <DialogHeader>
+                                <DialogTitle>Create Appointment Type</DialogTitle>
+                                <DialogDescription>
+                                    Define a new appointment type. Optionally link EMR descriptors to map to PMS procedure codes.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 py-2">
+                                <div className="space-y-2">
+                                    <Label htmlFor="name">Name</Label>
+                                    <Input
+                                        id="name"
+                                        placeholder="e.g. Adult Cleaning"
+                                        value={newName}
+                                        onChange={(e) => setNewName(e.target.value)}
+                                    />
                                 </div>
-                                <p className="text-xs text-muted-foreground">
-                                    Descriptors map to your PMS procedure codes. Optional — you can create without them.
-                                </p>
+                                <div className="space-y-2">
+                                    <Label htmlFor="duration">Duration (minutes)</Label>
+                                    <Input
+                                        id="duration"
+                                        type="number"
+                                        min={5}
+                                        max={480}
+                                        value={newDuration}
+                                        onChange={(e) => setNewDuration(Number(e.target.value))}
+                                    />
+                                </div>
+                                {descriptors.length > 0 && (
+                                    <div className="space-y-2">
+                                        <Label>
+                                            <Tag className="h-3 w-3 inline mr-1" />
+                                            EMR Descriptors ({selectedDescriptorIds.length} selected)
+                                        </Label>
+                                        <Input
+                                            placeholder="Search descriptors..."
+                                            value={descriptorSearch}
+                                            onChange={(e) => setDescriptorSearch(e.target.value)}
+                                        />
+                                        <div className="border rounded-md max-h-48 overflow-y-auto">
+                                            {filteredDescriptors.length === 0 ? (
+                                                <p className="p-3 text-sm text-muted-foreground">No descriptors found.</p>
+                                            ) : (
+                                                filteredDescriptors.map((d) => (
+                                                    <label
+                                                        key={d.source_id}
+                                                        className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                        onClick={() => toggleDescriptor(d.source_id)}
+                                                    >
+                                                        <Checkbox
+                                                            checked={selectedDescriptorIds.includes(d.source_id)}
+                                                            onCheckedChange={() => toggleDescriptor(d.source_id)}
+                                                        />
+                                                        <span className="text-sm">
+                                                            {d.code && <span className="font-mono text-xs mr-1">{d.code}</span>}
+                                                            {d.name}
+                                                        </span>
+                                                    </label>
+                                                ))
+                                            )}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            Descriptors map to your PMS procedure codes. Optional — you can create without them.
+                                        </p>
+                                    </div>
+                                )}
                             </div>
-                        )}
-                    </div>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-                        <Button onClick={handleCreate} disabled={creating || !newName.trim()}>
-                            {creating ? "Creating..." : "Create"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                            <DialogFooter>
+                                <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+                                <Button onClick={handleCreate} disabled={creating || !newName.trim()}>
+                                    {creating ? "Creating..." : "Create"}
+                                </Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
 
-            {/* Delete Confirmation */}
-            <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>Delete Appointment Type</DialogTitle>
-                        <DialogDescription>
-                            Are you sure you want to delete "{deleteTarget?.name}"? This may affect existing
-                            schedules and booking configurations.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-                        <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
-                            {deleting ? "Deleting..." : "Delete"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                    {/* Delete Confirmation */}
+                    <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
+                        <DialogContent>
+                            <DialogHeader>
+                                <DialogTitle>Delete Appointment Type</DialogTitle>
+                                <DialogDescription>
+                                    Are you sure you want to delete "{deleteTarget?.name}"? This may affect existing
+                                    schedules and booking configurations.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <DialogFooter>
+                                <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+                                <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
+                                    {deleting ? "Deleting..." : "Delete"}
+                                </Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
+                </>
+            )}
         </div>
     )
 }

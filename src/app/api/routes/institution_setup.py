@@ -16,7 +16,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.app.api.deps import get_current_active_user
+from src.app.api.deps import (
+    get_current_active_user,
+    get_current_institution_or_location_admin,
+)
 from src.app.database import get_db_session
 from src.app.models.institution import Institution
 from src.app.models.institution_appointment_type import InstitutionAppointmentType
@@ -325,7 +328,7 @@ async def list_appointment_types(
 @router.post("/appointment-types", response_model=CachedAppointmentTypeResponse, status_code=201)
 async def create_appointment_type(
     req: CreateAppointmentTypeRequest,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     location_id: str | None = Query(None),
 ):
     """Create appointment type via PMS and cache locally."""
@@ -374,7 +377,7 @@ async def create_appointment_type(
 @router.delete("/appointment-types/{source_id}", status_code=204)
 async def delete_appointment_type(
     source_id: str,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     location_id: str | None = Query(None),
 ):
     """Delete appointment type via PMS and remove from cache."""
@@ -506,7 +509,7 @@ async def list_availabilities(
 async def update_availability(
     source_id: str,
     req: UpdateAvailabilityRequest,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     location_id: str | None = Query(None),
 ):
     """Update availability via PMS (e.g. link appointment types)."""
@@ -556,7 +559,7 @@ async def update_availability(
 
 @router.post("/sync")
 async def trigger_sync(
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     location_id: str | None = Query(None),
 ):
     """Trigger a fresh sync from PMS for the institution location."""
@@ -662,7 +665,7 @@ async def get_operating_hours(
 @router.put("/operating-hours", response_model=list[OperatingHoursResponse])
 async def set_operating_hours(
     data: BulkOperatingHoursRequest,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     location_id: str | None = Query(None),
 ):
     """Bulk-set operating hours (replaces existing) for the institution location."""
@@ -727,7 +730,7 @@ async def get_breaks(
 @router.post("/breaks", response_model=BreakResponse, status_code=201)
 async def create_break(
     data: BreakCreateRequest,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     location_id: str | None = Query(None),
 ):
     """Add a break for the institution location."""
@@ -751,7 +754,7 @@ async def create_break(
 @router.delete("/breaks/{break_id}", status_code=204)
 async def delete_break(
     break_id: str,
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     location_id: str | None = Query(None),
 ):
     """Remove a break from the institution location."""

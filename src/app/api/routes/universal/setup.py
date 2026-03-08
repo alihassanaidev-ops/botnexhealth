@@ -1,8 +1,12 @@
 """Universal setup/capabilities endpoints."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from src.app.api.deps import get_current_institution_or_location_admin
+from src.app.models.user import User
 from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
 from src.app.pms.factory import get_institution_pms
 from src.app.pms.models import SetupStep
@@ -46,6 +50,7 @@ class LinkAvailabilityRequest(BaseModel):
 @router.post("/availabilities")
 async def link_availability(
     req: LinkAvailabilityRequest,
+    _: Annotated[User, Depends(get_current_institution_or_location_admin)],
     pms: PMSAdapter = Depends(get_institution_pms),
 ):
     if not isinstance(pms, SupportsAvailabilityLinking):
@@ -76,6 +81,7 @@ class UpdateAvailabilityRequest(BaseModel):
 async def update_availability(
     availability_id: str,
     req: UpdateAvailabilityRequest,
+    _: Annotated[User, Depends(get_current_institution_or_location_admin)],
     pms: PMSAdapter = Depends(get_institution_pms),
 ):
     if not isinstance(pms, SupportsAvailabilityLinking):

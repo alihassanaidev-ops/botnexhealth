@@ -6,13 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.api.models import ProviderDetailResponse, ProviderListResponse
-from src.app.api.deps import get_current_active_user
+from src.app.api.deps import get_current_admin
 from src.app.config import Settings, get_settings
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.nexhealth.client import NexHealthClient
 from src.app.api.rate_limit import limiter, RATE_READ
 
-router = APIRouter(dependencies=[Depends(get_current_active_user)])
+router = APIRouter(dependencies=[Depends(get_current_admin)])
 
 
 @router.get("/providers", response_model=ProviderListResponse)
