@@ -72,6 +72,11 @@ const institutionAdminNav: NavItemDef[] = [
         exact: true,
     },
     {
+        title: "User Management",
+        url: "/institution-admin/users",
+        icon: Users,
+    },
+    {
         title: "Dashboard",
         url: "/dashboard",
         icon: Home,
