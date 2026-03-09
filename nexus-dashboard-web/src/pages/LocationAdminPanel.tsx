@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Loader2, MailPlus, Users } from "lucide-react"
+import { Loader2, MailPlus, RefreshCcw, Users } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -7,38 +7,50 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { useAuth } from "@/context/AuthContext"
 import {
+    deactivateLocationUser,
     inviteStaff,
     listInstitutionPortalLocations,
+    listLocationUsers,
     updateLocationTimezone,
     type InstitutionPortalLocation,
+    type InstitutionUserRow,
 } from "@/lib/institution-portal-api"
 import { SUPPORTED_TIMEZONES } from "@/lib/timezones"
 
 export default function LocationAdminPanel() {
+    const { user } = useAuth()
     const [loading, setLoading] = useState(true)
     const [inviting, setInviting] = useState(false)
     const [savingTimezone, setSavingTimezone] = useState(false)
     const [location, setLocation] = useState<InstitutionPortalLocation | null>(null)
     const [email, setEmail] = useState("")
     const [timezone, setTimezone] = useState("UTC")
+    const [staffUsers, setStaffUsers] = useState<InstitutionUserRow[]>([])
+    const [actingUserId, setActingUserId] = useState<string | null>(null)
+
+    async function loadData() {
+        setLoading(true)
+        try {
+            const [locations, users] = await Promise.all([
+                listInstitutionPortalLocations(),
+                listLocationUsers(),
+            ])
+            const assigned = locations[0] ?? null
+            setLocation(assigned)
+            setTimezone(assigned?.timezone || "UTC")
+            setStaffUsers(users)
+        } catch (error: any) {
+            toast.error(error?.response?.data?.detail || "Failed to load location")
+        } finally {
+            setLoading(false)
+        }
+    }
 
     useEffect(() => {
-        async function loadLocation() {
-            setLoading(true)
-            try {
-                const locations = await listInstitutionPortalLocations()
-                const assigned = locations[0] ?? null
-                setLocation(assigned)
-                setTimezone(assigned?.timezone || "UTC")
-            } catch (error: any) {
-                toast.error(error?.response?.data?.detail || "Failed to load location")
-            } finally {
-                setLoading(false)
-            }
-        }
-
-        void loadLocation()
+        void loadData()
     }, [])
 
     async function handleInvite() {
@@ -48,6 +60,7 @@ export default function LocationAdminPanel() {
             await inviteStaff(location.slug, email.trim())
             toast.success(`Staff invite sent to ${email.trim()}`)
             setEmail("")
+            setStaffUsers(await listLocationUsers())
         } catch (error: any) {
             toast.error(error?.response?.data?.detail || "Failed to send invite")
         } finally {
@@ -73,13 +86,33 @@ export default function LocationAdminPanel() {
         }
     }
 
+    async function handleDeactivateUser(target: InstitutionUserRow) {
+        if (!window.confirm(`Deactivate ${target.email}?`)) return
+        setActingUserId(target.id)
+        try {
+            await deactivateLocationUser(target.id)
+            toast.success("Staff user deactivated")
+            setStaffUsers(await listLocationUsers())
+        } catch (error: any) {
+            toast.error(error?.response?.data?.detail || "Failed to deactivate user")
+        } finally {
+            setActingUserId(null)
+        }
+    }
+
     return (
         <div className="space-y-6">
-            <div>
-                <h1 className="text-3xl font-bold tracking-tight">Location Admin</h1>
-                <p className="mt-1 text-muted-foreground">
-                    Invite staff for your assigned location.
-                </p>
+            <div className="flex items-center justify-between">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight">Location Admin</h1>
+                    <p className="mt-1 text-muted-foreground">
+                        Manage staff and settings for your assigned location.
+                    </p>
+                </div>
+                <Button variant="outline" onClick={loadData} disabled={loading}>
+                    {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                    Refresh
+                </Button>
             </div>
 
             <Card>
@@ -140,33 +173,88 @@ export default function LocationAdminPanel() {
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <Users className="h-4 w-4" />
-                        Invite Staff
+                        Staff Management
                     </CardTitle>
                     <CardDescription>
-                        Staff users have location-scoped access and cannot invite other users.
+                        Invite and manage staff users for your location. Staff have location-scoped read access.
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="space-y-2">
-                        <Label htmlFor="staff-email">Email</Label>
-                        <Input
-                            id="staff-email"
-                            type="email"
-                            placeholder="staff@clinic.com"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                    void handleInvite()
-                                }
-                            }}
-                            disabled={!location || inviting}
-                        />
+                    <div className="flex items-end gap-3">
+                        <div className="flex-1 space-y-2">
+                            <Label htmlFor="staff-email">Invite Staff</Label>
+                            <Input
+                                id="staff-email"
+                                type="email"
+                                placeholder="staff@clinic.com"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                        void handleInvite()
+                                    }
+                                }}
+                                disabled={!location || inviting}
+                            />
+                        </div>
+                        <Button onClick={handleInvite} disabled={!location || inviting || !email.trim()}>
+                            {inviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
+                            Send Invite
+                        </Button>
                     </div>
-                    <Button onClick={handleInvite} disabled={!location || inviting || !email.trim()}>
-                        {inviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
-                        Send Invite
-                    </Button>
+
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Email</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead className="text-right">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {staffUsers.map((row) => {
+                                const isSelf = row.id === user?.id
+                                const busy = actingUserId === row.id
+                                return (
+                                    <TableRow key={row.id}>
+                                        <TableCell className="font-medium">{row.email}</TableCell>
+                                        <TableCell>
+                                            {row.invite_status === "PENDING" ? (
+                                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-yellow-50 text-yellow-700 ring-yellow-600/20 dark:bg-yellow-900/20 dark:text-yellow-400 dark:ring-yellow-900/10">
+                                                    Pending
+                                                </span>
+                                            ) : row.is_active ? (
+                                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10">
+                                                    Active
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-gray-50 text-gray-600 ring-gray-500/10 dark:bg-gray-900/20 dark:text-gray-400 dark:ring-gray-700/10">
+                                                    Inactive
+                                                </span>
+                                            )}
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                disabled={busy || isSelf || !row.is_active}
+                                                onClick={() => handleDeactivateUser(row)}
+                                            >
+                                                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Deactivate"}
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                )
+                            })}
+                            {!staffUsers.length && !loading && (
+                                <TableRow>
+                                    <TableCell colSpan={3} className="py-10 text-center text-muted-foreground">
+                                        No staff users yet. Invite your first staff member above.
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                        </TableBody>
+                    </Table>
                 </CardContent>
             </Card>
         </div>

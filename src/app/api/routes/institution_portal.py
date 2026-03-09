@@ -712,6 +712,98 @@ async def reinvite_institution_user(
     return UserActionResponse(message=f"Reinvite sent to {old_email}", user_id=new_supabase_user_id)
 
 
+@router.get("/location/users", response_model=list[InstitutionUserRowResponse])
+async def list_location_users(
+    current_user: Annotated[User, Depends(get_current_location_admin)],
+):
+    """
+    Location admins: list STAFF users assigned to their location.
+    """
+    if not current_user.institution_id or not current_user.location_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment")
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+
+        users = (
+            await session.execute(
+                select(User).where(
+                    User.institution_id == current_user.institution_id,
+                    User.location_id == current_user.location_id,
+                    User.role == UserRole.STAFF.value,
+                )
+            )
+        ).scalars().all()
+
+        location = (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.id == current_user.location_id,
+                )
+            )
+        ).scalar_one_or_none()
+        location_name = location.name if location else None
+
+        return [
+            InstitutionUserRowResponse(
+                id=str(u.id),
+                email=u.email,
+                role=u.role,
+                is_active=u.is_active,
+                invite_status=u.invite_status,
+                institution_id=str(u.institution_id) if u.institution_id else None,
+                location_id=str(u.location_id) if u.location_id else None,
+                location_name=location_name,
+            )
+            for u in users
+        ]
+
+
+@router.post("/location/users/{user_id}/deactivate", response_model=UserActionResponse)
+async def deactivate_location_user(
+    user_id: str,
+    current_user: Annotated[User, Depends(get_current_location_admin)],
+):
+    """
+    Location admin: deactivate a STAFF user at their own location.
+    """
+    if not current_user.institution_id or not current_user.location_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment")
+    if str(current_user.id) == str(user_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate your own account")
+
+    async with get_db_session() as session:
+        target = (
+            await session.execute(
+                select(User).where(
+                    User.id == user_id,
+                    User.institution_id == current_user.institution_id,
+                    User.location_id == current_user.location_id,
+                    User.role == UserRole.STAFF.value,
+                )
+            )
+        ).scalar_one_or_none()
+        if not target:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff user not found at your location")
+
+        target.is_active = False
+
+    log_audit_background(
+        actor=current_user.id,
+        action=AuditAction.LOCATION_USER_DELETE,
+        target_resource=f"user:{user_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "institution_id": current_user.institution_id,
+            "location_id": current_user.location_id,
+            "deactivated_user_id": user_id,
+        },
+        institution_id=current_user.institution_id,
+    )
+    return UserActionResponse(message="Staff user deactivated", user_id=user_id)
+
+
 @router.post("/locations/{loc_slug}/invite-location-admin", status_code=status.HTTP_201_CREATED)
 async def invite_location_admin(
     loc_slug: str,

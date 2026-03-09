@@ -184,3 +184,12 @@ export async function deactivateInstitutionUser(userId: string): Promise<void> {
 export async function reinviteInstitutionUser(userId: string): Promise<void> {
     await api.post(`/institution/users/${userId}/reinvite`)
 }
+
+export async function listLocationUsers(): Promise<InstitutionUserRow[]> {
+    const { data } = await api.get<InstitutionUserRow[]>("/institution/location/users")
+    return data
+}
+
+export async function deactivateLocationUser(userId: string): Promise<void> {
+    await api.post(`/institution/location/users/${userId}/deactivate`)
+}
