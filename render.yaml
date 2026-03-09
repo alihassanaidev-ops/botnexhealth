@@ -5,8 +5,6 @@
 # Deploy by connecting your GitHub repo to Render or using render deploy.
 # =============================================================================
 
-version: "1"
-
 services:
   # Main API service
   - type: web
@@ -28,7 +26,7 @@ services:
     healthCheckPath: /livez
     
     # Auto-deploy on push
-    autoDeploy: true
+    autoDeployTrigger: commit
     
     # Environment variables (set in Render dashboard for secrets)
     envVars:
@@ -37,19 +35,33 @@ services:
         value: production
       - key: LOG_LEVEL
         value: info
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
       
       # Database (using your external Supabase)
       - key: DATABASE_URL
         sync: false  # Set manually in Render dashboard
+      - key: CELERY_BROKER_URL
+        sync: false  # Set to internal Key Value URL, e.g. redis://red-xxxx:6379
       
       # Secrets (set in Render dashboard - never in this file!)
       - key: NEXHEALTH_API_KEY
         sync: false
       - key: RETELL_API_SECRET
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: RESEND_REPLY_TO
+        sync: false
+      - key: RESEND_ALERT_RECIPIENTS
+        sync: false
       - key: ADMIN_API_KEY
         sync: false
       - key: ENCRYPTION_KEY
+        sync: false
+      - key: JWT_SECRET
         sync: false
       - key: SUPABASE_URL
         sync: false
@@ -59,8 +71,8 @@ services:
         sync: false
 
 
-  # Redis (Key Value Store)
-  - type: redis
+  # Key Value Store (Redis-compatible)
+  - type: keyvalue
     name: botnexhealth-redis
     region: oregon
     plan: starter
@@ -79,7 +91,7 @@ services:
     region: oregon
 
     # Command
-    startCommand: celery -A src.app.worker worker --loglevel=info
+    dockerCommand: celery -A src.app.worker worker --loglevel=info
     
     # Environment Variables
     envVars:
@@ -87,13 +99,12 @@ services:
         value: production
       - key: LOG_LEVEL
         value: info
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
       
-      # Connect to Redis (Key Value Store)
+      # Connect to Key Value Store (Redis-compatible)
       - key: CELERY_BROKER_URL
-        fromService:
-          type: redis
-          name: botnexhealth-redis
-          property: connectionString
+        sync: false  # Set to internal Key Value URL, e.g. redis://red-xxxx:6379
 
       # Inherit Secrets (Must match API service)
       - key: DATABASE_URL
@@ -102,9 +113,19 @@ services:
         sync: false
       - key: RETELL_API_SECRET
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: RESEND_REPLY_TO
+        sync: false
+      - key: RESEND_ALERT_RECIPIENTS
+        sync: false
       - key: ADMIN_API_KEY
         sync: false
       - key: ENCRYPTION_KEY
+        sync: false
+      - key: JWT_SECRET
         sync: false
       - key: SUPABASE_URL
         sync: false

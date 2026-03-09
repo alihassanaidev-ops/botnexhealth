@@ -263,7 +263,7 @@ async def handle_retell_webhook(
                 )
                 
                 # Call service to save to DB (analysis_dict is always a dict now)
-                await post_call_service.process_call_analyzed_event(
+                saved_call = await post_call_service.process_call_analyzed_event(
                     institution_id=institution.id,
                     webhook_call=mapped_call_data,
                     analysis=analysis_dict,
@@ -271,6 +271,28 @@ async def handle_retell_webhook(
                 
                 # Commit the transaction so contacts and calls are saved!
                 await session.commit()
+
+            # ── Email notification: enqueue after DB commit (durable via Celery) ──
+            try:
+                from src.app.tasks.notifications import enqueue_call_notification
+
+                enqueue_call_notification(
+                    call_id=saved_call.id,
+                    institution_id=institution.id,
+                    location_id=location.id if location else None,
+                    call_status=saved_call.call_status,
+                    call_tags_csv=saved_call.call_tags,
+                    analysis_snapshot={
+                        "custom_analysis_data": analysis_dict.get("custom_analysis_data") or {},
+                        "collected_dynamic_variables": analysis_dict.get("collected_dynamic_variables") or {},
+                    },
+                )
+            except Exception as email_enqueue_err:
+                logger.error(
+                    "Failed to enqueue call email notification: call=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    email_enqueue_err,
+                )
 
             # ── Auto-SMS: fire after commit (non-blocking) ────────────────
             # Use raw call_analysis (not scrubbed) so patient name is intact.
@@ -306,7 +328,7 @@ async def handle_retell_webhook(
                                 to_number=_patient_phone,
                                 body=_sms_body,
                                 institution_location_id=location.id,
-                                call_id=mapped_call_data.id if hasattr(mapped_call_data, "id") else None,
+                                call_id=saved_call.id,
                                 patient_contact_id=contact_id
                             )
                             await sms_session.commit()

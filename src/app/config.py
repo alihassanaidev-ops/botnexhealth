@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     # Retell AI settings
     retell_api_secret: str | None = None
 
+    # Resend (transactional email)
+    resend_api_key: str | None = None
+    resend_from_email: str | None = None
+    resend_reply_to: str | None = None
+    # Comma-separated fallback recipients for call alerts (optional)
+    resend_alert_recipients: str | None = None
+
+    # Celery
+    celery_broker_url: str | None = None
+
 
     # Twilio (SMS / phone numbers)
     twillio_sid: str | None = None          # Account SID (env: TWILLIO_SID)

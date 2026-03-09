@@ -19,6 +19,11 @@ _engine = None
 _session_factory = None
 
 
+def is_database_initialized() -> bool:
+    """Return True when the SQLAlchemy session factory has been initialized."""
+    return _session_factory is not None
+
+
 def init_database(database_url: str) -> None:
     """
     Initialize the database engine and session factory.
