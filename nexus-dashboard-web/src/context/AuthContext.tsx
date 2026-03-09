@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import axios from "axios";
 import api from "@/lib/api";
 import { User } from "@/types";
-import { supabase } from "@/lib/supabase";
+import { authBootstrapUrlSnapshot, supabase } from "@/lib/supabase";
 import { setToken, clearToken } from "@/lib/token-manager";
 import { toast } from "sonner";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -36,10 +36,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     useEffect(() => { locationRef.current = location; }, [location]);
     useEffect(() => { userRef.current = user; }, [user]);
 
-    const hasInviteOrRecoveryHash = useCallback((): boolean => {
-        const hash = window.location.hash || "";
-        return hash.includes("type=invite") || hash.includes("type=recovery");
+    const getAuthFlowType = useCallback((): string | null => {
+        const hash = window.location.hash || authBootstrapUrlSnapshot.hash || "";
+        const search = window.location.search || authBootstrapUrlSnapshot.search || "";
+
+        const hashParams = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+        const searchParams = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+
+        return hashParams.get("type") || searchParams.get("type");
     }, []);
+
+    const hasInviteOrRecoveryHash = useCallback((): boolean => {
+        const flowType = getAuthFlowType();
+        return flowType === "invite" || flowType === "recovery";
+    }, [getAuthFlowType]);
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -141,58 +151,79 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // ---- Session restore on mount + auth state changes ----
     useEffect(() => {
-        const isInviteOrRecovery = hasInviteOrRecoveryHash();
+        let cancelled = false;
 
-        // Initial session check
-        supabase.auth.getSession().then(async ({ data: { session } }) => {
-            if (session?.user) {
-                if (isInviteOrRecovery) {
-                    navigate("/set-password");
-                    setIsLoading(false);
-                } else {
-                    const ok = await completeSignInSingleFlight(session.access_token);
-                    if (!ok) {
-                        toast.error(lastAuthFailureRef.current || "Failed to load user profile. Please log in again.");
-                        await signOut();
+        const bootstrapSession = async () => {
+            const isInviteOrRecovery = hasInviteOrRecoveryHash();
+            try {
+                const { data: { session } } = await supabase.auth.getSession();
+                if (cancelled) return;
+
+                if (session?.user) {
+                    if (isInviteOrRecovery) {
+                        navigate("/set-password", { replace: true });
+                    } else {
+                        const ok = await completeSignInSingleFlight(session.access_token);
+                        if (!ok) {
+                            toast.error(lastAuthFailureRef.current || "Failed to load user profile. Please log in again.");
+                            await signOut();
+                        }
                     }
+                }
+            } catch (error: any) {
+                console.error("Initial auth bootstrap failed", error);
+                lastAuthFailureRef.current = "Failed to initialize session";
+                clearToken();
+                setUser(null);
+            } finally {
+                if (!cancelled) {
                     setIsLoading(false);
                 }
-            } else {
+            }
+        };
+
+        void bootstrapSession();
+
+        // Auth state change listener
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+            try {
+                if (event === 'PASSWORD_RECOVERY') {
+                    navigate("/set-password", { replace: true });
+                } else if (event === 'SIGNED_IN' && session?.user) {
+                    const inviteOrRecoveryNow = hasInviteOrRecoveryHash();
+                    if (inviteOrRecoveryNow) {
+                        if (locationRef.current.pathname !== "/set-password") {
+                            navigate("/set-password", { replace: true });
+                        }
+                    } else if (!userRef.current) {
+                        const ok = await completeSignInSingleFlight(session.access_token);
+                        if (ok) {
+                            const loc = locationRef.current;
+                            const from = (loc.state as Record<string, { pathname?: string }>)?.from?.pathname || "/";
+                            if (loc.pathname === "/login") {
+                                navigate(from, { replace: true });
+                            }
+                        } else {
+                            toast.error(lastAuthFailureRef.current || "Login failed. Please try again.");
+                            await signOut();
+                        }
+                    }
+                } else if (event === 'SIGNED_OUT') {
+                    clearToken();
+                    setUser(null);
+                    navigate("/login");
+                }
+            } catch (error) {
+                console.error("Auth state change handler failed", error);
+            } finally {
                 setIsLoading(false);
             }
         });
 
-        // Auth state change listener
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-            if (event === 'PASSWORD_RECOVERY') {
-                navigate("/set-password");
-            } else if (event === 'SIGNED_IN' && session?.user) {
-                const inviteOrRecoveryNow = hasInviteOrRecoveryHash();
-                if (inviteOrRecoveryNow) {
-                    if (locationRef.current.pathname !== "/set-password") {
-                        navigate("/set-password");
-                    }
-                } else if (!userRef.current) {
-                    const ok = await completeSignInSingleFlight(session.access_token);
-                    if (ok) {
-                        const loc = locationRef.current;
-                        const from = (loc.state as Record<string, { pathname?: string }>)?.from?.pathname || "/";
-                        if (loc.pathname === "/login") {
-                            navigate(from, { replace: true });
-                        }
-                    } else {
-                        toast.error(lastAuthFailureRef.current || "Login failed. Please try again.");
-                        await signOut();
-                    }
-                }
-            } else if (event === 'SIGNED_OUT') {
-                clearToken();
-                setUser(null);
-                navigate("/login");
-            }
-        });
-
-        return () => subscription.unsubscribe();
+        return () => {
+            cancelled = true;
+            subscription.unsubscribe();
+        };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [hasInviteOrRecoveryHash]);
 

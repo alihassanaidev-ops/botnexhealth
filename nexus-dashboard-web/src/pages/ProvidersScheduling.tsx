@@ -114,6 +114,8 @@ export default function ProvidersScheduling() {
         setCutoffTime(p?.same_day_cutoff_time ?? "")
     }, [selectedProviderId, providers])
 
+    const selectedProvider = providers.find((p) => p.source_id === selectedProviderId)
+
     const handleSync = async () => {
         if (!canManage) return
         setSyncing(true)
@@ -234,8 +236,6 @@ export default function ProvidersScheduling() {
             setSaving(false)
         }
     }
-
-    const selectedProvider = providers.find((p) => p.source_id === selectedProviderId)
 
     // Filter availabilities by selected appointment type
     const filteredAvailabilities = selectedApptTypeId === "all"
