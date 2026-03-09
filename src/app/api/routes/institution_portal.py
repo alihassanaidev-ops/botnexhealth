@@ -1169,7 +1169,7 @@ async def get_location_audit_logs(
 
     location_id = str(current_user.location_id)
     async with get_db_session() as session:
-        filter_expr = AuditLog.audit_metadata["location_id"].astext == location_id
+        filter_expr = AuditLog.audit_metadata["location_id"].as_string() == location_id
         count_result = await session.execute(
             select(func.count())
             .select_from(AuditLog)
