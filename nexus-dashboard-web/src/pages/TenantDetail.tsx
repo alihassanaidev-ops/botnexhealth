@@ -281,17 +281,15 @@ export default function InstitutionDetailPage() {
                                         <CardTitle>Admin User</CardTitle>
                                         <CardDescription>The primary admin user for this institution</CardDescription>
                                     </div>
-                                    {institution.user.invite_status === "PENDING" && (
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={handleReinvite}
-                                            disabled={reinviting}
-                                        >
-                                            {reinviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
-                                            Reinvite
-                                        </Button>
-                                    )}
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={handleReinvite}
+                                        disabled={reinviting}
+                                    >
+                                        {reinviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
+                                        Reinvite
+                                    </Button>
                                 </CardHeader>
                                 <CardContent>
                                     <dl className="grid grid-cols-2 gap-4 text-sm">
