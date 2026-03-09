@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { toast } from "sonner"
 
 const formSchema = z.object({
     email: z.string().email({ message: "Invalid email address" }),
@@ -21,8 +22,9 @@ const formSchema = z.object({
 })
 
 export default function Login() {
-    const { signInWithSupabase } = useAuth()
+    const { signInWithSupabase, requestPasswordReset } = useAuth()
     const [loading, setLoading] = useState(false)
+    const [resetLoading, setResetLoading] = useState(false)
 
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
@@ -41,6 +43,25 @@ export default function Login() {
             // Error handled in AuthContext with toast
         } finally {
             setLoading(false)
+        }
+    }
+
+    async function onForgotPassword() {
+        const email = form.getValues("email").trim();
+        const valid = await form.trigger("email");
+        if (!valid || !email) return;
+
+        setResetLoading(true);
+        try {
+            await requestPasswordReset(email);
+            // Generic success message avoids account enumeration.
+            form.setValue("password", "");
+            toast.success("If an account exists, a password reset email has been sent.");
+        } catch (error: any) {
+            // Keep surface minimal - Supabase message is usually actionable.
+            form.setError("email", { message: error?.message || "Failed to send reset email" });
+        } finally {
+            setResetLoading(false);
         }
     }
 
@@ -84,6 +105,15 @@ export default function Login() {
                             />
                             <Button type="submit" className="w-full" disabled={loading}>
                                 {loading ? "Signing in..." : "Sign in"}
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                className="w-full"
+                                disabled={resetLoading}
+                                onClick={onForgotPassword}
+                            >
+                                {resetLoading ? "Sending reset link..." : "Forgot password?"}
                             </Button>
                         </form>
                     </Form>

@@ -19,6 +19,7 @@ interface AuthContextType {
     user: User | null;
     isLoading: boolean;
     signInWithSupabase: (email: string, password: string) => Promise<void>;
+    requestPasswordReset: (email: string) => Promise<void>;
     signOut: () => Promise<void>;
     updatePassword: (password: string) => Promise<void>;
 }
@@ -305,6 +306,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // onAuthStateChange handles the rest (token exchange, navigate)
     };
 
+    // ---- Request password reset (forgot password flow) ----
+    const requestPasswordReset = async (email: string) => {
+        const normalizedEmail = email.trim().toLowerCase();
+        if (!normalizedEmail) {
+            throw new Error("Email is required");
+        }
+
+        const redirectTo = `${window.location.origin}/set-password`;
+        const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+            redirectTo,
+        });
+        if (error) {
+            throw error;
+        }
+    };
+
     // ---- Update password (invite / recovery flow) ----
     const updatePassword = async (password: string) => {
         const { error } = await supabase.auth.updateUser({ password });
@@ -332,7 +349,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     return (
-        <AuthContext.Provider value={{ user, isLoading, signInWithSupabase, signOut, updatePassword }}>
+        <AuthContext.Provider value={{ user, isLoading, signInWithSupabase, requestPasswordReset, signOut, updatePassword }}>
             {children}
         </AuthContext.Provider>
     );
