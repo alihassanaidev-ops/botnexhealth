@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.app.database import get_db_session
 from src.app.api.deps import get_current_admin
+from src.app.config import settings
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.user import User, UserRole, InviteStatus
 from src.app.services.audit_decorator import audit
@@ -501,6 +502,15 @@ class ResendInviteRequest(BaseModel):
     email: str = Field(..., description="Email of the user to re-invite")
 
 
+class TestCallNotificationRequest(BaseModel):
+    to_email: str = Field(..., description="Recipient email for the test notification")
+    urgent: bool = Field(False, description="Send with URGENT emergency/complaint styling")
+    tag: str | None = Field(
+        default=None,
+        description="Optional normalized call tag (example: appointment_booked, emergency, complaint)",
+    )
+
+
 @router.post("/{slug}/reinvite", status_code=status.HTTP_200_OK)
 async def reinvite_institution_user(
     slug: str,
@@ -585,6 +595,61 @@ async def reinvite_institution_user(
             )
 
     return {"message": f"Invite re-sent to {data.email}"}
+
+
+@router.post("/{slug}/test-call-notification", status_code=status.HTTP_202_ACCEPTED)
+async def send_test_call_notification(
+    slug: str,
+    data: TestCallNotificationRequest,
+    current_admin: User = Depends(get_current_admin),
+):
+    """
+    Queue a synthetic call-notification email for testing from the Super Admin panel.
+
+    This does not require any real Call records.
+    """
+    to_email = (data.to_email or "").strip().lower()
+    if not to_email or "@" not in to_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Valid recipient email is required",
+        )
+
+    if not settings.celery_broker_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CELERY_BROKER_URL is not configured",
+        )
+    if not settings.resend_api_key or not settings.resend_from_email:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Resend is not configured (RESEND_API_KEY / RESEND_FROM_EMAIL)",
+        )
+
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(slug, include_inactive=True)
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+    from src.app.tasks.notifications import enqueue_test_call_notification
+
+    enqueue_test_call_notification(
+        recipients=[to_email],
+        institution_slug=institution.slug,
+        requested_by=current_admin.email,
+        urgent=data.urgent,
+        tag=data.tag,
+    )
+
+    return {
+        "message": f"Test notification queued to {to_email}",
+        "institution": institution.slug,
+        "urgent": data.urgent,
+    }
 
 
 # =============================================================================

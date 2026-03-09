@@ -52,6 +52,9 @@ export default function InstitutionDetailPage() {
     const [editSheetOpen, setEditSheetOpen] = useState(false);
     const [activeTab, setActiveTab] = useState("overview");
     const [reinviting, setReinviting] = useState(false);
+    const [testEmail, setTestEmail] = useState("");
+    const [testUrgent, setTestUrgent] = useState(false);
+    const [sendingTestEmail, setSendingTestEmail] = useState(false);
 
     const fetchInstitution = useCallback(async () => {
         setIsLoading(true);
@@ -93,6 +96,12 @@ export default function InstitutionDetailPage() {
         }
     }, [institution, form]);
 
+    useEffect(() => {
+        if (institution?.user?.email && !testEmail) {
+            setTestEmail(institution.user.email);
+        }
+    }, [institution?.user?.email, testEmail]);
+
     async function onOverviewSubmit(values: OverviewFormValues) {
         if (!institution) return;
 
@@ -127,6 +136,29 @@ export default function InstitutionDetailPage() {
             toast.error(error?.response?.data?.detail || "Failed to reinvite");
         } finally {
             setReinviting(false);
+        }
+    }
+
+    async function handleSendTestEmail() {
+        if (!slug) return;
+        const email = testEmail.trim();
+        if (!email) {
+            toast.error("Please enter a recipient email");
+            return;
+        }
+
+        setSendingTestEmail(true);
+        try {
+            await api.post(`/admin/institutions/${slug}/test-call-notification`, {
+                to_email: email,
+                urgent: testUrgent,
+                tag: testUrgent ? "emergency" : "appointment_booked",
+            });
+            toast.success(`Test email queued to ${email}`);
+        } catch (error: any) {
+            toast.error(error?.response?.data?.detail || "Failed to queue test email");
+        } finally {
+            setSendingTestEmail(false);
         }
     }
 
@@ -335,6 +367,43 @@ export default function InstitutionDetailPage() {
                                 </CardContent>
                             </Card>
                         )}
+
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Email Notification Test</CardTitle>
+                                <CardDescription>
+                                    Send a synthetic call notification email without waiting for a real call.
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div className="space-y-1.5">
+                                    <label className="text-sm text-muted-foreground">Recipient Email</label>
+                                    <Input
+                                        type="email"
+                                        value={testEmail}
+                                        onChange={(e) => setTestEmail(e.target.value)}
+                                        placeholder="you@example.com"
+                                    />
+                                </div>
+                                <div className="flex items-center justify-between rounded-lg border p-3">
+                                    <div>
+                                        <p className="text-sm font-medium">Urgent mode</p>
+                                        <p className="text-xs text-muted-foreground">
+                                            Adds the URGENT header/banner (emergency/complaint simulation).
+                                        </p>
+                                    </div>
+                                    <Switch checked={testUrgent} onCheckedChange={setTestUrgent} />
+                                </div>
+                                <Button onClick={handleSendTestEmail} disabled={sendingTestEmail || !testEmail.trim()}>
+                                    {sendingTestEmail ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <MailPlus className="mr-2 h-4 w-4" />
+                                    )}
+                                    Send Test Email
+                                </Button>
+                            </CardContent>
+                        </Card>
                     </div>
 
                     {/* Integrations Section */}

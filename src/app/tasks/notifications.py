@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
@@ -287,3 +288,82 @@ def enqueue_call_notification(
         queue=queue_name,
     )
 
+
+@celery_app.task(
+    name="src.app.tasks.notifications.send_test_call_notification",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    retry_kwargs={"max_retries": 3},
+)
+def send_test_call_notification(
+    self,  # noqa: ARG001 - required for bind=True retries
+    recipients: list[str],
+    institution_slug: str,
+    requested_by: str | None = None,
+    urgent: bool = False,
+    tag: str | None = None,
+    idempotency_key: str | None = None,
+) -> None:
+    async def _run() -> None:
+        sender = EmailNotificationService()
+        normalized_tag = ((tag or "").strip().lower().replace(" ", "_")) or (
+            CallStatus.EMERGENCY.value if urgent else CallStatus.APPOINTMENT_BOOKED.value
+        )
+        payload = {
+            "location_name": institution_slug,
+            "caller_phone_masked": "******4321",
+            "duration_seconds": 135,
+            "primary_tag": normalized_tag,
+            "tags": [normalized_tag],
+            "summary": (
+                "TEST NOTIFICATION: This is a synthetic call summary generated from the Super Admin panel."
+            ),
+            "is_urgent": urgent,
+            "appointment_patient_redacted": "J*** D***",
+            "appointment_datetime": "2026-03-10 2:30 PM",
+            "appointment_provider": "Dr. Test Provider",
+            "appointment_service": "Consultation",
+        }
+        await sender.send_call_created_notification(
+            recipients=recipients,
+            payload=payload,
+            idempotency_key=idempotency_key or f"test-call:{institution_slug}:{uuid4()}",
+        )
+        logger.info(
+            "Test call notification sent: institution=%s recipients=%d urgent=%s requested_by=%s",
+            institution_slug,
+            len(recipients),
+            urgent,
+            requested_by,
+        )
+
+    asyncio.run(_run())
+
+
+def enqueue_test_call_notification(
+    *,
+    recipients: list[str],
+    institution_slug: str,
+    requested_by: str | None,
+    urgent: bool,
+    tag: str | None = None,
+) -> None:
+    """Queue a synthetic test notification email."""
+    if not settings.celery_broker_url:
+        raise RuntimeError("CELERY_BROKER_URL is not set")
+
+    queue_name = "notifications_high" if urgent else "notifications_default"
+    send_test_call_notification.apply_async(
+        kwargs={
+            "recipients": recipients,
+            "institution_slug": institution_slug,
+            "requested_by": requested_by,
+            "urgent": urgent,
+            "tag": tag,
+            "idempotency_key": f"test-call-notification:{institution_slug}:{uuid4()}",
+        },
+        queue=queue_name,
+    )
