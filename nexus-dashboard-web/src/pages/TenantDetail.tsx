@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Pencil } from "lucide-react";
+import { ArrowLeft, Loader2, MailPlus, Pencil } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -51,6 +51,7 @@ export default function InstitutionDetailPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [editSheetOpen, setEditSheetOpen] = useState(false);
     const [activeTab, setActiveTab] = useState("overview");
+    const [reinviting, setReinviting] = useState(false);
 
     const fetchInstitution = useCallback(async () => {
         setIsLoading(true);
@@ -111,6 +112,21 @@ export default function InstitutionDetailPage() {
             fetchInstitution();
         } catch (error: any) {
             toast.error(error.response?.data?.detail || "Failed to update institution");
+        }
+    }
+
+    async function handleReinvite() {
+        if (!institution?.user || !slug) return;
+        if (!window.confirm(`Reinvite ${institution.user.email}? This will send a fresh invite email.`)) return;
+        setReinviting(true);
+        try {
+            await api.post(`/admin/institutions/${slug}/reinvite`, { email: institution.user.email });
+            toast.success(`Reinvite sent to ${institution.user.email}`);
+            fetchInstitution();
+        } catch (error: any) {
+            toast.error(error?.response?.data?.detail || "Failed to reinvite");
+        } finally {
+            setReinviting(false);
         }
     }
 
@@ -260,9 +276,22 @@ export default function InstitutionDetailPage() {
                         {/* Admin User */}
                         {institution.user && (
                             <Card>
-                                <CardHeader>
-                                    <CardTitle>Admin User</CardTitle>
-                                    <CardDescription>The primary admin user for this institution</CardDescription>
+                                <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                                    <div>
+                                        <CardTitle>Admin User</CardTitle>
+                                        <CardDescription>The primary admin user for this institution</CardDescription>
+                                    </div>
+                                    {institution.user.invite_status === "PENDING" && (
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={handleReinvite}
+                                            disabled={reinviting}
+                                        >
+                                            {reinviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
+                                            Reinvite
+                                        </Button>
+                                    )}
                                 </CardHeader>
                                 <CardContent>
                                     <dl className="grid grid-cols-2 gap-4 text-sm">

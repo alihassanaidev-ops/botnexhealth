@@ -573,6 +573,7 @@ async def reinvite_institution_user(
                 email=data.email,
                 role=old_role,
                 institution_id=old_institution_id,
+                invite_status=InviteStatus.PENDING.value,
                 is_active=old_is_active,
             )
             session.add(new_user)
@@ -991,6 +992,7 @@ async def invite_location_user(
             role=UserRole.LOCATION_ADMIN.value,
             institution_id=institution.id,
             location_id=location.id,
+            invite_status=InviteStatus.PENDING.value,
             is_active=True,
         )
         session.add(user)
@@ -1126,6 +1128,7 @@ async def reinvite_location_user(
                 role=old_role,
                 institution_id=old_institution_id,
                 location_id=old_location_id,
+                invite_status=InviteStatus.PENDING.value,
                 is_active=old_is_active,
             )
             session.add(new_user)
