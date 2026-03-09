@@ -140,6 +140,8 @@ export interface CachedProvider {
     last_name: string | null;
     specialty: string | null;
     is_active: boolean;
+    buffer_minutes: number;
+    same_day_cutoff_time: string | null;
     synced_at: string | null;
 }
 

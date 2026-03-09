@@ -170,6 +170,48 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         all_raw = await fetch_all_pages(fetch, per_page=50, max_items=200)
         return [mappers.to_provider(p) for p in all_raw]
 
+    # ── Appointment Queries ─────────────────────────────────────────────
+
+    async def has_provider_appointments_on_date(
+        self, provider_id: str, date_str: str
+    ) -> bool:
+        """Check NexHealth for any booked appointments for a provider on a date."""
+        try:
+            # Scan pages until we find at least one active appointment.
+            # We keep this bounded for latency/cost safety.
+            per_page = 50
+            for page in range(1, 11):
+                params = self._default_params()
+                params["start_date"] = date_str
+                params["end_date"] = date_str
+                params["provider_id"] = _strip(provider_id)
+                params["page"] = page
+                params["per_page"] = per_page
+
+                raw = await handle_nexhealth_request(
+                    self._client, "GET", "/appointments", params=params
+                )
+                data = raw.get("data", [])
+                if not isinstance(data, list):
+                    logger.warning(
+                        f"Unexpected appointments payload type while checking provider schedule: {type(data)}"
+                    )
+                    return True
+
+                for appt in data:
+                    cancelled = bool(appt.get("cancelled", False) or appt.get("canceled", False))
+                    if not cancelled:
+                        return True
+
+                # No more pages to scan.
+                if len(data) < per_page:
+                    break
+
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to check provider appointments: {e}")
+            return True  # safe fallback — don't hide slots
+
     # ── Operatories ──────────────────────────────────────────────────────
 
     async def list_operatories(self) -> list[UniversalOperatory]:

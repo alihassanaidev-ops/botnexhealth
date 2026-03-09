@@ -320,7 +320,11 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
     resource=lambda args: f"slots:{args.get('start_date')}",
 )
 async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
-    """Find available appointment slots."""
+    """Find available appointment slots.
+
+    Supports optional ``buffer_minutes`` — minimum lead-time from now.
+    Slots starting before now + buffer are excluded.
+    """
     start_date = args.get("start_date")
     if not start_date:
         return {"error": "start_date is required."}
@@ -338,6 +342,65 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             appointment_type_id=args.get("appointment_type_id"),
             operatory_ids=args.get("operatory_ids"),
         )
+
+        # Apply provider-level filters (buffer + time restriction)
+        try:
+            buffer_minutes = max(0, int(args.get("buffer_minutes", 0)))
+        except (TypeError, ValueError):
+            return {"error": "buffer_minutes must be an integer >= 0."}
+
+        normalized_provider_id = (
+            str(args["provider_id"]).removeprefix("nh-")
+            if args.get("provider_id")
+            else None
+        )
+        provider_source_id = (
+            f"nh-{normalized_provider_id}" if normalized_provider_id else None
+        )
+        provider_cutoff = None
+
+        if normalized_provider_id and ctx.location:
+            from sqlalchemy import select as sa_select
+            from src.app.database import get_db_session
+            from src.app.models.institution_provider import InstitutionProvider
+            async with get_db_session() as session:
+                prov = (await session.execute(
+                    sa_select(
+                        InstitutionProvider.buffer_minutes,
+                        InstitutionProvider.same_day_cutoff_time,
+                    ).where(
+                        InstitutionProvider.source_id == provider_source_id,
+                        InstitutionProvider.location_id == str(ctx.location.id),
+                    )
+                )).one_or_none()
+                if prov:
+                    from src.app.services.slot_filter import merge_buffer_minutes
+                    provider_buffer = max(0, int(prov.buffer_minutes or 0))
+                    buffer_minutes = merge_buffer_minutes(buffer_minutes, provider_buffer)
+                    provider_cutoff = prov.same_day_cutoff_time
+
+        if buffer_minutes > 0:
+            from src.app.services.slot_filter import apply_buffer
+            slots = apply_buffer(slots, buffer_minutes)
+
+        # Apply same-day cutoff time restriction
+        if provider_cutoff and normalized_provider_id and ctx.location:
+            from src.app.services.slot_filter import (
+                apply_time_restriction,
+                get_local_date_string,
+            )
+            tz_str = ctx.location.timezone or "UTC"
+            today_str = get_local_date_string(tz_str)
+            has_appts = await ctx.adapter.has_provider_appointments_on_date(
+                normalized_provider_id, today_str
+            )
+            slots = apply_time_restriction(
+                slots=slots,
+                cutoff_time=provider_cutoff,
+                has_appointments_today=has_appts,
+                timezone=tz_str,
+            )
+
         return {
             "slots_count": len(slots),
             "slots": [s.model_dump() for s in slots],

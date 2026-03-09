@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { toast } from "sonner"
 import { RefreshCcw, AlertTriangle, Clock, Calendar } from "lucide-react"
 import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
+import { Input } from "@/components/ui/input"
 import {
     listProviders,
     listAvailabilities,
@@ -16,6 +17,7 @@ import {
     listOperatories,
     createAvailability,
     updateAvailability,
+    updateProvider,
     triggerSync,
 } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
@@ -50,6 +52,9 @@ export default function ProvidersScheduling() {
     })
 
     const [saving, setSaving] = useState(false)
+    const [bufferMinutes, setBufferMinutes] = useState<number>(0)
+    const [cutoffTime, setCutoffTime] = useState<string>("")
+    const [savingSettings, setSavingSettings] = useState(false)
 
     // Load providers + appointment types once on mount
     const fetchData = useCallback(async () => {
@@ -101,10 +106,13 @@ export default function ProvidersScheduling() {
         fetchAvailabilities()
     }, [fetchAvailabilities])
 
-    // Reset appointment type filter when provider changes
+    // Reset appointment type filter + sync settings when provider changes
     useEffect(() => {
         setSelectedApptTypeId("all")
-    }, [selectedProviderId])
+        const p = providers.find((pr) => pr.source_id === selectedProviderId)
+        setBufferMinutes(p?.buffer_minutes ?? 0)
+        setCutoffTime(p?.same_day_cutoff_time ?? "")
+    }, [selectedProviderId, providers])
 
     const handleSync = async () => {
         if (!canManage) return
@@ -127,6 +135,28 @@ export default function ProvidersScheduling() {
             setSyncing(false)
         }
     }
+
+    const handleSaveSettings = async () => {
+        if (!canManage || !selectedProvider) return
+        setSavingSettings(true)
+        try {
+            await updateProvider(selectedProvider.id, {
+                buffer_minutes: bufferMinutes,
+                same_day_cutoff_time: cutoffTime || null,
+            })
+            toast.success("Provider settings saved")
+            await fetchData()
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : "Failed to update settings"
+            toast.error(message)
+        } finally {
+            setSavingSettings(false)
+        }
+    }
+
+    const settingsChanged =
+        bufferMinutes !== (selectedProvider?.buffer_minutes ?? 0) ||
+        cutoffTime !== (selectedProvider?.same_day_cutoff_time ?? "")
 
     const openEditDialog = (av: CachedAvailability) => {
         setEditTarget(av)
@@ -315,6 +345,77 @@ export default function ProvidersScheduling() {
                             </Select>
                         </div>
                     </div>
+
+                    {/* Provider Scheduling Rules */}
+                    <Card>
+                        <CardHeader className="pb-3">
+                            <CardTitle className="text-base">Scheduling Rules</CardTitle>
+                            <CardDescription>
+                                Configure booking restrictions for this provider.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            {/* Buffer Time */}
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium">Booking Buffer Time</label>
+                                <p className="text-xs text-muted-foreground">
+                                    Minimum lead time before a slot can be booked. Slots within this window from now are hidden.
+                                </p>
+                                <div className="flex items-center gap-3 pt-1">
+                                    <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        max={1440}
+                                        value={bufferMinutes}
+                                        onChange={(e) => setBufferMinutes(Math.max(0, Math.min(1440, Number(e.target.value) || 0)))}
+                                        className="w-24"
+                                        disabled={!canManage}
+                                    />
+                                    <span className="text-sm text-muted-foreground">minutes</span>
+                                </div>
+                            </div>
+
+                            {/* Same-Day Cutoff */}
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium">Same-Day Cutoff Time</label>
+                                <p className="text-xs text-muted-foreground">
+                                    If no appointments are booked for this provider by this time, all remaining same-day slots are hidden.
+                                    Leave empty to disable.
+                                </p>
+                                <div className="flex items-center gap-3 pt-1">
+                                    <Calendar className="h-4 w-4 text-muted-foreground shrink-0" />
+                                    <input
+                                        type="time"
+                                        value={cutoffTime}
+                                        onChange={(e) => setCutoffTime(e.target.value)}
+                                        className="flex h-10 w-32 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                                        disabled={!canManage}
+                                    />
+                                    {cutoffTime && canManage && (
+                                        <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => setCutoffTime("")}
+                                            className="text-muted-foreground"
+                                        >
+                                            Clear
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {canManage && (
+                                <Button
+                                    size="sm"
+                                    onClick={handleSaveSettings}
+                                    disabled={savingSettings || !settingsChanged}
+                                >
+                                    {savingSettings ? "Saving..." : "Save Settings"}
+                                </Button>
+                            )}
+                        </CardContent>
+                    </Card>
 
                     <Card>
                         <CardHeader>

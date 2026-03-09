@@ -87,6 +87,18 @@ class PMSAdapter(ABC):
     ) -> BookingResult:
         ...
 
+    # --- Appointment Queries ---
+
+    async def has_provider_appointments_on_date(
+        self, provider_id: str, date_str: str
+    ) -> bool:
+        """Check if a provider has any booked appointments on a given date.
+
+        Default returns True (assume appointments exist) so the cutoff filter
+        is only applied when the PMS adapter can confirm zero appointments.
+        """
+        return True
+
     # --- Locations ---
 
     @abstractmethod

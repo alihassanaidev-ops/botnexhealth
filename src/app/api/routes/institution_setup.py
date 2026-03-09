@@ -111,9 +111,26 @@ class CachedProviderResponse(BaseModel):
     last_name: str | None = None
     specialty: str | None = None
     is_active: bool = True
+    buffer_minutes: int = 0
+    same_day_cutoff_time: str | None = None
     synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_provider(cls, p: Any) -> "CachedProviderResponse":
+        return cls(
+            id=str(p.id),
+            source_id=p.source_id,
+            name=p.name,
+            first_name=p.first_name,
+            last_name=p.last_name,
+            specialty=p.specialty,
+            is_active=p.is_active,
+            buffer_minutes=p.buffer_minutes,
+            same_day_cutoff_time=p.same_day_cutoff_time.strftime("%H:%M") if p.same_day_cutoff_time else None,
+            synced_at=p.synced_at,
+        )
 
 
 class CachedAppointmentTypeResponse(BaseModel):
@@ -299,7 +316,57 @@ async def list_providers(
             )
             .order_by(InstitutionProvider.name)
         )
-        return [CachedProviderResponse.model_validate(p) for p in result.scalars().all()]
+        return [CachedProviderResponse.from_provider(p) for p in result.scalars().all()]
+
+
+class UpdateProviderRequest(BaseModel):
+    buffer_minutes: int | None = None
+    same_day_cutoff_time: str | None = None  # "HH:MM" or null to clear
+
+
+@router.patch("/providers/{provider_id}", response_model=CachedProviderResponse)
+async def update_provider(
+    provider_id: str,
+    req: UpdateProviderRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
+):
+    """Update provider settings (buffer_minutes, same_day_cutoff_time)."""
+    from datetime import datetime
+
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        result = await session.execute(
+            select(InstitutionProvider).where(
+                InstitutionProvider.id == provider_id,
+                InstitutionProvider.institution_id == institution.id,
+                InstitutionProvider.location_id == location.id,
+            )
+        )
+        provider = result.scalar_one_or_none()
+        if not provider:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Provider not found")
+
+        if "buffer_minutes" in req.model_fields_set and req.buffer_minutes is not None:
+            if req.buffer_minutes < 0 or req.buffer_minutes > 1440:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "buffer_minutes must be 0–1440")
+            provider.buffer_minutes = req.buffer_minutes
+
+        if "same_day_cutoff_time" in req.model_fields_set:
+            if req.same_day_cutoff_time in (None, ""):
+                provider.same_day_cutoff_time = None
+            else:
+                try:
+                    # Strict HH:MM format only.
+                    provider.same_day_cutoff_time = datetime.strptime(
+                        req.same_day_cutoff_time, "%H:%M"
+                    ).time()
+                except ValueError:
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "same_day_cutoff_time must be HH:MM format")
+
+        await session.flush()
+        await session.refresh(provider)
+        return CachedProviderResponse.from_provider(provider)
 
 
 # ── Appointment Types (cached + CRUD via PMS) ────────────────────────────

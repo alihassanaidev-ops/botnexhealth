@@ -44,6 +44,18 @@ export async function listProviders(locationId?: string): Promise<CachedProvider
     return data;
 }
 
+export async function updateProvider(
+    providerId: string,
+    payload: { buffer_minutes?: number; same_day_cutoff_time?: string | null },
+    locationId?: string
+): Promise<CachedProvider> {
+    const { data } = await api.patch<CachedProvider>(
+        `${BASE}/providers/${providerId}${qs(locationId)}`,
+        payload
+    );
+    return data;
+}
+
 // ── Appointment Types ───────────────────────────────────────────────────
 
 export async function listAppointmentTypes(locationId?: string): Promise<CachedAppointmentType[]> {
