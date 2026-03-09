@@ -14,7 +14,7 @@ def _build_celery_app() -> Celery:
     app = Celery(
         "nex_health",
         broker=broker_url,
-        include=["src.app.tasks.notifications"],
+        include=["src.app.tasks.notifications", "src.app.tasks.sms"],
     )
 
     app.conf.update(
@@ -39,4 +39,3 @@ celery_app = _build_celery_app()
 
 # Keep `app` alias so `celery -A src.app.worker worker ...` works.
 app = celery_app
-

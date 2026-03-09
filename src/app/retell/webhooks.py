@@ -294,7 +294,7 @@ async def handle_retell_webhook(
                     email_enqueue_err,
                 )
 
-            # ── Auto-SMS: fire after commit (non-blocking) ────────────────
+            # ── Auto-SMS: enqueue after commit (durable via Celery) ────────
             # Use raw call_analysis (not scrubbed) so patient name is intact.
             _raw_analysis = event.call.call_analysis
             _sms_body: str | None = (
@@ -309,38 +309,23 @@ async def handle_retell_webhook(
             ) or mapped_call_data.from_number
 
             if _sms_body and _patient_phone and location and location.twilio_from_number:
-                import asyncio
-                from src.app.database import get_db_session
-                from src.app.services.sms_service import SmsService
-                
-                async def _send_auto_sms():
-                    try:
-                        # Find the contact related to this call if any
-                        contact_id = None
-                        if getattr(mapped_call_data, "contact_id", None):
-                             # Depending on how PostCallService assigns Contact IDs
-                             contact_id = getattr(mapped_call_data, "contact_id")
-                             
-                        async with get_db_session() as sms_session:
-                            sms_service = SmsService(sms_session)
-                            await sms_service.send_sms(
-                                from_number=location.twilio_from_number, # type: ignore
-                                to_number=_patient_phone,
-                                body=_sms_body,
-                                institution_location_id=location.id,
-                                call_id=saved_call.id,
-                                patient_contact_id=contact_id
-                            )
-                            await sms_session.commit()
-                    except Exception as _sms_err:
-                         logger.error(
-                             "Auto-SMS background task failed: call=%s error=%s",
-                             hash_for_logging(event.call.call_id),
-                             _sms_err,
-                         )
-                
-                # Fire and forget without blocking webhook response
-                asyncio.create_task(_send_auto_sms())
+                try:
+                    from src.app.tasks.sms import enqueue_auto_sms
+
+                    enqueue_auto_sms(
+                        from_number=location.twilio_from_number,  # type: ignore[arg-type]
+                        to_number=_patient_phone,
+                        body=_sms_body,
+                        institution_location_id=location.id,
+                        patient_contact_id=saved_call.contact_id,
+                        call_id=saved_call.id,
+                    )
+                except Exception as sms_enqueue_err:
+                    logger.error(
+                        "Failed to enqueue auto-SMS: call=%s error=%s",
+                        hash_for_logging(event.call.call_id),
+                        sms_enqueue_err,
+                    )
 
             elif location and location.twilio_from_number and not _sms_body:
                 logger.debug(
