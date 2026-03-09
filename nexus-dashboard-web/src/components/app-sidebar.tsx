@@ -30,6 +30,7 @@ import {
     Armchair,
     LayoutDashboard,
     Phone,
+    Shield,
     ShieldCheck,
     MessageSquare,
     Moon,
@@ -139,6 +140,11 @@ const navSetup: NavItemDef[] = [
         title: "Operatories",
         url: "/setup/operatories",
         icon: Armchair,
+    },
+    {
+        title: "Insurance Plans",
+        url: "/setup/insurance-plans",
+        icon: Shield,
     },
     {
         title: "Audit Logs",

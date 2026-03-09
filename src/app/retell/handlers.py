@@ -528,6 +528,59 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": f"Failed to list providers: {str(e)}"}
 
 
+@register_function("list_insurance_plans")
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda args: "insurance_plans",
+)
+async def list_insurance_plans_handler(args: dict[str, Any]) -> dict[str, Any]:
+    """List accepted insurance plans for this location."""
+    try:
+        ctx = await _resolve_context()
+    except ValueError as e:
+        return {"error": str(e)}
+
+    if not ctx.location:
+        return {"error": "No location resolved for this agent."}
+
+    from sqlalchemy import select
+    from src.app.database import get_db_session
+    from src.app.models.insurance_plan import InsurancePlan
+
+    try:
+        async with get_db_session() as session:
+            plans = (
+                await session.execute(
+                    select(InsurancePlan).where(
+                        InsurancePlan.location_id == str(ctx.location.id),
+                        InsurancePlan.institution_id == str(ctx.institution.id),
+                        InsurancePlan.is_active == True,
+                    ).order_by(InsurancePlan.name)
+                )
+            ).scalars().all()
+
+            simplified = [
+                {"name": p.name, "description": p.description or ""}
+                for p in plans
+            ]
+
+            if not simplified:
+                return {
+                    "count": 0,
+                    "insurance_plans": [],
+                    "message": "This location has not listed any accepted insurance plans yet. Please ask the caller to contact the office for insurance verification.",
+                }
+
+            return {
+                "count": len(simplified),
+                "insurance_plans": simplified,
+                "message": f"We accept {len(simplified)} insurance plan(s): {', '.join(p['name'] for p in simplified)}.",
+            }
+    except Exception as e:
+        logger.error(f"Failed to list insurance plans: {e}")
+        return {"error": f"Failed to retrieve insurance plans: {str(e)}"}
+
+
 @register_function("list_operatories")
 async def list_operatories(args: dict[str, Any]) -> dict[str, Any]:
     """List operatories (chairs/rooms) at the practice."""

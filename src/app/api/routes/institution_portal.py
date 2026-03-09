@@ -15,6 +15,7 @@ from sqlalchemy import func, select, delete
 
 from src.app.api.deps import (
     get_current_institution_admin,
+    get_current_institution_or_location_admin,
     get_current_institution_or_location_user,
     get_current_location_admin,
 )
@@ -22,6 +23,7 @@ from src.app.api.models import AuditLogPaginatedResponse, AuditLogResponse
 from src.app.database import get_db_session
 from src.app.models.user import User, UserRole, InviteStatus
 from src.app.models.audit_log import AuditLog
+from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.services.institution_service import InstitutionService
 from src.app.services.supabase_service import SupabaseService
@@ -1205,4 +1207,256 @@ async def get_location_audit_logs(
             page=page,
             size=size,
             pages=pages,
+        )
+
+
+# =============================================================================
+# Insurance Plans
+# =============================================================================
+
+
+class InsurancePlanRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=1000)
+
+
+class InsurancePlanResponse(BaseModel):
+    id: str
+    location_id: str
+    name: str
+    description: str | None
+    is_active: bool
+
+
+@router.get("/locations/{loc_slug}/insurance-plans", response_model=list[InsurancePlanResponse])
+async def list_insurance_plans(
+    loc_slug: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+):
+    """List insurance plans for a location. All institution-scoped roles can view."""
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+
+        location = (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.slug == loc_slug,
+                    InstitutionLocation.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not location:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+
+        if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+            if str(location.id) != str(current_user.location_id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this location")
+
+        plans = (
+            await session.execute(
+                select(InsurancePlan).where(
+                    InsurancePlan.location_id == str(location.id),
+                    InsurancePlan.institution_id == current_user.institution_id,
+                    InsurancePlan.is_active == True,
+                ).order_by(InsurancePlan.name)
+            )
+        ).scalars().all()
+
+        return [
+            InsurancePlanResponse(
+                id=str(p.id),
+                location_id=str(p.location_id),
+                name=p.name,
+                description=p.description,
+                is_active=p.is_active,
+            )
+            for p in plans
+        ]
+
+
+@router.post(
+    "/locations/{loc_slug}/insurance-plans",
+    response_model=InsurancePlanResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_insurance_plan(
+    loc_slug: str,
+    data: InsurancePlanRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    """Create an insurance plan. INSTITUTION_ADMIN or LOCATION_ADMIN only."""
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+
+        location = (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.slug == loc_slug,
+                    InstitutionLocation.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not location:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+
+        if current_user.role == UserRole.LOCATION_ADMIN.value:
+            if str(location.id) != str(current_user.location_id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this location")
+
+        plan = InsurancePlan(
+            institution_id=current_user.institution_id,
+            location_id=str(location.id),
+            name=data.name,
+            description=data.description,
+        )
+        session.add(plan)
+        await session.flush()
+
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.LOCATION_UPDATE,
+            target_resource=f"location:{loc_slug}/insurance_plan:{plan.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "action": "create_insurance_plan",
+                "plan_name": data.name,
+            },
+            institution_id=current_user.institution_id,
+        )
+
+        return InsurancePlanResponse(
+            id=str(plan.id),
+            location_id=str(plan.location_id),
+            name=plan.name,
+            description=plan.description,
+            is_active=plan.is_active,
+        )
+
+
+@router.patch("/locations/{loc_slug}/insurance-plans/{plan_id}", response_model=InsurancePlanResponse)
+async def update_insurance_plan(
+    loc_slug: str,
+    plan_id: str,
+    data: InsurancePlanRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    """Update an insurance plan. INSTITUTION_ADMIN or LOCATION_ADMIN only."""
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+
+        location = (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.slug == loc_slug,
+                    InstitutionLocation.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not location:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+
+        if current_user.role == UserRole.LOCATION_ADMIN.value:
+            if str(location.id) != str(current_user.location_id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this location")
+
+        plan = (
+            await session.execute(
+                select(InsurancePlan).where(
+                    InsurancePlan.id == plan_id,
+                    InsurancePlan.location_id == str(location.id),
+                    InsurancePlan.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not plan:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance plan not found")
+
+        plan.name = data.name
+        plan.description = data.description
+
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.LOCATION_UPDATE,
+            target_resource=f"location:{loc_slug}/insurance_plan:{plan_id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "action": "update_insurance_plan",
+                "plan_name": data.name,
+            },
+            institution_id=current_user.institution_id,
+        )
+
+        return InsurancePlanResponse(
+            id=str(plan.id),
+            location_id=str(plan.location_id),
+            name=plan.name,
+            description=plan.description,
+            is_active=plan.is_active,
+        )
+
+
+@router.delete("/locations/{loc_slug}/insurance-plans/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_insurance_plan(
+    loc_slug: str,
+    plan_id: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    """Soft-delete an insurance plan. INSTITUTION_ADMIN or LOCATION_ADMIN only."""
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+
+        location = (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.slug == loc_slug,
+                    InstitutionLocation.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not location:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+
+        if current_user.role == UserRole.LOCATION_ADMIN.value:
+            if str(location.id) != str(current_user.location_id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this location")
+
+        plan = (
+            await session.execute(
+                select(InsurancePlan).where(
+                    InsurancePlan.id == plan_id,
+                    InsurancePlan.location_id == str(location.id),
+                    InsurancePlan.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not plan:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance plan not found")
+
+        plan.is_active = False
+
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.LOCATION_UPDATE,
+            target_resource=f"location:{loc_slug}/insurance_plan:{plan_id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "action": "delete_insurance_plan",
+                "plan_name": plan.name,
+            },
+            institution_id=current_user.institution_id,
         )

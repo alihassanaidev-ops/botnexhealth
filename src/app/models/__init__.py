@@ -16,6 +16,7 @@ from src.app.models.institution_descriptor import InstitutionDescriptor
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.institution_operatory import InstitutionOperatory
 from src.app.models.institution_provider import InstitutionProvider
+from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
@@ -28,6 +29,7 @@ __all__ = [
     "InstitutionAppointmentType",
     "InstitutionDescriptor",
     "InstitutionOperatory",
+    "InsurancePlan",
     "Contact",
     "Call",
     "CallStatus",

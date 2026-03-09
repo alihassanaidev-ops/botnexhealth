@@ -177,6 +177,48 @@ export async function calculateROI(): Promise<ROICalculation> {
     return data
 }
 
+// Insurance Plans
+
+export interface InsurancePlan {
+    id: string
+    location_id: string
+    name: string
+    description: string | null
+    is_active: boolean
+}
+
+export async function listInsurancePlans(locSlug: string): Promise<InsurancePlan[]> {
+    const { data } = await api.get<InsurancePlan[]>(`/institution/locations/${locSlug}/insurance-plans`)
+    return data
+}
+
+export async function createInsurancePlan(
+    locSlug: string,
+    payload: { name: string; description?: string },
+): Promise<InsurancePlan> {
+    const { data } = await api.post<InsurancePlan>(
+        `/institution/locations/${locSlug}/insurance-plans`,
+        payload,
+    )
+    return data
+}
+
+export async function updateInsurancePlan(
+    locSlug: string,
+    planId: string,
+    payload: { name: string; description?: string },
+): Promise<InsurancePlan> {
+    const { data } = await api.patch<InsurancePlan>(
+        `/institution/locations/${locSlug}/insurance-plans/${planId}`,
+        payload,
+    )
+    return data
+}
+
+export async function deleteInsurancePlan(locSlug: string, planId: string): Promise<void> {
+    await api.delete(`/institution/locations/${locSlug}/insurance-plans/${planId}`)
+}
+
 export async function deactivateInstitutionUser(userId: string): Promise<void> {
     await api.post(`/institution/users/${userId}/deactivate`)
 }
