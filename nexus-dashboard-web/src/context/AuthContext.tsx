@@ -10,6 +10,10 @@ import { useNavigate, useLocation } from "react-router-dom";
 const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — HIPAA automatic logoff
 const EXCHANGE_MAX_ATTEMPTS = 3;
 const EXCHANGE_RETRY_DELAY_MS = 250;
+const AUTH_REQUEST_TIMEOUT_MS = 12000;
+const SIGNIN_FLOW_TIMEOUT_MS = 15000;
+const INVITE_SESSION_RETRY_COUNT = 10;
+const INVITE_SESSION_RETRY_DELAY_MS = 300;
 
 interface AuthContextType {
     user: User | null;
@@ -46,12 +50,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return hashParams.get("type") || searchParams.get("type");
     }, []);
 
+    const getAuthFlowError = useCallback((): string | null => {
+        const hash = window.location.hash || authBootstrapUrlSnapshot.hash || "";
+        const search = window.location.search || authBootstrapUrlSnapshot.search || "";
+
+        const hashParams = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+        const searchParams = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+
+        const description =
+            hashParams.get("error_description") || searchParams.get("error_description");
+        return description ? decodeURIComponent(description) : null;
+    }, []);
+
     const hasInviteOrRecoveryHash = useCallback((): boolean => {
         const flowType = getAuthFlowType();
         return flowType === "invite" || flowType === "recovery";
     }, [getAuthFlowType]);
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const withTimeout = useCallback(async <T,>(
+        promise: Promise<T>,
+        timeoutMs: number,
+        timeoutMessage: string,
+    ): Promise<T> => {
+        return await Promise.race([
+            promise,
+            new Promise<T>((_, reject) => {
+                setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+            }),
+        ]);
+    }, []);
 
     // ---- Token exchange helper ----
     const exchangeToken = useCallback(async (supabaseAccessToken: string): Promise<boolean> => {
@@ -64,15 +93,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 const { data } = await axios.post<{ access_token: string }>(
                     authUrl,
                     { access_token: supabaseAccessToken },
-                    { headers: { "Content-Type": "application/json" } },
+                    {
+                        headers: { "Content-Type": "application/json" },
+                        timeout: AUTH_REQUEST_TIMEOUT_MS,
+                    },
                 );
                 setToken(data.access_token);
                 return true;
             } catch (err: any) {
                 const status = err?.response?.status as number | undefined;
                 const detail = err?.response?.data?.detail as string | undefined;
+                const timedOut = err?.code === "ECONNABORTED";
                 const retryable = !status || status === 429 || status >= 500;
                 console.error(`Token exchange failed (attempt ${attempt}/${EXCHANGE_MAX_ATTEMPTS})`, err);
+
+                if (timedOut) {
+                    lastAuthFailureRef.current = "Authentication timed out. Please try again.";
+                    return false;
+                }
 
                 if (retryable && attempt < EXCHANGE_MAX_ATTEMPTS) {
                     await sleep(EXCHANGE_RETRY_DELAY_MS * attempt);
@@ -89,7 +127,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // ---- Fetch backend user profile ----
     const fetchUserProfile = useCallback(async (): Promise<boolean> => {
         try {
-            const { data } = await api.get<User>("/auth/users/me");
+            const { data } = await api.get<User>("/auth/users/me", {
+                timeout: AUTH_REQUEST_TIMEOUT_MS,
+            });
             setUser(data);
             return true;
         } catch (error: any) {
@@ -155,24 +195,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const bootstrapSession = async () => {
             const isInviteOrRecovery = hasInviteOrRecoveryHash();
+            const authFlowError = getAuthFlowError();
+
+            if (authFlowError) {
+                lastAuthFailureRef.current = authFlowError;
+                toast.error(authFlowError);
+            }
             try {
-                const { data: { session } } = await supabase.auth.getSession();
+                let { data: { session } } = await supabase.auth.getSession();
                 if (cancelled) return;
+
+                // Invite links can briefly race with Supabase hash parsing on first load.
+                if (!session?.user && isInviteOrRecovery) {
+                    for (let i = 0; i < INVITE_SESSION_RETRY_COUNT; i += 1) {
+                        await sleep(INVITE_SESSION_RETRY_DELAY_MS);
+                        const { data } = await supabase.auth.getSession();
+                        session = data.session;
+                        if (session?.user || cancelled) break;
+                    }
+                }
 
                 if (session?.user) {
                     if (isInviteOrRecovery) {
                         navigate("/set-password", { replace: true });
                     } else {
-                        const ok = await completeSignInSingleFlight(session.access_token);
+                        const ok = await withTimeout(
+                            completeSignInSingleFlight(session.access_token),
+                            SIGNIN_FLOW_TIMEOUT_MS,
+                            "Authentication timed out. Please try again.",
+                        );
                         if (!ok) {
                             toast.error(lastAuthFailureRef.current || "Failed to load user profile. Please log in again.");
                             await signOut();
                         }
                     }
+                } else if (isInviteOrRecovery) {
+                    toast.error(lastAuthFailureRef.current || "Invite link is invalid or has expired. Request a new invite.");
+                    navigate("/login", { replace: true });
                 }
             } catch (error: any) {
                 console.error("Initial auth bootstrap failed", error);
-                lastAuthFailureRef.current = "Failed to initialize session";
+                lastAuthFailureRef.current = error?.message || "Failed to initialize session";
                 clearToken();
                 setUser(null);
             } finally {
@@ -181,8 +244,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 }
             }
         };
-
-        void bootstrapSession();
 
         // Auth state change listener
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -196,7 +257,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                             navigate("/set-password", { replace: true });
                         }
                     } else if (!userRef.current) {
-                        const ok = await completeSignInSingleFlight(session.access_token);
+                        const ok = await withTimeout(
+                            completeSignInSingleFlight(session.access_token),
+                            SIGNIN_FLOW_TIMEOUT_MS,
+                            "Authentication timed out. Please try again.",
+                        );
                         if (ok) {
                             const loc = locationRef.current;
                             const from = (loc.state as Record<string, { pathname?: string }>)?.from?.pathname || "/";
@@ -220,12 +285,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
         });
 
+        void bootstrapSession();
+
         return () => {
             cancelled = true;
             subscription.unsubscribe();
         };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [hasInviteOrRecoveryHash]);
+    }, [getAuthFlowError, hasInviteOrRecoveryHash, withTimeout]);
 
     // ---- Sign in with email + password ----
     const signInWithSupabase = async (email: string, password: string) => {
