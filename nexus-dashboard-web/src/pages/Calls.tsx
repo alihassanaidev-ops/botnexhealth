@@ -40,6 +40,14 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from "@/components/ui/table"
+import {
     Dialog,
     DialogContent,
     DialogHeader,
@@ -792,24 +800,24 @@ export default function Calls() {
                 </CardHeader>
                 <CardContent className="p-0">
                     <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="border-b border-border bg-muted/30">
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Date & Time</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Direction</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Tags</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Sentiment</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Duration</th>
-                                    <th className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Summary</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+                        <Table className="w-full text-sm">
+                            <TableHeader className="border-b border-border bg-muted/30">
+                                <TableRow>
+                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Date & Time</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Direction</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Tags</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Sentiment</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Duration</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Summary</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
                                 {loading ? (
                                     <SkeletonRows />
                                 ) : !data || data.items.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={7} className="px-4 py-16 text-center">
+                                    <TableRow>
+                                        <TableCell colSpan={7} className="px-4 py-16 text-center">
                                             <div className="flex flex-col items-center gap-3 text-muted-foreground">
                                                 <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
                                                     <Phone className="h-6 w-6 opacity-40" />
@@ -823,8 +831,8 @@ export default function Calls() {
                                                     </p>
                                                 </div>
                                             </div>
-                                        </td>
-                                    </tr>
+                                        </TableCell>
+                                    </TableRow>
                                 ) : (
                                     data.items.map((call) => (
                                         <CallRow
@@ -834,8 +842,8 @@ export default function Calls() {
                                         />
                                     ))
                                 )}
-                            </tbody>
-                        </table>
+                            </TableBody>
+                        </Table>
                     </div>
                 </CardContent>
             </Card>
@@ -876,15 +884,15 @@ interface CallRowProps {
 
 function CallRow({ call, onClick }: CallRowProps) {
     return (
-        <tr
-            className="border-b border-border/40 hover:bg-muted/40 cursor-pointer transition-colors duration-150"
+        <TableRow
+            className="cursor-pointer hover:bg-muted/50 transition-colors"
             onClick={onClick}
         >
-            <td className="px-4 py-3 whitespace-nowrap text-xs text-muted-foreground">
+            <TableCell className="whitespace-nowrap text-muted-foreground">
                 {formatDateTime(call.call_date, call.call_time)}
-            </td>
+            </TableCell>
 
-            <td className="px-4 py-3">
+            <TableCell>
                 <div className="flex items-center gap-1.5">
                     <span className={call.contact?.full_name ? "font-medium" : "text-muted-foreground"}>
                         {call.contact?.full_name ?? "Unknown"}
@@ -893,24 +901,23 @@ function CallRow({ call, onClick }: CallRowProps) {
                         <UserPlus className="h-3.5 w-3.5 text-indigo-500 shrink-0" aria-label="New patient" />
                     )}
                 </div>
-            </td>
+            </TableCell>
 
-            <td className="px-4 py-3">
+            <TableCell>
                 {call.call_direction === "inbound" ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-blue-600 font-medium">
+                    <span className="inline-flex items-center gap-1 text-xs text-blue-600 font-medium bg-blue-500/10 px-2 py-0.5 rounded-full">
                         <PhoneIncoming className="h-3.5 w-3.5" /> Inbound
                     </span>
                 ) : call.call_direction === "outbound" ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-purple-600 font-medium">
+                    <span className="inline-flex items-center gap-1 text-xs text-purple-600 font-medium bg-purple-500/10 px-2 py-0.5 rounded-full">
                         <PhoneOutgoing className="h-3.5 w-3.5" /> Outbound
                     </span>
                 ) : (
                     <span className="text-xs text-muted-foreground">—</span>
                 )}
-            </td>
+            </TableCell>
 
-            {/* Tags — show all, up to 3 visible */}
-            <td className="px-4 py-3">
+            <TableCell>
                 <div className="flex flex-wrap gap-1">
                     {call.call_tags.length > 0
                         ? call.call_tags.slice(0, 3).map((t) => <TagBadge key={t} tag={t} />)
@@ -920,21 +927,21 @@ function CallRow({ call, onClick }: CallRowProps) {
                         <Badge variant="secondary" className="text-[10px]">+{call.call_tags.length - 3}</Badge>
                     )}
                 </div>
-            </td>
+            </TableCell>
 
-            <td className="px-4 py-3">{sentimentBadge(call.patient_sentiment)}</td>
+            <TableCell>{sentimentBadge(call.patient_sentiment)}</TableCell>
 
-            <td className="px-4 py-3 text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+            <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
                 {formatDuration(call.call_duration_seconds)}
-            </td>
+            </TableCell>
 
-            <td className="px-4 py-3 max-w-[280px]">
+            <TableCell className="max-w-[280px]">
                 {call.summary ? (
-                    <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{call.summary}</p>
+                    <p className="text-muted-foreground line-clamp-2 leading-relaxed">{call.summary}</p>
                 ) : (
-                    <span className="text-xs text-muted-foreground">—</span>
+                    <span className="text-muted-foreground">—</span>
                 )}
-            </td>
-        </tr>
+            </TableCell>
+        </TableRow>
     )
 }

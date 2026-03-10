@@ -150,6 +150,7 @@ export function NotificationDialog() {
                             const total = getTotalCountForType(type);
                             const isExpanded = expandedGroups.has(type);
                             const label = getNotificationLabel(type);
+                            const GroupIcon = getNotificationIcon(type);
 
                             if (items.length === 0) return null;
 
@@ -165,10 +166,7 @@ export function NotificationDialog() {
                                         )}
                                     >
                                         <div className="flex items-center gap-2">
-                                            {(() => {
-                                                const Icon = getNotificationIcon(type);
-                                                return <Icon className="h-5 w-5" />;
-                                            })()}
+                                            <GroupIcon className="h-5 w-5" />
                                             <span className="font-medium text-zinc-800 dark:text-zinc-200">{label}</span>
                                             {showAllMode ? (
                                                 // Show total count in "Show All" mode
@@ -283,6 +281,7 @@ function NotificationItem({ notification, onMarkRead, showAllMode = false }: Not
     });
 
     const urgent = isUrgent(notification.type);
+    const Icon = getNotificationIcon(notification.type);
 
     return (
         <div
@@ -300,10 +299,7 @@ function NotificationItem({ notification, onMarkRead, showAllMode = false }: Not
             )}
 
             {/* Icon */}
-            {(() => {
-                const Icon = getNotificationIcon(notification.type);
-                return <Icon className="h-5 w-5 mt-0.5 text-zinc-500 dark:text-zinc-400" />;
-            })()}
+            <Icon className="h-5 w-5 mt-0.5 text-zinc-500 dark:text-zinc-400" />
 
             {/* Content */}
             <div className="flex-1 min-w-0">

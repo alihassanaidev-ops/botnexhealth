@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -179,67 +178,64 @@ export default function AppointmentTypes() {
                 </div>
             </div>
 
-            <Card>
-                <CardHeader>
-                    <CardTitle>Configured Types</CardTitle>
-                    <CardDescription>
-                        {types.length} appointment type{types.length !== 1 ? "s" : ""} configured.
-                        {" "}Types must be linked to provider availabilities to generate bookable slots.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    {loading ? (
-                        <div className="flex justify-center py-8 text-muted-foreground">Loading...</div>
-                    ) : types.length === 0 ? (
-                        <div className="text-center py-8 text-muted-foreground">
-                            <p>No appointment types found.</p>
-                            <p className="text-sm mt-1">
-                                {canManage
-                                    ? 'Click "Sync" to fetch from your PMS, or "Create" to add a new one.'
-                                    : "No appointment types are currently configured."}
-                            </p>
-                        </div>
-                    ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Name</TableHead>
-                                    <TableHead>Duration</TableHead>
-                                    <TableHead>EMR Descriptors</TableHead>
-                                    {canManage && <TableHead className="text-right">Actions</TableHead>}
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {types.map((type) => (
-                                    <TableRow key={type.id}>
-                                        <TableCell className="font-medium">{type.name}</TableCell>
-                                        <TableCell>
-                                            <div className="flex items-center gap-1">
-                                                <Clock className="h-3 w-3 text-muted-foreground" />
-                                                {type.duration_minutes ? `${type.duration_minutes} min` : "-"}
-                                            </div>
-                                        </TableCell>
-                                        <TableCell className="max-w-[300px] truncate text-sm text-muted-foreground">
-                                            {getDescriptorNames(type)}
-                                        </TableCell>
-                                        {canManage && (
-                                            <TableCell className="text-right">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    onClick={() => setDeleteTarget(type)}
-                                                >
-                                                    <Trash2 className="h-4 w-4 text-destructive" />
-                                                </Button>
-                                            </TableCell>
-                                        )}
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    )}
-                </CardContent>
-            </Card>
+            <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Duration</TableHead>
+                            <TableHead>EMR Descriptors</TableHead>
+                            {canManage && <TableHead className="text-right">Actions</TableHead>}
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {loading ? (
+                            <TableRow>
+                                <TableCell colSpan={canManage ? 4 : 3} className="h-24 text-center">
+                                    <div className="flex justify-center text-muted-foreground">Loading...</div>
+                                </TableCell>
+                            </TableRow>
+                        ) : types.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={canManage ? 4 : 3} className="h-32 text-center text-muted-foreground">
+                                    <p>No appointment types found.</p>
+                                    <p className="text-sm mt-1">
+                                        {canManage
+                                            ? 'Click "Sync" to fetch from your PMS, or "Create" to add a new one.'
+                                            : "No appointment types are currently configured."}
+                                    </p>
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            types.map((type) => (
+                            <TableRow key={type.source_id}>
+                                <TableCell className="font-medium">{type.name}</TableCell>
+                                <TableCell>
+                                    <div className="flex items-center gap-1">
+                                        <Clock className="h-3 w-3 text-muted-foreground" />
+                                        {type.duration_minutes ? `${type.duration_minutes} min` : "-"}
+                                    </div>
+                                </TableCell>
+                                <TableCell className="max-w-[300px] truncate text-sm text-muted-foreground">
+                                    {getDescriptorNames(type)}
+                                </TableCell>
+                                {canManage && (
+                                    <TableCell className="text-right">
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => setDeleteTarget(type)}
+                                        >
+                                            <Trash2 className="h-4 w-4 text-destructive" />
+                                        </Button>
+                                    </TableCell>
+                                )}
+                            </TableRow>
+                        ))
+                        )}
+                    </TableBody>
+                </Table>
+            </div>
 
             {canManage && (
                 <>

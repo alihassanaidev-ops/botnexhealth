@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
@@ -70,49 +69,52 @@ export default function Operatories() {
                 </div>
             </div>
 
-            <Card>
-                <CardHeader>
-                    <CardTitle>Rooms & Chairs</CardTitle>
-                    <CardDescription>
-                        {operatories.length} operator{operatories.length !== 1 ? "ies" : "y"} found.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    {loading ? (
-                        <div className="flex justify-center py-8 text-muted-foreground">Loading...</div>
-                    ) : operatories.length === 0 ? (
-                        <div className="text-center py-8 text-muted-foreground">
-                            <p>No operatories found.</p>
-                            <p className="text-sm mt-1">
-                                {canManage ? 'Click "Sync" to fetch from your PMS.' : "No operatories are currently configured."}
-                            </p>
-                        </div>
-                    ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Name</TableHead>
-                                    <TableHead>PMS ID</TableHead>
-                                    <TableHead>Status</TableHead>
+            <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm mt-4">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>PMS ID</TableHead>
+                            <TableHead>Status</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {loading ? (
+                            <TableRow>
+                                <TableCell colSpan={3} className="h-24 text-center">
+                                    <div className="flex justify-center text-muted-foreground">Loading...</div>
+                                </TableCell>
+                            </TableRow>
+                        ) : operatories.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={3} className="h-32 text-center text-muted-foreground">
+                                    <p>No operatories found.</p>
+                                    <p className="text-sm mt-1">
+                                        {canManage ? 'Click "Sync" to fetch from your PMS.' : "No operatories are currently configured."}
+                                    </p>
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            operatories.map((op) => (
+                                <TableRow key={op.source_id || op.id}>
+                                    <TableCell className="font-medium">{op.name}</TableCell>
+                                    <TableCell className="font-mono text-sm">{op.source_id}</TableCell>
+                                    <TableCell>
+                                        <Badge
+                                            variant="secondary"
+                                            className={op.is_active
+                                                ? "border border-primary/25 bg-primary/10 text-primary"
+                                                : "border border-border bg-muted text-muted-foreground"}
+                                        >
+                                            {op.is_active ? "Active" : "Inactive"}
+                                        </Badge>
+                                    </TableCell>
                                 </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {operatories.map((op) => (
-                                    <TableRow key={op.id}>
-                                        <TableCell className="font-medium">{op.name}</TableCell>
-                                        <TableCell className="font-mono text-sm">{op.source_id}</TableCell>
-                                        <TableCell>
-                                            <Badge variant={op.is_active ? "default" : "secondary"}>
-                                                {op.is_active ? "Active" : "Inactive"}
-                                            </Badge>
-                                        </TableCell>
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    )}
-                </CardContent>
-            </Card>
+                            ))
+                        )}
+                    </TableBody>
+                </Table>
+            </div>
 
             <div className="text-sm text-muted-foreground">
                 Operatories are synced from your practice management system.

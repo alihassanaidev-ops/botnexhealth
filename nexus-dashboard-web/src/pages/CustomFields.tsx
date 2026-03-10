@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -226,106 +225,105 @@ export default function CustomFields() {
                 </div>
             </div>
 
-            <Card>
-                <CardHeader>
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <CardTitle>Field Definitions</CardTitle>
-                            <CardDescription>
-                                {definitions.length} field{definitions.length !== 1 ? "s" : ""} configured.
-                            </CardDescription>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                            <Label htmlFor="show-inactive" className="text-sm text-muted-foreground">
-                                Show inactive
-                            </Label>
-                            <Switch
-                                id="show-inactive"
-                                checked={showInactive}
-                                onCheckedChange={setShowInactive}
-                            />
-                        </div>
-                    </div>
-                </CardHeader>
-                <CardContent>
-                    {loading ? (
-                        <div className="flex justify-center py-8 text-muted-foreground">Loading...</div>
-                    ) : definitions.length === 0 ? (
-                        <div className="text-center py-8 text-muted-foreground">
-                            <p>No custom fields defined yet.</p>
-                            <p className="text-sm mt-1">Click "Create" to add your first custom field.</p>
-                        </div>
-                    ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Field Name</TableHead>
-                                    <TableHead>Field Key</TableHead>
-                                    <TableHead>Type</TableHead>
-                                    <TableHead>Retell Source</TableHead>
-                                    <TableHead>PHI</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {definitions.map((defn) => (
-                                    <TableRow key={defn.id}>
-                                        <TableCell className="font-medium">{defn.field_name}</TableCell>
-                                        <TableCell>
-                                            <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
-                                                {defn.field_key}
-                                            </code>
-                                        </TableCell>
-                                        <TableCell>
-                                            <Badge variant="outline">{defn.field_type}</Badge>
-                                        </TableCell>
-                                        <TableCell className="text-sm text-muted-foreground max-w-[250px] truncate">
-                                            {retellLabel(defn)}
-                                        </TableCell>
-                                        <TableCell>
-                                            {defn.is_phi && (
-                                                <ShieldAlert className="h-4 w-4 text-amber-500" />
-                                            )}
-                                        </TableCell>
-                                        <TableCell>
-                                            <Badge variant={defn.is_active ? "default" : "secondary"}>
-                                                {defn.is_active ? "Active" : "Inactive"}
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell className="text-right space-x-1">
+            <div className="flex items-center space-x-2 pb-4 pt-2">
+                <Label htmlFor="show-inactive" className="text-sm text-muted-foreground">
+                    Show inactive
+                </Label>
+                <Switch
+                    id="show-inactive"
+                    checked={showInactive}
+                    onCheckedChange={setShowInactive}
+                />
+            </div>
+            <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Field Name</TableHead>
+                            <TableHead>Field Key</TableHead>
+                            <TableHead>Type</TableHead>
+                            <TableHead>Retell Source</TableHead>
+                            <TableHead>PHI</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {loading ? (
+                            <TableRow>
+                                <TableCell colSpan={7} className="h-24 text-center">
+                                    <div className="flex justify-center text-muted-foreground">Loading...</div>
+                                </TableCell>
+                            </TableRow>
+                        ) : definitions.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                                    <p>No custom fields defined yet.</p>
+                                    <p className="text-sm mt-1">Click "Create" to add your first custom field.</p>
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            definitions.map((defn) => (
+                                <TableRow key={defn.id}>
+                                    <TableCell className="font-medium">{defn.field_name}</TableCell>
+                                    <TableCell>
+                                        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
+                                            {defn.field_key}
+                                        </code>
+                                    </TableCell>
+                                    <TableCell>
+                                        <Badge variant="outline">{defn.field_type}</Badge>
+                                    </TableCell>
+                                    <TableCell className="text-sm text-muted-foreground max-w-[250px] truncate">
+                                        {retellLabel(defn)}
+                                    </TableCell>
+                                    <TableCell>
+                                        {defn.is_phi && (
+                                            <ShieldAlert className="h-4 w-4 text-amber-500" />
+                                        )}
+                                    </TableCell>
+                                    <TableCell>
+                                        <Badge
+                                            variant="secondary"
+                                            className={defn.is_active
+                                                ? "border border-primary/25 bg-primary/10 text-primary"
+                                                : "border border-border bg-muted text-muted-foreground"}
+                                        >
+                                            {defn.is_active ? "Active" : "Inactive"}
+                                        </Badge>
+                                    </TableCell>
+                                    <TableCell className="text-right space-x-1">
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => openEdit(defn)}
+                                        >
+                                            <Pencil className="h-4 w-4" />
+                                        </Button>
+                                        {defn.is_active ? (
                                             <Button
                                                 variant="ghost"
                                                 size="icon"
-                                                onClick={() => openEdit(defn)}
+                                                onClick={() => setDeleteTarget(defn)}
                                             >
-                                                <Pencil className="h-4 w-4" />
+                                                <EyeOff className="h-4 w-4 text-muted-foreground" />
                                             </Button>
-                                            {defn.is_active ? (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    onClick={() => setDeleteTarget(defn)}
-                                                >
-                                                    <EyeOff className="h-4 w-4 text-muted-foreground" />
-                                                </Button>
-                                            ) : (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    onClick={() => setDeleteTarget(defn)}
-                                                >
-                                                    <Trash2 className="h-4 w-4 text-destructive" />
-                                                </Button>
-                                            )}
-                                        </TableCell>
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    )}
-                </CardContent>
-            </Card>
+                                        ) : (
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => setDeleteTarget(defn)}
+                                            >
+                                                <Trash2 className="h-4 w-4 text-destructive" />
+                                            </Button>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            ))
+                        )}
+                    </TableBody>
+                </Table>
+            </div>
 
             {/* Create / Edit Dialog */}
             <Dialog

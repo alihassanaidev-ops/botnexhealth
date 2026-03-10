@@ -1,9 +1,8 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
-import type { Notification, NotificationType, NotificationBadgeCounts } from "@/types";
+import type { Notification, NotificationBadgeCounts } from "@/types";
 import {
-    listNotifications,
     getNotificationIcon,
     isUrgent,
 } from "@/lib/notifications-api";
@@ -311,6 +310,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useNotifications() {
     const context = useContext(NotificationContext);
     if (context === undefined) {
