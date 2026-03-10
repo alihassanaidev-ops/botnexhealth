@@ -35,11 +35,13 @@ import {
     MessageSquare,
     Moon,
     Sun,
+    Bell
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useTheme } from "next-themes"
 import { useAuth } from "@/context/AuthContext"
-import { formatRoleLabel } from "@/lib/utils"
+import { useNotifications } from "@/context/NotificationContext"
+import { formatRoleLabel} from "@/lib/utils"
 
 type NavItemDef = { title: string; url: string; icon: React.ElementType; exact?: boolean }
 
@@ -178,6 +180,7 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { user, signOut } = useAuth();
+    const { unreadCount, setIsDialogOpen } = useNotifications();
     const location = useLocation();
     const { theme, setTheme } = useTheme();
 
@@ -220,7 +223,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </SidebarHeader>
             <SidebarContent>
                 <SidebarGroup>
-                    <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
+                    <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1 mt-2">
                         Menu
                     </SidebarGroupLabel>
                     <SidebarGroupContent>
@@ -253,6 +256,32 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname === item.url || location.pathname.startsWith(item.url + "/")}
                                     />
                                 ))}
+                            </SidebarMenu>
+                        </SidebarGroupContent>
+                    </SidebarGroup>
+                )}
+                {/* Notifications - Last item in sidebar */}
+                {isInstitution && (
+                    <SidebarGroup className="mt-auto">
+                        <SidebarGroupContent>
+                            <SidebarMenu>
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton
+                                        onClick={() => setIsDialogOpen(true)}
+                                        tooltip="Notifications"
+                                        className="relative transition-all duration-150 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground cursor-pointer"
+                                    >
+                                        <div className="relative">
+                                            <Bell className={`h-5 w-5 ${unreadCount > 0 ? 'animate-bell-swing' : ''}`} />
+                                            {unreadCount > 0 && (
+                                                <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                                                    {unreadCount > 9 ? "9+" : unreadCount}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <span>Notifications</span>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
                             </SidebarMenu>
                         </SidebarGroupContent>
                     </SidebarGroup>

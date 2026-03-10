@@ -146,3 +146,47 @@
     animation: count-fade 0.4s ease-out forwards;
   }
 }
+
+/* Bell swing animation for new notifications - pendulum style */
+@keyframes bell-swing {
+  0% { transform: rotate(0deg); }
+  5% { transform: rotate(15deg); }
+  10% { transform: rotate(-12deg); }
+  15% { transform: rotate(10deg); }
+  20% { transform: rotate(-8deg); }
+  25% { transform: rotate(6deg); }
+  30% { transform: rotate(-4deg); }
+  35% { transform: rotate(2deg); }
+  40%, 100% { transform: rotate(0deg); }
+}
+
+.animate-bell-swing {
+  animation: bell-swing 2s ease-in-out infinite;
+  transform-origin: top center;
+}
+
+/* Slide in from right for notification dialog */
+@keyframes slide-in-from-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.animate-in {
+  animation: slide-in-from-right 0.2s ease-out forwards;
+}
+
+/* Toast slide from sidebar */
+@keyframes toast-slide-in {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
