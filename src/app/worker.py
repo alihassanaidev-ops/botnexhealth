@@ -14,7 +14,11 @@ def _build_celery_app() -> Celery:
     app = Celery(
         "nex_health",
         broker=broker_url,
-        include=["src.app.tasks.notifications", "src.app.tasks.sms"],
+        include=[
+            "src.app.tasks.notifications",
+            "src.app.tasks.in_app_notifications",
+            "src.app.tasks.sms",
+        ],
     )
 
     app.conf.update(

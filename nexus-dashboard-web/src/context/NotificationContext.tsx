@@ -1,14 +1,22 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import type { Notification, NotificationBadgeCounts } from "@/types";
 import {
+    listNotifications,
+    getUnreadCount,
+    markAsRead as apiMarkAsRead,
+    markAllAsRead as apiMarkAllAsRead,
     getNotificationIcon,
     isUrgent,
 } from "@/lib/notifications-api";
 
+const POLL_INTERVAL_MS = 20_000; // 20 seconds
+const PAGE_SIZE = 50;
+
 interface NotificationContextType {
     notifications: Notification[];
+    totalNotifications: number;
     unreadCount: number;
     badgeCounts: NotificationBadgeCounts;
     isLoading: boolean;
@@ -17,7 +25,8 @@ interface NotificationContextType {
     markAsRead: (id: string) => Promise<void>;
     markAllAsRead: () => Promise<void>;
     refreshNotifications: () => Promise<void>;
-    addNotification: (notification: Notification) => void;
+    loadMore: () => Promise<void>;
+    hasMore: boolean;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
@@ -25,9 +34,12 @@ const NotificationContext = createContext<NotificationContextType | undefined>(u
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
     const { user } = useAuth();
     const [notifications, setNotifications] = useState<Notification[]>([]);
+    const [totalNotifications, setTotalNotifications] = useState(0);
     const [unreadCount, setUnreadCount] = useState(0);
     const [isLoading, setIsLoading] = useState(false);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
+    const [offset, setOffset] = useState(0);
+    const [hasMore, setHasMore] = useState(false);
 
     const [badgeCounts, setBadgeCounts] = useState<NotificationBadgeCounts>({
         calls: 0,
@@ -35,38 +47,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         appointments: 0,
     });
 
-    const calculateBadges = useCallback((notifs: Notification[]) => {
-        const counts: NotificationBadgeCounts = {
-            calls: 0,
-            callbacks: 0,
-            appointments: 0,
-        };
-
-        let totalUnread = 0;
-
-        notifs.forEach((n) => {
-            if (!n.is_read) {
-                totalUnread++;
-                switch (n.type) {
-                    case "new_call":
-                        counts.calls++;
-                        break;
-                    case "callback_item":
-                        counts.callbacks++;
-                        break;
-                    case "appointment_booked":
-                        counts.appointments++;
-                        break;
-                }
-            }
-        });
-
-        setUnreadCount(totalUnread);
-        setBadgeCounts(counts);
-    }, []);
+    // Track previous unread count to detect new notifications for toasts
+    const prevUnreadRef = useRef<number>(0);
 
     const showToast = useCallback((notification: Notification) => {
-        const IconComponent = getNotificationIcon(notification.type);
         const isUrgentNotification = isUrgent(notification.type);
 
         toast.custom(
@@ -83,7 +67,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                         toast.dismiss(t);
                     }}
                 >
-                    <IconComponent className="h-5 w-5 text-zinc-600 dark:text-zinc-400" />
+                    <span className="text-zinc-600 dark:text-zinc-400">{getNotificationIcon(notification.type, "h-5 w-5")}</span>
                     <div className="flex-1 min-w-0">
                         <p className="font-medium text-zinc-900 dark:text-zinc-100 text-sm truncate">
                             {notification.title}
@@ -110,190 +94,165 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         );
     }, []);
 
+    // Fetch unread counts (lightweight, polled frequently)
+    const refreshUnreadCounts = useCallback(async () => {
+        if (!user) return;
+        try {
+            const counts = await getUnreadCount();
+            const newTotal = counts.total;
+            setUnreadCount(newTotal);
+            setBadgeCounts({
+                calls: counts.new_calls,
+                callbacks: counts.callbacks,
+                appointments: counts.appointments,
+            });
+            return newTotal;
+        } catch {
+            // Silently fail on poll — don't spam errors
+        }
+        return undefined;
+    }, [user]);
+
+    // Fetch full notification list (heavier, on demand)
     const refreshNotifications = useCallback(async () => {
         if (!user) return;
 
         setIsLoading(true);
+        try {
+            const [listResult] = await Promise.all([
+                listNotifications(PAGE_SIZE, 0),
+                refreshUnreadCounts(),
+            ]);
 
-        // MOCK DATA - Replace with actual API call when backend is ready
-        const mockNotifications: Notification[] = [
-            {
-                id: "1",
-                user_id: user.id,
-                type: "new_call",
-                title: "New call from John Doe",
-                message: "Patient needs callback regarding appointment",
-                is_read: false,
-                created_at: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
-                data: { call_id: "call-123" }
-            },
-            {
-                id: "2",
-                user_id: user.id,
-                type: "new_call",
-                title: "New call from Maria Garcia",
-                message: "Booking confirmed for cleaning",
-                is_read: false,
-                created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-                data: { call_id: "call-124" }
-            },
-            {
-                id: "3",
-                user_id: user.id,
-                type: "callback_item",
-                title: "Callback needed - Insurance issue",
-                message: "Patient called about insurance verification",
-                is_read: false,
-                created_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
-                data: { call_id: "call-125" }
-            },
-            {
-                id: "4",
-                user_id: user.id,
-                type: "callback_item",
-                title: "Follow up required",
-                message: "Patient requested callback for treatment plan",
-                is_read: false,
-                created_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-                data: { call_id: "call-126" }
-            },
-            {
-                id: "5",
-                user_id: user.id,
-                type: "appointment_booked",
-                title: "Appointment booked - Cleaning",
-                message: "John Doe scheduled for cleaning on Mar 15",
-                is_read: true,
-                created_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-                data: { appointment_id: "appt-123" }
-            },
-            {
-                id: "6",
-                user_id: user.id,
-                type: "urgent",
-                title: "Urgent: Complaint reported",
-                message: "Patient reported billing issue - needs immediate attention",
-                is_read: false,
-                created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-                data: { call_id: "call-127" }
-            },
-            {
-                id: "7",
-                user_id: user.id,
-                type: "callback_resolved",
-                title: "Callback resolved - Insurance verified",
-                message: "Insurance verification completed for patient",
-                is_read: false,
-                created_at: new Date(Date.now() - 2.5 * 60 * 60 * 1000).toISOString(),
-                data: { call_id: "call-125" }
-            },
-            {
-                id: "8",
-                user_id: user.id,
-                type: "callback_resolved",
-                title: "Callback resolved - Treatment confirmed",
-                message: "Patient confirmed treatment plan details",
-                is_read: true,
-                created_at: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-                data: { call_id: "call-126" }
-            },
-            {
-                id: "9",
-                user_id: user.id,
-                type: "new_call",
-                title: "Previous call logged",
-                message: "Call from existing patient about rescheduling",
-                is_read: true,
-                created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-                data: { call_id: "call-128" }
-            },
-        ];
+            setNotifications(listResult.items);
+            setTotalNotifications(listResult.total);
+            setOffset(listResult.items.length);
+            setHasMore(listResult.items.length < listResult.total);
+        } catch {
+            // If API isn't available yet, just clear loading state
+        } finally {
+            setIsLoading(false);
+        }
+    }, [user, refreshUnreadCounts]);
 
-        setNotifications(mockNotifications);
-        calculateBadges(mockNotifications);
-        setIsLoading(false);
-    }, [user, calculateBadges]);
+    // Load more notifications (pagination)
+    const loadMore = useCallback(async () => {
+        if (!user || !hasMore || isLoading) return;
 
-    const addNotification = useCallback(
-        (notification: Notification) => {
+        setIsLoading(true);
+        try {
+            const result = await listNotifications(PAGE_SIZE, offset);
             setNotifications((prev) => {
-                const exists = prev.some((n) => n.id === notification.id);
-                if (exists) return prev;
-                return [notification, ...prev];
+                // Deduplicate by id
+                const existingIds = new Set(prev.map((n) => n.id));
+                const newItems = result.items.filter((n) => !existingIds.has(n.id));
+                return [...prev, ...newItems];
             });
-
-            calculateBadges([notification, ...notifications]);
-
-            // Show toast
-            showToast(notification);
-
-            // Vibrate bell animation - handled by parent component via badge change
-        },
-        [notifications, calculateBadges, showToast]
-    );
+            const newOffset = offset + result.items.length;
+            setOffset(newOffset);
+            setHasMore(newOffset < result.total);
+        } catch {
+            // Silently fail
+        } finally {
+            setIsLoading(false);
+        }
+    }, [user, hasMore, isLoading, offset]);
 
     const markAsRead = useCallback(
         async (id: string) => {
-            // MOCK - Update local state only
+            // Optimistic update
             setNotifications((prev) =>
                 prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
             );
+            setUnreadCount((prev) => Math.max(0, prev - 1));
 
-            const updated = notifications.map((n) => (n.id === id ? { ...n, is_read: true } : n));
-            calculateBadges(updated);
+            try {
+                await apiMarkAsRead(id);
+                // Refresh counts from server for accuracy
+                await refreshUnreadCounts();
+            } catch {
+                // Revert optimistic update on failure
+                setNotifications((prev) =>
+                    prev.map((n) => (n.id === id ? { ...n, is_read: false } : n))
+                );
+                await refreshUnreadCounts();
+            }
         },
-        [notifications, calculateBadges]
+        [refreshUnreadCounts]
     );
 
     const markAllAsRead = useCallback(async () => {
-        // MOCK - Update local state only
+        // Optimistic update
         setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
         setUnreadCount(0);
         setBadgeCounts({ calls: 0, callbacks: 0, appointments: 0 });
-    }, []);
 
-    // Initial fetch
+        try {
+            await apiMarkAllAsRead();
+        } catch {
+            // Revert on failure — re-fetch everything
+            await refreshNotifications();
+        }
+    }, [refreshNotifications]);
+
+    // Initial fetch when user logs in
     useEffect(() => {
         if (user) {
             refreshNotifications();
+        } else {
+            // Clear state on logout
+            setNotifications([]);
+            setUnreadCount(0);
+            setBadgeCounts({ calls: 0, callbacks: 0, appointments: 0 });
+            setOffset(0);
+            setHasMore(false);
+            prevUnreadRef.current = 0;
         }
     }, [user, refreshNotifications]);
 
-    // Test function - call this to simulate new notification
-    // Usage: window.dispatchEvent(new CustomEvent('test-notification'))
-    useEffect(() => {
-        const handler = () => {
-            const testNotification: Notification = {
-                id: `test-${Date.now()}`,
-                user_id: user?.id || "",
-                type: Math.random() > 0.5 ? "new_call" : "callback_item",
-                title: Math.random() > 0.5 ? "Test: New call received" : "Test: Callback needed",
-                message: "This is a test notification to verify the system works",
-                is_read: false,
-                created_at: new Date().toISOString(),
-            };
-            addNotification(testNotification);
-        };
-
-        window.addEventListener("test-notification", handler);
-        return () => window.removeEventListener("test-notification", handler);
-    }, [user, addNotification]);
-
-    // Poll for new notifications every 30 seconds
+    // Poll unread counts (lightweight) and detect new notifications
     useEffect(() => {
         if (!user) return;
 
-        const interval = setInterval(() => {
-            refreshNotifications();
-        }, 30000);
+        const poll = async () => {
+            const newTotal = await refreshUnreadCounts();
+            if (newTotal !== undefined && newTotal > prevUnreadRef.current && prevUnreadRef.current > 0) {
+                // New notifications arrived — refresh the full list to get them
+                const result = await listNotifications(PAGE_SIZE, 0);
+                // Find truly new ones (not in current list) for toast
+                const existingIds = new Set(notifications.map((n) => n.id));
+                const brandNew = result.items.filter(
+                    (n) => !existingIds.has(n.id) && !n.is_read
+                );
+                for (const n of brandNew.slice(0, 3)) {
+                    showToast(n);
+                }
+                setNotifications(result.items);
+                setTotalNotifications(result.total);
+                setOffset(result.items.length);
+                setHasMore(result.items.length < result.total);
+            }
+            if (newTotal !== undefined) {
+                prevUnreadRef.current = newTotal;
+            }
+        };
 
+        const interval = setInterval(poll, POLL_INTERVAL_MS);
         return () => clearInterval(interval);
-    }, [user, refreshNotifications]);
+    }, [user, refreshUnreadCounts, notifications, showToast]);
+
+    // Refresh full list when dialog opens
+    useEffect(() => {
+        if (isDialogOpen && user) {
+            refreshNotifications();
+        }
+    }, [isDialogOpen, user, refreshNotifications]);
 
     return (
         <NotificationContext.Provider
             value={{
                 notifications,
+                totalNotifications,
                 unreadCount,
                 badgeCounts,
                 isLoading,
@@ -302,7 +261,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                 markAsRead,
                 markAllAsRead,
                 refreshNotifications,
-                addNotification,
+                loadMore,
+                hasMore,
             }}
         >
             {children}

@@ -24,6 +24,10 @@ from src.app.models import (  # noqa: F401 — side-effect import
     Contact,
     CustomFieldDefinition,
     CustomFieldValue,
+    InsurancePlan,
+    LocationBreak,
+    LocationOperatingHours,
+    Notification,
     RetellWebhookEvent,
     Institution,
     InstitutionAppointmentType,
@@ -31,6 +35,7 @@ from src.app.models import (  # noqa: F401 — side-effect import
     InstitutionLocation,
     InstitutionOperatory,
     InstitutionProvider,
+    SmsHistoryLog,
 )
 from src.app.models.user import User  # noqa: F401
 

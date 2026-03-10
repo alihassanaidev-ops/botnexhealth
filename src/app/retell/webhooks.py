@@ -294,6 +294,24 @@ async def handle_retell_webhook(
                     email_enqueue_err,
                 )
 
+            # ── In-app notification: enqueue after DB commit (durable via Celery) ──
+            try:
+                from src.app.tasks.in_app_notifications import enqueue_in_app_notifications
+
+                enqueue_in_app_notifications(
+                    call_id=saved_call.id,
+                    institution_id=institution.id,
+                    location_id=location.id if location else None,
+                    call_status=saved_call.call_status,
+                    call_tags_csv=saved_call.call_tags,
+                )
+            except Exception as in_app_enqueue_err:
+                logger.error(
+                    "Failed to enqueue in-app notification: call=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    in_app_enqueue_err,
+                )
+
             # ── Auto-SMS: enqueue after commit (durable via Celery) ────────
             # Use raw call_analysis (not scrubbed) so patient name is intact.
             _raw_analysis = event.call.call_analysis

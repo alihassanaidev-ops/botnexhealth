@@ -1,6 +1,7 @@
 import api from "@/lib/api";
+import type { ReactNode } from "react";
 import type { Notification, NotificationUnreadCount, NotificationType } from "@/types";
-import React from "react";
+
 
 export interface NotificationsListResponse {
     items: Notification[];
@@ -41,20 +42,21 @@ import {
     Bell
 } from "lucide-react";
 
-export function getNotificationIcon(type: NotificationType): React.ElementType {
+export function getNotificationIcon(type: NotificationType, className?: string): ReactNode {
+    const cls = className ?? "h-5 w-5";
     switch (type) {
         case "new_call":
-            return Phone;
+            return <Phone className={ cls } />;
         case "callback_item":
-            return ClipboardList;
+            return <ClipboardList className={ cls } />;
         case "callback_resolved":
-            return CheckCircle;
+            return <CheckCircle className={ cls } />;
         case "appointment_booked":
-            return Calendar;
+            return <Calendar className={ cls } />;
         case "urgent":
-            return AlertTriangle;
+            return <AlertTriangle className={ cls } />;
         default:
-            return Bell;
+            return <Bell className={ cls } />;
     }
 }
 

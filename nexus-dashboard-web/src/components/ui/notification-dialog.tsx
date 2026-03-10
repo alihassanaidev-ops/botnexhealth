@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Check, CheckCheck, ChevronDown, ChevronUp, X, Bell, BellOff, History } from "lucide-react";
+import { Check, CheckCheck, ChevronDown, ChevronUp, X, Bell, BellOff, History, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -19,11 +19,15 @@ const NOTIFICATION_ORDER: NotificationType[] = [
 export function NotificationDialog() {
     const {
         notifications,
+        totalNotifications,
         isDialogOpen,
         setIsDialogOpen,
         markAsRead,
         markAllAsRead,
         unreadCount,
+        isLoading,
+        loadMore,
+        hasMore,
     } = useNotifications();
 
     const [expandedGroups, setExpandedGroups] = useState<Set<NotificationType>>(
@@ -144,13 +148,21 @@ export function NotificationDialog() {
                 {/* Notification Groups */}
                 <ScrollArea className="flex-1">
                     <div className="p-2">
-                        {NOTIFICATION_ORDER.map((type) => {
+                        {/* Loading State */}
+                        {isLoading && notifications.length === 0 && (
+                            <div className="flex flex-col items-center justify-center py-12 text-zinc-500">
+                                <Loader2 className="h-8 w-8 mb-3 animate-spin text-zinc-400" />
+                                <p className="text-sm">Loading notifications...</p>
+                            </div>
+                        )}
+
+                        {!isLoading && NOTIFICATION_ORDER.map((type) => {
                             const items = groupedNotifications[type];
                             const unread = getUnreadCountForType(type);
                             const total = getTotalCountForType(type);
                             const isExpanded = expandedGroups.has(type);
                             const label = getNotificationLabel(type);
-                            const GroupIcon = getNotificationIcon(type);
+
 
                             if (items.length === 0) return null;
 
@@ -166,7 +178,7 @@ export function NotificationDialog() {
                                         )}
                                     >
                                         <div className="flex items-center gap-2">
-                                            <GroupIcon className="h-5 w-5" />
+                                            {getNotificationIcon(type, "h-5 w-5")}
                                             <span className="font-medium text-zinc-800 dark:text-zinc-200">{label}</span>
                                             {showAllMode ? (
                                                 // Show total count in "Show All" mode
@@ -213,8 +225,26 @@ export function NotificationDialog() {
                             );
                         })}
 
+                        {/* Load More Button */}
+                        {showAllMode && hasMore && (
+                            <div className="py-3 flex justify-center">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={loadMore}
+                                    disabled={isLoading}
+                                    className="text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                                >
+                                    {isLoading ? (
+                                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                    ) : null}
+                                    Load more
+                                </Button>
+                            </div>
+                        )}
+
                         {/* Empty State for Unread Mode */}
-                        {!showAllMode && displayedNotifications.length === 0 && (
+                        {!isLoading && !showAllMode && displayedNotifications.length === 0 && (
                             <div className="flex flex-col items-center justify-center py-12 text-zinc-500 dark:text-zinc-500">
                                 <CheckCheck className="h-10 w-10 mb-3 text-green-500" />
                                 <p className="text-sm font-medium">All caught up!</p>
@@ -225,7 +255,7 @@ export function NotificationDialog() {
                         )}
 
                         {/* Empty State for Show All Mode */}
-                        {showAllMode && displayedNotifications.length === 0 && (
+                        {!isLoading && showAllMode && displayedNotifications.length === 0 && (
                             <div className="flex flex-col items-center justify-center py-12 text-zinc-500 dark:text-zinc-500">
                                 <BellOff className="h-10 w-10 mb-3 text-zinc-400" />
                                 <p className="text-sm">No notifications yet</p>
@@ -247,9 +277,9 @@ export function NotificationDialog() {
                         >
                             <History className="h-4 w-4 mr-2" />
                             Show All Notifications
-                            {notifications.length > 0 && (
+                            {totalNotifications > 0 && (
                                 <span className="ml-2 text-xs text-zinc-500 dark:text-zinc-400">
-                                    ({notifications.length} total)
+                                    ({totalNotifications} total)
                                 </span>
                             )}
                         </Button>
@@ -281,7 +311,6 @@ function NotificationItem({ notification, onMarkRead, showAllMode = false }: Not
     });
 
     const urgent = isUrgent(notification.type);
-    const Icon = getNotificationIcon(notification.type);
 
     return (
         <div
@@ -299,7 +328,7 @@ function NotificationItem({ notification, onMarkRead, showAllMode = false }: Not
             )}
 
             {/* Icon */}
-            <Icon className="h-5 w-5 mt-0.5 text-zinc-500 dark:text-zinc-400" />
+            <span className="mt-0.5 text-zinc-500 dark:text-zinc-400">{getNotificationIcon(notification.type, "h-5 w-5")}</span>
 
             {/* Content */}
             <div className="flex-1 min-w-0">

@@ -19,6 +19,7 @@ from src.app.models.institution_provider import InstitutionProvider
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
+from src.app.models.notification import Notification, NotificationType
 from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 
@@ -48,6 +49,8 @@ __all__ = [
     "LocationBreak",
     "RetellWebhookEvent",
     "RetellWebhookStatus",
+    "Notification",
+    "NotificationType",
     "SmsHistoryLog",
     "SmsStatus",
 ]
