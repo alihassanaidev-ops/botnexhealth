@@ -348,6 +348,48 @@ export interface SendSmsResponse {
     to_number: string;
 }
 
+// ── Notifications ────────────────────────────────────────────────────────────────
+
+export type NotificationType =
+    | "new_call"
+    | "callback_item"
+    | "callback_resolved"
+    | "appointment_booked"
+    | "urgent";
+
+export interface Notification {
+    id: string;
+    user_id: string;
+    type: NotificationType;
+    title: string;
+    message: string;
+    is_read: boolean;
+    created_at: string;
+    data?: Record<string, unknown>;
+}
+
+export interface NotificationGroup {
+    type: NotificationType;
+    label: string;
+    icon: string;
+    items: Notification[];
+    unreadCount: number;
+}
+
+export interface NotificationUnreadCount {
+    total: number;
+    new_calls: number;
+    callbacks: number;
+    appointments: number;
+    urgent: number;
+}
+
+export interface NotificationBadgeCounts {
+    calls: number;
+    callbacks: number;
+    appointments: number;
+}
+
 // ── Dashboard ──────────────────────────────────────────────────────────
 
 export interface CallVolume {
