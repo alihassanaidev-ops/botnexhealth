@@ -117,14 +117,15 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                 }))
             });
             toast.success("Operating hours saved successfully.");
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || "Failed to save operating hours.");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to save operating hours.");
         } finally {
             setIsSavingHours(false);
         }
     };
 
-    const handleUpdateHour = (dayValue: number, field: keyof OperatingHoursEntry, value: any) => {
+    const handleUpdateHour = (dayValue: number, field: keyof OperatingHoursEntry, value: boolean | string | null) => {
         setHours(prev => prev.map(h => h.day_of_week === dayValue ? { ...h, [field]: value } : h));
     };
 
@@ -144,8 +145,9 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
             );
             setBreaks(prev => [...prev, data]);
             toast.success("Break added successfully.");
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || "Failed to add break.");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to add break.");
         } finally {
             setIsAddingBreak(false);
         }
@@ -157,8 +159,9 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
             await api.delete(`/admin/institutions/${institutionSlug}/locations/${location.slug}/breaks/${breakId}`);
             setBreaks(prev => prev.filter(b => b.id !== breakId));
             toast.success("Break removed.");
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || "Failed to remove break.");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to remove break.");
         }
     };
 
@@ -171,7 +174,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
 
     return (
         <Dialog open={!!location} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto border-primary/20 bg-gradient-to-b from-background to-accent/30">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <Clock className="w-5 h-5 text-muted-foreground" />
@@ -193,9 +196,9 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                                 <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
                             </div>
                         ) : (
-                            <div className="space-y-3 rounded-md border p-4">
+                            <div className="space-y-3 rounded-lg border border-primary/20 bg-background/70 p-4">
                                 {hours.map((hour) => (
-                                    <div key={hour.day_of_week} className="flex items-center gap-4">
+                                    <div key={hour.day_of_week} className="flex items-center gap-4 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
                                         <div className="w-32 flex items-center gap-2">
                                             <Switch
                                                 checked={hour.is_open}
@@ -240,7 +243,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                         <div className="flex items-center justify-between">
                             <h3 className="text-lg font-medium">Scheduled Breaks</h3>
                         </div>
-                        <div className="rounded-md border p-4 space-y-4">
+                        <div className="space-y-4 rounded-lg border border-primary/20 bg-background/70 p-4">
                             {isLoadingBreaks ? (
                                 <div className="flex justify-center p-4">
                                     <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -250,7 +253,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                             ) : (
                                 <div className="space-y-2">
                                     {breaks.map((brk) => (
-                                        <div key={brk.id} className="flex items-center justify-between bg-muted/50 p-3 rounded-md border">
+                                        <div key={brk.id} className="flex items-center justify-between rounded-md border border-border/60 bg-muted/30 p-3">
                                             <div className="grid grid-cols-4 w-full items-center gap-4">
                                                 <span className="font-medium text-sm col-span-1 truncate">{brk.name}</span>
                                                 <span className="text-sm text-muted-foreground col-span-1">{getDayLabel(brk.day_of_week)}</span>
@@ -266,7 +269,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                                 </div>
                             )}
 
-                            <div className="pt-4 border-t mt-4">
+                            <div className="mt-4 border-t border-primary/15 pt-4">
                                 <h4 className="text-sm font-medium mb-3">Add New Break</h4>
                                 <div className="grid grid-cols-5 gap-3 items-end">
                                     <div className="col-span-1 space-y-1">

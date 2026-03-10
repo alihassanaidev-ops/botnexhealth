@@ -96,7 +96,7 @@ function formatPhone(raw: string): string {
 
 function SectionCard({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
     return (
-        <div className="rounded-lg border bg-card p-6 space-y-4">
+        <div className="space-y-4 rounded-xl border border-primary/20 bg-gradient-to-br from-card to-accent/25 p-6 shadow-sm">
             <div className="space-y-0.5">
                 <h3 className="text-base font-semibold leading-none tracking-tight">{title}</h3>
                 {description && <p className="text-sm text-muted-foreground">{description}</p>}
@@ -243,15 +243,16 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
             }
 
             onSuccess();
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || `Failed to ${isEditing ? "update" : "create"} location`);
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || `Failed to ${isEditing ? "update" : "create"} location`);
         }
     }
 
     return (
         <TooltipProvider>
             <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pb-24">
+                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5 pb-24">
 
                     {/* NexHealth Autofill Picker */}
                     <FormField
@@ -388,7 +389,7 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
                                                 try {
                                                     await verifyRetellAgent(field.value || "");
                                                     setAgentVerificationStatus("success");
-                                                } catch (e) {
+                                                } catch {
                                                     setAgentVerificationStatus("error");
                                                 } finally {
                                                     setIsVerifyingAgent(false);
@@ -444,8 +445,8 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
                                                         isLoadingTwilio
                                                             ? "Loading numbers…"
                                                             : twilioNumbers.length === 0
-                                                            ? "No SMS-capable numbers found"
-                                                            : "Select a Twilio number"
+                                                                ? "No SMS-capable numbers found"
+                                                                : "Select a Twilio number"
                                                     }
                                                 />
                                             </SelectTrigger>
@@ -570,7 +571,7 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
                 </form>
 
                 {/* Sticky Footer */}
-                <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+                <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-primary/20 bg-gradient-to-r from-background/95 via-background/90 to-accent/40 backdrop-blur supports-[backdrop-filter]:bg-background/70">
                     <div className="px-6 py-3 flex items-center justify-between gap-4 w-full">
                         <div className="flex items-center gap-2">
                             {isDirty && (

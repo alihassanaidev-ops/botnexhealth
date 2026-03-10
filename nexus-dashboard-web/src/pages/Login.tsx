@@ -39,7 +39,7 @@ export default function Login() {
         try {
             await signInWithSupabase(values.email, values.password);
             // onAuthStateChange in AuthContext handles navigation after token exchange
-        } catch (error) {
+        } catch {
             // Error handled in AuthContext with toast
         } finally {
             setLoading(false)
@@ -57,7 +57,8 @@ export default function Login() {
             // Generic success message avoids account enumeration.
             form.setValue("password", "");
             toast.success("If an account exists, a password reset email has been sent.");
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { message?: string };
             // Keep surface minimal - Supabase message is usually actionable.
             form.setError("email", { message: error?.message || "Failed to send reset email" });
         } finally {
@@ -66,8 +67,8 @@ export default function Login() {
     }
 
     return (
-        <div className="flex h-screen w-full items-center justify-center bg-gray-50">
-            <Card className="w-full max-w-sm">
+        <div className="flex h-screen w-full items-center justify-center bg-gradient-to-b from-background via-background to-accent/30 p-4">
+            <Card className="w-full max-w-sm border-primary/20 bg-gradient-to-b from-card to-accent/20 shadow-lg">
                 <CardHeader>
                     <CardTitle className="text-2xl">Login</CardTitle>
                     <CardDescription>

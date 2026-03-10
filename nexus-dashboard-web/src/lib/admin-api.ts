@@ -7,7 +7,7 @@ export async function listInstitutionsDetailed(): Promise<InstitutionDetail[]> {
     return data
 }
 
-export async function verifyRetellAgent(agentId: string): Promise<any> {
+export async function verifyRetellAgent(agentId: string): Promise<unknown> {
     const { data } = await api.get(`/admin/institutions/retell/agents/${agentId}`)
     return data
 }

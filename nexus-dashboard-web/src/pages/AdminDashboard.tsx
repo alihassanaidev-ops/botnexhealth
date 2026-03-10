@@ -58,7 +58,7 @@ export default function AdminDashboard() {
     const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
 
     return (
-        <div className="flex-1 space-y-6 p-8 pt-6">
+        <div className="flex-1 space-y-6 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
@@ -97,31 +97,35 @@ export default function AdminDashboard() {
                         value={String(institutions.length)}
                         description="All registered practices"
                         icon={Building2}
+                        tone="neutral"
                     />
                     <StatsCard
                         title="Active"
                         value={String(activeInstitutions.length)}
                         description="Currently active institutions"
                         icon={CheckCircle2}
+                        tone="primary"
                     />
                     <StatsCard
                         title="Inactive"
                         value={String(inactiveInstitutions.length)}
                         description="Disabled or paused institutions"
                         icon={XCircle}
+                        tone="primarySoft"
                     />
                     <StatsCard
                         title="Fully Configured"
                         value={String(fullyConfigured.length)}
                         description="NexHealth + Retell ready"
                         icon={Settings}
+                        tone="accent"
                     />
                 </div>
             )}
 
             {/* Integration Overview */}
             {!loading && (
-                <Card>
+                <Card className="border-primary/20 bg-gradient-to-r from-secondary/70 via-accent/60 to-primary2/25">
                     <CardHeader>
                         <CardTitle>Integration Coverage</CardTitle>
                         <CardDescription>
@@ -130,10 +134,10 @@ export default function AdminDashboard() {
                     </CardHeader>
                     <CardContent>
                         <div className="flex flex-wrap gap-3">
-                            <Badge variant="secondary" className="text-sm px-3 py-1">
+                            <Badge variant="secondary" className="text-sm px-3 py-1 border border-primary/25 bg-primary/10 text-primary">
                                 NexHealth: {integrationCounts.nexhealth}
                             </Badge>
-                            <Badge variant="secondary" className="text-sm px-3 py-1">
+                            <Badge variant="secondary" className="text-sm px-3 py-1 border border-accent-foreground/20 bg-accent text-accent-foreground">
                                 Retell AI: {integrationCounts.retell}
                             </Badge>
                         </div>
@@ -142,7 +146,7 @@ export default function AdminDashboard() {
             )}
 
             {/* Institution Table */}
-            <Card>
+            <Card className="border-border/80 shadow-sm">
                 <CardHeader>
                     <div className="flex items-center justify-between">
                         <div>
@@ -175,7 +179,7 @@ export default function AdminDashboard() {
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm">
                                 <thead>
-                                    <tr className="border-b text-left text-muted-foreground">
+                                    <tr className="border-b border-border text-left text-muted-foreground">
                                         <th className="pb-3 font-medium">Name</th>
                                         <th className="pb-3 font-medium">Contact</th>
                                         <th className="pb-3 font-medium">Status</th>
@@ -186,13 +190,18 @@ export default function AdminDashboard() {
                                 </thead>
                                 <tbody>
                                     {institutions.map((inst) => (
-                                        <tr key={inst.id} className="border-b last:border-0">
+                                        <tr key={inst.id} className="border-b border-border/60 last:border-0 hover:bg-muted/40 transition-colors">
                                             <td className="py-3 font-medium">{inst.name}</td>
                                             <td className="py-3 text-muted-foreground text-xs">
                                                 {inst.user?.email ?? "—"}
                                             </td>
                                             <td className="py-3">
-                                                <Badge variant={inst.is_active ? "default" : "secondary"}>
+                                                <Badge
+                                                    variant="secondary"
+                                                    className={inst.is_active
+                                                        ? "border border-primary/25 bg-primary/10 text-primary"
+                                                        : "border border-border bg-muted text-muted-foreground"}
+                                                >
                                                     {inst.is_active ? "Active" : "Inactive"}
                                                 </Badge>
                                             </td>

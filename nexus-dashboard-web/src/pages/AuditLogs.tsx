@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { format } from "date-fns";
 import {
     Table,
@@ -25,7 +25,7 @@ export default function AuditLogs() {
     const [total, setTotal] = useState(0);
     const pageSize = 50;
 
-    async function fetchLogs(currentPage: number = page) {
+    const fetchLogs = useCallback(async (currentPage: number) => {
         setLoading(true);
         try {
             const scope = user?.role === "LOCATION_ADMIN"
@@ -35,17 +35,18 @@ export default function AuditLogs() {
             setLogs(data.items);
             setTotal(data.total);
             setPage(currentPage);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error("Failed to fetch audit logs:", err);
-            toast.error(err.message || "Unknown error occurred.");
+            const error = err as { message?: string };
+            toast.error(error?.message || "Unknown error occurred.");
         } finally {
             setLoading(false);
         }
-    }
+    }, [user?.role, pageSize]);
 
     useEffect(() => {
         fetchLogs(1);
-    }, []);
+    }, [fetchLogs]);
 
     function renderOutcomeBadge(outcome: string) {
         if (outcome === "SUCCESS") {
@@ -73,7 +74,7 @@ export default function AuditLogs() {
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Audit Logs</h1>
@@ -103,7 +104,7 @@ export default function AuditLogs() {
                         </div>
                     ) : (
                         <div className="space-y-4">
-                            <div className="border rounded-md">
+                            <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm">
                                 <Table>
                                     <TableHeader>
                                         <TableRow>

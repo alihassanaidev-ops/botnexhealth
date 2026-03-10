@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Loader2, MailPlus, RefreshCcw, Users } from "lucide-react"
 import { toast } from "sonner"
 
@@ -33,7 +33,7 @@ export default function InstitutionUserManagement() {
     const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
     const [users, setUsers] = useState<InstitutionUserRow[]>([])
 
-    async function loadData() {
+    const loadData = useCallback(async () => {
         setLoading(true)
         try {
             const [locationRows, userRows] = await Promise.all([
@@ -42,19 +42,18 @@ export default function InstitutionUserManagement() {
             ])
             setLocations(locationRows)
             setUsers(userRows)
-            if (!inviteLocationSlug && locationRows.length > 0) {
-                setInviteLocationSlug(locationRows[0].slug)
-            }
-        } catch (error: any) {
+            setInviteLocationSlug(prev => prev || (locationRows.length > 0 ? locationRows[0].slug : ""))
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to load user management")
         } finally {
             setLoading(false)
         }
-    }
+    }, []);
 
     useEffect(() => {
         void loadData()
-    }, [])
+    }, [loadData])
 
     async function handleInviteUser() {
         if (!inviteEmail.trim()) return
@@ -73,7 +72,8 @@ export default function InstitutionUserManagement() {
             toast.success("Invite sent")
             setInviteEmail("")
             setUsers(await listInstitutionUsers())
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to invite user")
         } finally {
             setInvitingUser(false)
@@ -87,7 +87,8 @@ export default function InstitutionUserManagement() {
             await deactivateInstitutionUser(target.id)
             toast.success("User deactivated")
             setUsers(await listInstitutionUsers())
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to deactivate user")
         } finally {
             setActingUserId(null)
@@ -101,7 +102,8 @@ export default function InstitutionUserManagement() {
             await reinviteInstitutionUser(target.id)
             toast.success("Reinvite sent")
             setUsers(await listInstitutionUsers())
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to reinvite user")
         } finally {
             setActingUserId(null)
@@ -109,7 +111,7 @@ export default function InstitutionUserManagement() {
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Institution User Management</h1>

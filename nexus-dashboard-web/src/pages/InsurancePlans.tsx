@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Loader2, Pencil, Plus, RefreshCcw, Shield, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 
@@ -45,30 +45,32 @@ export default function InsurancePlans() {
                 if (locs.length > 0) {
                     setSelectedSlug(locs[0].slug)
                 }
-            } catch (error: any) {
+            } catch (err: unknown) {
+                const error = err as { response?: { data?: { detail?: string } } };
                 toast.error(error?.response?.data?.detail || "Failed to load locations")
             }
         }
         void loadLocations()
     }, [])
 
-    useEffect(() => {
-        if (!selectedSlug) return
-        void loadPlans()
-    }, [selectedSlug])
-
-    async function loadPlans() {
+    const loadPlans = useCallback(async () => {
         if (!selectedSlug) return
         setLoading(true)
         try {
             const data = await listInsurancePlans(selectedSlug)
             setPlans(data)
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to load insurance plans")
         } finally {
             setLoading(false)
         }
-    }
+    }, [selectedSlug]);
+
+    useEffect(() => {
+        if (!selectedSlug) return
+        void loadPlans()
+    }, [selectedSlug, loadPlans])
 
     function openCreateForm() {
         setEditingPlan(null)
@@ -108,7 +110,8 @@ export default function InsurancePlans() {
             }
             closeForm()
             await loadPlans()
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to save insurance plan")
         } finally {
             setSaving(false)
@@ -122,7 +125,8 @@ export default function InsurancePlans() {
             await deleteInsurancePlan(selectedSlug, plan.id)
             toast.success("Insurance plan removed")
             await loadPlans()
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to remove insurance plan")
         } finally {
             setDeletingId(null)
@@ -132,7 +136,7 @@ export default function InsurancePlans() {
     const showLocationPicker = user?.role === "INSTITUTION_ADMIN" && locations.length > 1
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Insurance Plans</h1>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { format } from "date-fns";
 import {
     Table,
@@ -26,20 +26,21 @@ export default function AdminAuditLogs() {
     const [institutionIdFilter, setInstitutionIdFilter] = useState("");
     const pageSize = 50;
 
-    async function fetchLogs(currentPage: number = page, institutionId: string = institutionIdFilter) {
+    const fetchLogs = useCallback(async (currentPage: number, institutionId: string) => {
         setLoading(true);
         try {
             const data = await listAdminAuditLogs(currentPage, pageSize, institutionId || undefined);
             setLogs(data.items);
             setTotal(data.total);
             setPage(currentPage);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error("Failed to fetch admin audit logs:", err);
-            toast.error(err.message || "Unknown error occurred.");
+            const error = err as { message?: string };
+            toast.error(error?.message || "Unknown error occurred.");
         } finally {
             setLoading(false);
         }
-    }
+    }, [pageSize]);
 
     useEffect(() => {
         // Debounce fetching if filtering by institution ID
@@ -47,7 +48,7 @@ export default function AdminAuditLogs() {
             fetchLogs(1, institutionIdFilter);
         }, 300);
         return () => clearTimeout(timer);
-    }, [institutionIdFilter]);
+    }, [institutionIdFilter, fetchLogs]);
 
     function renderOutcomeBadge(outcome: string) {
         if (outcome === "SUCCESS") {
@@ -75,7 +76,7 @@ export default function AdminAuditLogs() {
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Platform Audit Logs</h1>
@@ -93,7 +94,7 @@ export default function AdminAuditLogs() {
                             onChange={(e) => setInstitutionIdFilter(e.target.value)}
                         />
                     </div>
-                    <Button variant="outline" onClick={() => fetchLogs(page)} disabled={loading}>
+                    <Button variant="outline" onClick={() => fetchLogs(page, institutionIdFilter)} disabled={loading}>
                         <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                         Refresh Logs
                     </Button>
@@ -116,7 +117,7 @@ export default function AdminAuditLogs() {
                         </div>
                     ) : (
                         <div className="space-y-4">
-                            <div className="border rounded-md">
+                            <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm">
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
@@ -158,7 +159,7 @@ export default function AdminAuditLogs() {
                                     <Button
                                         variant="outline"
                                         size="sm"
-                                        onClick={() => fetchLogs(page - 1)}
+                                        onClick={() => fetchLogs(page - 1, institutionIdFilter)}
                                         disabled={page === 1 || loading}
                                     >
                                         <ChevronLeft className="h-4 w-4 mr-1" />
@@ -170,7 +171,7 @@ export default function AdminAuditLogs() {
                                     <Button
                                         variant="outline"
                                         size="sm"
-                                        onClick={() => fetchLogs(page + 1)}
+                                        onClick={() => fetchLogs(page + 1, institutionIdFilter)}
                                         disabled={page >= Math.ceil(total / pageSize) || loading}
                                     >
                                         Next

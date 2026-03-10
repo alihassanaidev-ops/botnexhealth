@@ -10,7 +10,7 @@ import {
     ArrowRight,
     CalendarDays,
     TrendingUp,
-    Infinity,
+    Infinity as InfinityIcon,
     Clock,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -79,29 +79,49 @@ const VOLUME_CARD_CONFIG = [
         label: "Today",
         key: "today" as const,
         icon: CalendarDays,
-        iconBg: "bg-blue-500/15 dark:bg-blue-500/20",
-        iconColor: "text-blue-500",
+        cardClass: "border-border/80 bg-card shadow-sm",
+        titleClass: "text-muted-foreground",
+        valueClass: "text-foreground",
+        subtextClass: "text-muted-foreground",
+        iconBg: "bg-muted",
+        iconColor: "text-foreground/80",
+        accentClass: "via-border/70",
     },
     {
         label: "This Week",
         key: "this_week" as const,
         icon: TrendingUp,
-        iconBg: "bg-violet-500/15 dark:bg-violet-500/20",
-        iconColor: "text-violet-500",
+        cardClass: "border-primary/30 bg-gradient-to-br from-primary to-primary2 text-primary-foreground shadow-lg shadow-primary/20",
+        titleClass: "text-primary-foreground/90",
+        valueClass: "text-primary-foreground",
+        subtextClass: "text-primary-foreground/85",
+        iconBg: "bg-primary-foreground/15",
+        iconColor: "text-primary-foreground",
+        accentClass: "via-primary-foreground/40",
     },
     {
         label: "This Month",
         key: "this_month" as const,
         icon: Phone,
-        iconBg: "bg-purple-500/15 dark:bg-purple-500/20",
-        iconColor: "text-purple-500",
+        cardClass: "border-primary/20 bg-gradient-to-br from-secondary via-accent to-primary2/25 text-foreground shadow-md shadow-primary/10",
+        titleClass: "text-muted-foreground",
+        valueClass: "text-foreground",
+        subtextClass: "text-muted-foreground",
+        iconBg: "bg-primary/15",
+        iconColor: "text-primary",
+        accentClass: "via-primary/35",
     },
     {
         label: "All Time",
         key: "all_time" as const,
-        icon: Infinity,
-        iconBg: "bg-slate-500/15 dark:bg-slate-400/15",
-        iconColor: "text-slate-400",
+        icon: InfinityIcon,
+        cardClass: "border-accent-foreground/20 bg-gradient-to-br from-accent via-secondary to-primary2/20 text-foreground shadow-md shadow-accent-foreground/10",
+        titleClass: "text-muted-foreground",
+        valueClass: "text-foreground",
+        subtextClass: "text-muted-foreground",
+        iconBg: "bg-accent-foreground/15",
+        iconColor: "text-accent-foreground",
+        accentClass: "via-accent-foreground/35",
     },
 ]
 
@@ -148,12 +168,29 @@ interface VolumeCardProps {
     label: string
     value: number | undefined
     icon: React.ElementType
+    cardClass: string
+    titleClass: string
+    valueClass: string
+    subtextClass: string
     iconBg: string
     iconColor: string
+    accentClass: string
     loading: boolean
 }
 
-function VolumeCard({ label, value, icon: Icon, iconBg, iconColor, loading }: VolumeCardProps) {
+function VolumeCard({
+    label,
+    value,
+    icon: Icon,
+    cardClass,
+    titleClass,
+    valueClass,
+    subtextClass,
+    iconBg,
+    iconColor,
+    accentClass,
+    loading,
+}: VolumeCardProps) {
     const animatedValue = useAnimatedCount(loading ? undefined : (value ?? 0))
 
     if (loading) {
@@ -169,20 +206,20 @@ function VolumeCard({ label, value, icon: Icon, iconBg, iconColor, loading }: Vo
     }
 
     return (
-        <Card className="group relative overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/20 cursor-default">
+        <Card className={`group relative overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg cursor-default ${cardClass}`}>
             {/* Subtle top gradient accent */}
-            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
+            <div className={`absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent ${accentClass} to-transparent`} />
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
+                <CardTitle className={`text-sm font-medium ${titleClass}`}>{label}</CardTitle>
                 <div className={`rounded-lg p-2.5 ${iconBg} transition-transform duration-200 group-hover:scale-110`}>
                     <Icon className={`h-4 w-4 ${iconColor}`} />
                 </div>
             </CardHeader>
             <CardContent className="pb-5">
-                <div className="text-4xl font-black tabular-nums tracking-tight animate-count-fade">
+                <div className={`text-4xl font-black tabular-nums tracking-tight animate-count-fade ${valueClass}`}>
                     {animatedValue.toLocaleString()}
                 </div>
-                <p className="text-xs text-muted-foreground/60 mt-1">calls</p>
+                <p className={`text-xs mt-1 ${subtextClass}`}>calls</p>
             </CardContent>
         </Card>
     )
@@ -348,7 +385,7 @@ export default function Dashboard() {
     const totalTagCount = tagCounts.reduce((sum, tc) => sum + tc.count, 0)
 
     return (
-        <div className="flex-1 space-y-6 p-8 pt-6 animate-fade-in-up">
+        <div className="flex-1 space-y-6 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6 animate-fade-in-up">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
@@ -373,14 +410,19 @@ export default function Dashboard() {
 
             {/* Volume cards */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                {VOLUME_CARD_CONFIG.map(({ label, key, icon, iconBg, iconColor }) => (
+                {VOLUME_CARD_CONFIG.map(({ label, key, icon, cardClass, titleClass, valueClass, subtextClass, iconBg, iconColor, accentClass }) => (
                     <VolumeCard
                         key={key}
                         label={label}
                         value={summary?.call_volume[key]}
                         icon={icon}
+                        cardClass={cardClass}
+                        titleClass={titleClass}
+                        valueClass={valueClass}
+                        subtextClass={subtextClass}
                         iconBg={iconBg}
                         iconColor={iconColor}
+                        accentClass={accentClass}
                         loading={loading}
                     />
                 ))}
@@ -389,7 +431,7 @@ export default function Dashboard() {
             {/* Bottom grid: tag breakdown + callback queue */}
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* Tag breakdown */}
-                <Card>
+                <Card className="border-primary/20 shadow-sm">
                     <CardHeader className="pb-4">
                         <CardTitle className="text-base font-semibold">Call Tags Breakdown</CardTitle>
                         <CardDescription>All-time calls by primary tag.</CardDescription>
@@ -445,7 +487,7 @@ export default function Dashboard() {
                 </Card>
 
                 {/* Callback queue */}
-                <Card className={`transition-all duration-300 ${hasCallbacks ? "border-l-4 border-l-amber-500" : ""}`}>
+                <Card className={`transition-all duration-300 shadow-sm ${hasCallbacks ? "border-l-4 border-l-amber-500 bg-amber-50/20" : "border-border/80"}`}>
                     <CardHeader className="pb-4">
                         <div className="flex items-center justify-between">
                             <div>

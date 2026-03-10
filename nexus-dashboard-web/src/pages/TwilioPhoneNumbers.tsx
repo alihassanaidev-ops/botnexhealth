@@ -90,7 +90,7 @@ export default function TwilioPhoneNumbers() {
     const voiceCapable = numbers.filter((n) => n.capabilities.voice)
 
     return (
-        <div className="flex-1 space-y-6 p-8 pt-6">
+        <div className="flex-1 space-y-6 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>

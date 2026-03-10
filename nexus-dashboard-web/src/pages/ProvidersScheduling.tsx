@@ -253,7 +253,7 @@ export default function ProvidersScheduling() {
     const relevantApptTypes = appointmentTypes.filter((at) => availableApptTypeIds.has(at.source_id))
 
     return (
-        <div className="flex-1 space-y-4 p-8 pt-6">
+        <div className="flex-1 space-y-4 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6">
             <div className="flex items-center justify-between space-y-2">
                 <div>
                     <h2 className="text-3xl font-bold tracking-tight">Providers & Scheduling</h2>
@@ -285,9 +285,9 @@ export default function ProvidersScheduling() {
             )}
 
             {unlinkedCount > 0 && !loading && !error && (
-                <Alert className="border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertDescription>
+                <Alert className="flex items-center gap-2 border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] text-indigo-700 [&>svg]:static [&>svg]:left-auto [&>svg]:top-auto [&>svg]:translate-y-0 [&>svg+div]:translate-y-0 [&>svg~*]:pl-0 dark:bg-[rgb(255,244,227)]/10 dark:text-indigo-300">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <AlertDescription className="m-0 leading-5">
                         {unlinkedCount} work window{unlinkedCount !== 1 ? "s" : ""} without linked
                         appointment types. These won't generate bookable slots.
                     </AlertDescription>
@@ -448,8 +448,8 @@ export default function ProvidersScheduling() {
                                         const isPastDate = !!av.specific_date && av.specific_date < new Date().toISOString().slice(0, 10)
                                         const isWarning = !hasTypes && !isPastDate
 
-                                        const mutedClass = isWarning ? "text-amber-500 dark:text-amber-400" : "text-muted-foreground"
-                                        const normalClass = isWarning ? "text-amber-700 dark:text-amber-300" : ""
+                                        const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
+                                        const normalClass = isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
 
                                         return (
                                             <div
@@ -457,8 +457,8 @@ export default function ProvidersScheduling() {
                                                 className={`rounded-lg border p-4 transition-colors ${isPastDate
                                                         ? "border-border/40 bg-muted/20 opacity-50"
                                                         : isWarning
-                                                            ? "border-amber-500/25 bg-amber-500/8 dark:bg-amber-500/[0.06]"
-                                                            : "border-border/60 hover:border-border"
+                                                            ? "border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] dark:bg-[rgb(255,244,227)]/10"
+                                                            : "border-primary/20 bg-background/70 hover:border-primary/35"
                                                     }`}
                                             >
                                                 <div className="flex items-start justify-between">
@@ -477,7 +477,7 @@ export default function ProvidersScheduling() {
                                                                 <Badge
                                                                     variant={isWarning ? "outline" : "secondary"}
                                                                     className={`text-xs ${isWarning
-                                                                            ? "border-amber-500/40 text-amber-600 dark:text-amber-400 bg-amber-500/10"
+                                                                            ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 bg-indigo-500/10"
                                                                             : ""
                                                                         }`}
                                                                 >
@@ -487,7 +487,7 @@ export default function ProvidersScheduling() {
                                                             {!av.synced && (
                                                                 <Badge
                                                                     variant="outline"
-                                                                    className={`text-xs ${isWarning ? "border-amber-500/40 text-amber-600 dark:text-amber-400" : ""
+                                                                    className={`text-xs ${isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300" : ""
                                                                         }`}
                                                                 >
                                                                     Manual
@@ -511,7 +511,7 @@ export default function ProvidersScheduling() {
                                                             {hasTypes ? (
                                                                 <span>{av.appointment_type_names?.join(", ")}</span>
                                                             ) : (
-                                                                <span className="text-amber-600 dark:text-amber-400 font-medium">
+                                                                <span className="text-indigo-700 dark:text-indigo-300 font-medium">
                                                                     None linked
                                                                 </span>
                                                             )}
@@ -521,7 +521,7 @@ export default function ProvidersScheduling() {
                                                         <Button
                                                             variant="outline"
                                                             size="sm"
-                                                            className={isWarning ? "border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 shrink-0" : "shrink-0"}
+                                                            className={isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/10 shrink-0" : "shrink-0"}
                                                             onClick={() => openEditDialog(av)}
                                                         >
                                                             Edit Linking

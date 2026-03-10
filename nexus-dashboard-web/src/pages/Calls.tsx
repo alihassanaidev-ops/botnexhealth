@@ -689,7 +689,7 @@ export default function Calls() {
     const to = Math.min((page + 1) * PAGE_SIZE, total)
 
     return (
-        <div className="flex-1 space-y-6 p-8 pt-6">
+        <div className="flex-1 space-y-6 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6">
             {/* Page header */}
             <div className="flex items-center justify-between">
                 <div>

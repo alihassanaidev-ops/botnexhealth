@@ -49,8 +49,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
         form.reset({
             nexhealth_api_key: "",
         });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [institution]);
+    }, [institution, form]);
 
     async function onSubmit(values: CredentialsFormValues) {
         setIsSaving(true);
@@ -81,22 +80,23 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
             toast.success("Credentials updated");
             setEditingSection(null);
             onUpdated();
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || "Failed to update credentials");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to update credentials");
         } finally {
             setIsSaving(false);
         }
     }
 
     const IntegrationStatus = ({ configured, hasSystemKey = false }: { configured: boolean; hasSystemKey?: boolean }) => {
-        let statusColor = "bg-neutral-300 dark:bg-neutral-600";
+        let statusColor = "bg-muted-foreground/40";
         let statusText = "Not Connected";
 
         if (configured) {
-            statusColor = "bg-green-500";
+            statusColor = "bg-primary";
             statusText = "Connected";
         } else if (hasSystemKey) {
-            statusColor = "bg-green-500/50";
+            statusColor = "bg-primary/60";
             statusText = "Connected (System)";
         }
 
@@ -128,7 +128,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
         const isEditing = editingSection === section;
 
         return (
-            <Card className={`group overflow-hidden transition-all duration-200 border-border/60 hover:border-border/80 hover:bg-muted/50 hover:shadow-sm ${isEditing ? "ring-1 ring-ring border-ring" : ""}`}>
+            <Card className={`group overflow-hidden border-primary/15 bg-gradient-to-br from-card to-accent/20 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-md hover:shadow-primary/10 ${isEditing ? "ring-1 ring-primary/40 border-primary/50" : ""}`}>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 gap-4">
                     <div className="flex-1 space-y-1">
                         <div className="flex items-center gap-2">
@@ -146,7 +146,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 type="button"
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                className="h-8 w-8 text-muted-foreground hover:bg-primary/10 hover:text-primary"
                                 onClick={() => setEditingSection(null)}
                             >
                                 <X className="h-4 w-4" />
@@ -156,7 +156,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 type="button"
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-background/80"
+                                className="h-8 w-8 text-muted-foreground hover:bg-primary/10 hover:text-primary"
                                 onClick={() => setEditingSection(section)}
                             >
                                 <Pencil className="h-4 w-4" />
@@ -166,7 +166,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                 </div>
 
                 {isEditing && (
-                    <div className="border-t bg-background/50 px-4 py-6 space-y-4 animate-in slide-in-from-top-2 fade-in duration-200">
+                    <div className="animate-in slide-in-from-top-2 fade-in space-y-4 border-t border-primary/15 bg-background/60 px-4 py-6 duration-200">
                         {children}
                     </div>
                 )}

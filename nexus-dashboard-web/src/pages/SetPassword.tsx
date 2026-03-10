@@ -40,16 +40,17 @@ export default function SetPassword() {
         setLoading(true)
         try {
             await updatePassword(values.password)
-        } catch (error: any) {
-            toast.error(error.message || "Failed to update password")
+        } catch (err: unknown) {
+            const error = err as { message?: string };
+            toast.error(error?.message || "Failed to update password")
         } finally {
             setLoading(false)
         }
     }
 
     return (
-        <div className="flex h-screen w-full items-center justify-center bg-gray-50">
-            <Card className="w-full max-w-sm">
+        <div className="flex h-screen w-full items-center justify-center bg-gradient-to-b from-background via-background to-accent/30 p-4">
+            <Card className="w-full max-w-sm border-primary/20 bg-gradient-to-b from-card to-accent/20 shadow-lg">
                 <CardHeader>
                     <CardTitle className="text-2xl">Set New Password</CardTitle>
                     <CardDescription>

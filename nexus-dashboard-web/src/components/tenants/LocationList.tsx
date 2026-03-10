@@ -88,8 +88,9 @@ export function LocationList({ institutionSlug }: LocationListProps) {
             toast.success(`Location "${deleteTarget.name}" deleted`);
             setDeleteTarget(null);
             fetchLocations();
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || "Failed to delete location");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to delete location");
         } finally {
             setIsDeleting(false);
         }
@@ -110,8 +111,9 @@ export function LocationList({ institutionSlug }: LocationListProps) {
             } else {
                 toast.error("Sync completed with errors");
             }
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || "Sync failed");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Sync failed");
         } finally {
             setSyncingSlug(null);
         }
@@ -129,8 +131,9 @@ export function LocationList({ institutionSlug }: LocationListProps) {
             setInviteTarget(null);
             setInviteEmail("");
             fetchLocations();
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || "Failed to send invite");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to send invite");
         } finally {
             setIsInviting(false);
         }
@@ -144,8 +147,9 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                 { email: loc.user.email }
             );
             toast.success(`Re-invite sent to ${loc.user.email}`);
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || "Failed to re-invite");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to re-invite");
         }
     }
 
@@ -186,7 +190,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
             )}
 
             {viewMode === "list" && (
-                <div className="border rounded-md">
+                <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -262,7 +266,12 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                                         )}
                                     </TableCell>
                                     <TableCell>
-                                        <Badge variant={loc.is_active ? "default" : "secondary"}>
+                                        <Badge
+                                            variant="secondary"
+                                            className={loc.is_active
+                                                ? "border border-primary/25 bg-primary/10 text-primary"
+                                                : "border border-border bg-muted text-muted-foreground"}
+                                        >
                                             {loc.is_active ? "Active" : "Inactive"}
                                         </Badge>
                                     </TableCell>
@@ -316,7 +325,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
 
             {/* Create / Edit Form View */}
             {viewMode === "form" && (
-                <div>
+                <div className="rounded-xl border border-primary/20 bg-gradient-to-b from-card to-accent/20 p-4 shadow-sm">
                     <LocationForm
                         institutionSlug={institutionSlug}
                         location={editingLocation}
@@ -335,7 +344,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
 
             {/* Invite Location User Dialog */}
             <Dialog open={!!inviteTarget} onOpenChange={(open) => { if (!open) { setInviteTarget(null); setInviteEmail(""); } }}>
-                <DialogContent>
+                <DialogContent className="max-w-md">
                     <DialogHeader>
                         <DialogTitle>Invite Location User</DialogTitle>
                         <DialogDescription>
@@ -377,7 +386,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
 
             {/* Delete Confirmation Dialog */}
             <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-                <DialogContent>
+                <DialogContent className="max-w-md">
                     <DialogHeader>
                         <DialogTitle>Delete Location</DialogTitle>
                         <DialogDescription>

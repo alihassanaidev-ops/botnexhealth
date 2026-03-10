@@ -120,7 +120,8 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
             )
             toast.success("Operating hours saved")
             onClose()
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to save operating hours")
         } finally {
             setSaving(false)
@@ -131,7 +132,7 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
 
     return (
         <Dialog open={!!location} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-2xl">
+            <DialogContent className="max-w-2xl border-primary/20 bg-gradient-to-b from-background to-accent/30">
                 <DialogHeader>
                     <DialogTitle>Operating Hours: {location.name}</DialogTitle>
                 </DialogHeader>
@@ -142,7 +143,7 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
                 ) : (
                     <div className="space-y-3">
                         {hours.map((hour) => (
-                            <div key={hour.day_of_week} className="flex items-center gap-3 rounded-md border p-3">
+                            <div key={hour.day_of_week} className="flex items-center gap-3 rounded-lg border border-border/70 bg-muted/20 p-3">
                                 <div className="flex w-40 items-center gap-2">
                                     <Switch
                                         checked={hour.is_open}
@@ -238,7 +239,8 @@ export default function InstitutionAdminPanel() {
                     setRoiCalculation(calc)
                 } catch { /* config exists but no calls yet — fine */ }
             }
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to load institution admin panel")
         } finally {
             setLoading(false)
@@ -259,7 +261,8 @@ export default function InstitutionAdminPanel() {
             try {
                 const data = await getDashboardSummary(drilldownLocationSlug)
                 setDrilldownSummary(data)
-            } catch (error: any) {
+            } catch (err: unknown) {
+                const error = err as { response?: { data?: { detail?: string } } };
                 toast.error(error?.response?.data?.detail || "Failed to load location drill-down")
             } finally {
                 setDrilldownLoading(false)
@@ -298,7 +301,8 @@ export default function InstitutionAdminPanel() {
                 ),
             )
             toast.success(`Timezone updated for ${location.name}`)
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to update timezone")
         } finally {
             setTimezoneSavingSlug(null)
@@ -318,7 +322,8 @@ export default function InstitutionAdminPanel() {
                 setRoiCalculation(calc)
             } catch { /* no calls yet */ }
             setRoiCalculating(false)
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to save ROI configuration")
         } finally {
             setRoiSaving(false)
@@ -331,7 +336,8 @@ export default function InstitutionAdminPanel() {
         try {
             const calc = await calculateROI()
             setRoiCalculation(calc)
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to calculate ROI")
         } finally {
             setRoiCalculating(false)
@@ -343,7 +349,7 @@ export default function InstitutionAdminPanel() {
     const tagDistribution = aggregate?.tag_distribution ?? []
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Institution Admin Panel</h1>
@@ -358,7 +364,7 @@ export default function InstitutionAdminPanel() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <Card>
+                <Card className="border-border/80 bg-gradient-to-br from-card to-accent/30 shadow-sm">
                     <CardHeader className="pb-2">
                         <CardDescription>Institution</CardDescription>
                         <CardTitle className="text-lg">{institutionName || "—"}</CardTitle>
@@ -368,17 +374,17 @@ export default function InstitutionAdminPanel() {
                         Centralized admin scope
                     </CardContent>
                 </Card>
-                <Card>
+                <Card className="border-primary/30 bg-gradient-to-br from-primary to-primary2 text-primary-foreground shadow-lg shadow-primary/20">
                     <CardHeader className="pb-2">
-                        <CardDescription>Total Calls (Month)</CardDescription>
-                        <CardTitle className="text-3xl">{summary?.total_calls_month ?? 0}</CardTitle>
+                        <CardDescription className="text-primary-foreground/85">Total Calls (Month)</CardDescription>
+                        <CardTitle className="text-3xl text-primary-foreground">{summary?.total_calls_month ?? 0}</CardTitle>
                     </CardHeader>
-                    <CardContent className="text-sm text-muted-foreground">
+                    <CardContent className="text-sm text-primary-foreground/85">
                         <BarChart3 className="mr-2 inline h-4 w-4" />
                         Cross-location volume
                     </CardContent>
                 </Card>
-                <Card>
+                <Card className="border-primary/20 bg-gradient-to-br from-secondary via-accent to-primary2/20 shadow-sm">
                     <CardHeader className="pb-2">
                         <CardDescription>Bookings (Month)</CardDescription>
                         <CardTitle className="text-3xl">{summary?.appointments_booked_month ?? 0}</CardTitle>
@@ -387,7 +393,7 @@ export default function InstitutionAdminPanel() {
                         Booking rate: {summary?.booking_rate_month ?? 0}%
                     </CardContent>
                 </Card>
-                <Card>
+                <Card className="border-accent-foreground/20 bg-gradient-to-br from-accent via-secondary to-primary2/15 shadow-sm">
                     <CardHeader className="pb-2">
                         <CardDescription>Open Callbacks</CardDescription>
                         <CardTitle className="text-3xl">{summary?.open_callbacks ?? 0}</CardTitle>
@@ -399,7 +405,7 @@ export default function InstitutionAdminPanel() {
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
-                <Card>
+                <Card className="border-primary/20 shadow-sm">
                     <CardHeader>
                         <CardTitle>Tag Distribution</CardTitle>
                         <CardDescription>
@@ -408,9 +414,11 @@ export default function InstitutionAdminPanel() {
                     </CardHeader>
                     <CardContent className="space-y-3">
                         {tagDistribution.map((item) => (
-                            <div key={item.tag} className="flex items-center justify-between rounded-md border p-2">
+                            <div key={item.tag} className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
                                 <span className="text-sm">{item.label}</span>
-                                <span className="text-sm font-semibold">{item.count}</span>
+                                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-sm font-semibold text-primary">
+                                    {item.count}
+                                </span>
                             </div>
                         ))}
                         {!tagDistribution.length && (
@@ -419,7 +427,7 @@ export default function InstitutionAdminPanel() {
                     </CardContent>
                 </Card>
 
-                <Card>
+                <Card className="border-primary/20 shadow-sm">
                     <CardHeader>
                         <CardTitle>Location Drill-Down</CardTitle>
                         <CardDescription>
@@ -451,19 +459,19 @@ export default function InstitutionAdminPanel() {
                             </div>
                         ) : drilldownSummary ? (
                             <div className="grid grid-cols-2 gap-2">
-                                <div className="rounded-md border p-2">
+                                <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5">
                                     <p className="text-xs text-muted-foreground">Calls Today</p>
                                     <p className="text-lg font-semibold">{drilldownSummary.call_volume.today}</p>
                                 </div>
-                                <div className="rounded-md border p-2">
+                                <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5">
                                     <p className="text-xs text-muted-foreground">This Week</p>
                                     <p className="text-lg font-semibold">{drilldownSummary.call_volume.this_week}</p>
                                 </div>
-                                <div className="rounded-md border p-2">
+                                <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5">
                                     <p className="text-xs text-muted-foreground">This Month</p>
                                     <p className="text-lg font-semibold">{drilldownSummary.call_volume.this_month}</p>
                                 </div>
-                                <div className="rounded-md border p-2">
+                                <div className="rounded-lg border border-border/70 bg-muted/20 p-2.5">
                                     <p className="text-xs text-muted-foreground">Open Callbacks</p>
                                     <p className="text-lg font-semibold">{drilldownSummary.callback_queue.length}</p>
                                 </div>
@@ -475,7 +483,7 @@ export default function InstitutionAdminPanel() {
                 </Card>
             </div>
 
-            <Card>
+            <Card className="border-primary/20 shadow-sm">
                 <CardHeader>
                     <CardTitle>Clinic Comparison</CardTitle>
                     <CardDescription>
@@ -483,57 +491,66 @@ export default function InstitutionAdminPanel() {
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Location</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Calls Today</TableHead>
-                                <TableHead>Calls Month</TableHead>
-                                <TableHead>Bookings Month</TableHead>
-                                <TableHead>New Patients</TableHead>
-                                <TableHead>Booking Rate</TableHead>
-                                <TableHead>Open Callbacks</TableHead>
-                                <TableHead className="text-right">Actions</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {comparisonRows.map((row) => (
-                                <TableRow key={row.location_id}>
-                                    <TableCell className="font-medium">{row.location_name}</TableCell>
-                                    <TableCell>{row.status}</TableCell>
-                                    <TableCell>{row.calls_today}</TableCell>
-                                    <TableCell>{row.calls_this_month}</TableCell>
-                                    <TableCell>{row.appointments_booked_month}</TableCell>
-                                    <TableCell>{row.new_patients_month}</TableCell>
-                                    <TableCell>{row.booking_rate_month}%</TableCell>
-                                    <TableCell>{row.open_callbacks}</TableCell>
-                                    <TableCell className="text-right">
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => setDrilldownLocationSlug(row.location_slug)}
-                                        >
-                                            Drill-down
-                                        </Button>
-                                    </TableCell>
-                                </TableRow>
-                            ))}
-                            {!comparisonRows.length && (
+                    <div className="overflow-hidden rounded-lg border border-border/70 bg-background/60">
+                        <Table>
+                            <TableHeader>
                                 <TableRow>
-                                    <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
-                                        No location comparison data yet.
-                                    </TableCell>
+                                    <TableHead>Location</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead>Calls Today</TableHead>
+                                    <TableHead>Calls Month</TableHead>
+                                    <TableHead>Bookings Month</TableHead>
+                                    <TableHead>New Patients</TableHead>
+                                    <TableHead>Booking Rate</TableHead>
+                                    <TableHead>Open Callbacks</TableHead>
+                                    <TableHead className="text-right">Actions</TableHead>
                                 </TableRow>
-                            )}
-                        </TableBody>
-                    </Table>
+                            </TableHeader>
+                            <TableBody>
+                                {comparisonRows.map((row) => (
+                                    <TableRow key={row.location_id}>
+                                        <TableCell className="font-medium">{row.location_name}</TableCell>
+                                        <TableCell>
+                                            <span className={row.status === "Active"
+                                                ? "inline-flex rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                                                : "inline-flex rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground"}
+                                            >
+                                                {row.status}
+                                            </span>
+                                        </TableCell>
+                                        <TableCell>{row.calls_today}</TableCell>
+                                        <TableCell>{row.calls_this_month}</TableCell>
+                                        <TableCell>{row.appointments_booked_month}</TableCell>
+                                        <TableCell>{row.new_patients_month}</TableCell>
+                                        <TableCell>{row.booking_rate_month}%</TableCell>
+                                        <TableCell>{row.open_callbacks}</TableCell>
+                                        <TableCell className="text-right">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => setDrilldownLocationSlug(row.location_slug)}
+                                            >
+                                                Drill-down
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                                {!comparisonRows.length && (
+                                    <TableRow>
+                                        <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
+                                            No location comparison data yet.
+                                        </TableCell>
+                                    </TableRow>
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
                 </CardContent>
             </Card>
 
             {/* ROI Configuration & Results */}
             <div className="grid gap-4 lg:grid-cols-2">
-                <Card>
+                <Card className="border-primary/20 shadow-sm">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <DollarSign className="h-4 w-4" />
@@ -613,74 +630,80 @@ export default function InstitutionAdminPanel() {
                     </CardContent>
                 </Card>
 
-                <Card>
+                <Card className="border-primary/30 bg-gradient-to-br from-primary to-primary2 text-primary-foreground shadow-lg shadow-primary/25">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <TrendingUp className="h-4 w-4" />
                             ROI Summary (This Month)
                         </CardTitle>
-                        <CardDescription>
+                        <CardDescription className="text-primary-foreground/85">
                             {roiConfig ? "Calculated from your call data and configured values." : "Save your ROI configuration to see results."}
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
                         {!roiConfig ? (
-                            <p className="text-sm text-muted-foreground py-8 text-center">
+                            <p className="py-8 text-center text-sm text-primary-foreground/85">
                                 Configure your practice financials to calculate ROI.
                             </p>
                         ) : roiCalculating ? (
                             <div className="flex items-center justify-center py-8">
-                                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                <Loader2 className="h-6 w-6 animate-spin text-primary-foreground/85" />
                             </div>
                         ) : roiCalculation ? (
                             <div className="space-y-4">
                                 <div className="grid grid-cols-2 gap-3">
-                                    <div className="rounded-md border p-3">
-                                        <p className="text-xs text-muted-foreground">Calls Handled</p>
-                                        <p className="text-2xl font-bold">{roiCalculation.total_calls_month}</p>
+                                    <div className="rounded-lg border border-white/30 bg-white/15 p-3">
+                                        <p className="text-xs text-primary-foreground/80">Calls Handled</p>
+                                        <p className="text-2xl font-bold text-primary-foreground">{roiCalculation.total_calls_month}</p>
                                     </div>
-                                    <div className="rounded-md border p-3">
-                                        <p className="text-xs text-muted-foreground">Appointments Booked</p>
-                                        <p className="text-2xl font-bold">{roiCalculation.appointments_booked_month}</p>
+                                    <div className="rounded-lg border border-white/30 bg-white/15 p-3">
+                                        <p className="text-xs text-primary-foreground/80">Appointments Booked</p>
+                                        <p className="text-2xl font-bold text-primary-foreground">{roiCalculation.appointments_booked_month}</p>
                                     </div>
-                                    <div className="rounded-md border p-3">
-                                        <p className="text-xs text-muted-foreground">Revenue from Bookings</p>
-                                        <p className="text-lg font-semibold text-green-600 dark:text-green-400">
+                                    <div className="rounded-lg border border-white/30 bg-white/15 p-3">
+                                        <p className="text-xs text-primary-foreground/80">Revenue from Bookings</p>
+                                        <p className="text-lg font-semibold text-emerald-200">
                                             ${roiCalculation.revenue_from_bookings.toLocaleString()}
                                         </p>
                                     </div>
-                                    <div className="rounded-md border p-3">
-                                        <p className="text-xs text-muted-foreground">New Patient Revenue</p>
-                                        <p className="text-lg font-semibold text-green-600 dark:text-green-400">
+                                    <div className="rounded-lg border border-white/30 bg-white/15 p-3">
+                                        <p className="text-xs text-primary-foreground/80">New Patient Revenue</p>
+                                        <p className="text-lg font-semibold text-emerald-200">
                                             ${roiCalculation.revenue_from_new_patients.toLocaleString()}
                                         </p>
                                     </div>
-                                    <div className="rounded-md border p-3">
-                                        <p className="text-xs text-muted-foreground">Staff Time Saved</p>
-                                        <p className="text-lg font-semibold">{roiCalculation.staff_time_saved_hours}h</p>
-                                        <p className="text-xs text-muted-foreground">${roiCalculation.staff_cost_saved.toLocaleString()} saved</p>
+                                    <div className="rounded-lg border border-white/30 bg-white/15 p-3">
+                                        <p className="text-xs text-primary-foreground/80">Staff Time Saved</p>
+                                        <p className="text-lg font-semibold text-primary-foreground">{roiCalculation.staff_time_saved_hours}h</p>
+                                        <p className="text-xs text-primary-foreground/75">${roiCalculation.staff_cost_saved.toLocaleString()} saved</p>
                                     </div>
-                                    <div className="rounded-md border p-3">
-                                        <p className="text-xs text-muted-foreground">Subscription Cost</p>
-                                        <p className="text-lg font-semibold text-red-500">${roiCalculation.monthly_cost.toLocaleString()}</p>
+                                    <div className="rounded-lg border border-white/30 bg-white/15 p-3">
+                                        <p className="text-xs text-primary-foreground/80">Subscription Cost</p>
+                                        <p className="text-lg font-semibold text-rose-200">${roiCalculation.monthly_cost.toLocaleString()}</p>
                                     </div>
                                 </div>
-                                <div className="rounded-lg border-2 border-primary/20 bg-primary/5 p-4 text-center">
-                                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Monthly ROI</p>
-                                    <p className={`text-4xl font-bold ${roiCalculation.roi_percentage >= 0 ? "text-green-600 dark:text-green-400" : "text-red-500"}`}>
+                                <div className="rounded-xl border border-white/35 bg-white/10 p-4 text-center">
+                                    <p className="text-xs uppercase tracking-wider text-primary-foreground/80">Monthly ROI</p>
+                                    <p className={`text-4xl font-bold ${roiCalculation.roi_percentage >= 0 ? "text-emerald-200" : "text-rose-200"}`}>
                                         {roiCalculation.roi_percentage}%
                                     </p>
-                                    <p className="text-sm text-muted-foreground mt-1">
+                                    <p className="mt-1 text-sm text-primary-foreground/85">
                                         Net value: ${roiCalculation.net_value.toLocaleString()}
                                     </p>
                                 </div>
-                                <Button variant="outline" size="sm" onClick={handleRecalculateROI} disabled={roiCalculating} className="w-full">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleRecalculateROI}
+                                    disabled={roiCalculating}
+                                    className="w-full border-white/35 bg-white/10 text-primary-foreground hover:bg-white/20"
+                                >
                                     <RefreshCcw className="mr-2 h-4 w-4" />
                                     Recalculate
                                 </Button>
                             </div>
                         ) : (
-                            <p className="text-sm text-muted-foreground py-8 text-center">
+                            <p className="py-8 text-center text-sm text-primary-foreground/85">
                                 No calculation data available. Try recalculating.
                             </p>
                         )}
@@ -688,7 +711,7 @@ export default function InstitutionAdminPanel() {
                 </Card>
             </div>
 
-            <Card>
+            <Card className="border-primary/20 shadow-sm">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <MapPin className="h-4 w-4" />
@@ -699,77 +722,86 @@ export default function InstitutionAdminPanel() {
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Location</TableHead>
-                                <TableHead>Phone</TableHead>
-                                <TableHead>Timezone</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead className="text-right">Actions</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {locations.map((location) => {
-                                const selectedTimezone = timezoneDraftBySlug[location.slug] ?? location.timezone ?? "UTC"
-                                const currentTimezone = location.timezone ?? "UTC"
-                                const timezoneChanged = selectedTimezone !== currentTimezone
-                                const savingTimezone = timezoneSavingSlug === location.slug
-                                return (
-                                    <TableRow key={location.id}>
-                                        <TableCell className="font-medium">{location.name}</TableCell>
-                                        <TableCell>{location.phone || "—"}</TableCell>
-                                        <TableCell className="min-w-64">
-                                            <Select
-                                                value={selectedTimezone}
-                                                onValueChange={(value) =>
-                                                    setTimezoneDraftBySlug((prev) => ({
-                                                        ...prev,
-                                                        [location.slug]: value,
-                                                    }))
-                                                }
-                                            >
-                                                <SelectTrigger>
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    {SUPPORTED_TIMEZONES.map((tz) => (
-                                                        <SelectItem key={tz.value} value={tz.value}>
-                                                            {tz.label}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                        </TableCell>
-                                        <TableCell>{location.is_active ? "Active" : "Inactive"}</TableCell>
-                                        <TableCell className="text-right">
-                                            <div className="flex justify-end gap-2">
-                                                <Button
-                                                    variant="secondary"
-                                                    size="sm"
-                                                    disabled={!timezoneChanged || savingTimezone}
-                                                    onClick={() => void handleSaveTimezone(location)}
+                    <div className="overflow-hidden rounded-lg border border-border/70 bg-background/60">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Location</TableHead>
+                                    <TableHead>Phone</TableHead>
+                                    <TableHead>Timezone</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="text-right">Actions</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {locations.map((location) => {
+                                    const selectedTimezone = timezoneDraftBySlug[location.slug] ?? location.timezone ?? "UTC"
+                                    const currentTimezone = location.timezone ?? "UTC"
+                                    const timezoneChanged = selectedTimezone !== currentTimezone
+                                    const savingTimezone = timezoneSavingSlug === location.slug
+                                    return (
+                                        <TableRow key={location.id}>
+                                            <TableCell className="font-medium">{location.name}</TableCell>
+                                            <TableCell>{location.phone || "—"}</TableCell>
+                                            <TableCell className="min-w-64">
+                                                <Select
+                                                    value={selectedTimezone}
+                                                    onValueChange={(value) =>
+                                                        setTimezoneDraftBySlug((prev) => ({
+                                                            ...prev,
+                                                            [location.slug]: value,
+                                                        }))
+                                                    }
                                                 >
-                                                    {savingTimezone ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save TZ"}
-                                                </Button>
-                                                <Button variant="outline" size="sm" onClick={() => setSelectedLocation(location)}>
-                                                    <Settings2 className="mr-2 h-4 w-4" />
-                                                    Edit Hours
-                                                </Button>
-                                            </div>
+                                                    <SelectTrigger>
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {SUPPORTED_TIMEZONES.map((tz) => (
+                                                            <SelectItem key={tz.value} value={tz.value}>
+                                                                {tz.label}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </TableCell>
+                                            <TableCell>
+                                                <span className={location.is_active
+                                                    ? "inline-flex rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                                                    : "inline-flex rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground"}
+                                                >
+                                                    {location.is_active ? "Active" : "Inactive"}
+                                                </span>
+                                            </TableCell>
+                                            <TableCell className="text-right">
+                                                <div className="flex justify-end gap-2">
+                                                    <Button
+                                                        variant="secondary"
+                                                        size="sm"
+                                                        disabled={!timezoneChanged || savingTimezone}
+                                                        onClick={() => void handleSaveTimezone(location)}
+                                                    >
+                                                        {savingTimezone ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save TZ"}
+                                                    </Button>
+                                                    <Button variant="outline" size="sm" onClick={() => setSelectedLocation(location)}>
+                                                        <Settings2 className="mr-2 h-4 w-4" />
+                                                        Edit Hours
+                                                    </Button>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    )
+                                })}
+                                {!locations.length && (
+                                    <TableRow>
+                                        <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
+                                            No locations found for this institution.
                                         </TableCell>
                                     </TableRow>
-                                )
-                            })}
-                            {!locations.length && (
-                                <TableRow>
-                                    <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
-                                        No locations found for this institution.
-                                    </TableCell>
-                                </TableRow>
-                            )}
-                        </TableBody>
-                    </Table>
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
                 </CardContent>
             </Card>
 

@@ -101,10 +101,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 );
                 setToken(data.access_token);
                 return true;
-            } catch (err: any) {
-                const status = err?.response?.status as number | undefined;
-                const detail = err?.response?.data?.detail as string | undefined;
-                const timedOut = err?.code === "ECONNABORTED";
+            } catch (err: unknown) {
+                const error = err as { response?: { status?: number; data?: { detail?: string } }; code?: string };
+                const status = error?.response?.status;
+                const detail = error?.response?.data?.detail;
+                const timedOut = error?.code === "ECONNABORTED";
                 const retryable = !status || status === 429 || status >= 500;
                 console.error(`Token exchange failed (attempt ${attempt}/${EXCHANGE_MAX_ATTEMPTS})`, err);
 
@@ -133,10 +134,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             });
             setUser(data);
             return true;
-        } catch (error: any) {
-            console.error("Failed to fetch user profile", error);
-            const status = error?.response?.status as number | undefined;
-            const detail = error?.response?.data?.detail as string | undefined;
+        } catch (err: unknown) {
+            console.error("Failed to fetch user profile", err);
+            const error = err as { response?: { status?: number; data?: { detail?: string } } };
+            const status = error?.response?.status;
+            const detail = error?.response?.data?.detail;
             lastAuthFailureRef.current = detail || (status ? `Failed to fetch user profile (${status})` : "Failed to fetch user profile");
             return false;
         }
@@ -234,8 +236,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     toast.error(lastAuthFailureRef.current || "Invite link is invalid or has expired. Request a new invite.");
                     navigate("/login", { replace: true });
                 }
-            } catch (error: any) {
-                console.error("Initial auth bootstrap failed", error);
+            } catch (err: unknown) {
+                console.error("Initial auth bootstrap failed", err);
+                const error = err as { message?: string };
                 lastAuthFailureRef.current = error?.message || "Failed to initialize session";
                 clearToken();
                 setUser(null);
@@ -292,7 +295,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             cancelled = true;
             subscription.unsubscribe();
         };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [getAuthFlowError, hasInviteOrRecoveryHash, withTimeout]);
 
     // ---- Sign in with email + password ----
@@ -355,6 +358,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
     const context = useContext(AuthContext);
     if (context === undefined) {

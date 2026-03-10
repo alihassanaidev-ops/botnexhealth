@@ -211,7 +211,7 @@ export default function CustomFields() {
     }
 
     return (
-        <div className="flex-1 space-y-4 p-8 pt-6">
+        <div className="flex-1 space-y-4 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6">
             <div className="flex items-center justify-between space-y-2">
                 <div>
                     <h2 className="text-3xl font-bold tracking-tight">Custom Fields</h2>
@@ -497,7 +497,7 @@ export default function CustomFields() {
 
             {/* Delete / Deactivate Dialog */}
             <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
-                <DialogContent>
+                <DialogContent className="max-w-lg">
                     <DialogHeader>
                         <DialogTitle>Remove Field Definition</DialogTitle>
                         <DialogDescription>
@@ -506,7 +506,7 @@ export default function CustomFields() {
                     </DialogHeader>
                     <div className="space-y-3 py-2">
                         {deleteTarget?.is_active && (
-                            <div className="rounded-md border p-3">
+                            <div className="rounded-md border border-primary/20 bg-background/70 p-3">
                                 <p className="text-sm font-medium">Deactivate</p>
                                 <p className="text-xs text-muted-foreground mt-1">
                                     Hides the field from new data but keeps existing values intact.

@@ -40,15 +40,16 @@ export function TenantForm({ onSuccess }: InstitutionFormProps) {
             toast.success("Institution created successfully")
             form.reset()
             onSuccess()
-        } catch (error: any) {
-            console.error("Failed to create institution", error)
-            toast.error(error.response?.data?.detail || "Failed to create institution")
+        } catch (err: unknown) {
+            console.error("Failed to create institution", err)
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to create institution")
         }
     }
 
     return (
         <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 rounded-xl border border-primary/20 bg-background/70 p-4">
                 <FormField
                     control={form.control}
                     name="name"

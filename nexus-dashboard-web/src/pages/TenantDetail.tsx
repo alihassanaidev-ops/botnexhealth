@@ -61,8 +61,9 @@ export default function InstitutionDetailPage() {
         try {
             const { data } = await api.get<InstitutionDetail>(`/admin/institutions/${slug}`);
             setInstitution(data);
-        } catch (error: any) {
-            console.error("Failed to fetch institution", error);
+        } catch (err: unknown) {
+            console.error("Failed to fetch institution", err);
+            const error = err as { response?: { status?: number, data?: { detail?: string } } };
             if (error.response?.status === 404) {
                 toast.error("Institution not found");
                 navigate("/institutions");
@@ -119,8 +120,9 @@ export default function InstitutionDetailPage() {
             toast.success("Institution updated");
             setEditSheetOpen(false);
             fetchInstitution();
-        } catch (error: any) {
-            toast.error(error.response?.data?.detail || "Failed to update institution");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to update institution");
         }
     }
 
@@ -132,7 +134,8 @@ export default function InstitutionDetailPage() {
             await api.post(`/admin/institutions/${slug}/reinvite`, { email: institution.user.email });
             toast.success(`Reinvite sent to ${institution.user.email}`);
             fetchInstitution();
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to reinvite");
         } finally {
             setReinviting(false);
@@ -155,7 +158,8 @@ export default function InstitutionDetailPage() {
                 tag: testUrgent ? "emergency" : "appointment_booked",
             });
             toast.success(`Test email queued to ${email}`);
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to queue test email");
         } finally {
             setSendingTestEmail(false);
@@ -175,19 +179,19 @@ export default function InstitutionDetailPage() {
         hasSystemKey?: boolean;
         onConfigure: () => void;
     }) => {
-        let statusColor = "bg-neutral-300 dark:bg-neutral-600";
+        let statusColor = "bg-muted-foreground/40";
         let statusText = "Not Connected";
 
         if (isConfigured) {
-            statusColor = "bg-green-500";
+            statusColor = "bg-primary";
             statusText = "Connected";
         } else if (hasSystemKey) {
-            statusColor = "bg-green-500/50";
+            statusColor = "bg-primary/60";
             statusText = "Connected (System)";
         }
 
         return (
-            <div className="group flex items-center justify-between rounded-lg border border-border/60 bg-card p-4 transition-all hover:border-border/80 hover:bg-muted/50 hover:shadow-sm">
+            <div className="group flex items-center justify-between rounded-xl border border-primary/15 bg-gradient-to-br from-card to-accent/20 p-4 transition-all hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-md hover:shadow-primary/10">
                 <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
                         <span className="font-semibold">{name}</span>
@@ -205,7 +209,7 @@ export default function InstitutionDetailPage() {
                 <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-background/80 hover:text-foreground"
+                    className="h-8 w-8 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-primary/10 hover:text-primary"
                     onClick={onConfigure}
                 >
                     <Pencil className="h-4 w-4" />
@@ -232,7 +236,7 @@ export default function InstitutionDetailPage() {
     }
 
     return (
-        <div className="flex-1 space-y-6 p-8 pt-6">
+        <div className="flex-1 space-y-6 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6">
             {/* Header */}
             <div className="flex items-start gap-4">
                 <Button variant="ghost" size="icon" onClick={() => navigate("/institutions")} className="mt-1">
@@ -240,7 +244,9 @@ export default function InstitutionDetailPage() {
                 </Button>
                 <div className="flex-1">
                     <div className="flex items-center gap-3">
-                        <h2 className="text-3xl font-bold tracking-tight">{institution.name}</h2>
+                        <h2 className="bg-gradient-to-r from-foreground to-primary2 bg-clip-text text-3xl font-bold tracking-tight text-transparent">
+                            {institution.name}
+                        </h2>
                     </div>
                     <p className="text-sm text-muted-foreground font-mono">{institution.slug}</p>
                 </div>
@@ -248,7 +254,7 @@ export default function InstitutionDetailPage() {
 
             {/* Tabs */}
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-                <TabsList>
+                <TabsList className="border border-primary/20 bg-gradient-to-r from-secondary/70 to-accent/70">
                     <TabsTrigger value="overview">Overview</TabsTrigger>
                     <TabsTrigger value="credentials">Credentials</TabsTrigger>
                     <TabsTrigger value="locations">Locations</TabsTrigger>
@@ -258,7 +264,7 @@ export default function InstitutionDetailPage() {
                 <TabsContent value="overview" className="space-y-6">
                     <div className="grid gap-6">
                         {/* Institution Details */}
-                        <Card>
+                        <Card className="border-primary/20 shadow-sm">
                             <CardHeader className="flex flex-row items-center justify-between space-y-0">
                                 <div>
                                     <CardTitle>Institution Details</CardTitle>
@@ -307,7 +313,7 @@ export default function InstitutionDetailPage() {
 
                         {/* Admin User */}
                         {institution.user && (
-                            <Card>
+                            <Card className="border-primary/20 shadow-sm">
                                 <CardHeader className="flex flex-row items-center justify-between space-y-0">
                                     <div>
                                         <CardTitle>Admin User</CardTitle>
@@ -368,7 +374,7 @@ export default function InstitutionDetailPage() {
                             </Card>
                         )}
 
-                        <Card>
+                        <Card className="border-primary/20 bg-gradient-to-br from-card to-accent/25 shadow-sm">
                             <CardHeader>
                                 <CardTitle>Email Notification Test</CardTitle>
                                 <CardDescription>
@@ -385,7 +391,7 @@ export default function InstitutionDetailPage() {
                                         placeholder="you@example.com"
                                     />
                                 </div>
-                                <div className="flex items-center justify-between rounded-lg border p-3">
+                                <div className="flex items-center justify-between rounded-lg border border-primary/20 bg-background/70 p-3">
                                     <div>
                                         <p className="text-sm font-medium">Urgent mode</p>
                                         <p className="text-xs text-muted-foreground">
@@ -409,7 +415,7 @@ export default function InstitutionDetailPage() {
                     {/* Integrations Section */}
                     <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                            <h3 className="text-lg font-medium">Integrations</h3>
+                            <h3 className="text-lg font-medium text-foreground">Integrations</h3>
                         </div>
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-2">
                             <IntegrationCard
@@ -430,19 +436,19 @@ export default function InstitutionDetailPage() {
                 </TabsContent>
 
                 {/* Credentials Tab */}
-                <TabsContent value="credentials">
+                <TabsContent value="credentials" className="space-y-4">
                     <TenantCredentialsForm institution={institution} onUpdated={fetchInstitution} />
                 </TabsContent>
 
                 {/* Locations Tab */}
-                <TabsContent value="locations">
+                <TabsContent value="locations" className="space-y-4">
                     <LocationList institutionSlug={institution.slug} />
                 </TabsContent>
             </Tabs>
 
             {/* Edit Overview Sheet */}
             <Sheet open={editSheetOpen} onOpenChange={setEditSheetOpen}>
-                <SheetContent>
+                <SheetContent className="border-primary/20 bg-gradient-to-b from-background to-accent/30">
                     <SheetHeader>
                         <SheetTitle>Edit Institution</SheetTitle>
                         <SheetDescription>
@@ -469,7 +475,7 @@ export default function InstitutionDetailPage() {
                                     control={form.control}
                                     name="is_active"
                                     render={({ field }) => (
-                                        <FormItem className="flex items-center justify-between rounded-lg border p-4">
+                                        <FormItem className="flex items-center justify-between rounded-lg border border-primary/20 bg-background/70 p-4">
                                             <div>
                                                 <FormLabel className="text-base">Active</FormLabel>
                                                 <p className="text-sm text-muted-foreground">

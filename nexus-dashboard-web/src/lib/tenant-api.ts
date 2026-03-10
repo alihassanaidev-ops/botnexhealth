@@ -165,7 +165,7 @@ export interface AuditLog {
     action: string;
     target_resource: string;
     outcome: string;
-    audit_metadata?: Record<string, any> | null;
+    audit_metadata?: Record<string, unknown> | null;
 }
 
 export interface AuditLogPaginatedResponse {

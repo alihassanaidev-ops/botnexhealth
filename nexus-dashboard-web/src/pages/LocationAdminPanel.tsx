@@ -42,7 +42,8 @@ export default function LocationAdminPanel() {
             setLocation(assigned)
             setTimezone(assigned?.timezone || "UTC")
             setStaffUsers(users)
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to load location")
         } finally {
             setLoading(false)
@@ -61,7 +62,8 @@ export default function LocationAdminPanel() {
             toast.success(`Staff invite sent to ${email.trim()}`)
             setEmail("")
             setStaffUsers(await listLocationUsers())
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to send invite")
         } finally {
             setInviting(false)
@@ -79,7 +81,8 @@ export default function LocationAdminPanel() {
             setLocation(updated)
             setTimezone(updated.timezone || "UTC")
             toast.success("Timezone updated")
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to update timezone")
         } finally {
             setSavingTimezone(false)
@@ -93,7 +96,8 @@ export default function LocationAdminPanel() {
             await deactivateLocationUser(target.id)
             toast.success("Staff user deactivated")
             setStaffUsers(await listLocationUsers())
-        } catch (error: any) {
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to deactivate user")
         } finally {
             setActingUserId(null)
@@ -101,7 +105,7 @@ export default function LocationAdminPanel() {
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Location Admin</h1>
