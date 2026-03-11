@@ -20,6 +20,7 @@ import TwilioPhoneNumbers from "./pages/TwilioPhoneNumbers";
 import InstitutionAdminPanel from "./pages/InstitutionAdminPanel";
 import LocationAdminPanel from "./pages/LocationAdminPanel";
 import InstitutionUserManagement from "./pages/InstitutionUserManagement";
+import InstitutionSettings from "./pages/InstitutionSettings";
 import InsurancePlans from "./pages/InsurancePlans";
 
 
@@ -73,6 +74,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <InstitutionUserManagement />
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/settings",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <InstitutionSettings />
                             </RoleGuard>
                         ),
                     },

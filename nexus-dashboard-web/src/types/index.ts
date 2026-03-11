@@ -420,6 +420,10 @@ export interface DashboardSummary {
     tag_counts: TagCount[];
     callback_queue: CallbackQueueItem[];
     as_of: string;
+    appointments_booked_month?: number;
+    new_patients_month?: number;
+    booking_rate_month?: number;
+    avg_call_duration_seconds?: number;
 }
 
 // ── Callbacks Page ──────────────────────────────────────────────────────

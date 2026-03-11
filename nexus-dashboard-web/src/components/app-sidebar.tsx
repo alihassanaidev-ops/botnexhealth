@@ -36,7 +36,8 @@ import {
     MessageSquare,
     Moon,
     Sun,
-    Bell
+    Bell,
+    Settings
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useTheme } from "next-themes"
@@ -276,9 +277,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                         </SidebarGroupContent>
                     </SidebarGroup>
                 )}
-                {/* Notifications - Last item in sidebar */}
                 {isInstitution && (
-                    <SidebarGroup className="mt-auto">
+                    <SidebarGroup>
+                        <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
+                            Notifications & Settings
+                        </SidebarGroupLabel>
                         <SidebarGroupContent>
                             <SidebarMenu>
                                 <SidebarMenuItem>
@@ -298,6 +301,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         <span>Notifications</span>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
+                                <NavItem
+                                    item={{
+                                        title: "Settings",
+                                        url: "/institution-admin/settings",
+                                        icon: Settings,
+                                    }}
+                                    isActive={location.pathname === "/institution-admin/settings" || location.pathname.startsWith("/institution-admin/settings")}
+                                />
                             </SidebarMenu>
                         </SidebarGroupContent>
                     </SidebarGroup>

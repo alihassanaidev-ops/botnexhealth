@@ -12,16 +12,27 @@ import {
     TrendingUp,
     Infinity as InfinityIcon,
     Clock,
+    Users,
+    Percent,
+    Timer,
+    MapPin,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Input } from "@/components/ui/input"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
-import { getDashboardSummary } from "@/lib/dashboard-api"
+import { getDashboardSummary, getAggregateDashboard } from "@/lib/dashboard-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
 
@@ -52,6 +63,57 @@ function formatDuration(seconds: number | null): string {
     const s = seconds % 60
     return s > 0 ? `${m}m ${s}s` : `${m}m`
 }
+
+const METRIC_CARDS_CONFIG = [
+    {
+        label: "Appointments Booked",
+        key: "appointments_booked_month" as const,
+        icon: CalendarDays,
+        cardClass: "border-primary/20 bg-gradient-to-br from-primary/5 via-primary/10 to-primary/5",
+        titleClass: "text-muted-foreground",
+        valueClass: "text-foreground",
+        subtextClass: "text-muted-foreground",
+        iconBg: "bg-primary/15",
+        iconColor: "text-primary",
+        accentClass: "via-primary/35",
+    },
+    {
+        label: "New Patients",
+        key: "new_patients_month" as const,
+        icon: Users,
+        cardClass: "border-green-500/20 bg-gradient-to-br from-green-500/5 via-green-500/10 to-green-500/5",
+        titleClass: "text-muted-foreground",
+        valueClass: "text-foreground",
+        subtextClass: "text-muted-foreground",
+        iconBg: "bg-green-500/15",
+        iconColor: "text-green-600",
+        accentClass: "via-green-500/35",
+    },
+    {
+        label: "Booking Rate",
+        key: "booking_rate_month" as const,
+        icon: Percent,
+        cardClass: "border-amber-500/20 bg-gradient-to-br from-amber-500/5 via-amber-500/10 to-amber-500/5",
+        titleClass: "text-muted-foreground",
+        valueClass: "text-foreground",
+        subtextClass: "text-muted-foreground",
+        iconBg: "bg-amber-500/15",
+        iconColor: "text-amber-600",
+        accentClass: "via-amber-500/35",
+    },
+    {
+        label: "Avg Call Duration",
+        key: "avg_call_duration_seconds" as const,
+        icon: Timer,
+        cardClass: "border-violet-500/20 bg-gradient-to-br from-violet-500/5 via-violet-500/10 to-violet-500/5",
+        titleClass: "text-muted-foreground",
+        valueClass: "text-foreground",
+        subtextClass: "text-muted-foreground",
+        iconBg: "bg-violet-500/15",
+        iconColor: "text-violet-600",
+        accentClass: "via-violet-500/35",
+    },
+]
 
 const STATUS_COLOR_MAP = Object.fromEntries(
     STATUS_OPTIONS.map((o) => [o.value, o.color])
@@ -176,6 +238,8 @@ interface VolumeCardProps {
     iconColor: string
     accentClass: string
     loading: boolean
+    suffix?: string
+    formatValue?: (val: number) => string
 }
 
 function VolumeCard({
@@ -190,6 +254,8 @@ function VolumeCard({
     iconColor,
     accentClass,
     loading,
+    suffix = "",
+    formatValue,
 }: VolumeCardProps) {
     const animatedValue = useAnimatedCount(loading ? undefined : (value ?? 0))
 
@@ -217,9 +283,11 @@ function VolumeCard({
             </CardHeader>
             <CardContent className="pb-5">
                 <div className={`text-4xl font-black tabular-nums tracking-tight animate-count-fade ${valueClass}`}>
-                    {animatedValue.toLocaleString()}
+                    {formatValue ? (loading ? "" : formatValue(value ?? 0)) : (animatedValue.toLocaleString() + suffix)}
                 </div>
-                <p className={`text-xs mt-1 ${subtextClass}`}>calls</p>
+                <p className={`text-xs mt-1 ${subtextClass}`}>
+                    {formatValue ? "avg length" : "calls"}
+                </p>
             </CardContent>
         </Card>
     )
@@ -353,20 +421,92 @@ export default function Dashboard() {
     const { user } = useAuth()
     const [summary, setSummary] = useState<DashboardSummary | null>(null)
     const [loading, setLoading] = useState(true)
+    const [selectedLocationSlug, setSelectedLocationSlug] = useState<string>("all")
+    const [locations, setLocations] = useState<{ slug: string; name: string }[]>([])
+    const [aggregateMetrics, setAggregateMetrics] = useState<{
+        appointments_booked_month: number
+        new_patients_month: number
+        booking_rate_month: number
+        avg_call_duration_seconds: number
+    } | null>(null)
 
     const fetchSummary = useCallback(async () => {
         try {
-            const data = await getDashboardSummary()
-            setSummary(data)
+            const locationSlug = selectedLocationSlug === "all" ? undefined : selectedLocationSlug
+            const [summaryData] = await Promise.all([
+                getDashboardSummary(locationSlug),
+            ])
+            setSummary(summaryData)
+
+            const isInstitutionAdmin = user?.role === "INSTITUTION_ADMIN"
+            
+            if (isInstitutionAdmin) {
+                try {
+                    const aggregateData = await getAggregateDashboard()
+                    
+                    if (selectedLocationSlug === "all") {
+                        setAggregateMetrics({
+                            appointments_booked_month: aggregateData.summary.appointments_booked_month,
+                            new_patients_month: aggregateData.summary.new_patients_month,
+                            booking_rate_month: aggregateData.summary.booking_rate_month,
+                            avg_call_duration_seconds: 0,
+                        })
+                        setLocations(
+                            aggregateData.clinic_comparison.map((c) => ({
+                                slug: c.location_slug,
+                                name: c.location_name,
+                            }))
+                        )
+                    } else {
+                        const locData = aggregateData.clinic_comparison.find(
+                            (c) => c.location_slug === selectedLocationSlug
+                        )
+                        if (locData) {
+                            setAggregateMetrics({
+                                appointments_booked_month: locData.appointments_booked_month,
+                                new_patients_month: locData.new_patients_month,
+                                booking_rate_month: locData.booking_rate_month,
+                                avg_call_duration_seconds: locData.avg_call_duration_seconds,
+                            })
+                        }
+                    }
+                } catch {
+                    setAggregateMetrics({
+                        appointments_booked_month: 0,
+                        new_patients_month: 0,
+                        booking_rate_month: 0,
+                        avg_call_duration_seconds: 0,
+                    })
+                }
+            } else {
+                try {
+                    const aggregateData = await getAggregateDashboard()
+                    setAggregateMetrics({
+                        appointments_booked_month: aggregateData.summary.appointments_booked_month,
+                        new_patients_month: aggregateData.summary.new_patients_month,
+                        booking_rate_month: aggregateData.summary.booking_rate_month,
+                        avg_call_duration_seconds: 0,
+                    })
+                } catch {
+                    setAggregateMetrics({
+                        appointments_booked_month: 0,
+                        new_patients_month: 0,
+                        booking_rate_month: 0,
+                        avg_call_duration_seconds: 0,
+                    })
+                }
+            }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load dashboard"
             toast.error(message)
         } finally {
             setLoading(false)
         }
-    }, [])
+    }, [selectedLocationSlug, user?.role])
 
-    useEffect(() => { fetchSummary() }, [fetchSummary])
+    useEffect(() => { 
+        fetchSummary() 
+    }, [fetchSummary])
 
     // 30-second auto-poll
     useEffect(() => {
@@ -396,16 +536,34 @@ export default function Dashboard() {
                         {todayStr} · Here's your call activity overview.
                     </p>
                 </div>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={fetchSummary}
-                    disabled={loading}
-                    className="gap-2 h-8 text-xs"
-                >
-                    <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                    Refresh
-                </Button>
+                <div className="flex items-center gap-2">
+                    {user?.role === "INSTITUTION_ADMIN" && (
+                        <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
+                            <SelectTrigger className="w-[180px] h-8 text-xs">
+                                <MapPin className="mr-2 h-3.5 w-3.5" />
+                                <SelectValue placeholder="Select location" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Locations</SelectItem>
+                                {locations.map((loc) => (
+                                    <SelectItem key={loc.slug} value={loc.slug}>
+                                        {loc.name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    )}
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={fetchSummary}
+                        disabled={loading}
+                        className="gap-2 h-8 text-xs"
+                    >
+                        <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                        Refresh
+                    </Button>
+                </div>
             </div>
 
             {/* Volume cards */}
@@ -427,6 +585,30 @@ export default function Dashboard() {
                     />
                 ))}
             </div>
+
+            {/* Metric cards - only for INSTITUTION_ADMIN */}
+            {user?.role === "INSTITUTION_ADMIN" && (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                    {METRIC_CARDS_CONFIG.map(({ label, key, icon, cardClass, titleClass, valueClass, subtextClass, iconBg, iconColor, accentClass }) => (
+                        <VolumeCard
+                            key={key}
+                            label={label}
+                            value={aggregateMetrics?.[key] ?? 0}
+                            icon={icon}
+                            cardClass={cardClass}
+                            titleClass={titleClass}
+                            valueClass={valueClass}
+                            subtextClass={subtextClass}
+                            iconBg={iconBg}
+                            iconColor={iconColor}
+                            accentClass={accentClass}
+                            loading={loading}
+                            suffix={key === "booking_rate_month" ? "%" : ""}
+                            formatValue={key === "avg_call_duration_seconds" ? formatDuration : undefined}
+                        />
+                    ))}
+                </div>
+            )}
 
             {/* Bottom grid: tag breakdown + callback queue */}
             <div className="grid gap-6 lg:grid-cols-2">
