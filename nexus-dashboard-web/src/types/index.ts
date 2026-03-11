@@ -421,3 +421,28 @@ export interface DashboardSummary {
     callback_queue: CallbackQueueItem[];
     as_of: string;
 }
+
+// ── Callbacks Page ──────────────────────────────────────────────────────
+
+export interface CallbackListItem {
+    call_id: string;
+    contact_name: string | null;
+    call_date: string | null;
+    call_time: string | null;
+    call_duration_seconds: number | null;
+    summary: string | null;
+    next_action: string | null;
+    callback_resolved: boolean;
+    callback_resolved_at: string | null;
+    callback_note: string | null;
+    preferred_callback_datetime: string | null;
+    created_at: string;
+    contact: ContactSummary | null;
+}
+
+export interface CallbacksListResponse {
+    total: number;
+    limit: number;
+    offset: number;
+    items: CallbackListItem[];
+}

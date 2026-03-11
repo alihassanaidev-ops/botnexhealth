@@ -539,7 +539,7 @@ export default function Dashboard() {
 
                         {hasCallbacks && (
                             <div className="mt-4 pt-4 border-t">
-                                <Link to="/calls?tags=needs_callback">
+                                <Link to="/callbacks">
                                     <Button variant="ghost" size="sm" className="gap-1.5 text-xs h-7">
                                         <AlertCircle className="h-3 w-3 text-amber-500" />
                                         View all callbacks <ArrowRight className="h-3 w-3" />

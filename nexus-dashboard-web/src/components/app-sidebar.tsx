@@ -30,6 +30,7 @@ import {
     Armchair,
     LayoutDashboard,
     Phone,
+    PhoneForwarded,
     Shield,
     ShieldCheck,
     MessageSquare,
@@ -92,6 +93,11 @@ const institutionAdminNav: NavItemDef[] = [
         url: "/calls",
         icon: Phone,
     },
+    {
+        title: "Callback Queue",
+        url: "/callbacks",
+        icon: PhoneForwarded,
+    },
 ]
 
 const locationAdminNav: NavItemDef[] = [
@@ -111,6 +117,11 @@ const locationAdminNav: NavItemDef[] = [
         url: "/calls",
         icon: Phone,
     },
+    {
+        title: "Callback Queue",
+        url: "/callbacks",
+        icon: PhoneForwarded,
+    },
 ]
 
 const staffNav: NavItemDef[] = [
@@ -123,6 +134,11 @@ const staffNav: NavItemDef[] = [
         title: "Calls",
         url: "/calls",
         icon: Phone,
+    },
+    {
+        title: "Callback Queue",
+        url: "/callbacks",
+        icon: PhoneForwarded,
     },
 ]
 

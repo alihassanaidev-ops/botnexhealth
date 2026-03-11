@@ -13,6 +13,7 @@ import AppointmentTypes from "./pages/AppointmentTypes";
 import ProvidersScheduling from "./pages/ProvidersScheduling";
 import Operatories from "./pages/Operatories";
 import Calls from "./pages/Calls";
+import Callbacks from "./pages/Callbacks";
 import AuditLogs from "./pages/AuditLogs"
 import AdminAuditLogs from "./pages/AdminAuditLogs"
 import TwilioPhoneNumbers from "./pages/TwilioPhoneNumbers";
@@ -161,6 +162,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <Calls />
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "callbacks",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <Callbacks />
                             </RoleGuard>
                         ),
                     },
