@@ -774,16 +774,6 @@ async def create_location(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        active_locations = await institution_service.list_locations(institution.id, include_inactive=False)
-        if len(active_locations) >= institution.location_limit:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"Institution '{slug}' reached its location limit "
-                    f"({institution.location_limit}). Increase plan limit before adding more locations."
-                ),
-            )
-
         existing = await institution_service.get_location_by_slug(data.slug)
         if existing:
             raise HTTPException(
