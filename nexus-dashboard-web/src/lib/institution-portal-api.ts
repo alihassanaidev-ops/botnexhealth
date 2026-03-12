@@ -18,6 +18,7 @@ export interface InstitutionPortalLocation {
     is_active: boolean
     phone: string | null
     timezone: string | null
+    transfer_number: string | null
 }
 
 export interface AggregateSummaryCards {
@@ -87,6 +88,17 @@ export async function updateLocationTimezone(
     const { data } = await api.patch<InstitutionPortalLocation>(
         `/institution/locations/${locSlug}/timezone`,
         { timezone },
+    )
+    return data
+}
+
+export async function updateLocationTransferNumber(
+    locSlug: string,
+    transferNumber: string,
+): Promise<InstitutionPortalLocation> {
+    const { data } = await api.patch<InstitutionPortalLocation>(
+        `/institution/locations/${locSlug}/transfer-number`,
+        { transfer_number: transferNumber },
     )
     return data
 }

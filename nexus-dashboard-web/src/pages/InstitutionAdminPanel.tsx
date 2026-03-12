@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import {
+    ArrowDown,
+    ArrowUp,
     BarChart3,
     Building2,
     Loader2,
@@ -412,70 +414,89 @@ export default function InstitutionAdminPanel() {
                 </CardContent>
             </Card>
 
-            <Card className="border-primary/30 bg-gradient-to-br from-primary to-primary2 text-primary-foreground shadow-lg shadow-primary/25">
+            <Card className="border-primary/20 shadow-sm">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <TrendingUp className="h-4 w-4" />
                         ROI Summary (This Month)
                     </CardTitle>
-                    <CardDescription className="text-primary-foreground/85">
+                    <CardDescription>
                         {roiConfig ? "Calculated from your call data and configured values." : "Configure settings in the Settings page to see metrics."}
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     {!roiConfig ? (
-                        <p className="py-8 text-center text-sm text-primary-foreground/85">
+                        <p className="py-8 text-center text-sm text-muted-foreground">
                             Configure your ROI settings in the Settings page to see metrics here.
                         </p>
                     ) : roiLoading ? (
                         <div className="flex items-center justify-center py-8">
-                            <Loader2 className="h-6 w-6 animate-spin text-primary-foreground/85" />
+                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                         </div>
                     ) : roiCalculation ? (
                         <div className="space-y-4">
                             <div className="grid grid-cols-2 gap-3">
-                                <div className="rounded-lg border border-white/30 bg-white/15 p-3">
-                                    <p className="text-xs text-primary-foreground/80">Calls Handled</p>
-                                    <p className="text-2xl font-bold text-primary-foreground">{roiCalculation.total_calls_month}</p>
+                                <div className="rounded-lg border bg-muted p-3">
+                                    <p className="text-xs text-muted-foreground">Calls Handled</p>
+                                    <p className="text-2xl font-bold">{roiCalculation.total_calls_month}</p>
                                 </div>
-                                <div className="rounded-lg border border-white/30 bg-white/15 p-3">
-                                    <p className="text-xs text-primary-foreground/80">Appointments Booked</p>
-                                    <p className="text-2xl font-bold text-primary-foreground">{roiCalculation.appointments_booked_month}</p>
+                                <div className="rounded-lg border bg-muted p-3">
+                                    <p className="text-xs text-muted-foreground">Appointments Booked</p>
+                                    <p className="text-2xl font-bold">{roiCalculation.appointments_booked_month}</p>
                                 </div>
-                                <div className="rounded-lg border border-white/30 bg-white/15 p-3">
-                                    <p className="text-xs text-primary-foreground/80">Revenue from Bookings</p>
-                                    <p className="text-lg font-semibold text-emerald-200">
-                                        ${roiCalculation.revenue_from_bookings.toLocaleString()}
-                                    </p>
+                                <div className="rounded-lg border bg-muted p-3">
+                                    <p className="text-xs text-muted-foreground">Revenue from Bookings</p>
+                                    <div className="flex items-center gap-1">
+                                        <ArrowUp className="h-4 w-4 text-emerald-600" />
+                                        <p className="text-lg font-semibold">
+                                            ${roiCalculation.revenue_from_bookings.toLocaleString()}
+                                        </p>
+                                    </div>
                                 </div>
-                                <div className="rounded-lg border border-white/30 bg-white/15 p-3">
-                                    <p className="text-xs text-primary-foreground/80">New Patient Revenue</p>
-                                    <p className="text-lg font-semibold text-emerald-200">
-                                        ${roiCalculation.revenue_from_new_patients.toLocaleString()}
-                                    </p>
+                                <div className="rounded-lg border bg-muted p-3">
+                                    <p className="text-xs text-muted-foreground">New Patient Revenue</p>
+                                    <div className="flex items-center gap-1">
+                                        <ArrowUp className="h-4 w-4 text-emerald-600" />
+                                        <p className="text-lg font-semibold">
+                                            ${roiCalculation.revenue_from_new_patients.toLocaleString()}
+                                        </p>
+                                    </div>
                                 </div>
-                                <div className="rounded-lg border border-white/30 bg-white/15 p-3">
-                                    <p className="text-xs text-primary-foreground/80">Staff Time Saved</p>
-                                    <p className="text-lg font-semibold text-primary-foreground">{roiCalculation.staff_time_saved_hours}h</p>
-                                    <p className="text-xs text-primary-foreground/75">${roiCalculation.staff_cost_saved.toLocaleString()} saved</p>
+                                <div className="rounded-lg border bg-muted p-3">
+                                    <p className="text-xs text-muted-foreground">Staff Time Saved</p>
+                                    <div className="flex items-center gap-1">
+                                        <ArrowUp className="h-4 w-4 text-emerald-600" />
+                                        <p className="text-lg font-semibold">{roiCalculation.staff_time_saved_hours}h</p>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">${roiCalculation.staff_cost_saved.toLocaleString()} saved</p>
                                 </div>
-                                <div className="rounded-lg border border-white/30 bg-white/15 p-3">
-                                    <p className="text-xs text-primary-foreground/80">Subscription Cost</p>
-                                    <p className="text-lg font-semibold text-rose-200">${roiCalculation.monthly_cost.toLocaleString()}</p>
+                                <div className="rounded-lg border bg-muted p-3">
+                                    <p className="text-xs text-muted-foreground">Subscription Cost</p>
+                                    <div className="flex items-center gap-1">
+                                        <ArrowDown className="h-4 w-4 text-rose-600" />
+                                        <p className="text-lg font-semibold">${roiCalculation.monthly_cost.toLocaleString()}</p>
+                                    </div>
                                 </div>
                             </div>
-                            <div className="rounded-xl border border-white/35 bg-white/10 p-4 text-center">
-                                <p className="text-xs uppercase tracking-wider text-primary-foreground/80">Monthly ROI</p>
-                                <p className={`text-4xl font-bold ${roiCalculation.roi_percentage >= 0 ? "text-emerald-200" : "text-rose-200"}`}>
-                                    {roiCalculation.roi_percentage}%
-                                </p>
-                                <p className="mt-1 text-sm text-primary-foreground/85">
+                            <div className="rounded-xl border bg-muted p-4 text-center">
+                                <p className="text-xs uppercase tracking-wider text-muted-foreground">Monthly ROI</p>
+                                <div className="flex items-center justify-center gap-2">
+                                    {roiCalculation.roi_percentage >= 0 ? (
+                                        <ArrowUp className="h-6 w-6 text-emerald-600" />
+                                    ) : (
+                                        <ArrowDown className="h-6 w-6 text-rose-600" />
+                                    )}
+                                    <p className={`text-4xl font-bold ${roiCalculation.roi_percentage >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                                        {roiCalculation.roi_percentage}%
+                                    </p>
+                                </div>
+                                <p className="mt-1 text-sm text-muted-foreground">
                                     Net value: ${roiCalculation.net_value.toLocaleString()}
                                 </p>
                             </div>
                         </div>
                     ) : (
-                        <p className="py-8 text-center text-sm text-primary-foreground/85">
+                        <p className="py-8 text-center text-sm text-muted-foreground">
                             No calculation data available.
                         </p>
                     )}

@@ -37,22 +37,27 @@ class InstitutionLocation(Base):
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    slug: Mapped[str] = mapped_column(
+        String(100), unique=True, nullable=False, index=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # NexHealth — location-level overrides
     nexhealth_subdomain: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    nexhealth_location_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    nexhealth_location_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
 
     # Retell — per-location agent
-    retell_agent_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    retell_agent_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, index=True
+    )
 
     # Twilio — outbound SMS number for this location (E.164, e.g. +12125551234)
     twilio_from_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # Configuration
     timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
-
 
     # Address
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -65,7 +70,10 @@ class InstitutionLocation(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     # =========================================================================

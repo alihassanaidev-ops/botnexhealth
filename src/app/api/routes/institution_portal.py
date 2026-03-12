@@ -74,7 +74,12 @@ class BulkOperatingHoursRequest(BaseModel):
 
 
 class LocationTimezoneUpdateRequest(BaseModel):
-    timezone: str = Field(..., min_length=1, max_length=64, description="IANA timezone, e.g. America/New_York")
+    timezone: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="IANA timezone, e.g. America/New_York",
+    )
 
 
 class InstitutionLocationLiteResponse(BaseModel):
@@ -106,7 +111,9 @@ class InviteUserRequest(BaseModel):
 class InstitutionUserInviteRequest(BaseModel):
     email: str = Field(..., description="Invitee email")
     role: str = Field(..., description="INSTITUTION_ADMIN | LOCATION_ADMIN | STAFF")
-    location_slug: str | None = Field(None, description="Required for LOCATION_ADMIN and STAFF")
+    location_slug: str | None = Field(
+        None, description="Required for LOCATION_ADMIN and STAFF"
+    )
 
 
 class InstitutionUserRowResponse(BaseModel):
@@ -179,7 +186,10 @@ def _validate_invite_role(role: str) -> str:
 
 
 def _assert_location_scope(current_user: User, location_id: str) -> None:
-    if current_user.role == UserRole.LOCATION_ADMIN.value and current_user.location_id != location_id:
+    if (
+        current_user.role == UserRole.LOCATION_ADMIN.value
+        and current_user.location_id != location_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized for this location",
@@ -188,7 +198,7 @@ def _assert_location_scope(current_user: User, location_id: str) -> None:
 
 @router.get("/me", response_model=InstitutionPortalMeResponse)
 async def get_my_institution_config(
-    current_user: Annotated[User, Depends(get_current_institution_or_location_user)]
+    current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
 ):
     """
     Get non-sensitive profile context for institution portal users.
@@ -196,7 +206,7 @@ async def get_my_institution_config(
     if not current_user.institution_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User is not associated with an institution"
+            detail="User is not associated with an institution",
         )
     async with get_db_session() as session:
         service = InstitutionService(session)
@@ -227,17 +237,26 @@ async def list_portal_locations(
     Sensitive integration fields are intentionally excluded.
     """
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         svc = InstitutionService(session)
         if current_user.role == UserRole.INSTITUTION_ADMIN.value:
-            locations = await svc.list_locations(current_user.institution_id, include_inactive=True)
-            return [InstitutionLocationLiteResponse.from_model(loc) for loc in locations]
+            locations = await svc.list_locations(
+                current_user.institution_id, include_inactive=True
+            )
+            return [
+                InstitutionLocationLiteResponse.from_model(loc) for loc in locations
+            ]
 
         if not current_user.location_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No location assignment")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="No location assignment"
+            )
         from src.app.models.institution_location import InstitutionLocation
+
         loc_result = await session.execute(
             select(InstitutionLocation).where(
                 InstitutionLocation.id == current_user.location_id,
@@ -246,22 +265,30 @@ async def list_portal_locations(
         )
         location = loc_result.scalar_one_or_none()
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
         return [InstitutionLocationLiteResponse.from_model(location)]
 
 
-@router.get("/locations/{loc_slug}/operating-hours", response_model=list[OperatingHoursResponse])
+@router.get(
+    "/locations/{loc_slug}/operating-hours", response_model=list[OperatingHoursResponse]
+)
 async def get_location_operating_hours(
     loc_slug: str,
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
 ):
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
     async with get_db_session() as session:
         svc = InstitutionService(session)
         location = await svc.get_location_by_slug(loc_slug)
         if not location or location.institution_id != current_user.institution_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
         _assert_location_scope(current_user, str(location.id))
 
         result = await session.execute(
@@ -272,7 +299,9 @@ async def get_location_operating_hours(
         return [OperatingHoursResponse.from_model(h) for h in result.scalars().all()]
 
 
-@router.put("/locations/{loc_slug}/operating-hours", response_model=list[OperatingHoursResponse])
+@router.put(
+    "/locations/{loc_slug}/operating-hours", response_model=list[OperatingHoursResponse]
+)
 async def set_location_operating_hours(
     loc_slug: str,
     data: BulkOperatingHoursRequest,
@@ -289,13 +318,17 @@ async def set_location_operating_hours(
             detail="Staff cannot edit operating hours",
         )
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         svc = InstitutionService(session)
         location = await svc.get_location_by_slug(loc_slug)
         if not location or location.institution_id != current_user.institution_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
         _assert_location_scope(current_user, str(location.id))
 
         days_seen = set()
@@ -319,8 +352,12 @@ async def set_location_operating_hours(
                 location_id=location.id,
                 day_of_week=entry.day_of_week,
                 is_open=entry.is_open,
-                open_time=dt_time.fromisoformat(entry.open_time) if entry.open_time else None,
-                close_time=dt_time.fromisoformat(entry.close_time) if entry.close_time else None,
+                open_time=dt_time.fromisoformat(entry.open_time)
+                if entry.open_time
+                else None,
+                close_time=dt_time.fromisoformat(entry.close_time)
+                if entry.close_time
+                else None,
             )
             session.add(row)
             new_rows.append(row)
@@ -328,7 +365,9 @@ async def set_location_operating_hours(
         return [OperatingHoursResponse.from_model(r) for r in new_rows]
 
 
-@router.patch("/locations/{loc_slug}/timezone", response_model=InstitutionLocationLiteResponse)
+@router.patch(
+    "/locations/{loc_slug}/timezone", response_model=InstitutionLocationLiteResponse
+)
 async def update_location_timezone(
     loc_slug: str,
     data: LocationTimezoneUpdateRequest,
@@ -345,7 +384,9 @@ async def update_location_timezone(
             detail="Staff cannot update timezone",
         )
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     timezone_value = data.timezone.strip()
     try:
@@ -360,7 +401,9 @@ async def update_location_timezone(
         svc = InstitutionService(session)
         location = await svc.get_location_by_slug(loc_slug)
         if not location or location.institution_id != current_user.institution_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
         _assert_location_scope(current_user, str(location.id))
 
         location.timezone = timezone_value
@@ -388,12 +431,16 @@ async def invite_institution_admin(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
 ):
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         existing = await session.execute(select(User).where(User.email == data.email))
         if existing.scalar_one_or_none():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="User already exists"
+            )
 
         supabase = SupabaseService()
         response = supabase.invite_user(
@@ -407,7 +454,10 @@ async def invite_institution_admin(
         elif isinstance(response, dict) and "id" in response:
             supabase_user_id = str(response["id"])
         if not supabase_user_id:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invite did not return user id")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invite did not return user id",
+            )
 
         user = User(
             id=supabase_user_id,
@@ -443,34 +493,46 @@ async def list_institution_users(
     for institution admin user management.
     """
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         from src.app.models.institution_location import InstitutionLocation
 
         users = (
-            await session.execute(
-                select(User).where(
-                    User.institution_id == current_user.institution_id,
-                    User.role.in_(
-                        [
-                            UserRole.INSTITUTION_ADMIN.value,
-                            UserRole.LOCATION_ADMIN.value,
-                            UserRole.STAFF.value,
-                        ]
-                    ),
+            (
+                await session.execute(
+                    select(User).where(
+                        User.institution_id == current_user.institution_id,
+                        User.role.in_(
+                            [
+                                UserRole.INSTITUTION_ADMIN.value,
+                                UserRole.LOCATION_ADMIN.value,
+                                UserRole.STAFF.value,
+                            ]
+                        ),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         location_ids = [u.location_id for u in users if u.location_id]
         location_name_by_id: dict[str, str] = {}
         if location_ids:
             location_rows = (
-                await session.execute(
-                    select(InstitutionLocation).where(InstitutionLocation.id.in_(location_ids))
+                (
+                    await session.execute(
+                        select(InstitutionLocation).where(
+                            InstitutionLocation.id.in_(location_ids)
+                        )
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             location_name_by_id = {str(loc.id): loc.name for loc in location_rows}
 
         return [
@@ -480,15 +542,23 @@ async def list_institution_users(
                 role=user.role,
                 is_active=user.is_active,
                 invite_status=user.invite_status,
-                institution_id=str(user.institution_id) if user.institution_id else None,
+                institution_id=str(user.institution_id)
+                if user.institution_id
+                else None,
                 location_id=str(user.location_id) if user.location_id else None,
-                location_name=location_name_by_id.get(str(user.location_id)) if user.location_id else None,
+                location_name=location_name_by_id.get(str(user.location_id))
+                if user.location_id
+                else None,
             )
             for user in users
         ]
 
 
-@router.post("/users/invite", response_model=UserActionResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/users/invite",
+    response_model=UserActionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def invite_institution_user(
     data: InstitutionUserInviteRequest,
     current_user: Annotated[User, Depends(get_current_institution_admin)],
@@ -500,7 +570,9 @@ async def invite_institution_user(
     - LOCATION_ADMIN: location_slug required
     """
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     role = _validate_invite_role(data.role)
 
@@ -509,7 +581,9 @@ async def invite_institution_user(
 
         existing = await session.execute(select(User).where(User.email == data.email))
         if existing.scalar_one_or_none():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="User already exists"
+            )
 
         location_id: str | None = None
         if role == UserRole.LOCATION_ADMIN.value:
@@ -522,12 +596,15 @@ async def invite_institution_user(
                 await session.execute(
                     select(InstitutionLocation).where(
                         InstitutionLocation.slug == data.location_slug,
-                        InstitutionLocation.institution_id == current_user.institution_id,
+                        InstitutionLocation.institution_id
+                        == current_user.institution_id,
                     )
                 )
             ).scalar_one_or_none()
             if not location:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+                )
             location_id = str(location.id)
 
         supabase = SupabaseService()
@@ -543,7 +620,10 @@ async def invite_institution_user(
         elif isinstance(response, dict) and "id" in response:
             supabase_user_id = str(response["id"])
         if not supabase_user_id:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invite did not return user id")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invite did not return user id",
+            )
 
         created = User(
             id=supabase_user_id,
@@ -570,7 +650,9 @@ async def invite_institution_user(
         },
         institution_id=current_user.institution_id,
     )
-    return UserActionResponse(message=f"Invite sent to {data.email}", user_id=supabase_user_id)
+    return UserActionResponse(
+        message=f"Invite sent to {data.email}", user_id=supabase_user_id
+    )
 
 
 @router.post("/users/{user_id}/deactivate", response_model=UserActionResponse)
@@ -582,9 +664,14 @@ async def deactivate_institution_user(
     Deactivate institution-scoped user immediately.
     """
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
     if str(current_user.id) == str(user_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate your own account")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot deactivate your own account",
+        )
 
     async with get_db_session() as session:
         target = (
@@ -603,7 +690,9 @@ async def deactivate_institution_user(
             )
         ).scalar_one_or_none()
         if not target:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
 
         target.is_active = False
 
@@ -632,7 +721,9 @@ async def reinvite_institution_user(
     creates a fresh invite/local user row with a new UUID.
     """
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         target = (
@@ -651,9 +742,14 @@ async def reinvite_institution_user(
             )
         ).scalar_one_or_none()
         if not target:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
         if str(target.id) == str(current_user.id):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot reinvite your own account")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot reinvite your own account",
+            )
 
         old_user_id = str(target.id)
         old_email = target.email
@@ -680,7 +776,10 @@ async def reinvite_institution_user(
         elif isinstance(response, dict) and "id" in response:
             new_supabase_user_id = str(response["id"])
         if not new_supabase_user_id:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invite did not return user id")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invite did not return user id",
+            )
 
         await session.delete(target)
         await session.flush()
@@ -711,7 +810,9 @@ async def reinvite_institution_user(
         },
         institution_id=current_user.institution_id,
     )
-    return UserActionResponse(message=f"Reinvite sent to {old_email}", user_id=new_supabase_user_id)
+    return UserActionResponse(
+        message=f"Reinvite sent to {old_email}", user_id=new_supabase_user_id
+    )
 
 
 @router.get("/location/users", response_model=list[InstitutionUserRowResponse])
@@ -722,20 +823,26 @@ async def list_location_users(
     Location admins: list STAFF users assigned to their location.
     """
     if not current_user.institution_id or not current_user.location_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment"
+        )
 
     async with get_db_session() as session:
         from src.app.models.institution_location import InstitutionLocation
 
         users = (
-            await session.execute(
-                select(User).where(
-                    User.institution_id == current_user.institution_id,
-                    User.location_id == current_user.location_id,
-                    User.role == UserRole.STAFF.value,
+            (
+                await session.execute(
+                    select(User).where(
+                        User.institution_id == current_user.institution_id,
+                        User.location_id == current_user.location_id,
+                        User.role == UserRole.STAFF.value,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         location = (
             await session.execute(
@@ -770,9 +877,14 @@ async def deactivate_location_user(
     Location admin: deactivate a STAFF user at their own location.
     """
     if not current_user.institution_id or not current_user.location_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment"
+        )
     if str(current_user.id) == str(user_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate your own account")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot deactivate your own account",
+        )
 
     async with get_db_session() as session:
         target = (
@@ -786,7 +898,10 @@ async def deactivate_location_user(
             )
         ).scalar_one_or_none()
         if not target:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff user not found at your location")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Staff user not found at your location",
+            )
 
         target.is_active = False
 
@@ -806,23 +921,31 @@ async def deactivate_location_user(
     return UserActionResponse(message="Staff user deactivated", user_id=user_id)
 
 
-@router.post("/locations/{loc_slug}/invite-location-admin", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/locations/{loc_slug}/invite-location-admin", status_code=status.HTTP_201_CREATED
+)
 async def invite_location_admin(
     loc_slug: str,
     data: InviteUserRequest,
     current_user: Annotated[User, Depends(get_current_institution_admin)],
 ):
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
     async with get_db_session() as session:
         svc = InstitutionService(session)
         location = await svc.get_location_by_slug(loc_slug)
         if not location or location.institution_id != current_user.institution_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
 
         existing = await session.execute(select(User).where(User.email == data.email))
         if existing.scalar_one_or_none():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="User already exists"
+            )
 
         supabase = SupabaseService()
         response = supabase.invite_user(
@@ -837,7 +960,10 @@ async def invite_location_admin(
         elif isinstance(response, dict) and "id" in response:
             supabase_user_id = str(response["id"])
         if not supabase_user_id:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invite did not return user id")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invite did not return user id",
+            )
 
         user = User(
             id=supabase_user_id,
@@ -873,18 +999,27 @@ async def invite_staff(
     current_user: Annotated[User, Depends(get_current_location_admin)],
 ):
     if not current_user.institution_id or not current_user.location_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment"
+        )
     async with get_db_session() as session:
         svc = InstitutionService(session)
         location = await svc.get_location_by_slug(loc_slug)
         if not location or location.institution_id != current_user.institution_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
         if str(location.id) != str(current_user.location_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Can only invite staff for your location")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Can only invite staff for your location",
+            )
 
         existing = await session.execute(select(User).where(User.email == data.email))
         if existing.scalar_one_or_none():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="User already exists"
+            )
 
         supabase = SupabaseService()
         response = supabase.invite_user(
@@ -899,7 +1034,10 @@ async def invite_staff(
         elif isinstance(response, dict) and "id" in response:
             supabase_user_id = str(response["id"])
         if not supabase_user_id:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invite did not return user id")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invite did not return user id",
+            )
 
         user = User(
             id=supabase_user_id,
@@ -937,7 +1075,9 @@ async def invite_staff(
 
 
 class BillingEmailRequest(BaseModel):
-    billing_email: str = Field(..., max_length=255, description="Email address for invoices")
+    billing_email: str = Field(
+        ..., max_length=255, description="Email address for invoices"
+    )
 
 
 class BillingEmailResponse(BaseModel):
@@ -949,13 +1089,17 @@ async def get_billing_email(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
 ):
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         svc = InstitutionService(session)
         institution = await svc.get_by_id(current_user.institution_id)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found"
+            )
         return BillingEmailResponse(billing_email=institution.billing_email)
 
 
@@ -965,13 +1109,17 @@ async def update_billing_email(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
 ):
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         svc = InstitutionService(session)
         institution = await svc.get_by_id(current_user.institution_id)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found"
+            )
         institution.billing_email = data.billing_email
 
     log_audit_background(
@@ -989,11 +1137,21 @@ async def update_billing_email(
 
 
 class ROIConfigRequest(BaseModel):
-    avg_appointment_value: float = Field(..., ge=0, description="Average appointment revenue ($)")
-    avg_new_patient_value: float = Field(..., ge=0, description="Average new patient first-visit revenue ($)")
-    monthly_subscription_cost: float = Field(..., ge=0, description="Monthly Nexus subscription cost ($)")
-    staff_hourly_rate: float = Field(..., ge=0, description="Front desk staff hourly rate ($)")
-    avg_call_duration_minutes: float = Field(4.0, ge=0, description="Avg manual call handling time (minutes)")
+    avg_appointment_value: float = Field(
+        ..., ge=0, description="Average appointment revenue ($)"
+    )
+    avg_new_patient_value: float = Field(
+        ..., ge=0, description="Average new patient first-visit revenue ($)"
+    )
+    monthly_subscription_cost: float = Field(
+        ..., ge=0, description="Monthly Nexus subscription cost ($)"
+    )
+    staff_hourly_rate: float = Field(
+        ..., ge=0, description="Front desk staff hourly rate ($)"
+    )
+    avg_call_duration_minutes: float = Field(
+        4.0, ge=0, description="Avg manual call handling time (minutes)"
+    )
 
 
 class ROIConfigResponse(BaseModel):
@@ -1028,7 +1186,9 @@ async def get_roi_config(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
 ):
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         svc = InstitutionService(session)
@@ -1044,7 +1204,9 @@ async def update_roi_config(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
 ):
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     config_dict = data.model_dump()
 
@@ -1052,7 +1214,9 @@ async def update_roi_config(
         svc = InstitutionService(session)
         institution = await svc.get_by_id(current_user.institution_id)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found"
+            )
         institution.roi_config = config_dict
 
     log_audit_background(
@@ -1071,7 +1235,9 @@ async def calculate_roi(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
 ):
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     from datetime import date, datetime, timezone as tz
     from src.app.models.call import Call, CallStatus
@@ -1124,13 +1290,17 @@ async def calculate_roi(
     revenue_from_new_patients = new_patients_month * config.avg_new_patient_value
     total_revenue_generated = revenue_from_bookings + revenue_from_new_patients
 
-    staff_time_saved_hours = round((total_calls_month * config.avg_call_duration_minutes) / 60, 2)
+    staff_time_saved_hours = round(
+        (total_calls_month * config.avg_call_duration_minutes) / 60, 2
+    )
     staff_cost_saved = round(staff_time_saved_hours * config.staff_hourly_rate, 2)
 
     total_value = round(total_revenue_generated + staff_cost_saved, 2)
     monthly_cost = config.monthly_subscription_cost
     net_value = round(total_value - monthly_cost, 2)
-    roi_percentage = round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else 0.0
+    roi_percentage = (
+        round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else 0.0
+    )
 
     return ROICalculationResponse(
         config=config,
@@ -1153,7 +1323,7 @@ async def calculate_roi(
 async def get_my_audit_logs(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
     page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=100)
+    size: int = Query(50, ge=1, le=100),
 ):
     """
     Institution admin: view all audit logs for the institution including sub-locations.
@@ -1161,7 +1331,7 @@ async def get_my_audit_logs(
     if not current_user.institution_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User is not associated with an institution"
+            detail="User is not associated with an institution",
         )
 
     async with get_db_session() as session:
@@ -1184,6 +1354,7 @@ async def get_my_audit_logs(
         items = result.scalars().all()
 
         import math
+
         pages = math.ceil(total / size) if size > 0 else 0
 
         log_audit_background(
@@ -1206,7 +1377,7 @@ async def get_my_audit_logs(
             total=total,
             page=page,
             size=size,
-            pages=pages
+            pages=pages,
         )
 
 
@@ -1220,7 +1391,9 @@ async def get_location_audit_logs(
     Location admin: view only audit logs for their own location.
     """
     if not current_user.institution_id or not current_user.location_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment"
+        )
 
     location_id = str(current_user.location_id)
     async with get_db_session() as session:
@@ -1241,6 +1414,7 @@ async def get_location_audit_logs(
         )
         items = result.scalars().all()
         import math
+
         pages = math.ceil(total / size) if size > 0 else 0
         log_audit_background(
             actor=current_user.id,
@@ -1283,14 +1457,18 @@ class InsurancePlanResponse(BaseModel):
     is_active: bool
 
 
-@router.get("/locations/{loc_slug}/insurance-plans", response_model=list[InsurancePlanResponse])
+@router.get(
+    "/locations/{loc_slug}/insurance-plans", response_model=list[InsurancePlanResponse]
+)
 async def list_insurance_plans(
     loc_slug: str,
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
 ):
     """List insurance plans for a location. All institution-scoped roles can view."""
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         from src.app.models.institution_location import InstitutionLocation
@@ -1304,21 +1482,32 @@ async def list_insurance_plans(
             )
         ).scalar_one_or_none()
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
 
         if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
             if str(location.id) != str(current_user.location_id):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this location")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized for this location",
+                )
 
         plans = (
-            await session.execute(
-                select(InsurancePlan).where(
-                    InsurancePlan.location_id == str(location.id),
-                    InsurancePlan.institution_id == current_user.institution_id,
-                    InsurancePlan.is_active == True,
-                ).order_by(InsurancePlan.name)
+            (
+                await session.execute(
+                    select(InsurancePlan)
+                    .where(
+                        InsurancePlan.location_id == str(location.id),
+                        InsurancePlan.institution_id == current_user.institution_id,
+                        InsurancePlan.is_active == True,
+                    )
+                    .order_by(InsurancePlan.name)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         return [
             InsurancePlanResponse(
@@ -1344,7 +1533,9 @@ async def create_insurance_plan(
 ):
     """Create an insurance plan. INSTITUTION_ADMIN or LOCATION_ADMIN only."""
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         from src.app.models.institution_location import InstitutionLocation
@@ -1358,11 +1549,16 @@ async def create_insurance_plan(
             )
         ).scalar_one_or_none()
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
 
         if current_user.role == UserRole.LOCATION_ADMIN.value:
             if str(location.id) != str(current_user.location_id):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this location")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized for this location",
+                )
 
         plan = InsurancePlan(
             institution_id=current_user.institution_id,
@@ -1395,7 +1591,10 @@ async def create_insurance_plan(
         )
 
 
-@router.patch("/locations/{loc_slug}/insurance-plans/{plan_id}", response_model=InsurancePlanResponse)
+@router.patch(
+    "/locations/{loc_slug}/insurance-plans/{plan_id}",
+    response_model=InsurancePlanResponse,
+)
 async def update_insurance_plan(
     loc_slug: str,
     plan_id: str,
@@ -1404,7 +1603,9 @@ async def update_insurance_plan(
 ):
     """Update an insurance plan. INSTITUTION_ADMIN or LOCATION_ADMIN only."""
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         from src.app.models.institution_location import InstitutionLocation
@@ -1418,11 +1619,16 @@ async def update_insurance_plan(
             )
         ).scalar_one_or_none()
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
 
         if current_user.role == UserRole.LOCATION_ADMIN.value:
             if str(location.id) != str(current_user.location_id):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this location")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized for this location",
+                )
 
         plan = (
             await session.execute(
@@ -1434,7 +1640,9 @@ async def update_insurance_plan(
             )
         ).scalar_one_or_none()
         if not plan:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance plan not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Insurance plan not found"
+            )
 
         plan.name = data.name
         plan.description = data.description
@@ -1461,7 +1669,10 @@ async def update_insurance_plan(
         )
 
 
-@router.delete("/locations/{loc_slug}/insurance-plans/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/locations/{loc_slug}/insurance-plans/{plan_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 async def delete_insurance_plan(
     loc_slug: str,
     plan_id: str,
@@ -1469,7 +1680,9 @@ async def delete_insurance_plan(
 ):
     """Soft-delete an insurance plan. INSTITUTION_ADMIN or LOCATION_ADMIN only."""
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
 
     async with get_db_session() as session:
         from src.app.models.institution_location import InstitutionLocation
@@ -1483,11 +1696,16 @@ async def delete_insurance_plan(
             )
         ).scalar_one_or_none()
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
 
         if current_user.role == UserRole.LOCATION_ADMIN.value:
             if str(location.id) != str(current_user.location_id):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this location")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized for this location",
+                )
 
         plan = (
             await session.execute(
@@ -1499,7 +1717,9 @@ async def delete_insurance_plan(
             )
         ).scalar_one_or_none()
         if not plan:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Insurance plan not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Insurance plan not found"
+            )
 
         plan.is_active = False
 
