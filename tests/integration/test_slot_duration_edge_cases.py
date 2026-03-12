@@ -14,10 +14,19 @@ Run:
 from __future__ import annotations
 
 import logging
+import os
 from datetime import time, date, datetime, timedelta
 
 import pytest
 import pytest_asyncio
+
+pytestmark = pytest.mark.integration
+
+if os.getenv("RUN_LIVE_NEXHEALTH") != "1":
+    pytest.skip(
+        "Live NexHealth tests disabled. Set RUN_LIVE_NEXHEALTH=1 to enable.",
+        allow_module_level=True,
+    )
 
 from src.app.config import settings
 from src.app.nexhealth.client import NexHealthClient

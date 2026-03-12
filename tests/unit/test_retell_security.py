@@ -1,38 +1,33 @@
 """Unit tests for Retell signature verification."""
 
-import hmac
-import hashlib
 import pytest
 from fastapi import HTTPException, Request
+from retell.lib.webhook_auth import symmetric
 from src.app.retell.security import RetellSignatureVerifier, get_signature_dependency
 
 class TestRetellSecurity:
     
     def test_verify_signature_valid(self, retell_verifier):
         """Test valid signature verification."""
-        payload = b'{"event": "call_started"}'
+        payload = '{"event": "call_started"}'
         secret = "test-secret"
         
-        # Calculate valid signature
-        signature = hmac.new(
-            secret.encode(),
-            payload,
-            hashlib.sha256
-        ).hexdigest()
+        # Calculate valid signature using Retell SDK helper
+        signature = symmetric["sign"](payload, secret)
         
         assert retell_verifier.verify_signature(payload, signature) is True
 
     def test_verify_signature_invalid(self, retell_verifier):
         """Test invalid signature rejection."""
-        payload = b'{"event": "call_started"}'
+        payload = '{"event": "call_started"}'
         signature = "invalid-signature"
         
         assert retell_verifier.verify_signature(payload, signature) is False
         
     def test_verify_signature_no_secret(self):
-        """Test verification allows request when no secret configured (dev mode)."""
+        """Test verification rejects when no secret configured."""
         verifier = RetellSignatureVerifier(None)
-        assert verifier.verify_signature(b"data", "sig") is True
+        assert verifier.verify_signature("data", "sig") is False
         
     def test_verify_signature_missing_header(self, retell_verifier):
         """Test missing signature header."""
@@ -43,7 +38,7 @@ async def test_dependency_valid_signature():
     """Test FastAPI dependency with valid signature."""
     payload = b'test-body'
     secret = "test-secret"
-    signature = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    signature = symmetric["sign"](payload.decode("utf-8"), secret)
     
     # Mock Request
     scope = {

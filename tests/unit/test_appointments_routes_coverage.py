@@ -1,98 +1,94 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from src.app.api.routes import appointments
-from src.app.dependencies import get_nexhealth_client_dependency
-from src.app.api.deps import get_current_user
+
+from src.app.api.routes.universal import appointments
+from src.app.pms.factory import get_institution_pms
+from src.app.pms.models import BookingResult
+
 
 # Setup app with overrides
-def get_test_app(mock_client):
+
+def get_test_app(mock_adapter):
     app = FastAPI()
-    app.include_router(appointments.router, prefix="/nexhealth")
-    
-    async def override_get_client():
-        return mock_client
-        
-    class MockUser:
-        is_active = True
+    app.include_router(appointments.router, prefix="/pms")
 
-    async def override_auth():
-        return MockUser()
-
-    app.dependency_overrides[get_nexhealth_client_dependency] = override_get_client
-    app.dependency_overrides[get_current_user] = override_auth
+    app.dependency_overrides[get_institution_pms] = lambda: mock_adapter
     return app
 
+
 @pytest.fixture
-def mock_nh_client():
-    client = AsyncMock()
-    # Mock post/patch methods
-    client.post = AsyncMock()
-    client.patch = AsyncMock()
-    return client
+def mock_adapter():
+    adapter = AsyncMock()
+    adapter.book_appointment = AsyncMock()
+    adapter.cancel_appointment = AsyncMock()
+    adapter.reschedule_appointment = AsyncMock()
+    return adapter
 
-def test_book_appointment_route(mock_nh_client):
-    app = get_test_app(mock_nh_client)
+
+def test_book_appointment_route(mock_adapter):
+    app = get_test_app(mock_adapter)
     client = TestClient(app)
-    
-    mock_nh_client.post.return_value = {
-        "code": True,
-        "data": {"appt": {"id": 123}}
-    }
-    
+
+    mock_adapter.book_appointment.return_value = BookingResult(
+        success=True,
+        id="appt-123",
+        source="test",
+        status="confirmed",
+    )
+
     payload = {
-        "appt": {
-            "start_time": "2023-01-01T10:00:00",
-            "provider_id": 1,
-            "patient_id": 2
-        }
+        "patient_id": "p1",
+        "provider_id": "pr1",
+        "slot_start": "2026-01-01T10:00:00Z",
     }
-    
-    response = client.post("/nexhealth/appointments?subdomain=test&location_id=1", json=payload)
-    assert response.status_code == 200
-    assert response.json()["data"]["appt"]["id"] == 123
-    mock_nh_client.post.assert_called_once()
 
-def test_book_appointment_missing_subdomain(mock_nh_client):
-    app = get_test_app(mock_nh_client)
-    client = TestClient(app)
-    
-    # Provide valid body so we hit the subdomain check, not Pydantic validation error (422)
-    payload = {
-        "appt": {
-            "start_time": "2023-01-01T10:00:00",
-            "provider_id": 1,
-            "patient_id": 2
-        }
-    }
-    response = client.post("/nexhealth/appointments", json=payload)
-    # The route requires subdomain query param:
-    # subdomain: str | None = Query(None)
-    # But checks: 'if not subdomain: raise 400'
-    assert response.status_code == 400
-    assert "Missing subdomain or location_id. Provide as query params or configure in settings." in response.json()["detail"]
-
-def test_cancel_appointment_route(mock_nh_client):
-    app = get_test_app(mock_nh_client)
-    client = TestClient(app)
-    
-    mock_nh_client.patch.return_value = {"code": True}
-    
-    payload = {"appt": {"cancelled": True}}
-    response = client.patch("/nexhealth/appointments/123?subdomain=test", json=payload)
+    response = client.post("/pms/appointments", json=payload)
     assert response.status_code == 200
-    mock_nh_client.patch.assert_called_once()
+    assert response.json()["id"] == "appt-123"
+    mock_adapter.book_appointment.assert_awaited_once()
 
-def test_cancel_appointment_failure(mock_nh_client):
-    app = get_test_app(mock_nh_client)
+
+def test_book_appointment_validation_error(mock_adapter):
+    app = get_test_app(mock_adapter)
     client = TestClient(app)
-    
-    mock_nh_client.patch.return_value = {"code": False, "message": "Failed"}
-    
-    response = client.patch("/nexhealth/appointments/123?subdomain=test", json={"appt": {}})
-    # If route calls handle_nexhealth_request, it returns whatever dict
-    # If using ResponseModel, it might validate.
-    # Route logic: return await handle_nexhealth_request(...)
+
+    # Missing required fields should trigger 422
+    response = client.post("/pms/appointments", json={"patient_id": "p1"})
+    assert response.status_code == 422
+
+
+def test_cancel_appointment_route(mock_adapter):
+    app = get_test_app(mock_adapter)
+    client = TestClient(app)
+
+    mock_adapter.cancel_appointment.return_value = BookingResult(
+        success=True,
+        id="appt-123",
+        source="test",
+        status="cancelled",
+    )
+
+    response = client.patch("/pms/appointments/appt-123/cancel")
     assert response.status_code == 200
-    assert response.json()["code"] is False
+    assert response.json()["status"] == "cancelled"
+    mock_adapter.cancel_appointment.assert_awaited_once_with("appt-123")
+
+
+def test_cancel_appointment_failure(mock_adapter):
+    app = get_test_app(mock_adapter)
+    client = TestClient(app)
+
+    mock_adapter.cancel_appointment.return_value = BookingResult(
+        success=False,
+        id="appt-123",
+        source="test",
+        status="error",
+        error="Failed",
+    )
+
+    response = client.patch("/pms/appointments/appt-123/cancel")
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["error"] == "Failed"

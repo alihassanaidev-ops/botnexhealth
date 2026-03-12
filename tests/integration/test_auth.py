@@ -20,7 +20,7 @@ async def test_users_me_requires_auth(async_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_token_endpoint_validation(async_client: AsyncClient):
-    """Test that /auth/token returns 422 with missing form data."""
+    """Test that /auth/supabase/token returns 422 with missing body."""
     # Send completely empty body - should fail validation before hitting DB
-    response = await async_client.post("/auth/token")
+    response = await async_client.post("/auth/supabase/token")
     assert response.status_code == 422  # Validation error

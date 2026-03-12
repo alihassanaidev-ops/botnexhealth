@@ -87,6 +87,25 @@ class User(Base):
         server_default="PENDING",
     )
 
+    invite_cooldown_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
+
+    invite_cooldown_exponent: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        server_default="0",
+    )
+
+    last_invite_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,

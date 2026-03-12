@@ -1,5 +1,33 @@
+import os
 import pytest
+
 from src.app.api.models import InstitutionListResponse, InstitutionDetailResponse
+from src.app.api.deps import get_current_admin
+from src.app.main import app
+from src.app.models.user import User, UserRole
+
+pytestmark = pytest.mark.integration
+
+if os.getenv("RUN_LIVE_NEXHEALTH") != "1":
+    pytest.skip(
+        "Live NexHealth tests disabled. Set RUN_LIVE_NEXHEALTH=1 to enable.",
+        allow_module_level=True,
+    )
+
+
+@pytest.fixture(autouse=True)
+def override_admin():
+    mock_user = User(
+        id="00000000-0000-0000-0000-000000000000",
+        email="admin@example.com",
+        role=UserRole.SUPER_ADMIN.value,
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_admin] = lambda: mock_user
+    try:
+        yield
+    finally:
+        app.dependency_overrides = {}
 
 @pytest.mark.asyncio
 async def test_list_institutions(async_client):

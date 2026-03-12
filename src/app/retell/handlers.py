@@ -704,6 +704,65 @@ async def list_insurance_plans_handler(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": f"Failed to retrieve insurance plans: {str(e)}"}
 
 
+@register_function("list_transfer_numbers")
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda args: "transfer_numbers",
+)
+async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
+    """List transfer numbers for this location."""
+    try:
+        ctx = await _resolve_context()
+    except ValueError as e:
+        return {"error": str(e)}
+
+    if not ctx.location:
+        return {"error": "No location resolved for this agent."}
+
+    from sqlalchemy import select
+    from src.app.database import get_db_session
+    from src.app.models.institution_location_transfer_number import (
+        InstitutionLocationTransferNumber,
+    )
+
+    try:
+        async with get_db_session() as session:
+            rows = (
+                await session.execute(
+                    select(InstitutionLocationTransferNumber)
+                    .where(
+                        InstitutionLocationTransferNumber.location_id == str(ctx.location.id),
+                        InstitutionLocationTransferNumber.institution_id == str(ctx.institution.id),
+                    )
+                    .order_by(
+                        InstitutionLocationTransferNumber.department,
+                        InstitutionLocationTransferNumber.phone_number,
+                    )
+                )
+            ).scalars().all()
+
+            simplified = [
+                {"phone_number": r.phone_number, "department": r.department}
+                for r in rows
+            ]
+
+            if not simplified:
+                return {
+                    "count": 0,
+                    "transfer_numbers": [],
+                    "message": "No transfer numbers are configured for this location.",
+                }
+
+            return {
+                "count": len(simplified),
+                "transfer_numbers": simplified,
+                "message": f"Found {len(simplified)} transfer number(s).",
+            }
+    except Exception as e:
+        logger.error(f"Failed to list transfer numbers: {e}")
+        return {"error": f"Failed to retrieve transfer numbers: {str(e)}"}
+
+
 @register_function("list_operatories")
 async def list_operatories(args: dict[str, Any]) -> dict[str, Any]:
     """List operatories (chairs/rooms) at the practice."""

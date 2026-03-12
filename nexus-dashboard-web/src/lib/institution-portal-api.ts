@@ -18,7 +18,15 @@ export interface InstitutionPortalLocation {
     is_active: boolean
     phone: string | null
     timezone: string | null
-    transfer_number: string | null
+}
+
+export interface TransferNumber {
+    id: string
+    location_id: string
+    location_slug: string
+    location_name: string
+    phone_number: string
+    department: string
 }
 
 export interface AggregateSummaryCards {
@@ -92,15 +100,39 @@ export async function updateLocationTimezone(
     return data
 }
 
-export async function updateLocationTransferNumber(
+export async function listTransferNumbers(): Promise<TransferNumber[]> {
+    const { data } = await api.get<TransferNumber[]>("/institution/transfer-numbers")
+    return data
+}
+
+export async function createTransferNumber(
     locSlug: string,
-    transferNumber: string,
-): Promise<InstitutionPortalLocation> {
-    const { data } = await api.patch<InstitutionPortalLocation>(
-        `/institution/locations/${locSlug}/transfer-number`,
-        { transfer_number: transferNumber },
+    payload: { phone_number: string; department: string },
+): Promise<TransferNumber> {
+    const { data } = await api.post<TransferNumber>(
+        `/institution/locations/${locSlug}/transfer-numbers`,
+        payload,
     )
     return data
+}
+
+export async function updateTransferNumber(
+    locSlug: string,
+    transferId: string,
+    payload: { phone_number: string; department: string },
+): Promise<TransferNumber> {
+    const { data } = await api.patch<TransferNumber>(
+        `/institution/locations/${locSlug}/transfer-numbers/${transferId}`,
+        payload,
+    )
+    return data
+}
+
+export async function deleteTransferNumber(
+    locSlug: string,
+    transferId: string,
+): Promise<void> {
+    await api.delete(`/institution/locations/${locSlug}/transfer-numbers/${transferId}`)
 }
 
 export async function getAggregateDashboard(): Promise<AggregateDashboardResponse> {

@@ -32,14 +32,18 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import {
+    createTransferNumber,
+    deleteTransferNumber,
     getBillingEmail,
     getROIConfig,
     listInstitutionPortalLocations,
+    listTransferNumbers,
     updateBillingEmail,
     updateROIConfig,
-    updateLocationTransferNumber,
+    updateTransferNumber,
     type ROIConfig,
     type InstitutionPortalLocation,
+    type TransferNumber,
 } from "@/lib/institution-portal-api"
 
 interface TransferRow {
@@ -102,13 +106,16 @@ export default function InstitutionSettings() {
     const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
     const [locationsLoading, setLocationsLoading] = useState(false)
 
+    const [transferNumbers, setTransferNumbers] = useState<TransferNumber[]>([])
+    const [transferNumbersLoading, setTransferNumbersLoading] = useState(false)
+
     const [transferRows, setTransferRows] = useState<TransferRow[]>([
         { id: generateId(), locationId: "", locationName: "", transferNumber: "", department: "" }
     ])
     const [transferSaving, setTransferSaving] = useState(false)
 
     const [editModalOpen, setEditModalOpen] = useState(false)
-    const [editingLocation, setEditingLocation] = useState<InstitutionPortalLocation | null>(null)
+    const [editingTransfer, setEditingTransfer] = useState<TransferNumber | null>(null)
     const [editTransferNumber, setEditTransferNumber] = useState("")
     const [editDepartment, setEditDepartment] = useState("")
     const [editTransferNumberError, setEditTransferNumberError] = useState("")
@@ -148,6 +155,19 @@ export default function InstitutionSettings() {
         }
     }, [])
 
+    const loadTransferNumbers = useCallback(async () => {
+        setTransferNumbersLoading(true)
+        try {
+            const rows = await listTransferNumbers()
+            setTransferNumbers(rows)
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to load transfer numbers")
+        } finally {
+            setTransferNumbersLoading(false)
+        }
+    }, [])
+
     useEffect(() => {
         void loadData()
     }, [loadData])
@@ -155,6 +175,10 @@ export default function InstitutionSettings() {
     useEffect(() => {
         void loadLocations()
     }, [loadLocations])
+
+    useEffect(() => {
+        void loadTransferNumbers()
+    }, [loadTransferNumbers])
 
     async function handleSaveROIConfig() {
         setRoiSaving(true)
@@ -219,10 +243,23 @@ export default function InstitutionSettings() {
     }
 
     async function handleSaveAllTransferNumbers() {
-        const validRows = transferRows.filter((row) => row.locationId && row.transferNumber)
+        const populatedRows = transferRows.filter(
+            (row) => row.locationId || row.transferNumber || row.department
+        )
+        const validRows = transferRows.filter(
+            (row) => row.locationId && row.transferNumber && row.department.trim()
+        )
         
         if (validRows.length === 0) {
-            toast.error("Please add at least one valid entry (location and number required)")
+            toast.error("Please add at least one valid entry (location, number, and department required)")
+            return
+        }
+
+        const incompleteRows = populatedRows.filter(
+            (row) => !row.locationId || !row.transferNumber || !row.department.trim()
+        )
+        if (incompleteRows.length > 0) {
+            toast.error("Please complete location, number, and department for each row")
             return
         }
 
@@ -236,15 +273,19 @@ export default function InstitutionSettings() {
         try {
             for (const row of validRows) {
                 const location = locations.find((loc) => loc.id === row.locationId)
-                if (location) {
-                    const normalizedNumber = normalizePhoneNumber(row.transferNumber)
-                    await updateLocationTransferNumber(location.slug, normalizedNumber)
+                if (!location) {
+                    throw new Error("Selected location not found")
                 }
+                const normalizedNumber = normalizePhoneNumber(row.transferNumber)
+                await createTransferNumber(location.slug, {
+                    phone_number: normalizedNumber,
+                    department: row.department.trim(),
+                })
             }
             
             toast.success(`${validRows.length} transfer number(s) saved`)
             setTransferRows([{ id: generateId(), locationId: "", locationName: "", transferNumber: "", department: "" }])
-            void loadLocations()
+            void loadTransferNumbers()
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to save transfer numbers")
@@ -253,33 +294,57 @@ export default function InstitutionSettings() {
         }
     }
 
-    function handleEditClick(location: InstitutionPortalLocation) {
-        setEditingLocation(location)
-        setEditTransferNumber(location.transfer_number || "")
-        setEditDepartment((location as any).department || "")
+    function handleEditClick(transfer: TransferNumber) {
+        setEditingTransfer(transfer)
+        setEditTransferNumber(transfer.phone_number || "")
+        setEditDepartment(transfer.department || "")
         setEditTransferNumberError("")
         setEditModalOpen(true)
     }
 
     async function handleSaveEditTransferNumber() {
-        if (!editingLocation) return
+        if (!editingTransfer) return
 
         if (editTransferNumber && !isValidPhoneNumber(editTransferNumber)) {
             setEditTransferNumberError("Please enter a valid phone number")
+            return
+        }
+        if (!editDepartment.trim()) {
+            toast.error("Department is required")
             return
         }
 
         setTransferSaving(true)
         try {
             const normalizedNumber = editTransferNumber ? normalizePhoneNumber(editTransferNumber) : ""
-            await updateLocationTransferNumber(editingLocation.slug, normalizedNumber)
+            await updateTransferNumber(editingTransfer.location_slug, editingTransfer.id, {
+                phone_number: normalizedNumber,
+                department: editDepartment.trim(),
+            })
 
             toast.success("Transfer number updated")
             setEditModalOpen(false)
-            void loadLocations()
+            void loadTransferNumbers()
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to update transfer number")
+        } finally {
+            setTransferSaving(false)
+        }
+    }
+
+    async function handleDeleteTransferNumber(transfer: TransferNumber) {
+        const confirmed = window.confirm(`Delete transfer number for ${transfer.location_name}?`)
+        if (!confirmed) return
+
+        setTransferSaving(true)
+        try {
+            await deleteTransferNumber(transfer.location_slug, transfer.id)
+            toast.success("Transfer number deleted")
+            void loadTransferNumbers()
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to delete transfer number")
         } finally {
             setTransferSaving(false)
         }
@@ -505,12 +570,12 @@ export default function InstitutionSettings() {
                         </CardTitle>
                     </CardHeader>
                     <CardContent>
-                        {locationsLoading ? (
+                        {transferNumbersLoading ? (
                             <div className="flex items-center justify-center py-8">
                                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                             </div>
-                        ) : locations.length === 0 ? (
-                            <p className="text-muted-foreground text-center py-8">No locations found</p>
+                        ) : transferNumbers.length === 0 ? (
+                            <p className="text-muted-foreground text-center py-8">No transfer numbers found</p>
                         ) : (
                             <Table>
                                 <TableHeader>
@@ -522,20 +587,31 @@ export default function InstitutionSettings() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {locations.map((loc) => (
-                                        <TableRow key={loc.id}>
-                                            <TableCell className="font-medium">{loc.name}</TableCell>
-                                            <TableCell>{formatPhoneDisplay(loc.transfer_number)}</TableCell>
-                                            <TableCell>{(loc as any).department || "—"}</TableCell>
+                                    {transferNumbers.map((transfer) => (
+                                        <TableRow key={transfer.id}>
+                                            <TableCell className="font-medium">{transfer.location_name}</TableCell>
+                                            <TableCell>{formatPhoneDisplay(transfer.phone_number)}</TableCell>
+                                            <TableCell>{transfer.department}</TableCell>
                                             <TableCell className="text-right">
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => handleEditClick(loc)}
-                                                >
-                                                    <Edit className="h-4 w-4 mr-1" />
-                                                    Edit
-                                                </Button>
+                                                <div className="flex justify-end gap-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleEditClick(transfer)}
+                                                    >
+                                                        <Edit className="h-4 w-4 mr-1" />
+                                                        Edit
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleDeleteTransferNumber(transfer)}
+                                                        disabled={transferSaving}
+                                                    >
+                                                        <Trash2 className="h-4 w-4 mr-1" />
+                                                        Delete
+                                                    </Button>
+                                                </div>
                                             </TableCell>
                                         </TableRow>
                                     ))}
@@ -552,7 +628,7 @@ export default function InstitutionSettings() {
                     <DialogHeader>
                         <DialogTitle>Edit Transfer Number</DialogTitle>
                         <DialogDescription>
-                            Update the transfer number for {editingLocation?.name}
+                            Update the transfer number for {editingTransfer?.location_name}
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-4">
@@ -560,7 +636,7 @@ export default function InstitutionSettings() {
                             <Label htmlFor="edit-location">Location</Label>
                             <Input
                                 id="edit-location"
-                                value={editingLocation?.name || ""}
+                                value={editingTransfer?.location_name || ""}
                                 disabled
                                 className="bg-muted"
                             />
@@ -598,7 +674,11 @@ export default function InstitutionSettings() {
                         </Button>
                         <Button
                             onClick={handleSaveEditTransferNumber}
-                            disabled={transferSaving || (!!editTransferNumber && !isValidPhoneNumber(editTransferNumber))}
+                            disabled={
+                                transferSaving ||
+                                (!!editTransferNumber && !isValidPhoneNumber(editTransferNumber)) ||
+                                !editDepartment.trim()
+                            }
                         >
                             {transferSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                             Save Changes

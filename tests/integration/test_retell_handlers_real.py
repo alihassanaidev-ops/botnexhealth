@@ -1,21 +1,35 @@
 
+import logging
+import os
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+
 import pytest
 import pytest_asyncio
-import logging
-from datetime import datetime, timedelta
+
 from src.app.config import Settings
 from src.app.dependencies import init_nexhealth_client, cleanup_nexhealth_client
+from src.app.models.institution import Institution
+from src.app.models.institution_location import InstitutionLocation
+from src.app.pms.nexhealth.adapter import NexHealthAdapter
+from src.app.retell import handlers
 from src.app.retell.handlers import (
     lookup_patient,
     find_appointment_slots,
     book_appointment,
     cancel_appointment,
     get_location_details,
-    reschedule_appointment
+    reschedule_appointment,
 )
 
 # Mark as integration test
 pytestmark = pytest.mark.integration
+
+if os.getenv("RUN_LIVE_NEXHEALTH") != "1":
+    pytest.skip(
+        "Live NexHealth tests disabled. Set RUN_LIVE_NEXHEALTH=1 to enable.",
+        allow_module_level=True,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +45,33 @@ async def initialized_client():
 def real_settings():
     """Load real settings."""
     return Settings()
+
+
+@pytest_asyncio.fixture
+async def retell_context(test_context, real_settings, monkeypatch):
+    """Patch Retell context to use a real NexHealth adapter for tests."""
+    institution = Institution(name="Test Institution", slug="test-institution")
+    institution.nexhealth_api_key = real_settings.nexhealth_api_key
+
+    location = InstitutionLocation(
+        institution_id=institution.id,
+        name="Test Location",
+        slug="test-location",
+        nexhealth_subdomain=test_context["subdomain"],
+        nexhealth_location_id=str(test_context["location_id"]),
+    )
+
+    adapter = await NexHealthAdapter.create(institution, location)
+    ctx = SimpleNamespace(institution=institution, location=location, adapter=adapter)
+
+    async def mock_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", mock_resolve)
+    try:
+        yield ctx
+    finally:
+        await adapter.close()
 
 @pytest_asyncio.fixture
 async def test_context(initialized_client, real_settings):
@@ -114,7 +155,7 @@ async def test_context(initialized_client, real_settings):
     return context
 
 @pytest.mark.asyncio
-async def test_lookup_patient(test_context):
+async def test_lookup_patient(test_context, retell_context):
     logger.info(f"test_context type: {type(test_context)}")
     logger.info(f"test_context val: {test_context}")
     
@@ -126,8 +167,6 @@ async def test_lookup_patient(test_context):
         
     args = {
         "name": test_context["patient_name"],
-        "subdomain": test_context["subdomain"],
-        "location_id": test_context["location_id"] # Optional but helps
     }
 
     result = await lookup_patient(args)
@@ -145,13 +184,11 @@ async def test_lookup_patient(test_context):
     assert len(result["patients"]) > 0
 
 @pytest.mark.asyncio
-async def test_find_appointment_slots(test_context):
+async def test_find_appointment_slots(test_context, retell_context):
     start_date = datetime.now().strftime("%Y-%m-%d")
     args = {
         "start_date": start_date,
-        "location_id": test_context["location_id"],
-        "subdomain": test_context["subdomain"],
-        "days": 7
+        "days": 7,
     }
     if test_context.get("provider_id"):
         args["provider_id"] = test_context["provider_id"]
@@ -162,7 +199,7 @@ async def test_find_appointment_slots(test_context):
     assert "slots" in result
 
 @pytest.mark.asyncio
-async def test_book_and_cancel_appointment(test_context):
+async def test_book_and_cancel_appointment(test_context, retell_context):
     if not test_context.get("provider_id") or not test_context.get("patient_id"):
         pytest.skip("Missing provider or patient for booking test")
 
@@ -170,10 +207,8 @@ async def test_book_and_cancel_appointment(test_context):
     start_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     slots_args = {
         "start_date": start_date,
-        "location_id": test_context["location_id"],
-        "subdomain": test_context["subdomain"],
         "provider_id": test_context["provider_id"],
-        "days": 5
+        "days": 5,
     }
     if test_context.get("appointment_type_id"):
         slots_args["appointment_type_id"] = test_context["appointment_type_id"]
@@ -196,12 +231,10 @@ async def test_book_and_cancel_appointment(test_context):
 
     # BOOK
     book_args = {
-        "subdomain": test_context["subdomain"],
-        "location_id": test_context["location_id"],
         "patient_id": test_context["patient_id"],
         "provider_id": test_context["provider_id"],
         "start_time": target_time,
-        "note": "Test appointment from integration test"
+        "note": "Test appointment from integration test",
     }
     # Skip appointment_type_id to avoid "not configured" error, defaulting to provider/location default
     # if test_context.get("appointment_type_id"):
@@ -216,24 +249,21 @@ async def test_book_and_cancel_appointment(test_context):
     if not booking_result.get("success"):
         pytest.fail(f"Booking failed: {booking_result.get('error')}")
         
-    appt_id = booking_result.get("appointment_id")
+    appt_id = booking_result.get("id")
     assert appt_id is not None
     print(f"Booked appointment ID: {appt_id}")
 
     # CANCEL
     cancel_args = {
         "appointment_id": appt_id,
-        "subdomain": test_context["subdomain"]
     }
     
     cancel_result = await cancel_appointment(cancel_args)
     assert cancel_result.get("success") is True, f"Cancel failed: {cancel_result.get('error')}"
 
 @pytest.mark.asyncio
-async def test_get_location_details(test_context):
-    args = {
-        "location_id": test_context["location_id"]
-    }
+async def test_get_location_details(test_context, retell_context):
+    args = {}
     result = await get_location_details(args)
     assert "location" in result
     assert result["location"]["name"] is not None

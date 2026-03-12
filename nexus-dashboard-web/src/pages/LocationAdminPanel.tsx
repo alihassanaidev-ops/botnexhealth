@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useAuth } from "@/context/AuthContext"
+import { useCooldown } from "@/hooks/use-cooldown"
 import {
     deactivateLocationUser,
     inviteStaff,
@@ -21,6 +22,7 @@ import {
 import { SUPPORTED_TIMEZONES } from "@/lib/timezones"
 
 export default function LocationAdminPanel() {
+    const INVITE_COOLDOWN_SECONDS = 30
     const { user } = useAuth()
     const [loading, setLoading] = useState(true)
     const [inviting, setInviting] = useState(false)
@@ -30,6 +32,7 @@ export default function LocationAdminPanel() {
     const [timezone, setTimezone] = useState("UTC")
     const [staffUsers, setStaffUsers] = useState<InstitutionUserRow[]>([])
     const [actingUserId, setActingUserId] = useState<string | null>(null)
+    const inviteCooldown = useCooldown(INVITE_COOLDOWN_SECONDS)
 
     async function loadData() {
         setLoading(true)
@@ -56,10 +59,12 @@ export default function LocationAdminPanel() {
 
     async function handleInvite() {
         if (!location || !email.trim()) return
+        if (inviteCooldown.isActive) return
         setInviting(true)
         try {
             await inviteStaff(location.slug, email.trim())
             toast.success(`Staff invite sent to ${email.trim()}`)
+            inviteCooldown.start()
             setEmail("")
             setStaffUsers(await listLocationUsers())
         } catch (err: unknown) {
@@ -194,16 +199,23 @@ export default function LocationAdminPanel() {
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
+                                    if (e.key === "Enter" && !inviteCooldown.isActive) {
                                         void handleInvite()
                                     }
                                 }}
                                 disabled={!location || inviting}
                             />
                         </div>
-                        <Button onClick={handleInvite} disabled={!location || inviting || !email.trim()}>
+                        <Button
+                            onClick={handleInvite}
+                            disabled={!location || inviting || inviteCooldown.isActive || !email.trim()}
+                        >
                             {inviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
-                            Send Invite
+                            {inviting
+                                ? "Sending..."
+                                : inviteCooldown.isActive
+                                    ? `Send Invite (${inviteCooldown.remaining}s)`
+                                    : "Send Invite"}
                         </Button>
                     </div>
 

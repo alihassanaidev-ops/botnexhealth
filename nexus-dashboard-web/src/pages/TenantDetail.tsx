@@ -36,6 +36,7 @@ import { toast } from "sonner";
 import api from "@/lib/api";
 import type { InstitutionDetail } from "@/types";
 import { formatRoleLabel } from "@/lib/utils";
+import { useCooldown } from "@/hooks/use-cooldown";
 
 const overviewSchema = z.object({
     name: z.string().min(2, "Name must be at least 2 characters"),
@@ -45,6 +46,7 @@ const overviewSchema = z.object({
 type OverviewFormValues = z.infer<typeof overviewSchema>;
 
 export default function InstitutionDetailPage() {
+    const INVITE_COOLDOWN_SECONDS = 30;
     const { slug } = useParams<{ slug: string }>();
     const navigate = useNavigate();
     const [institution, setInstitution] = useState<InstitutionDetail | null>(null);
@@ -55,6 +57,7 @@ export default function InstitutionDetailPage() {
     const [testEmail, setTestEmail] = useState("");
     const [testUrgent, setTestUrgent] = useState(false);
     const [sendingTestEmail, setSendingTestEmail] = useState(false);
+    const reinviteCooldown = useCooldown(INVITE_COOLDOWN_SECONDS);
 
     const fetchInstitution = useCallback(async () => {
         setIsLoading(true);
@@ -128,11 +131,13 @@ export default function InstitutionDetailPage() {
 
     async function handleReinvite() {
         if (!institution?.user || !slug) return;
+        if (reinviteCooldown.isActive) return;
         if (!window.confirm(`Reinvite ${institution.user.email}? This will send a fresh invite email.`)) return;
         setReinviting(true);
         try {
             await api.post(`/admin/institutions/${slug}/reinvite`, { email: institution.user.email });
             toast.success(`Reinvite sent to ${institution.user.email}`);
+            reinviteCooldown.start();
             fetchInstitution();
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
@@ -323,10 +328,14 @@ export default function InstitutionDetailPage() {
                                         variant="outline"
                                         size="sm"
                                         onClick={handleReinvite}
-                                        disabled={reinviting}
+                                        disabled={reinviting || reinviteCooldown.isActive}
                                     >
                                         {reinviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
-                                        Reinvite
+                                        {reinviting
+                                            ? "Reinviting..."
+                                            : reinviteCooldown.isActive
+                                                ? `Reinvite (${reinviteCooldown.remaining}s)`
+                                                : "Reinvite"}
                                     </Button>
                                 </CardHeader>
                                 <CardContent>

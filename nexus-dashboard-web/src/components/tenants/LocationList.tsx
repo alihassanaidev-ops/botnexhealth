@@ -26,12 +26,14 @@ import { LocationHoursDialog } from "./LocationHoursDialog";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import type { Location, SyncResult } from "@/types";
+import { useCooldown, useCooldownMap } from "@/hooks/use-cooldown";
 
 interface LocationListProps {
     institutionSlug: string;
 }
 
 export function LocationList({ institutionSlug }: LocationListProps) {
+    const INVITE_COOLDOWN_SECONDS = 30;
     const [locations, setLocations] = useState<Location[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"list" | "form">("list");
@@ -46,6 +48,8 @@ export function LocationList({ institutionSlug }: LocationListProps) {
     const [inviteTarget, setInviteTarget] = useState<Location | null>(null);
     const [inviteEmail, setInviteEmail] = useState("");
     const [isInviting, setIsInviting] = useState(false);
+    const inviteCooldown = useCooldown(INVITE_COOLDOWN_SECONDS);
+    const reinviteCooldowns = useCooldownMap(INVITE_COOLDOWN_SECONDS);
 
     const fetchLocations = useCallback(async () => {
         setIsLoading(true);
@@ -121,6 +125,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
 
     async function handleInvite() {
         if (!inviteTarget || !inviteEmail.trim()) return;
+        if (inviteCooldown.isActive) return;
         setIsInviting(true);
         try {
             await api.post(
@@ -128,6 +133,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                 { email: inviteEmail.trim() }
             );
             toast.success(`Invite sent to ${inviteEmail.trim()}`);
+            inviteCooldown.start();
             setInviteTarget(null);
             setInviteEmail("");
             fetchLocations();
@@ -141,12 +147,14 @@ export function LocationList({ institutionSlug }: LocationListProps) {
 
     async function handleReinvite(loc: Location) {
         if (!loc.user) return;
+        if (reinviteCooldowns.isActive(loc.id)) return;
         try {
             await api.post(
                 `/admin/institutions/${institutionSlug}/locations/${loc.slug}/reinvite`,
                 { email: loc.user.email }
             );
             toast.success(`Re-invite sent to ${loc.user.email}`);
+            reinviteCooldowns.start(loc.id);
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to re-invite");
@@ -212,7 +220,9 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                                     </TableCell>
                                 </TableRow>
                             )}
-                            {locations.map((loc) => (
+                            {locations.map((loc) => {
+                                const reinviteRemaining = reinviteCooldowns.getRemaining(loc.id);
+                                return (
                                 <TableRow key={loc.id}>
                                     <TableCell className="font-medium">{loc.name}</TableCell>
                                     <TableCell className="font-mono text-sm">{loc.slug}</TableCell>
@@ -245,7 +255,12 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                                                     size="icon"
                                                     className="h-6 w-6 shrink-0"
                                                     onClick={() => handleReinvite(loc)}
-                                                    title="Re-send invite"
+                                                    title={
+                                                        reinviteRemaining > 0
+                                                            ? `Reinvite available in ${reinviteRemaining}s`
+                                                            : "Re-send invite"
+                                                    }
+                                                    disabled={reinviteRemaining > 0}
                                                 >
                                                     <MailPlus className="h-3.5 w-3.5" />
                                                 </Button>
@@ -317,7 +332,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                                         </div>
                                     </TableCell>
                                 </TableRow>
-                            ))}
+                            )})}
                         </TableBody>
                     </Table>
                 </div>
@@ -359,7 +374,11 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                             placeholder="user@clinic.com"
                             value={inviteEmail}
                             onChange={(e) => setInviteEmail(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter") handleInvite(); }}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" && !inviteCooldown.isActive) {
+                                    handleInvite();
+                                }
+                            }}
                             disabled={isInviting}
                         />
                     </div>
@@ -367,7 +386,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                         <Button variant="outline" onClick={() => { setInviteTarget(null); setInviteEmail(""); }} disabled={isInviting}>
                             Cancel
                         </Button>
-                        <Button onClick={handleInvite} disabled={isInviting || !inviteEmail.trim()}>
+                        <Button onClick={handleInvite} disabled={isInviting || inviteCooldown.isActive || !inviteEmail.trim()}>
                             {isInviting ? (
                                 <>
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -376,7 +395,9 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                             ) : (
                                 <>
                                     <UserPlus className="mr-2 h-4 w-4" />
-                                    Send Invite
+                                    {inviteCooldown.isActive
+                                        ? `Send Invite (${inviteCooldown.remaining}s)`
+                                        : "Send Invite"}
                                 </>
                             )}
                         </Button>

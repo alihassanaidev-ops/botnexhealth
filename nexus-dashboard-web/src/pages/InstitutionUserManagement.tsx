@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useAuth } from "@/context/AuthContext"
+import { useCooldown, useCooldownMap } from "@/hooks/use-cooldown"
 import {
     deactivateInstitutionUser,
     listInstitutionPortalLocations,
@@ -23,6 +24,7 @@ import { formatRoleLabel } from "@/lib/utils"
 type InstitutionInviteRole = "INSTITUTION_ADMIN" | "LOCATION_ADMIN"
 
 export default function InstitutionUserManagement() {
+    const INVITE_COOLDOWN_SECONDS = 30
     const { user } = useAuth()
     const [loading, setLoading] = useState(true)
     const [invitingUser, setInvitingUser] = useState(false)
@@ -32,6 +34,8 @@ export default function InstitutionUserManagement() {
     const [inviteLocationSlug, setInviteLocationSlug] = useState("")
     const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
     const [users, setUsers] = useState<InstitutionUserRow[]>([])
+    const inviteCooldown = useCooldown(INVITE_COOLDOWN_SECONDS)
+    const reinviteCooldowns = useCooldownMap(INVITE_COOLDOWN_SECONDS)
 
     const loadData = useCallback(async () => {
         setLoading(true)
@@ -57,6 +61,7 @@ export default function InstitutionUserManagement() {
 
     async function handleInviteUser() {
         if (!inviteEmail.trim()) return
+        if (inviteCooldown.isActive) return
         if (inviteRole === "LOCATION_ADMIN" && !inviteLocationSlug) {
             toast.error("Select a location for location admin invite")
             return
@@ -70,6 +75,7 @@ export default function InstitutionUserManagement() {
                 location_slug: inviteRole === "LOCATION_ADMIN" ? inviteLocationSlug : undefined,
             })
             toast.success("Invite sent")
+            inviteCooldown.start()
             setInviteEmail("")
             setUsers(await listInstitutionUsers())
         } catch (err: unknown) {
@@ -96,11 +102,13 @@ export default function InstitutionUserManagement() {
     }
 
     async function handleReinviteUser(target: InstitutionUserRow) {
+        if (reinviteCooldowns.isActive(target.id)) return
         if (!window.confirm(`Reinvite ${target.email}? This replaces their auth user.`)) return
         setActingUserId(target.id)
         try {
             await reinviteInstitutionUser(target.id)
             toast.success("Reinvite sent")
+            reinviteCooldowns.start(target.id)
             setUsers(await listInstitutionUsers())
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
@@ -183,9 +191,16 @@ export default function InstitutionUserManagement() {
                         </div>
                     </div>
 
-                    <Button onClick={handleInviteUser} disabled={invitingUser || !inviteEmail.trim() || loading}>
+                    <Button
+                        onClick={handleInviteUser}
+                        disabled={invitingUser || inviteCooldown.isActive || !inviteEmail.trim() || loading}
+                    >
                         {invitingUser ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
-                        Send Invite
+                        {invitingUser
+                            ? "Sending..."
+                            : inviteCooldown.isActive
+                                ? `Send Invite (${inviteCooldown.remaining}s)`
+                                : "Send Invite"}
                     </Button>
 
                     <Table>
@@ -202,6 +217,7 @@ export default function InstitutionUserManagement() {
                             {users.map((row) => {
                                 const isSelf = row.id === user?.id
                                 const busy = actingUserId === row.id
+                                const reinviteRemaining = reinviteCooldowns.getRemaining(row.id)
                                 return (
                                     <TableRow key={row.id}>
                                         <TableCell className="font-medium">{row.email}</TableCell>
@@ -235,10 +251,14 @@ export default function InstitutionUserManagement() {
                                                 <Button
                                                     variant="secondary"
                                                     size="sm"
-                                                    disabled={busy || isSelf}
+                                                    disabled={busy || isSelf || reinviteRemaining > 0}
                                                     onClick={() => handleReinviteUser(row)}
                                                 >
-                                                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Reinvite"}
+                                                    {busy
+                                                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                                                        : reinviteRemaining > 0
+                                                            ? `Reinvite (${reinviteRemaining}s)`
+                                                            : "Reinvite"}
                                                 </Button>
                                             </div>
                                         </TableCell>

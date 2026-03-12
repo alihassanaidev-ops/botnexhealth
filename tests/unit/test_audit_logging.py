@@ -42,7 +42,7 @@ class TestAuditLogModel:
             target_resource="patient:123",
             outcome=AuditOutcome.SUCCESS,
             audit_metadata={"request_id": "abc123"},
-            tenant_id="tenant-uuid",
+            institution_id="institution-uuid",
         )
         
         assert log.actor == "RETELL_AGENT"
@@ -50,7 +50,7 @@ class TestAuditLogModel:
         assert log.target_resource == "patient:123"
         assert log.outcome == "SUCCESS"
         assert log.audit_metadata["request_id"] == "abc123"
-        assert log.tenant_id == "tenant-uuid"
+        assert log.institution_id == "institution-uuid"
     
     def test_audit_log_create_with_strings(self):
         """Test creating AuditLog with string values."""
@@ -68,8 +68,8 @@ class TestAuditLogModel:
         """Test that AuditLog id default factory generates UUID."""
         log = AuditLog.create(
             actor=AuditActor.ADMIN,
-            action=AuditAction.TENANT_CREATE,
-            target_resource="tenant:xyz",
+            action=AuditAction.INSTITUTION_CREATE,
+            target_resource="institution:xyz",
             outcome=AuditOutcome.SUCCESS,
         )
         
@@ -126,7 +126,7 @@ class TestAuditEntry:
         )
         
         assert entry.metadata == {}
-        assert entry.tenant_id is None
+        assert entry.institution_id is None
         assert entry.timestamp is not None
         assert entry.request_id is not None
 
@@ -179,8 +179,8 @@ class TestInMemoryAuditRepository:
         """Test clearing all entries."""
         entry = AuditEntry(
             actor=AuditActor.ADMIN,
-            action=AuditAction.TENANT_CREATE,
-            target_resource="tenant:abc",
+            action=AuditAction.INSTITUTION_CREATE,
+            target_resource="institution:abc",
             outcome=AuditOutcome.SUCCESS,
         )
         
@@ -214,7 +214,7 @@ class TestAuditService:
             target_resource="patient:123",
             outcome=AuditOutcome.SUCCESS,
             metadata={"ip": "127.0.0.1"},
-            tenant_id="tenant-1",
+            institution_id="institution-1",
             request_id="req-123",
         )
         
@@ -226,7 +226,7 @@ class TestAuditService:
         assert entry.action == AuditAction.READ_PATIENT
         assert entry.outcome == AuditOutcome.SUCCESS
         assert entry.metadata["ip"] == "127.0.0.1"
-        assert entry.tenant_id == "tenant-1"
+        assert entry.institution_id == "institution-1"
     
     @pytest.mark.asyncio
     async def test_log_failure(self, service):

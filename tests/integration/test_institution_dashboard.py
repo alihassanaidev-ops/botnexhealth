@@ -82,6 +82,7 @@ async def test_get_aggregate_dashboard_success(async_client: AsyncClient):
             scalar_result(8),   # appointments_booked_month
             scalar_result(3),   # new_patients_month
             scalar_result(2),   # open_callbacks
+            scalar_result(95),  # avg_call_duration_seconds
             tag_rows_result,
             metrics_rows_result,
         ]

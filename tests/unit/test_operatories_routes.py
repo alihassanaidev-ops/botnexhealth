@@ -1,124 +1,80 @@
-
 import pytest
-import respx
 from fastapi.testclient import TestClient
-from httpx import Response
+from unittest.mock import AsyncMock
+
 from src.app.main import app
-from src.app.config import get_settings
-from src.app.api.deps import get_current_user
+from src.app.config import get_settings, settings as global_settings
+from src.app.api.deps import get_current_institution_or_location_user
+from src.app.models.user import User, UserRole, InviteStatus
+from src.app.pms.factory import get_institution_pms
+from src.app.pms.models import UniversalOperatory
+
 
 @pytest.fixture
-def override_settings(mock_settings):
+def override_dependencies(mock_settings):
     app.dependency_overrides[get_settings] = lambda: mock_settings
-    class MockUser:
-        is_active = True
-        
-    app.dependency_overrides[get_current_user] = lambda: MockUser()
-    mock_settings.nexhealth_subdomain = "test-subdomain"
-    mock_settings.nexhealth_location_id = 123
-    return mock_settings
+
+    original = {
+        "database_url": global_settings.database_url,
+        "app_env": global_settings.app_env,
+        "jwt_secret": global_settings.jwt_secret,
+    }
+    global_settings.database_url = None
+    global_settings.app_env = "test"
+    global_settings.jwt_secret = mock_settings.jwt_secret
+
+    mock_user = User(
+        id="00000000-0000-0000-0000-000000000000",
+        email="user@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="11111111-1111-1111-1111-111111111111",
+        is_active=True,
+        invite_status=InviteStatus.PENDING.value,
+    )
+    app.dependency_overrides[get_current_institution_or_location_user] = lambda: mock_user
+
+    mock_adapter = AsyncMock()
+    app.dependency_overrides[get_institution_pms] = lambda: mock_adapter
+
+    try:
+        yield mock_adapter
+    finally:
+        app.dependency_overrides = {}
+        for key, value in original.items():
+            setattr(global_settings, key, value)
+
 
 @pytest.fixture
-def test_client(override_settings):
+def test_client(override_dependencies):
     with TestClient(app) as client:
         yield client
 
-def test_list_operatories(test_client, mock_settings):
-    with respx.mock(base_url=mock_settings.base_url) as respx_mock:
-        # Mock Auth
-        respx_mock.post("/authenticates").mock(
-            return_value=Response(201, json={"code": True, "data": {"token": "token"}})
-        )
-        
-        # Mock List Operatories
-        expected_operatories = [
-            {
-                "id": 1,
-                "name": "Op 1",
-                "location_id": 123,
-                "active": True
-            },
-            {
-                "id": 2,
-                "name": "Op 2",
-                "location_id": 123,
-                "active": False
-            }
+
+def test_list_operatories(test_client, override_dependencies):
+    mock_adapter = override_dependencies
+    mock_adapter.list_operatories = AsyncMock(
+        return_value=[
+            UniversalOperatory(id="1", source="nexhealth", name="Op 1", is_active=True),
+            UniversalOperatory(id="2", source="nexhealth", name="Op 2", is_active=False),
         ]
-        
-        respx_mock.get("/operatories").mock(
-            return_value=Response(
-                200, 
-                json={
-                    "code": True, 
-                    "data": expected_operatories
-                }
-            )
-        )
-        
-        # Call API
-        response = test_client.get(
-            "/api/v1/nexhealth/operatories",
-            headers={},
-             # We rely on settings for subdomain/location_id
-        )
-        
-        assert response.status_code == 200
-        data = response.json()["data"]
-        assert len(data) == 2
-        assert data[0]["id"] == 1
-        assert data[0]["name"] == "Op 1"
-
-def test_list_operatories_missing_params(test_client, mock_settings):
-    # Unset settings to force error
-    mock_settings.nexhealth_subdomain = None
-    mock_settings.nexhealth_location_id = None
-    
-    response = test_client.get(
-        "/api/v1/nexhealth/operatories",
-        headers={"x-admin-api-key": "test-admin-key"}
     )
-    
-    assert response.status_code == 400
-    assert "Missing subdomain or location_id" in response.json()["detail"]
 
-def test_get_operatory(test_client, mock_settings):
-    with respx.mock(base_url=mock_settings.base_url) as respx_mock:
-        respx_mock.post("/authenticates").mock(
-            return_value=Response(201, json={"code": True, "data": {"token": "token"}})
-        )
-        
-        operatory_id = 999
-        respx_mock.get(f"/operatories/{operatory_id}").mock(
-            return_value=Response(
-                200, 
-                json={
-                    "code": True, 
-                    "data": {
-                        "id": operatory_id,
-                        "name": "Single Op",
-                        "location_id": 123,
-                    }
-                }
-            )
-        )
-        
-        response = test_client.get(
-            f"/api/v1/nexhealth/operatories/{operatory_id}",
-            headers={}
-        )
-        
-        assert response.status_code == 200
-        assert response.json()["data"]["id"] == operatory_id
-        assert response.json()["data"]["name"] == "Single Op"
+    response = test_client.get("/api/v1/pms/operatories")
 
-def test_get_operatory_missing_subdomain(test_client, mock_settings):
-    mock_settings.nexhealth_subdomain = None
-    
-    response = test_client.get(
-        "/api/v1/nexhealth/operatories/1",
-        headers={"x-admin-api-key": "test-admin-key"}
-    )
-    
-    assert response.status_code == 400
-    assert "Missing subdomain" in response.json()["detail"]
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert data[0]["id"] == "1"
+    assert data[0]["name"] == "Op 1"
+    mock_adapter.list_operatories.assert_awaited_once()
+
+
+def test_list_operatories_empty(test_client, override_dependencies):
+    mock_adapter = override_dependencies
+    mock_adapter.list_operatories = AsyncMock(return_value=[])
+
+    response = test_client.get("/api/v1/pms/operatories")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    mock_adapter.list_operatories.assert_awaited_once()

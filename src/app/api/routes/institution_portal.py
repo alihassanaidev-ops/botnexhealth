@@ -26,6 +26,7 @@ from src.app.models.audit_log import AuditLog
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.services.institution_service import InstitutionService
+from src.app.services.invite_cooldown import apply_invite_cooldown, ensure_invite_cooldown
 from src.app.services.supabase_service import SupabaseService
 from src.app.services.audit import log_audit_background
 from src.app.models.audit_log import AuditAction, AuditOutcome
@@ -102,6 +103,20 @@ class InstitutionLocationLiteResponse(BaseModel):
             phone=loc.phone,
             timezone=loc.timezone,
         )
+
+
+class TransferNumberRequest(BaseModel):
+    phone_number: str = Field(..., min_length=1, max_length=50)
+    department: str = Field(..., min_length=1, max_length=255)
+
+
+class TransferNumberResponse(BaseModel):
+    id: str
+    location_id: str
+    location_slug: str
+    location_name: str
+    phone_number: str
+    department: str
 
 
 class InviteUserRequest(BaseModel):
@@ -283,6 +298,7 @@ async def get_location_operating_hours(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
         )
     async with get_db_session() as session:
+        actor = await ensure_invite_cooldown(session, current_user)
         svc = InstitutionService(session)
         location = await svc.get_location_by_slug(loc_slug)
         if not location or location.institution_id != current_user.institution_id:
@@ -425,6 +441,298 @@ async def update_location_timezone(
     return InstitutionLocationLiteResponse.from_model(location)
 
 
+# =============================================================================
+# Transfer Numbers
+# =============================================================================
+
+
+@router.get("/transfer-numbers", response_model=list[TransferNumberResponse])
+async def list_transfer_numbers(
+    current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+):
+    """List transfer numbers for the institution (location admins see only their location)."""
+    if not current_user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+        from src.app.models.institution_location_transfer_number import (
+            InstitutionLocationTransferNumber,
+        )
+
+        stmt = (
+            select(InstitutionLocationTransferNumber, InstitutionLocation)
+            .join(
+                InstitutionLocation,
+                InstitutionLocation.id == InstitutionLocationTransferNumber.location_id,
+            )
+            .where(
+                InstitutionLocationTransferNumber.institution_id
+                == current_user.institution_id,
+            )
+        )
+
+        if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+            if not current_user.location_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Location-scoped account is missing location assignment",
+                )
+            stmt = stmt.where(
+                InstitutionLocationTransferNumber.location_id
+                == str(current_user.location_id)
+            )
+
+        rows = (
+            await session.execute(
+                stmt.order_by(InstitutionLocation.name, InstitutionLocationTransferNumber.department)
+            )
+        ).all()
+
+        return [
+            TransferNumberResponse(
+                id=str(tn.id),
+                location_id=str(loc.id),
+                location_slug=loc.slug,
+                location_name=loc.name,
+                phone_number=tn.phone_number,
+                department=tn.department,
+            )
+            for tn, loc in rows
+        ]
+
+
+@router.post(
+    "/locations/{loc_slug}/transfer-numbers",
+    response_model=TransferNumberResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_transfer_number(
+    loc_slug: str,
+    data: TransferNumberRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    """Create a transfer number for a location."""
+    if not current_user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+        from src.app.models.institution_location_transfer_number import (
+            InstitutionLocationTransferNumber,
+        )
+
+        location = (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.slug == loc_slug,
+                    InstitutionLocation.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
+
+        if current_user.role == UserRole.LOCATION_ADMIN.value:
+            if str(location.id) != str(current_user.location_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized for this location",
+                )
+
+        entry = InstitutionLocationTransferNumber(
+            institution_id=current_user.institution_id,
+            location_id=str(location.id),
+            phone_number=data.phone_number,
+            department=data.department,
+        )
+        session.add(entry)
+        await session.flush()
+
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.LOCATION_UPDATE,
+            target_resource=f"location:{loc_slug}/transfer_number:{entry.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "action": "create_transfer_number",
+                "department": data.department,
+            },
+            institution_id=current_user.institution_id,
+        )
+
+        return TransferNumberResponse(
+            id=str(entry.id),
+            location_id=str(location.id),
+            location_slug=location.slug,
+            location_name=location.name,
+            phone_number=entry.phone_number,
+            department=entry.department,
+        )
+
+
+@router.patch(
+    "/locations/{loc_slug}/transfer-numbers/{transfer_id}",
+    response_model=TransferNumberResponse,
+)
+async def update_transfer_number(
+    loc_slug: str,
+    transfer_id: str,
+    data: TransferNumberRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    """Update a transfer number for a location."""
+    if not current_user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+        from src.app.models.institution_location_transfer_number import (
+            InstitutionLocationTransferNumber,
+        )
+
+        location = (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.slug == loc_slug,
+                    InstitutionLocation.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
+
+        if current_user.role == UserRole.LOCATION_ADMIN.value:
+            if str(location.id) != str(current_user.location_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized for this location",
+                )
+
+        entry = (
+            await session.execute(
+                select(InstitutionLocationTransferNumber).where(
+                    InstitutionLocationTransferNumber.id == transfer_id,
+                    InstitutionLocationTransferNumber.location_id == str(location.id),
+                    InstitutionLocationTransferNumber.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not entry:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Transfer number not found",
+            )
+
+        entry.phone_number = data.phone_number
+        entry.department = data.department
+
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.LOCATION_UPDATE,
+            target_resource=f"location:{loc_slug}/transfer_number:{transfer_id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "action": "update_transfer_number",
+                "department": data.department,
+            },
+            institution_id=current_user.institution_id,
+        )
+
+        return TransferNumberResponse(
+            id=str(entry.id),
+            location_id=str(location.id),
+            location_slug=location.slug,
+            location_name=location.name,
+            phone_number=entry.phone_number,
+            department=entry.department,
+        )
+
+
+@router.delete(
+    "/locations/{loc_slug}/transfer-numbers/{transfer_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_transfer_number(
+    loc_slug: str,
+    transfer_id: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    """Delete a transfer number for a location."""
+    if not current_user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
+
+    async with get_db_session() as session:
+        from src.app.models.institution_location import InstitutionLocation
+        from src.app.models.institution_location_transfer_number import (
+            InstitutionLocationTransferNumber,
+        )
+
+        location = (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.slug == loc_slug,
+                    InstitutionLocation.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+            )
+
+        if current_user.role == UserRole.LOCATION_ADMIN.value:
+            if str(location.id) != str(current_user.location_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized for this location",
+                )
+
+        entry = (
+            await session.execute(
+                select(InstitutionLocationTransferNumber).where(
+                    InstitutionLocationTransferNumber.id == transfer_id,
+                    InstitutionLocationTransferNumber.location_id == str(location.id),
+                    InstitutionLocationTransferNumber.institution_id == current_user.institution_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not entry:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Transfer number not found",
+            )
+
+        await session.delete(entry)
+
+        log_audit_background(
+            actor=current_user.id,
+            action=AuditAction.LOCATION_UPDATE,
+            target_resource=f"location:{loc_slug}/transfer_number:{transfer_id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "action": "delete_transfer_number",
+            },
+            institution_id=current_user.institution_id,
+        )
+
+    return None
+
 @router.post("/users/invite-institution-admin", status_code=status.HTTP_201_CREATED)
 async def invite_institution_admin(
     data: InviteUserRequest,
@@ -436,6 +744,7 @@ async def invite_institution_admin(
         )
 
     async with get_db_session() as session:
+        actor = await ensure_invite_cooldown(session, current_user)
         existing = await session.execute(select(User).where(User.email == data.email))
         if existing.scalar_one_or_none():
             raise HTTPException(
@@ -468,6 +777,7 @@ async def invite_institution_admin(
             is_active=True,
         )
         session.add(user)
+        apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,
@@ -577,6 +887,7 @@ async def invite_institution_user(
     role = _validate_invite_role(data.role)
 
     async with get_db_session() as session:
+        actor = await ensure_invite_cooldown(session, current_user)
         from src.app.models.institution_location import InstitutionLocation
 
         existing = await session.execute(select(User).where(User.email == data.email))
@@ -635,6 +946,7 @@ async def invite_institution_user(
             is_active=True,
         )
         session.add(created)
+        apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,
@@ -726,6 +1038,7 @@ async def reinvite_institution_user(
         )
 
     async with get_db_session() as session:
+        actor = await ensure_invite_cooldown(session, current_user)
         target = (
             await session.execute(
                 select(User).where(
@@ -794,6 +1107,7 @@ async def reinvite_institution_user(
             is_active=old_is_active,
         )
         session.add(replacement)
+        apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,
@@ -975,6 +1289,7 @@ async def invite_location_admin(
             is_active=True,
         )
         session.add(user)
+        apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,
@@ -1003,6 +1318,7 @@ async def invite_staff(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment"
         )
     async with get_db_session() as session:
+        actor = await ensure_invite_cooldown(session, current_user)
         svc = InstitutionService(session)
         location = await svc.get_location_by_slug(loc_slug)
         if not location or location.institution_id != current_user.institution_id:
@@ -1049,6 +1365,7 @@ async def invite_staff(
             is_active=True,
         )
         session.add(user)
+        apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,

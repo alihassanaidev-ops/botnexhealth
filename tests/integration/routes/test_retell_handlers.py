@@ -1,8 +1,10 @@
-
 import pytest
+from types import SimpleNamespace
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.app.retell.handlers import create_patient
-from src.app.nexhealth.exceptions import NexHealthAPIError
+
+from src.app.pms.models import PatientCreateRequest
+from src.app.retell.handlers import create_patient, list_transfer_numbers
 
 @pytest.mark.asyncio
 async def test_create_patient_success():
@@ -13,40 +15,37 @@ async def test_create_patient_success():
         "email": "john.doe@example.com",
         "phone_number": "555-0123",
         "date_of_birth": "1990-01-01",
-        "location_id": 123,
-        "subdomain": "test-dental",
-        "provider_id": 456
+        "provider_id": "456",
     }
 
     mock_response = {
-        "code": True,
-        "data": {
-            "user": {
-                "id": 789,
-                "first_name": "John",
-                "email": "john.doe@example.com"
-            }
-        }
+        "success": True,
+        "patient_id": "nh-789",
+        "message": "Patient John created successfully.",
     }
 
-    with patch("src.app.retell.handlers._get_nexhealth_client") as mock_get_client:
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_get_client.return_value = mock_client
+    mock_adapter = SimpleNamespace(create_patient=AsyncMock(return_value=mock_response))
 
+    async def mock_resolve():
+        return SimpleNamespace(institution=SimpleNamespace(id="inst-1"), location=SimpleNamespace(id="loc-1"), adapter=mock_adapter)
+
+    with patch("src.app.retell.handlers._resolve_context", new=mock_resolve):
         result = await create_patient(mock_args)
 
-        assert result["success"] is True
-        assert result["patient_id"] == 789
-        assert "created successfully" in result["message"]
+    assert result["success"] is True
+    assert result["patient_id"] == "nh-789"
+    assert "created successfully" in result["message"]
 
-        # Verify client call structure
-        mock_client.post.assert_called_once()
-        call_args = mock_client.post.call_args
-        assert call_args[0][0] == "/patients"
-        assert call_args[1]["params"] == {"subdomain": "test-dental", "location_id": 123}
-        assert call_args[1]["json"]["patient"]["first_name"] == "John"
-        assert call_args[1]["json"]["provider"]["provider_id"] == 456
+    # Verify adapter call structure
+    mock_adapter.create_patient.assert_awaited_once()
+    req = mock_adapter.create_patient.call_args.args[0]
+    assert isinstance(req, PatientCreateRequest)
+    assert req.first_name == "John"
+    assert req.last_name == "Doe"
+    assert req.email == "john.doe@example.com"
+    assert req.phone == "555-0123"
+    assert req.date_of_birth == "1990-01-01"
+    assert req.provider_id == "456"
 
 @pytest.mark.asyncio
 async def test_create_patient_missing_fields():
@@ -70,17 +69,50 @@ async def test_create_patient_api_failure():
         "email": "john.doe@example.com",
         "phone_number": "555-0123",
         "date_of_birth": "1990-01-01",
-        "location_id": 123,
-        "subdomain": "test-dental",
-        "provider_id": 456
+        "provider_id": "456",
     }
 
-    with patch("src.app.retell.handlers._get_nexhealth_client") as mock_get_client:
-        mock_client = AsyncMock()
-        mock_client.post.side_effect = Exception("API Error")
-        mock_get_client.return_value = mock_client
+    mock_adapter = SimpleNamespace(create_patient=AsyncMock(side_effect=Exception("API Error")))
 
+    async def mock_resolve():
+        return SimpleNamespace(institution=SimpleNamespace(id="inst-1"), location=SimpleNamespace(id="loc-1"), adapter=mock_adapter)
+
+    with patch("src.app.retell.handlers._resolve_context", new=mock_resolve):
         result = await create_patient(mock_args)
 
-        assert result["success"] is False
-        assert "500" in result["error"] or "API Error" in result["error"]
+    assert result["success"] is False
+    assert "API Error" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_list_transfer_numbers_success():
+    """Test listing transfer numbers via Retell handler."""
+    mock_rows = [
+        SimpleNamespace(phone_number="+15551230001", department="Reception"),
+        SimpleNamespace(phone_number="+15551230002", department="Billing"),
+    ]
+
+    mock_session = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = mock_rows
+    mock_session.execute.return_value = result
+
+    @asynccontextmanager
+    async def fake_db():
+        yield mock_session
+
+    async def mock_resolve():
+        return SimpleNamespace(
+            institution=SimpleNamespace(id="inst-1"),
+            location=SimpleNamespace(id="loc-1"),
+            adapter=SimpleNamespace(),
+        )
+
+    with patch("src.app.retell.handlers._resolve_context", new=mock_resolve), patch(
+        "src.app.database.get_db_session", new=fake_db
+    ):
+        result = await list_transfer_numbers({})
+
+    assert result["count"] == 2
+    assert result["transfer_numbers"][0]["phone_number"] == "+15551230001"
+    assert result["transfer_numbers"][0]["department"] == "Reception"
