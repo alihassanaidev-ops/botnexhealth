@@ -110,7 +110,7 @@ class TransferNumberRequest(BaseModel):
         ...,
         min_length=1,
         max_length=50,
-        pattern=r"^\\+[1-9]\\d{7,14}$",
+        pattern=r"^\+[1-9]\d{7,14}$",
         description="E.164 format (e.g. +923001234567)",
     )
     department: str = Field(..., min_length=1, max_length=255)
