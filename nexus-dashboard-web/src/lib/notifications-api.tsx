@@ -15,22 +15,22 @@ export async function listNotifications(
     offset = 0
 ): Promise<NotificationsListResponse> {
     const { data } = await api.get<NotificationsListResponse>(
-        `/notifications?limit=${limit}&offset=${offset}`
+        `/institution/notifications?limit=${limit}&offset=${offset}`
     );
     return data;
 }
 
 export async function getUnreadCount(): Promise<NotificationUnreadCount> {
-    const { data } = await api.get<NotificationUnreadCount>("/notifications/unread-count");
+    const { data } = await api.get<NotificationUnreadCount>("/institution/notifications/unread-count");
     return data;
 }
 
 export async function markAsRead(notificationId: string): Promise<void> {
-    await api.patch(`/notifications/${notificationId}/read`);
+    await api.patch(`/institution/notifications/${notificationId}/read`);
 }
 
 export async function markAllAsRead(): Promise<void> {
-    await api.post("/notifications/mark-all-read");
+    await api.post("/institution/notifications/mark-all-read");
 }
 
 import {
