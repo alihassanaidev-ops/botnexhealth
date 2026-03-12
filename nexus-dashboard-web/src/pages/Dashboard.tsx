@@ -449,7 +449,7 @@ export default function Dashboard() {
                             appointments_booked_month: aggregateData.summary.appointments_booked_month,
                             new_patients_month: aggregateData.summary.new_patients_month,
                             booking_rate_month: aggregateData.summary.booking_rate_month,
-                            avg_call_duration_seconds: 0,
+                            avg_call_duration_seconds: aggregateData.summary.avg_call_duration_seconds,
                         })
                         setLocations(
                             aggregateData.clinic_comparison.map((c) => ({
@@ -485,7 +485,7 @@ export default function Dashboard() {
                         appointments_booked_month: aggregateData.summary.appointments_booked_month,
                         new_patients_month: aggregateData.summary.new_patients_month,
                         booking_rate_month: aggregateData.summary.booking_rate_month,
-                        avg_call_duration_seconds: 0,
+                        avg_call_duration_seconds: aggregateData.summary.avg_call_duration_seconds,
                     })
                 } catch {
                     setAggregateMetrics({

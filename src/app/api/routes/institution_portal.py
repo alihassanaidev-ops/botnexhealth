@@ -933,6 +933,61 @@ async def invite_staff(
 # =============================================================================
 
 
+# ── Billing Email ─────────────────────────────────────────────────────────────
+
+
+class BillingEmailRequest(BaseModel):
+    billing_email: str = Field(..., max_length=255, description="Email address for invoices")
+
+
+class BillingEmailResponse(BaseModel):
+    billing_email: str | None
+
+
+@router.get("/billing-email", response_model=BillingEmailResponse)
+async def get_billing_email(
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    async with get_db_session() as session:
+        svc = InstitutionService(session)
+        institution = await svc.get_by_id(current_user.institution_id)
+        if not institution:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found")
+        return BillingEmailResponse(billing_email=institution.billing_email)
+
+
+@router.put("/billing-email", response_model=BillingEmailResponse)
+async def update_billing_email(
+    data: BillingEmailRequest,
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment")
+
+    async with get_db_session() as session:
+        svc = InstitutionService(session)
+        institution = await svc.get_by_id(current_user.institution_id)
+        if not institution:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found")
+        institution.billing_email = data.billing_email
+
+    log_audit_background(
+        actor=current_user.id,
+        action=AuditAction.INSTITUTION_UPDATE,
+        target_resource="institution:billing_email",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={"actor_role": current_user.role, "billing_email": data.billing_email},
+        institution_id=current_user.institution_id,
+    )
+    return BillingEmailResponse(billing_email=data.billing_email)
+
+
+# ── ROI Configuration ────────────────────────────────────────────────────────
+
+
 class ROIConfigRequest(BaseModel):
     avg_appointment_value: float = Field(..., ge=0, description="Average appointment revenue ($)")
     avg_new_patient_value: float = Field(..., ge=0, description="Average new patient first-visit revenue ($)")

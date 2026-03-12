@@ -45,6 +45,8 @@ def _provider():
         is_active=True,
         buffer_minutes=15,
         same_day_cutoff_time=time(14, 0),
+        min_age=None,
+        max_age=None,
         synced_at=datetime(2026, 3, 9, 12, 0, tzinfo=timezone.utc),
     )
 

@@ -113,6 +113,8 @@ class CachedProviderResponse(BaseModel):
     is_active: bool = True
     buffer_minutes: int = 0
     same_day_cutoff_time: str | None = None
+    min_age: int | None = None
+    max_age: int | None = None
     synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
@@ -129,6 +131,8 @@ class CachedProviderResponse(BaseModel):
             is_active=p.is_active,
             buffer_minutes=p.buffer_minutes,
             same_day_cutoff_time=p.same_day_cutoff_time.strftime("%H:%M") if p.same_day_cutoff_time else None,
+            min_age=p.min_age,
+            max_age=p.max_age,
             synced_at=p.synced_at,
         )
 
@@ -322,6 +326,8 @@ async def list_providers(
 class UpdateProviderRequest(BaseModel):
     buffer_minutes: int | None = None
     same_day_cutoff_time: str | None = None  # "HH:MM" or null to clear
+    min_age: int | None = None  # minimum patient age (inclusive), null to clear
+    max_age: int | None = None  # maximum patient age (inclusive), null to clear
 
 
 @router.patch("/providers/{provider_id}", response_model=CachedProviderResponse)
@@ -363,6 +369,23 @@ async def update_provider(
                     ).time()
                 except ValueError:
                     raise HTTPException(status.HTTP_400_BAD_REQUEST, "same_day_cutoff_time must be HH:MM format")
+
+        # ── Age-group fields ─────────────────────────────────────────
+        if "min_age" in req.model_fields_set:
+            if req.min_age is not None and (req.min_age < 0 or req.min_age > 150):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "min_age must be 0–150")
+            provider.min_age = req.min_age
+
+        if "max_age" in req.model_fields_set:
+            if req.max_age is not None and (req.max_age < 0 or req.max_age > 150):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "max_age must be 0–150")
+            provider.max_age = req.max_age
+
+        # Cross-validate: min must be <= max when both are set
+        effective_min = provider.min_age
+        effective_max = provider.max_age
+        if effective_min is not None and effective_max is not None and effective_min > effective_max:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "min_age cannot be greater than max_age")
 
         await session.flush()
         await session.refresh(provider)

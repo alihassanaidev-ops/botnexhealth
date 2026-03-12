@@ -59,6 +59,15 @@ class InstitutionProvider(Base):
         comment="If set and current time > cutoff and provider has no appointments today, hide same-day slots",
     )
 
+    min_age: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=None,
+        comment="Minimum patient age (inclusive) this provider sees; NULL = no lower bound",
+    )
+    max_age: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=None,
+        comment="Maximum patient age (inclusive) this provider sees; NULL = no upper bound",
+    )
+
     synced_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

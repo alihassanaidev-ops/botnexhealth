@@ -142,6 +142,8 @@ export interface CachedProvider {
     is_active: boolean;
     buffer_minutes: number;
     same_day_cutoff_time: string | null;
+    min_age: number | null;
+    max_age: number | null;
     synced_at: string | null;
 }
 

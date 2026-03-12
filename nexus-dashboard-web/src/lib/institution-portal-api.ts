@@ -28,6 +28,7 @@ export interface AggregateSummaryCards {
     appointments_booked_month: number
     new_patients_month: number
     booking_rate_month: number
+    avg_call_duration_seconds: number
     open_callbacks: number
 }
 
@@ -134,6 +135,22 @@ export async function inviteInstitutionUser(payload: {
 
 export async function inviteStaff(locSlug: string, email: string): Promise<void> {
     await api.post(`/institution/locations/${locSlug}/invite-staff`, { email })
+}
+
+// Billing Email
+
+export interface BillingEmailResponse {
+    billing_email: string | null
+}
+
+export async function getBillingEmail(): Promise<BillingEmailResponse> {
+    const { data } = await api.get<BillingEmailResponse>("/institution/billing-email")
+    return data
+}
+
+export async function updateBillingEmail(billing_email: string): Promise<BillingEmailResponse> {
+    const { data } = await api.put<BillingEmailResponse>("/institution/billing-email", { billing_email })
+    return data
 }
 
 // ROI Configuration & Calculation

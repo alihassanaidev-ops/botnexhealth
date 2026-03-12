@@ -122,6 +122,9 @@ class Institution(Base):
     # ROI configuration (institution-configurable)
     roi_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Billing email for invoices
+    billing_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 

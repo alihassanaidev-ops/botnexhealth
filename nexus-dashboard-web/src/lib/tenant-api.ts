@@ -46,7 +46,12 @@ export async function listProviders(locationId?: string): Promise<CachedProvider
 
 export async function updateProvider(
     providerId: string,
-    payload: { buffer_minutes?: number; same_day_cutoff_time?: string | null },
+    payload: {
+        buffer_minutes?: number;
+        same_day_cutoff_time?: string | null;
+        min_age?: number | null;
+        max_age?: number | null;
+    },
     locationId?: string
 ): Promise<CachedProvider> {
     const { data } = await api.patch<CachedProvider>(

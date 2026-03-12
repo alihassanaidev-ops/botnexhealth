@@ -54,6 +54,8 @@ export default function ProvidersScheduling() {
     const [saving, setSaving] = useState(false)
     const [bufferMinutes, setBufferMinutes] = useState<number>(0)
     const [cutoffTime, setCutoffTime] = useState<string>("")
+    const [minAge, setMinAge] = useState<number | "">("")
+    const [maxAge, setMaxAge] = useState<number | "">("")
     const [savingSettings, setSavingSettings] = useState(false)
 
     // Load providers + appointment types once on mount
@@ -112,6 +114,8 @@ export default function ProvidersScheduling() {
         const p = providers.find((pr) => pr.source_id === selectedProviderId)
         setBufferMinutes(p?.buffer_minutes ?? 0)
         setCutoffTime(p?.same_day_cutoff_time ?? "")
+        setMinAge(p?.min_age ?? "")
+        setMaxAge(p?.max_age ?? "")
     }, [selectedProviderId, providers])
 
     const selectedProvider = providers.find((p) => p.source_id === selectedProviderId)
@@ -140,11 +144,18 @@ export default function ProvidersScheduling() {
 
     const handleSaveSettings = async () => {
         if (!canManage || !selectedProvider) return
+        // Cross-validate age range
+        if (minAge !== "" && maxAge !== "" && minAge > maxAge) {
+            toast.error("Min age cannot be greater than max age")
+            return
+        }
         setSavingSettings(true)
         try {
             await updateProvider(selectedProvider.id, {
                 buffer_minutes: bufferMinutes,
                 same_day_cutoff_time: cutoffTime || null,
+                min_age: minAge === "" ? null : minAge,
+                max_age: maxAge === "" ? null : maxAge,
             })
             toast.success("Provider settings saved")
             await fetchData()
@@ -158,7 +169,9 @@ export default function ProvidersScheduling() {
 
     const settingsChanged =
         bufferMinutes !== (selectedProvider?.buffer_minutes ?? 0) ||
-        cutoffTime !== (selectedProvider?.same_day_cutoff_time ?? "")
+        cutoffTime !== (selectedProvider?.same_day_cutoff_time ?? "") ||
+        minAge !== (selectedProvider?.min_age ?? "") ||
+        maxAge !== (selectedProvider?.max_age ?? "")
 
     const openEditDialog = (av: CachedAvailability) => {
         setEditTarget(av)
@@ -402,6 +415,39 @@ export default function ProvidersScheduling() {
                                             Clear
                                         </Button>
                                     )}
+                                </div>
+                            </div>
+
+                            {/* Age Group */}
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium">Patient Age Group</label>
+                                <p className="text-xs text-muted-foreground">
+                                    Restrict this provider to patients within a specific age range.
+                                    Leave empty for no restriction.
+                                </p>
+                                <div className="flex items-center gap-3 pt-1">
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        max={150}
+                                        placeholder="Min"
+                                        value={minAge}
+                                        onChange={(e) => setMinAge(e.target.value === "" ? "" : Math.max(0, Math.min(150, Number(e.target.value) || 0)))}
+                                        className="w-20"
+                                        disabled={!canManage}
+                                    />
+                                    <span className="text-sm text-muted-foreground">to</span>
+                                    <Input
+                                        type="number"
+                                        min={0}
+                                        max={150}
+                                        placeholder="Max"
+                                        value={maxAge}
+                                        onChange={(e) => setMaxAge(e.target.value === "" ? "" : Math.max(0, Math.min(150, Number(e.target.value) || 0)))}
+                                        className="w-20"
+                                        disabled={!canManage}
+                                    />
+                                    <span className="text-sm text-muted-foreground">years</span>
                                 </div>
                             </div>
 

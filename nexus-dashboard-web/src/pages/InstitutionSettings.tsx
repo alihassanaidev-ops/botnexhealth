@@ -12,7 +12,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
+    getBillingEmail,
     getROIConfig,
+    updateBillingEmail,
     updateROIConfig,
     type ROIConfig,
 } from "@/lib/institution-portal-api"
@@ -33,13 +35,19 @@ export default function InstitutionSettings() {
     const loadData = useCallback(async () => {
         setLoading(true)
         try {
-            const existingConfig = await getROIConfig()
+            const [existingConfig, billingData] = await Promise.all([
+                getROIConfig(),
+                getBillingEmail(),
+            ])
             if (existingConfig) {
                 setRoiDraft(existingConfig)
             }
+            if (billingData?.billing_email) {
+                setBillingEmail(billingData.billing_email)
+            }
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
-            toast.error(error?.response?.data?.detail || "Failed to load ROI configuration")
+            toast.error(error?.response?.data?.detail || "Failed to load settings")
         } finally {
             setLoading(false)
         }
@@ -65,9 +73,7 @@ export default function InstitutionSettings() {
     async function handleSaveBillingEmail() {
         setBillingSaving(true)
         try {
-            // TODO: Replace with actual API call when backend endpoint is ready
-            // await updateBillingEmail(billingEmail)
-            await new Promise((resolve) => setTimeout(resolve, 500)) // Fake delay
+            await updateBillingEmail(billingEmail)
             toast.success("Billing email saved")
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };

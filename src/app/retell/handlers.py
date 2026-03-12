@@ -561,7 +561,12 @@ async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
     resource=lambda args: "providers",
 )
 async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
-    """List all providers at the practice."""
+    """List providers at the practice, optionally filtered by patient age.
+
+    If ``date_of_birth`` (YYYY-MM-DD) is supplied, only providers whose
+    configured age range covers the patient's age are returned.  Providers
+    with no age-range configured are always included.
+    """
     try:
         ctx = await _resolve_context()
     except ValueError as e:
@@ -569,6 +574,61 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
 
     try:
         providers = await ctx.adapter.list_providers()
+
+        # ── Age-group filtering ──────────────────────────────────────
+        patient_dob = args.get("date_of_birth")
+        patient_age: int | None = None
+        if patient_dob and ctx.location:
+            try:
+                from datetime import date
+
+                dob = date.fromisoformat(patient_dob)
+                today = date.today()
+                patient_age = (
+                    today.year - dob.year
+                    - ((today.month, today.day) < (dob.month, dob.day))
+                )
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid date_of_birth format: {hash_for_logging(patient_dob)}")
+
+        if patient_age is not None and ctx.location:
+            # Look up age-group rules from local cache
+            from sqlalchemy import select as sa_select
+            from src.app.database import get_db_session
+            from src.app.models.institution_provider import InstitutionProvider
+
+            age_rules: dict[str, tuple[int | None, int | None]] = {}
+            async with get_db_session() as session:
+                rows = (
+                    await session.execute(
+                        sa_select(
+                            InstitutionProvider.source_id,
+                            InstitutionProvider.min_age,
+                            InstitutionProvider.max_age,
+                        ).where(
+                            InstitutionProvider.location_id == str(ctx.location.id),
+                            InstitutionProvider.is_active == True,
+                        )
+                    )
+                ).all()
+                for row in rows:
+                    age_rules[row.source_id] = (row.min_age, row.max_age)
+
+            filtered = []
+            for p in providers:
+                rule = age_rules.get(f"nh-{p.id}") or age_rules.get(str(p.id))
+                if rule is None:
+                    # No local cache entry — include by default
+                    filtered.append(p)
+                    continue
+                p_min, p_max = rule
+                if p_min is not None and patient_age < p_min:
+                    continue
+                if p_max is not None and patient_age > p_max:
+                    continue
+                filtered.append(p)
+            providers = filtered
+
         simplified = [
             {
                 "id": p.id,

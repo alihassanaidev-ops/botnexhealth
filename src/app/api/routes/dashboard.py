@@ -71,6 +71,7 @@ class AggregateSummaryCards(BaseModel):
     appointments_booked_month: int
     new_patients_month: int
     booking_rate_month: float
+    avg_call_duration_seconds: float
     open_callbacks: int
 
 
@@ -335,6 +336,14 @@ async def get_aggregate_dashboard(
             if total_calls_month
             else 0.0
         )
+        avg_call_duration_seconds = (
+            await session.execute(
+                select(func.avg(Call.call_duration_seconds)).where(
+                    Call.institution_id == institution_id,
+                    Call.call_duration_seconds.isnot(None),
+                )
+            )
+        ).scalar_one() or 0.0
 
         # Institution-wide tag distribution
         tag_rows = (
@@ -440,6 +449,7 @@ async def get_aggregate_dashboard(
                 appointments_booked_month=appointments_booked_month,
                 new_patients_month=new_patients_month,
                 booking_rate_month=booking_rate_month,
+                avg_call_duration_seconds=round(float(avg_call_duration_seconds), 2),
                 open_callbacks=open_callbacks,
             ),
             tag_distribution=tag_distribution,
