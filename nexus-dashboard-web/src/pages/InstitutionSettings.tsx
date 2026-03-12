@@ -102,7 +102,6 @@ export default function InstitutionSettings() {
     const [billingSaving, setBillingSaving] = useState(false)
 
     const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
-    const [locationsLoading, setLocationsLoading] = useState(false)
 
     const [transferNumbers, setTransferNumbers] = useState<TransferNumber[]>([])
     const [transferNumbersLoading, setTransferNumbersLoading] = useState(false)
@@ -140,7 +139,6 @@ export default function InstitutionSettings() {
     }, [])
 
     const loadLocations = useCallback(async () => {
-        setLocationsLoading(true)
         try {
             const locs = await listInstitutionPortalLocations()
             console.log("Locations loaded:", locs)
@@ -148,8 +146,6 @@ export default function InstitutionSettings() {
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to load locations")
-        } finally {
-            setLocationsLoading(false)
         }
     }, [])
 
