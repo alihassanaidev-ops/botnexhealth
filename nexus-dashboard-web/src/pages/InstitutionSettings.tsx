@@ -55,17 +55,13 @@ interface TransferRow {
 }
 
 function normalizePhoneNumber(phone: string): string {
-    const digits = phone.replace(/\D/g, "")
-    if (digits.length === 10) {
-        return `+1${digits}`
-    }
-    if (digits.length === 11 && digits.startsWith("1")) {
-        return `+${digits}`
-    }
-    if (digits.length > 0) {
-        return `+${digits}`
-    }
-    return phone
+    const trimmed = phone.trim()
+    if (!trimmed) return phone
+    const cleaned = trimmed.replace(/[^+\d]/g, "")
+    if (!cleaned) return trimmed
+    const digits = cleaned.replace(/\D/g, "")
+    if (!digits) return cleaned
+    return cleaned.startsWith("+") ? `+${digits}` : digits
 }
 
 function formatPhoneDisplay(phone: string | null | undefined): string {
@@ -82,8 +78,10 @@ function formatPhoneDisplay(phone: string | null | undefined): string {
 }
 
 function isValidPhoneNumber(phone: string): boolean {
-    const digits = phone.replace(/\D/g, "")
-    return digits.length >= 10 && digits.length <= 11
+    const trimmed = phone.trim()
+    if (!trimmed) return false
+    const cleaned = trimmed.replace(/[^+\d]/g, "")
+    return /^\+[1-9]\d{7,14}$/.test(cleaned)
 }
 
 function generateId(): string {
@@ -265,7 +263,7 @@ export default function InstitutionSettings() {
 
         const invalidRows = validRows.filter((row) => row.transferNumber && !isValidPhoneNumber(row.transferNumber))
         if (invalidRows.length > 0) {
-            toast.error("Please enter valid phone numbers")
+            toast.error("Please enter valid E.164 phone numbers (e.g. +923001234567)")
             return
         }
 
@@ -306,7 +304,7 @@ export default function InstitutionSettings() {
         if (!editingTransfer) return
 
         if (editTransferNumber && !isValidPhoneNumber(editTransferNumber)) {
-            setEditTransferNumberError("Please enter a valid phone number")
+            setEditTransferNumberError("Please enter a valid E.164 phone number (e.g. +923001234567)")
             return
         }
         if (!editDepartment.trim()) {
@@ -523,7 +521,7 @@ export default function InstitutionSettings() {
                                 <div className="sm:col-span-3">
                                     <Input
                                         type="tel"
-                                        placeholder="+1 (555) 123-4567"
+                                        placeholder="+923001234567"
                                         value={row.transferNumber}
                                         onChange={(e) => handleTransferNumberChange(row.id, e.target.value)}
                                     />
@@ -646,7 +644,7 @@ export default function InstitutionSettings() {
                             <Input
                                 id="edit-transfer-number"
                                 type="tel"
-                                placeholder="+1 (555) 123-4567"
+                                placeholder="+923001234567"
                                 value={editTransferNumber}
                                 onChange={(e) => {
                                     setEditTransferNumber(e.target.value)
