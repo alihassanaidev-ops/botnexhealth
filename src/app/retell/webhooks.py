@@ -326,6 +326,24 @@ async def handle_retell_webhook(
                 else mapped_call_data.to_number
             ) or mapped_call_data.from_number
 
+            sms_body_present = bool(_sms_body)
+            sms_body_len = len(_sms_body) if _sms_body else 0
+            patient_phone_hash = (
+                hash_for_logging(_patient_phone) if _patient_phone else None
+            )
+            location_id_hash = (
+                hash_for_logging(str(location.id)) if location else None
+            )
+            missing_reasons: list[str] = []
+            if not _sms_body:
+                missing_reasons.append("missing_send_sms")
+            if not _patient_phone:
+                missing_reasons.append("missing_patient_phone")
+            if not location:
+                missing_reasons.append("missing_location")
+            elif not location.twilio_from_number:
+                missing_reasons.append("missing_twilio_from_number")
+
             if _sms_body and _patient_phone and location and location.twilio_from_number:
                 try:
                     from src.app.tasks.sms import enqueue_auto_sms
@@ -338,6 +356,14 @@ async def handle_retell_webhook(
                         patient_contact_id=saved_call.contact_id,
                         call_id=saved_call.id,
                     )
+                    logger.info(
+                        "Auto-SMS enqueued: call=%s to=%s from=%s location=%s sms_len=%s",
+                        hash_for_logging(event.call.call_id),
+                        patient_phone_hash or "none",
+                        hash_for_logging(location.twilio_from_number),
+                        location_id_hash or "none",
+                        sms_body_len,
+                    )
                 except Exception as sms_enqueue_err:
                     logger.error(
                         "Failed to enqueue auto-SMS: call=%s error=%s",
@@ -345,10 +371,17 @@ async def handle_retell_webhook(
                         sms_enqueue_err,
                     )
 
-            elif location and location.twilio_from_number and not _sms_body:
-                logger.debug(
-                    "Auto-SMS skipped: no send_sms content in call analysis for call=%s",
+            else:
+                logger.info(
+                    "Auto-SMS skipped: call=%s reasons=%s sms_body=%s sms_len=%s patient_phone=%s location=%s twilio_from=%s direction=%s",
                     hash_for_logging(event.call.call_id),
+                    ",".join(missing_reasons) if missing_reasons else "unknown",
+                    sms_body_present,
+                    sms_body_len,
+                    patient_phone_hash or "none",
+                    location_id_hash or "none",
+                    bool(location and location.twilio_from_number),
+                    mapped_call_data.direction,
                 )
 
         await _finish_webhook_processing(

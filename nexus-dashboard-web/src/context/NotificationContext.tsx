@@ -33,6 +33,7 @@ const NotificationContext = createContext<NotificationContextType | undefined>(u
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
     const { user } = useAuth();
+    const notificationsEnabled = Boolean(user?.institution_id);
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [totalNotifications, setTotalNotifications] = useState(0);
     const [unreadCount, setUnreadCount] = useState(0);
@@ -96,7 +97,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
     // Fetch unread counts (lightweight, polled frequently)
     const refreshUnreadCounts = useCallback(async () => {
-        if (!user) return;
+        if (!user || !notificationsEnabled) return;
         try {
             const counts = await getUnreadCount();
             const newTotal = counts.total;
@@ -111,11 +112,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             // Silently fail on poll — don't spam errors
         }
         return undefined;
-    }, [user]);
+    }, [user, notificationsEnabled]);
 
     // Fetch full notification list (heavier, on demand)
     const refreshNotifications = useCallback(async () => {
-        if (!user) return;
+        if (!user || !notificationsEnabled) return;
 
         setIsLoading(true);
         try {
@@ -133,11 +134,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         } finally {
             setIsLoading(false);
         }
-    }, [user, refreshUnreadCounts]);
+    }, [user, refreshUnreadCounts, notificationsEnabled]);
 
     // Load more notifications (pagination)
     const loadMore = useCallback(async () => {
-        if (!user || !hasMore || isLoading) return;
+        if (!user || !notificationsEnabled || !hasMore || isLoading) return;
 
         setIsLoading(true);
         try {
@@ -156,10 +157,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         } finally {
             setIsLoading(false);
         }
-    }, [user, hasMore, isLoading, offset]);
+    }, [user, hasMore, isLoading, offset, notificationsEnabled]);
 
     const markAsRead = useCallback(
         async (id: string) => {
+            if (!notificationsEnabled) return;
             // Optimistic update
             setNotifications((prev) =>
                 prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
@@ -178,10 +180,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                 await refreshUnreadCounts();
             }
         },
-        [refreshUnreadCounts]
+        [refreshUnreadCounts, notificationsEnabled]
     );
 
     const markAllAsRead = useCallback(async () => {
+        if (!notificationsEnabled) return;
         // Optimistic update
         setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
         setUnreadCount(0);
@@ -193,11 +196,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             // Revert on failure — re-fetch everything
             await refreshNotifications();
         }
-    }, [refreshNotifications]);
+    }, [refreshNotifications, notificationsEnabled]);
 
     // Initial fetch when user logs in
     useEffect(() => {
-        if (user) {
+        if (user && notificationsEnabled) {
             refreshNotifications();
         } else {
             // Clear state on logout
@@ -208,11 +211,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             setHasMore(false);
             prevUnreadRef.current = 0;
         }
-    }, [user, refreshNotifications]);
+    }, [user, refreshNotifications, notificationsEnabled]);
 
     // Poll unread counts (lightweight) and detect new notifications
     useEffect(() => {
-        if (!user) return;
+        if (!user || !notificationsEnabled) return;
 
         const poll = async () => {
             const newTotal = await refreshUnreadCounts();
@@ -239,14 +242,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
         const interval = setInterval(poll, POLL_INTERVAL_MS);
         return () => clearInterval(interval);
-    }, [user, refreshUnreadCounts, notifications, showToast]);
+    }, [user, refreshUnreadCounts, notifications, showToast, notificationsEnabled]);
 
     // Refresh full list when dialog opens
     useEffect(() => {
-        if (isDialogOpen && user) {
+        if (isDialogOpen && user && notificationsEnabled) {
             refreshNotifications();
         }
-    }, [isDialogOpen, user, refreshNotifications]);
+    }, [isDialogOpen, user, refreshNotifications, notificationsEnabled]);
 
     return (
         <NotificationContext.Provider
