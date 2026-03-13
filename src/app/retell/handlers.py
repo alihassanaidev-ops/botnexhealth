@@ -264,6 +264,53 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 
     if detail_level == "full":
         simplified = [_to_full_patient_payload(p) for p in patients[:10]]
+        if ctx.location:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+            tz_str = (ctx.location.timezone or "UTC").strip()
+            try:
+                tz = ZoneInfo(tz_str)
+            except ZoneInfoNotFoundError:
+                logger.warning(
+                    f"Invalid timezone for location {ctx.location.id}: {tz_str!r}. Falling back to UTC."
+                )
+                tz_str = "UTC"
+                tz = ZoneInfo(tz_str)
+
+            def _parse_iso(value: str) -> datetime | None:
+                try:
+                    raw = value.strip()
+                    if raw.endswith("Z"):
+                        raw = raw[:-1] + "+00:00"
+                    return datetime.fromisoformat(raw)
+                except Exception:
+                    return None
+
+            def _to_local_iso(value: str | None) -> str | None:
+                if not value:
+                    return None
+                dt = _parse_iso(value)
+                if not dt:
+                    return None
+                if dt.tzinfo is None:
+                    # If timezone is missing, assume UTC to avoid shifting twice.
+                    dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+                local_dt = dt.astimezone(tz).replace(microsecond=0)
+                return local_dt.isoformat()
+
+            for patient in simplified:
+                patient["timezone"] = tz_str
+                upcoming = patient.get("upcoming_appointments")
+                if isinstance(upcoming, list):
+                    for appt in upcoming:
+                        if isinstance(appt, dict):
+                            appt["start_time_local"] = _to_local_iso(appt.get("start_time"))
+                            appt["end_time_local"] = _to_local_iso(appt.get("end_time"))
+                last_visit = patient.get("last_visit")
+                if isinstance(last_visit, dict):
+                    last_visit["start_time_local"] = _to_local_iso(last_visit.get("start_time"))
+                    last_visit["end_time_local"] = _to_local_iso(last_visit.get("end_time"))
     else:
         simplified = [_to_basic_patient_payload(p) for p in patients[:10]]
 
@@ -719,14 +766,31 @@ async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
     if not ctx.location:
         return {"error": "No location resolved for this agent."}
 
+    from datetime import datetime
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
     from sqlalchemy import select
     from src.app.database import get_db_session
     from src.app.models.institution_location_transfer_number import (
         InstitutionLocationTransferNumber,
     )
+    from src.app.models.location_break import LocationBreak
+    from src.app.models.location_operating_hours import LocationOperatingHours
 
     try:
         async with get_db_session() as session:
+            timezone = (ctx.location.timezone or "UTC").strip()
+            try:
+                tz = ZoneInfo(timezone)
+            except ZoneInfoNotFoundError:
+                logger.warning(f"Invalid timezone for location {ctx.location.id}: {timezone!r}. Falling back to UTC.")
+                timezone = "UTC"
+                tz = ZoneInfo(timezone)
+
+            local_now = datetime.now(tz)
+            local_day = local_now.weekday()
+            now_time = local_now.time()
+
             rows = (
                 await session.execute(
                     select(InstitutionLocationTransferNumber)
@@ -746,16 +810,71 @@ async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
                 for r in rows
             ]
 
+            hours_rows = (
+                await session.execute(
+                    select(LocationOperatingHours).where(
+                        LocationOperatingHours.location_id == str(ctx.location.id)
+                    )
+                )
+            ).scalars().all()
+
+            breaks_rows = (
+                await session.execute(
+                    select(LocationBreak).where(
+                        LocationBreak.location_id == str(ctx.location.id)
+                    )
+                )
+            ).scalars().all()
+
+            opens_at = None
+            closes_at = None
+            is_open = False
+            on_lunch_break = False
+
+            if hours_rows:
+                hours_by_day = {h.day_of_week: h for h in hours_rows}
+                day_hours = hours_by_day.get(local_day)
+
+                if day_hours:
+                    opens_at = day_hours.open_time.strftime("%H:%M") if day_hours.open_time else None
+                    closes_at = day_hours.close_time.strftime("%H:%M") if day_hours.close_time else None
+
+                    if day_hours.is_open:
+                        if day_hours.open_time and day_hours.close_time:
+                            is_open = day_hours.open_time <= now_time < day_hours.close_time
+                        else:
+                            is_open = True
+
+                        if is_open and breaks_rows:
+                            breaks_by_day: dict[int | None, list[LocationBreak]] = {}
+                            for brk in breaks_rows:
+                                breaks_by_day.setdefault(brk.day_of_week, []).append(brk)
+
+                            applicable_breaks = breaks_by_day.get(local_day, []) + breaks_by_day.get(None, [])
+                            for brk in applicable_breaks:
+                                if brk.start_time <= now_time < brk.end_time:
+                                    on_lunch_break = True
+                                    is_open = False
+                                    break
+
             if not simplified:
                 return {
                     "count": 0,
                     "transfer_numbers": [],
+                    "is_open": is_open,
+                    "opens_at": opens_at,
+                    "closes_at": closes_at,
+                    "on_lunch_break": on_lunch_break,
                     "message": "No transfer numbers are configured for this location.",
                 }
 
             return {
                 "count": len(simplified),
                 "transfer_numbers": simplified,
+                "is_open": is_open,
+                "opens_at": opens_at,
+                "closes_at": closes_at,
+                "on_lunch_break": on_lunch_break,
                 "message": f"Found {len(simplified)} transfer number(s).",
             }
     except Exception as e:

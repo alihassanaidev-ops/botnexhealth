@@ -93,9 +93,18 @@ async def test_list_transfer_numbers_success():
     ]
 
     mock_session = AsyncMock()
-    result = MagicMock()
-    result.scalars.return_value.all.return_value = mock_rows
-    mock_session.execute.return_value = result
+    result_transfer = MagicMock()
+    result_transfer.scalars.return_value.all.return_value = mock_rows
+
+    result_hours = MagicMock()
+    result_hours.scalars.return_value.all.return_value = [
+        SimpleNamespace(day_of_week=0, is_open=True, open_time=None, close_time=None),
+    ]
+
+    result_breaks = MagicMock()
+    result_breaks.scalars.return_value.all.return_value = []
+
+    mock_session.execute.side_effect = [result_transfer, result_hours, result_breaks]
 
     @asynccontextmanager
     async def fake_db():
@@ -104,7 +113,7 @@ async def test_list_transfer_numbers_success():
     async def mock_resolve():
         return SimpleNamespace(
             institution=SimpleNamespace(id="inst-1"),
-            location=SimpleNamespace(id="loc-1"),
+            location=SimpleNamespace(id="loc-1", timezone="UTC"),
             adapter=SimpleNamespace(),
         )
 
