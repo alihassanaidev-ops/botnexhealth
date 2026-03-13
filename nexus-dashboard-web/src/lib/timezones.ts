@@ -109,7 +109,7 @@ function formatTimeZoneLabel(timeZone: string): string {
 const ianaTimezones = getIanaTimezones()
 const ianaSet = new Set(ianaTimezones)
 const commonTimezones = COMMON_TIMEZONES.filter((tz) => ianaSet.has(tz))
-const commonSet = new Set(commonTimezones)
+const commonSet = new Set<string>(commonTimezones)
 const remainingTimezones = ianaTimezones.filter((tz) => !commonSet.has(tz))
 
 const orderedTimezones = [...commonTimezones, ...remainingTimezones]
