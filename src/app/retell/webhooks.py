@@ -320,11 +320,22 @@ async def handle_retell_webhook(
                 if _raw_analysis
                 else None
             )
-            _patient_phone = (
-                mapped_call_data.from_number
-                if mapped_call_data.direction == "inbound"
-                else mapped_call_data.to_number
-            ) or mapped_call_data.from_number
+            _custom_analysis = _raw_analysis.custom_analysis_data if _raw_analysis else {}
+            _fallback_from = (
+                _custom_analysis.get("from_number")
+                or _custom_analysis.get("phone_number")
+                or _custom_analysis.get("patient_phone")
+            )
+            if mapped_call_data.direction == "inbound":
+                _patient_phone = mapped_call_data.from_number or _fallback_from
+            elif mapped_call_data.direction == "outbound":
+                _patient_phone = mapped_call_data.to_number or _fallback_from
+            else:
+                _patient_phone = (
+                    mapped_call_data.from_number
+                    or mapped_call_data.to_number
+                    or _fallback_from
+                )
 
             sms_body_present = bool(_sms_body)
             sms_body_len = len(_sms_body) if _sms_body else 0
