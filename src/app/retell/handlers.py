@@ -292,9 +292,16 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
         return {"message": "I had trouble accessing the patient records. Please try again."}
 
     if not patients:
-        return {"message": "No patients found matching the criteria."}
+        return {
+            "match_status": "none",
+            "message": "No patients found matching the criteria.",
+        }
 
-    if detail_level == "full":
+    match_count = len(patients)
+    needs_disambiguation = match_count > 1
+    effective_detail_level = "basic" if needs_disambiguation else detail_level
+
+    if effective_detail_level == "full":
         simplified = [_to_full_patient_payload(p) for p in patients[:10]]
         if ctx.location:
             from datetime import datetime
@@ -347,10 +354,17 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
         simplified = [_to_basic_patient_payload(p) for p in patients[:10]]
 
     return {
-        "detail_level": detail_level,
+        "detail_level": effective_detail_level,
         "count": len(simplified),
         "patients": simplified,
-        "message": f"Found {len(simplified)} patient(s).",
+        "match_status": "multiple" if needs_disambiguation else "single",
+        "disambiguation_required": needs_disambiguation,
+        "disambiguation_hints": ["date_of_birth", "email"] if needs_disambiguation else [],
+        "message": (
+            "Multiple patients matched. Please ask for date of birth or email to confirm."
+            if needs_disambiguation
+            else f"Found {len(simplified)} patient(s)."
+        ),
     }
 
 
