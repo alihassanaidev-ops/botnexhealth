@@ -431,7 +431,19 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
     except ValueError as e:
         return {"error": str(e)}
 
-    provider_id = args.get("provider_id")
+    raw_provider = args.get("provider_id")
+    provider_ids: list[str] | None = None
+    provider_id: str | None = None
+    if raw_provider is not None:
+        if isinstance(raw_provider, list):
+            provider_ids = [str(pid) for pid in raw_provider if pid]
+        else:
+            provider_ids = [str(raw_provider)]
+        if provider_ids:
+            provider_id = provider_ids[0]
+        else:
+            provider_ids = None
+
     if appt_type_id and provider_id:
         validation_error = await _validate_appointment_type_for_provider(
             ctx, provider_id, appt_type_id
@@ -443,7 +455,7 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         slots = await ctx.adapter.get_available_slots(
             start_date=start_date,
             days=args.get("days", 7),
-            provider_id=provider_id,
+            provider_id=provider_ids if provider_ids is not None else None,
             appointment_type_id=appt_type_id,
             operatory_ids=args.get("operatory_ids"),
         )
@@ -455,8 +467,8 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             return {"error": "buffer_minutes must be an integer >= 0."}
 
         normalized_provider_id = (
-            str(args["provider_id"]).removeprefix("nh-")
-            if args.get("provider_id")
+            str(provider_id).removeprefix("nh-")
+            if provider_id
             else None
         )
         provider_source_id = (

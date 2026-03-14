@@ -65,7 +65,7 @@ class PMSAdapter(ABC):
         self,
         start_date: str,
         days: int = 7,
-        provider_id: str | None = None,
+        provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
     ) -> list[UniversalSlot]:

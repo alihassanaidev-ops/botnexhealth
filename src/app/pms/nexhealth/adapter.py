@@ -226,7 +226,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         self,
         start_date: str,
         days: int = 7,
-        provider_id: str | None = None,
+        provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
     ) -> list[UniversalSlot]:
@@ -240,7 +240,10 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             params["lids[]"] = [self._location_id]
 
         if provider_id:
-            params["pids[]"] = [_strip(provider_id)]
+            if isinstance(provider_id, list):
+                params["pids[]"] = [_strip(pid) for pid in provider_id]
+            else:
+                params["pids[]"] = [_strip(provider_id)]
         else:
             # Auto-fetch all providers for the location
             providers = await self.list_providers()
