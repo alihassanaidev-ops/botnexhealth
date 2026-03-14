@@ -88,6 +88,18 @@ export async function deleteAppointmentType(
     await api.delete(`${BASE}/appointment-types/${sourceId}${qs(locationId)}`);
 }
 
+export async function updateAppointmentType(
+    sourceId: string,
+    payload: { name?: string; duration_minutes?: number; descriptor_ids?: string[] },
+    locationId?: string
+): Promise<CachedAppointmentType> {
+    const { data } = await api.patch<CachedAppointmentType>(
+        `${BASE}/appointment-types/${sourceId}${qs(locationId)}`,
+        payload
+    );
+    return data;
+}
+
 // ── Operatories ─────────────────────────────────────────────────────────
 
 export async function listOperatories(locationId?: string): Promise<CachedOperatory[]> {
@@ -200,4 +212,3 @@ export async function listAuditLogs(
         ? listLocationAuditLogs(page, size)
         : listInstitutionAuditLogs(page, size);
 }
-

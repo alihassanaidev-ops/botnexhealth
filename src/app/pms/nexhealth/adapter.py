@@ -379,6 +379,38 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         raw = await handle_nexhealth_request(self._client, "POST", "/appointment_types", params=params, json=body)
         return mappers.to_appointment_type(raw.get("data", {}))
 
+    async def update_appointment_type(
+        self,
+        appointment_type_id: str,
+        name: str | None = None,
+        duration_minutes: int | None = None,
+        descriptor_ids: list[str] | None = None,
+    ) -> UniversalAppointmentType:
+        params = self._default_params()
+        payload: dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if duration_minutes is not None:
+            payload["minutes"] = duration_minutes
+        if descriptor_ids is not None:
+            def _to_int(value: str) -> int | str:
+                stripped = _strip(value)
+                try:
+                    return int(stripped)
+                except (TypeError, ValueError):
+                    return stripped
+
+            payload["emr_appt_descriptor_ids"] = [_to_int(d) for d in descriptor_ids]
+
+        raw = await handle_nexhealth_request(
+            self._client,
+            "PATCH",
+            f"/appointment_types/{_strip(appointment_type_id)}",
+            params=params,
+            json={"appointment_type": payload},
+        )
+        return mappers.to_appointment_type(raw.get("data", {}))
+
     async def link_availability(
         self,
         provider_id: str,

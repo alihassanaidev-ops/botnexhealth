@@ -464,6 +464,59 @@ async def create_appointment_type(
         return CachedAppointmentTypeResponse.model_validate(cached)
 
 
+@router.patch("/appointment-types/{source_id}", response_model=CachedAppointmentTypeResponse)
+async def update_appointment_type(
+    source_id: str,
+    req: UpdateAppointmentTypeRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
+):
+    """Update appointment type via PMS and refresh the local cache."""
+    if req.name is None and req.duration_minutes is None and req.descriptor_ids is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No fields provided to update")
+
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
+
+        if not isinstance(adapter, SupportsAppointmentTypeCreation):
+            raise HTTPException(400, "This PMS does not support updating appointment types")
+
+        result = await adapter.update_appointment_type(
+            appointment_type_id=source_id,
+            name=req.name,
+            duration_minutes=req.duration_minutes,
+            descriptor_ids=req.descriptor_ids,
+        )
+
+        # Update cached row with latest values
+        sync_svc = SyncService(session)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        await sync_svc._upsert_appointment_type(
+            institution_id=institution.id,
+            location_id=location.id,
+            source=result.source,
+            source_id=result.id,
+            name=result.name,
+            duration_minutes=result.duration_minutes,
+            source_metadata=result.source_metadata,
+            synced_at=now,
+        )
+        await session.flush()
+
+        stmt = select(InstitutionAppointmentType).where(
+            InstitutionAppointmentType.institution_id == institution.id,
+            InstitutionAppointmentType.location_id == location.id,
+            InstitutionAppointmentType.source_id == result.id,
+        )
+        cached = (await session.execute(stmt)).scalar_one_or_none()
+        if not cached:
+            raise HTTPException(500, "Failed to cache appointment type")
+
+        return CachedAppointmentTypeResponse.model_validate(cached)
+
+
 @router.delete("/appointment-types/{source_id}", status_code=204)
 async def delete_appointment_type(
     source_id: str,

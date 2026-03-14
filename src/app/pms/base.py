@@ -135,6 +135,16 @@ class SupportsAppointmentTypeCreation(ABC):
     ) -> UniversalAppointmentType:
         ...
 
+    @abstractmethod
+    async def update_appointment_type(
+        self,
+        appointment_type_id: str,
+        name: str | None = None,
+        duration_minutes: int | None = None,
+        descriptor_ids: list[str] | None = None,
+    ) -> UniversalAppointmentType:
+        ...
+
 
 class SupportsAvailabilityLinking(ABC):
     """Optional: PMS requires explicit availability linking (e.g. NexHealth)."""
