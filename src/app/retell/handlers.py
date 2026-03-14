@@ -17,7 +17,7 @@ from typing import Any
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
-from src.app.pms.base import PMSAdapter
+from src.app.pms.base import PMSAdapter, SupportsAvailabilityLinking
 from src.app.pms.factory import get_adapter_for_institution, get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import get_institution_from_call_context, register_function
@@ -87,6 +87,38 @@ def _mask_phone(value: str | None) -> str | None:
     if len(digits) < 4:
         return None
     return f"***-***-{digits[-4:]}"
+
+
+async def _validate_appointment_type_for_provider(
+    ctx: ResolvedContext,
+    provider_id: str | None,
+    appointment_type_id: str | None,
+) -> str | None:
+    """Ensure appointment_type_id is linked to provider availability if supported."""
+    if not appointment_type_id:
+        return None
+    if not provider_id:
+        return "provider_id is required when appointment_type_id is provided."
+    if not isinstance(ctx.adapter, SupportsAvailabilityLinking):
+        return None
+
+    raw_provider_id = provider_id.removeprefix("nh-")
+    raw_appt_id = appointment_type_id.removeprefix("nh-")
+    try:
+        availabilities = await ctx.adapter.list_availabilities(provider_id=raw_provider_id)
+    except Exception as e:
+        logger.error("Failed to validate appointment type: %s", e)
+        return "Unable to validate appointment type for this provider."
+
+    allowed_ids = {
+        str(at.get("id"))
+        for avail in availabilities
+        for at in (avail.get("appointment_types") or [])
+        if at.get("id") is not None
+    }
+    if raw_appt_id not in allowed_ids:
+        return "Appointment type is not available for this provider."
+    return None
 
 
 def _to_basic_patient_payload(patient: Any) -> dict[str, Any]:
@@ -376,17 +408,29 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
     if not start_date:
         return {"error": "start_date is required."}
 
+    appt_type_id = args.get("appointment_type_id")
+    if not appt_type_id:
+        return {"error": "appointment_type_id is required."}
+
     try:
         ctx = await _resolve_context()
     except ValueError as e:
         return {"error": str(e)}
 
+    provider_id = args.get("provider_id")
+    if appt_type_id and provider_id:
+        validation_error = await _validate_appointment_type_for_provider(
+            ctx, provider_id, appt_type_id
+        )
+        if validation_error:
+            return {"error": validation_error}
+
     try:
         slots = await ctx.adapter.get_available_slots(
             start_date=start_date,
             days=args.get("days", 7),
-            provider_id=args.get("provider_id"),
-            appointment_type_id=args.get("appointment_type_id"),
+            provider_id=provider_id,
+            appointment_type_id=appt_type_id,
             operatory_ids=args.get("operatory_ids"),
         )
 
@@ -474,11 +518,19 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
     for field in required:
         if not args.get(field):
             return {"error": f"{field} is required."}
+    if not args.get("appointment_type_id"):
+        return {"error": "appointment_type_id is required."}
 
     try:
         ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
+
+    validation_error = await _validate_appointment_type_for_provider(
+        ctx, args.get("provider_id"), args.get("appointment_type_id")
+    )
+    if validation_error:
+        return {"success": False, "error": validation_error}
 
     try:
         result = await ctx.adapter.book_appointment(
@@ -538,11 +590,19 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
     for field in required:
         if not args.get(field):
             return {"error": f"{field} is required for the new booking."}
+    if not args.get("appointment_type_id"):
+        return {"error": "appointment_type_id is required for the new booking."}
 
     try:
         ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
+
+    validation_error = await _validate_appointment_type_for_provider(
+        ctx, args.get("provider_id"), args.get("appointment_type_id")
+    )
+    if validation_error:
+        return {"success": False, "error": validation_error}
 
     try:
         result = await ctx.adapter.reschedule_appointment(
