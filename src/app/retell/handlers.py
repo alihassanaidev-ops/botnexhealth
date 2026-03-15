@@ -518,6 +518,15 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
                 timezone=tz_str,
             )
 
+        # Shuffle provider group order so the AI doesn't always favour the first provider
+        import random
+        from itertools import groupby
+        keyfunc = lambda s: s.provider_id
+        grouped = {pid: list(group) for pid, group in groupby(sorted(slots, key=keyfunc), key=keyfunc)}
+        provider_ids = list(grouped.keys())
+        random.shuffle(provider_ids)
+        slots = [slot for pid in provider_ids for slot in grouped[pid]]
+
         return {
             "slots_count": len(slots),
             "slots": [s.model_dump() for s in slots],
