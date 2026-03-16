@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
+import { useNavigate } from "react-router-dom"
 import {
     PhoneForwarded,
     CalendarIcon,
@@ -191,7 +192,7 @@ function ResolveDialog({ callbackItem, onClose, onResolved }: ResolveDialogProps
                     </DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
-                    <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+                    <div className="rounded-lg border bg-muted p-3 text-sm space-y-1">
                         <p className="font-medium">
                             {callbackItem?.contact_name ?? callbackItem?.contact?.full_name ?? "Unknown caller"}
                         </p>
@@ -258,11 +259,12 @@ function SkeletonRows() {
 interface CallbackRowProps {
     item: CallbackListItem
     onResolve: () => void
+    onClick: () => void
 }
 
-function CallbackRow({ item, onResolve }: CallbackRowProps) {
+function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
     return (
-        <TableRow className="hover:bg-muted/50 transition-colors">
+        <TableRow className="cursor-pointer hover:bg-muted transition-colors" onClick={onClick}>
             <TableCell className="px-4">
                 {item.callback_resolved ? (
                     <CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -324,6 +326,7 @@ function CallbackRow({ item, onResolve }: CallbackRowProps) {
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 export default function Callbacks() {
+    const navigate = useNavigate()
     const [data, setData] = useState<CallbacksListResponse | null>(null)
     const [loading, setLoading] = useState(true)
     const [resolveTarget, setResolveTarget] = useState<CallbackListItem | null>(null)
@@ -512,7 +515,7 @@ export default function Callbacks() {
                 <CardContent className="p-0">
                     <div className="overflow-x-auto">
                         <Table className="w-full text-sm">
-                            <TableHeader className="border-b border-border bg-muted/30">
+                            <TableHeader className="border-b border-border bg-muted">
                                 <TableRow>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide w-10">Status</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</TableHead>
@@ -556,6 +559,7 @@ export default function Callbacks() {
                                             key={item.call_id}
                                             item={item}
                                             onResolve={() => setResolveTarget(item)}
+                                            onClick={() => navigate(`/calls?detail=${item.call_id}`)}
                                         />
                                     ))
                                 )}

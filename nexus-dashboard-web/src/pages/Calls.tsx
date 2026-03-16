@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
+import { useSearchParams } from "react-router-dom"
 import { MaskedPHI } from "@/components/ui/masked-phi"
 import {
     Phone,
@@ -314,7 +315,7 @@ function CustomFieldsSection({ fields }: { fields: CustomFieldValue[] }) {
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">
                 Additional Details
             </p>
-            <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/30 p-3 text-xs">
+            <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3 text-xs">
                 {fields.map((f) => (
                     <div key={f.field_key}>
                         <p className="text-muted-foreground flex items-center gap-1">
@@ -422,7 +423,7 @@ function TranscriptSection({ detail }: { detail: CallDetail }) {
             </div>
 
             {/* Content */}
-            <div className="rounded-lg border bg-muted/30 max-h-64 overflow-y-auto">
+            <div className="rounded-lg border bg-muted max-h-64 overflow-y-auto">
                 {activeTab === "scrubbed" && hasScrubbed && (
                     <TranscriptChatBubbles turns={detail.scrubbed_transcript_with_tool_calls!} />
                 )}
@@ -525,7 +526,7 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                         </div>
 
                         {/* Date & duration */}
-                        <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/40 p-3 text-xs">
+                        <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3 text-xs">
                             <div>
                                 <p className="text-muted-foreground">Date & Time</p>
                                 <p className="font-medium mt-0.5">{formatDateTime(detail.call_date, detail.call_time)}</p>
@@ -540,7 +541,7 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                         {detail.summary && (
                             <div>
                                 <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">AI Summary</p>
-                                <p className="text-sm leading-relaxed rounded-lg border bg-muted/30 p-3">{detail.summary}</p>
+                                <p className="text-sm leading-relaxed rounded-lg border bg-muted p-3">{detail.summary}</p>
                             </div>
                         )}
 
@@ -548,7 +549,7 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                         {detail.next_action && (
                             <div>
                                 <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Appointment Detail</p>
-                                <p className="text-sm leading-relaxed rounded-lg border bg-muted/30 p-3">{detail.next_action}</p>
+                                <p className="text-sm leading-relaxed rounded-lg border bg-muted p-3">{detail.next_action}</p>
                             </div>
                         )}
 
@@ -556,7 +557,7 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                         {detail.recording_url && (
                             <div>
                                 <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Call Recording</p>
-                                <div className="rounded-lg border bg-muted/30 p-3 flex items-center justify-center">
+                                <div className="rounded-lg border bg-muted p-3 flex items-center justify-center">
                                     <audio controls className="w-full h-10 outline-none" src={detail.recording_url}>
                                         Your browser does not support the audio element.
                                     </audio>
@@ -627,9 +628,19 @@ function SkeletonRows() {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Calls() {
+    const [searchParams, setSearchParams] = useSearchParams()
     const [data, setData] = useState<CallsListResponse | null>(null)
     const [loading, setLoading] = useState(true)
-    const [selectedCallId, setSelectedCallId] = useState<string | null>(null)
+    const [selectedCallId, setSelectedCallId] = useState<string | null>(
+        searchParams.get("detail")
+    )
+
+    // Clear the query param once consumed
+    useEffect(() => {
+        if (searchParams.has("detail")) {
+            setSearchParams((prev) => { prev.delete("detail"); return prev }, { replace: true })
+        }
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
     // Filters
     const [search, setSearch] = useState("")
@@ -801,7 +812,7 @@ export default function Calls() {
                 <CardContent className="p-0">
                     <div className="overflow-x-auto">
                         <Table className="w-full text-sm">
-                            <TableHeader className="border-b border-border bg-muted/30">
+                            <TableHeader className="border-b border-border bg-muted">
                                 <TableRow>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Date & Time</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</TableHead>
