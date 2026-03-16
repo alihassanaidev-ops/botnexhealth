@@ -80,7 +80,7 @@ export default function Institutions() {
                     </Sheet>
                 </div>
             </div>
-            <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm">
+            <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -110,7 +110,7 @@ export default function Institutions() {
                                     <Badge
                                         variant="secondary"
                                         className={inst.is_active
-                                            ? "border border-primary/25 bg-primary/10 text-primary"
+                                            ? "border border-border bg-primary/10 text-primary"
                                             : "border border-border bg-muted text-muted-foreground"}
                                     >
                                         {inst.is_active ? "Active" : "Inactive"}

@@ -504,7 +504,7 @@ export default function ProvidersScheduling() {
                                                         ? "border-border/40 bg-muted/20 opacity-50"
                                                         : isWarning
                                                             ? "border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] dark:bg-[rgb(255,244,227)]/10"
-                                                            : "border-primary/20 bg-background/70 hover:border-primary/35"
+                                                            : "border-border bg-background/70 hover:border-border"
                                                     }`}
                                             >
                                                 <div className="flex items-start justify-between">

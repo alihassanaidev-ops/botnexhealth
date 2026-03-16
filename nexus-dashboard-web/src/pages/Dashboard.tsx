@@ -16,8 +16,9 @@ import {
     Percent,
     Timer,
     MapPin,
+    Activity,
 } from "lucide-react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -58,60 +59,74 @@ function formatDate(dateStr: string | null): string {
 
 function formatDuration(seconds: number | null): string {
     if (seconds === null) return ""
-    if (seconds < 60) return `${seconds}s`
-    const m = Math.floor(seconds / 60)
-    const s = seconds % 60
+    const rounded = Math.round(seconds)
+    if (rounded < 60) return `${rounded}s`
+    const m = Math.floor(rounded / 60)
+    const s = rounded % 60
     return s > 0 ? `${m}m ${s}s` : `${m}m`
 }
+
+// ── Volume Card Configs ──────────────────────────────────────────────────────
+
+const VOLUME_CARD_CONFIG = [
+    {
+        label: "Today",
+        key: "today" as const,
+        icon: CalendarDays,
+        accentColor: "violet",
+        glowRgb: "139,92,246",
+    },
+    {
+        label: "This Week",
+        key: "this_week" as const,
+        icon: TrendingUp,
+        accentColor: "blue",
+        glowRgb: "59,130,246",
+    },
+    {
+        label: "This Month",
+        key: "this_month" as const,
+        icon: Phone,
+        accentColor: "cyan",
+        glowRgb: "6,182,212",
+    },
+    {
+        label: "All Time",
+        key: "all_time" as const,
+        icon: InfinityIcon,
+        accentColor: "fuchsia",
+        glowRgb: "217,70,239",
+    },
+]
 
 const METRIC_CARDS_CONFIG = [
     {
         label: "Appointments Booked",
         key: "appointments_booked_month" as const,
         icon: CalendarDays,
-        cardClass: "border-primary/20 bg-gradient-to-br from-primary/5 via-primary/10 to-primary/5",
-        titleClass: "text-muted-foreground",
-        valueClass: "text-foreground",
-        subtextClass: "text-muted-foreground",
-        iconBg: "bg-primary/15",
-        iconColor: "text-primary",
-        accentClass: "via-primary/35",
+        accentColor: "emerald",
+        glowRgb: "16,185,129",
     },
     {
         label: "New Patients",
         key: "new_patients_month" as const,
         icon: Users,
-        cardClass: "border-green-500/20 bg-gradient-to-br from-green-500/5 via-green-500/10 to-green-500/5",
-        titleClass: "text-muted-foreground",
-        valueClass: "text-foreground",
-        subtextClass: "text-muted-foreground",
-        iconBg: "bg-green-500/15",
-        iconColor: "text-green-600",
-        accentClass: "via-green-500/35",
+        accentColor: "sky",
+        glowRgb: "14,165,233",
     },
     {
         label: "Booking Rate",
         key: "booking_rate_month" as const,
         icon: Percent,
-        cardClass: "border-amber-500/20 bg-gradient-to-br from-amber-500/5 via-amber-500/10 to-amber-500/5",
-        titleClass: "text-muted-foreground",
-        valueClass: "text-foreground",
-        subtextClass: "text-muted-foreground",
-        iconBg: "bg-amber-500/15",
-        iconColor: "text-amber-600",
-        accentClass: "via-amber-500/35",
+        accentColor: "amber",
+        glowRgb: "245,158,11",
     },
     {
         label: "Avg Call Duration",
         key: "avg_call_duration_seconds" as const,
         icon: Timer,
-        cardClass: "border-violet-500/20 bg-gradient-to-br from-violet-500/5 via-violet-500/10 to-violet-500/5",
-        titleClass: "text-muted-foreground",
-        valueClass: "text-foreground",
-        subtextClass: "text-muted-foreground",
-        iconBg: "bg-violet-500/15",
-        iconColor: "text-violet-600",
-        accentClass: "via-violet-500/35",
+        accentColor: "violet",
+        glowRgb: "139,92,246",
     },
 ]
 
@@ -119,7 +134,6 @@ const STATUS_COLOR_MAP = Object.fromEntries(
     STATUS_OPTIONS.map((o) => [o.value, o.color])
 )
 
-// Semantic bar colors for tag breakdown (dark-mode safe)
 const TAG_BAR_COLOR: Record<string, string> = {
     appointment_booked: "bg-emerald-500",
     appointment_rescheduled: "bg-blue-500",
@@ -135,57 +149,13 @@ const TAG_BAR_COLOR: Record<string, string> = {
     no_action_needed: "bg-zinc-400",
 }
 
-// Per-card icon gradient for volume cards
-const VOLUME_CARD_CONFIG = [
-    {
-        label: "Today",
-        key: "today" as const,
-        icon: CalendarDays,
-        cardClass: "border-border/80 bg-card shadow-sm",
-        titleClass: "text-muted-foreground",
-        valueClass: "text-foreground",
-        subtextClass: "text-muted-foreground",
-        iconBg: "bg-muted",
-        iconColor: "text-foreground/80",
-        accentClass: "via-border/70",
-    },
-    {
-        label: "This Week",
-        key: "this_week" as const,
-        icon: TrendingUp,
-        cardClass: "border-primary/30 bg-gradient-to-br from-primary to-primary2 text-primary-foreground shadow-lg shadow-primary/20",
-        titleClass: "text-primary-foreground/90",
-        valueClass: "text-primary-foreground",
-        subtextClass: "text-primary-foreground/85",
-        iconBg: "bg-primary-foreground/15",
-        iconColor: "text-primary-foreground",
-        accentClass: "via-primary-foreground/40",
-    },
-    {
-        label: "This Month",
-        key: "this_month" as const,
-        icon: Phone,
-        cardClass: "border-primary/20 bg-gradient-to-br from-secondary via-accent to-primary2/25 text-foreground shadow-md shadow-primary/10",
-        titleClass: "text-muted-foreground",
-        valueClass: "text-foreground",
-        subtextClass: "text-muted-foreground",
-        iconBg: "bg-primary/15",
-        iconColor: "text-primary",
-        accentClass: "via-primary/35",
-    },
-    {
-        label: "All Time",
-        key: "all_time" as const,
-        icon: InfinityIcon,
-        cardClass: "border-accent-foreground/20 bg-gradient-to-br from-accent via-secondary to-primary2/20 text-foreground shadow-md shadow-accent-foreground/10",
-        titleClass: "text-muted-foreground",
-        valueClass: "text-foreground",
-        subtextClass: "text-muted-foreground",
-        iconBg: "bg-accent-foreground/15",
-        iconColor: "text-accent-foreground",
-        accentClass: "via-accent-foreground/35",
-    },
-]
+const TAG_BAR_GLOW: Record<string, string> = {
+    appointment_booked: "shadow-emerald-500/30",
+    appointment_rescheduled: "shadow-blue-500/30",
+    emergency: "shadow-red-500/30",
+    complaint: "shadow-orange-500/30",
+    needs_callback: "shadow-amber-500/30",
+}
 
 // ── Animated Count Hook ───────────────────────────────────────────────────────
 
@@ -207,7 +177,6 @@ function useAnimatedCount(target: number | undefined, duration = 600): number {
             if (!startRef.current) startRef.current = timestamp
             const elapsed = timestamp - startRef.current
             const progress = Math.min(elapsed / duration, 1)
-            // ease-out cubic
             const eased = 1 - Math.pow(1 - progress, 3)
             setDisplayed(Math.round(from + (to - from) * eased))
             if (progress < 1) {
@@ -224,72 +193,72 @@ function useAnimatedCount(target: number | undefined, duration = 600): number {
     return displayed
 }
 
-// ── Volume Card ───────────────────────────────────────────────────────────────
+// ── Glass Card ───────────────────────────────────────────────────────────────
 
-interface VolumeCardProps {
+interface GlassCardProps {
     label: string
     value: number | undefined
     icon: React.ElementType
-    cardClass: string
-    titleClass: string
-    valueClass: string
-    subtextClass: string
-    iconBg: string
-    iconColor: string
-    accentClass: string
+    accentColor: string
+    glowRgb: string
     loading: boolean
     suffix?: string
     formatValue?: (val: number) => string
 }
 
-function VolumeCard({
+function GlassCard({
     label,
     value,
     icon: Icon,
-    cardClass,
-    titleClass,
-    valueClass,
-    subtextClass,
-    iconBg,
-    iconColor,
-    accentClass,
+    glowRgb,
     loading,
     suffix = "",
     formatValue,
-}: VolumeCardProps) {
+}: GlassCardProps) {
     const animatedValue = useAnimatedCount(loading ? undefined : (value ?? 0))
 
     if (loading) {
         return (
-            <Card className="p-6 space-y-4">
+            <div className="relative rounded-2xl border border-border/60 bg-card p-6 space-y-4">
                 <div className="flex items-center justify-between">
                     <Skeleton className="h-4 w-20" />
-                    <Skeleton className="h-9 w-9 rounded-lg" />
+                    <Skeleton className="h-9 w-9 rounded-xl" />
                 </div>
-                <Skeleton className="h-10 w-16" />
-            </Card>
+                <Skeleton className="h-12 w-24" />
+            </div>
         )
     }
 
     return (
-        <Card className={`group relative overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg cursor-default ${cardClass}`}>
-            {/* Subtle top gradient accent */}
-            <div className={`absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent ${accentClass} to-transparent`} />
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-                <CardTitle className={`text-sm font-medium ${titleClass}`}>{label}</CardTitle>
-                <div className={`rounded-lg p-2.5 ${iconBg} transition-transform duration-200 group-hover:scale-110`}>
-                    <Icon className={`h-4 w-4 ${iconColor}`} />
+        <div className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg cursor-default">
+            {/* Radial glow */}
+            <div
+                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 rounded-full opacity-[0.08] blur-3xl transition-opacity duration-300 group-hover:opacity-[0.15]"
+                style={{ background: `radial-gradient(circle, rgba(${glowRgb}, 0.8) 0%, transparent 70%)` }}
+            />
+
+            {/* Top edge highlight */}
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+
+            <div className="relative p-6">
+                <div className="flex items-center justify-between mb-5">
+                    <span className="text-sm font-medium text-muted-foreground">{label}</span>
+                    <div className="rounded-xl p-2.5 bg-primary/10">
+                        <Icon className="h-4 w-4 text-primary" />
+                    </div>
                 </div>
-            </CardHeader>
-            <CardContent className="pb-5">
-                <div className={`text-4xl font-black tabular-nums tracking-tight animate-count-fade ${valueClass}`}>
-                    {formatValue ? (loading ? "" : formatValue(value ?? 0)) : (animatedValue.toLocaleString() + suffix)}
+                <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground animate-count-fade">
+                    {formatValue
+                        ? (loading ? "" : formatValue(value ?? 0))
+                        : suffix === "%"
+                            ? (Number(value ?? 0).toFixed(2) + suffix)
+                            : (animatedValue.toLocaleString() + suffix)}
                 </div>
-                <p className={`text-xs mt-1 ${subtextClass}`}>
+                <p className="text-xs mt-2 text-muted-foreground/60 font-medium tracking-wide uppercase">
                     {formatValue ? "avg length" : "calls"}
                 </p>
-            </CardContent>
-        </Card>
+            </div>
+        </div>
     )
 }
 
@@ -319,16 +288,15 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
     }
 
     return (
-        <div className="rounded-lg border border-border/60 bg-card hover:bg-muted/20 transition-colors duration-150 p-3.5 space-y-2">
+        <div className="rounded-xl border border-border/40 bg-card/50 hover:bg-accent/30 transition-all duration-200 p-4 space-y-2">
             <div className="flex items-start justify-between gap-2">
                 <div className="flex items-start gap-2.5 min-w-0">
-                    {/* Urgency dot */}
-                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                    <span className="mt-1.5 h-2 w-2 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shrink-0 shadow-sm shadow-amber-500/50" />
                     <div className="min-w-0">
-                        <p className="font-medium text-sm truncate">
+                        <p className="font-medium text-sm truncate text-foreground">
                             {item.contact_name ?? <span className="text-muted-foreground italic">Unknown caller</span>}
                         </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
+                        <p className="text-xs text-muted-foreground/70 mt-0.5">
                             {formatDate(item.call_date)} · {formatTime(item.call_time)}
                             {item.call_duration_seconds ? ` · ${formatDuration(item.call_duration_seconds)}` : ""}
                         </p>
@@ -345,15 +313,15 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
             </div>
 
             {item.summary && (
-                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed pl-4">
+                <p className="text-xs text-muted-foreground/60 line-clamp-2 leading-relaxed pl-[18px]">
                     {item.summary}
                 </p>
             )}
 
             {open && (
-                <div className="space-y-2 pt-1 pl-4">
+                <div className="space-y-2 pt-1 pl-[18px]">
                     <Input
-                        placeholder="Resolution note (optional)…"
+                        placeholder="Resolution note (optional)..."
                         value={note}
                         onChange={(e) => setNote(e.target.value)}
                         className="text-xs h-8"
@@ -365,7 +333,7 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                         disabled={resolving}
                     >
                         <CheckCircle2 className="h-3.5 w-3.5" />
-                        {resolving ? "Resolving…" : "Mark Resolved"}
+                        {resolving ? "Resolving..." : "Mark Resolved"}
                     </Button>
                 </div>
             )}
@@ -385,31 +353,31 @@ interface TagBarProps {
     barColor: string
 }
 
-function TagBar({ label, count, total, pct, colorClass, barColor }: TagBarProps) {
+function TagBar({ tag, label, count, total, pct, colorClass, barColor }: TagBarProps) {
     const [width, setWidth] = useState(0)
 
     useEffect(() => {
-        // Small timeout to ensure CSS transition fires
         const id = setTimeout(() => setWidth(pct), 60)
         return () => clearTimeout(id)
     }, [pct])
 
     const countPct = total > 0 ? Math.round((count / total) * 100) : 0
+    const glowClass = TAG_BAR_GLOW[tag] ?? ""
 
     return (
-        <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium w-40 shrink-0 truncate ${colorClass}`}>
+        <div className="flex items-center gap-3 group/bar">
+            <span className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-xs font-medium w-40 shrink-0 truncate ${colorClass} transition-all duration-200`}>
                 {label}
             </span>
-            <div className="flex-1 bg-muted rounded-full h-2.5 overflow-hidden">
+            <div className="flex-1 bg-muted/50 rounded-full h-2.5 overflow-hidden">
                 <div
-                    className={`h-2.5 rounded-full transition-all duration-700 ease-out ${barColor}`}
+                    className={`h-2.5 rounded-full transition-all duration-700 ease-out ${barColor} ${glowClass ? `shadow-sm ${glowClass}` : ""}`}
                     style={{ width: `${width}%` }}
                 />
             </div>
             <div className="flex items-center gap-1.5 w-16 justify-end shrink-0">
                 <span className="text-sm font-semibold tabular-nums text-foreground">{count}</span>
-                <span className="text-xs text-muted-foreground">({countPct}%)</span>
+                <span className="text-xs text-muted-foreground/50">({countPct}%)</span>
             </div>
         </div>
     )
@@ -439,11 +407,11 @@ export default function Dashboard() {
             setSummary(summaryData)
 
             const isInstitutionAdmin = user?.role === "INSTITUTION_ADMIN"
-            
+
             if (isInstitutionAdmin) {
                 try {
                     const aggregateData = await getAggregateDashboard()
-                    
+
                     if (selectedLocationSlug === "all") {
                         setAggregateMetrics({
                             appointments_booked_month: aggregateData.summary.appointments_booked_month,
@@ -504,18 +472,15 @@ export default function Dashboard() {
         }
     }, [selectedLocationSlug, user?.role])
 
-    useEffect(() => { 
-        fetchSummary() 
+    useEffect(() => {
+        fetchSummary()
     }, [fetchSummary])
 
-    // 30-second auto-poll
     useEffect(() => {
         const id = setInterval(fetchSummary, POLL_INTERVAL_MS)
         return () => clearInterval(id)
     }, [fetchSummary])
 
-    const hour = new Date().getHours()
-    const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
     const todayStr = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })
 
     const callbackQueue = summary?.callback_queue ?? []
@@ -525,226 +490,243 @@ export default function Dashboard() {
     const totalTagCount = tagCounts.reduce((sum, tc) => sum + tc.count, 0)
 
     return (
-        <div className="flex-1 space-y-6 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6 animate-fade-in-up">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">
-                        {greeting}{user?.email ? `, ${user.email.split("@")[0]}` : ""}
-                    </h2>
-                    <p className="text-sm text-muted-foreground mt-0.5">
-                        {todayStr} · Here's your call activity overview.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    {user?.role === "INSTITUTION_ADMIN" && (
-                        <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
-                            <SelectTrigger className="w-[180px] h-8 text-xs">
-                                <MapPin className="mr-2 h-3.5 w-3.5" />
-                                <SelectValue placeholder="Select location" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All Locations</SelectItem>
-                                {locations.map((loc) => (
-                                    <SelectItem key={loc.slug} value={loc.slug}>
-                                        {loc.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    )}
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={fetchSummary}
-                        disabled={loading}
-                        className="gap-2 h-8 text-xs"
-                    >
-                        <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                </div>
+        <div className="flex-1 min-h-screen bg-gradient-to-br from-background via-background to-primary/5 animate-fade-in-up">
+            {/* Ambient background blobs */}
+            <div className="fixed inset-0 overflow-hidden pointer-events-none">
+                <div className="absolute -top-40 -right-40 w-80 h-80 bg-violet-500/[0.07] dark:bg-violet-500/[0.04] rounded-full blur-3xl" />
+                <div className="absolute top-1/3 -left-20 w-60 h-60 bg-blue-500/[0.05] dark:bg-blue-500/[0.03] rounded-full blur-3xl" />
+                <div className="absolute bottom-20 right-1/4 w-72 h-72 bg-purple-500/[0.05] dark:bg-purple-500/[0.03] rounded-full blur-3xl" />
             </div>
 
-            {/* Volume cards */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                {VOLUME_CARD_CONFIG.map(({ label, key, icon, cardClass, titleClass, valueClass, subtextClass, iconBg, iconColor, accentClass }) => (
-                    <VolumeCard
-                        key={key}
-                        label={label}
-                        value={summary?.call_volume[key]}
-                        icon={icon}
-                        cardClass={cardClass}
-                        titleClass={titleClass}
-                        valueClass={valueClass}
-                        subtextClass={subtextClass}
-                        iconBg={iconBg}
-                        iconColor={iconColor}
-                        accentClass={accentClass}
-                        loading={loading}
-                    />
-                ))}
-            </div>
+            <div className="relative z-10 p-8 pt-6 space-y-6">
+                {/* Header */}
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-2xl font-bold tracking-tight">Dashboard</h2>
+                        <p className="text-sm text-muted-foreground/70 mt-0.5">
+                            {todayStr} · Call activity overview.
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {user?.role === "INSTITUTION_ADMIN" && (
+                            <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
+                                <SelectTrigger className="w-[180px] h-8 text-xs">
+                                    <MapPin className="mr-2 h-3.5 w-3.5" />
+                                    <SelectValue placeholder="Select location" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All Locations</SelectItem>
+                                    {locations.map((loc) => (
+                                        <SelectItem key={loc.slug} value={loc.slug}>
+                                            {loc.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={fetchSummary}
+                            disabled={loading}
+                            className="gap-2 h-8 text-xs"
+                        >
+                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </div>
+                </div>
 
-            {/* Metric cards - only for INSTITUTION_ADMIN */}
-            {user?.role === "INSTITUTION_ADMIN" && (
+                {/* Volume cards */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    {METRIC_CARDS_CONFIG.map(({ label, key, icon, cardClass, titleClass, valueClass, subtextClass, iconBg, iconColor, accentClass }) => (
-                        <VolumeCard
+                    {VOLUME_CARD_CONFIG.map(({ label, key, icon, accentColor, glowRgb }) => (
+                        <GlassCard
                             key={key}
                             label={label}
-                            value={aggregateMetrics?.[key] ?? 0}
+                            value={summary?.call_volume[key]}
                             icon={icon}
-                            cardClass={cardClass}
-                            titleClass={titleClass}
-                            valueClass={valueClass}
-                            subtextClass={subtextClass}
-                            iconBg={iconBg}
-                            iconColor={iconColor}
-                            accentClass={accentClass}
+                            accentColor={accentColor}
+                            glowRgb={glowRgb}
                             loading={loading}
-                            suffix={key === "booking_rate_month" ? "%" : ""}
-                            formatValue={key === "avg_call_duration_seconds" ? formatDuration : undefined}
                         />
                     ))}
                 </div>
-            )}
 
-            {/* Bottom grid: tag breakdown + callback queue */}
-            <div className="grid gap-6 lg:grid-cols-2">
-                {/* Tag breakdown */}
-                <Card className="border-primary/20 shadow-sm">
-                    <CardHeader className="pb-4">
-                        <CardTitle className="text-base font-semibold">Call Tags Breakdown</CardTitle>
-                        <CardDescription>All-time calls by primary tag.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        {loading ? (
-                            <div className="space-y-4">
-                                {Array.from({ length: 5 }).map((_, i) => (
-                                    <div key={i} className="flex items-center gap-3">
-                                        <Skeleton className="h-5 w-40 rounded-full" />
-                                        <Skeleton className="h-2.5 flex-1 rounded-full" />
-                                        <Skeleton className="h-4 w-16" />
+                {/* Metric cards */}
+                {aggregateMetrics && (
+                    <div>
+                        <div className="flex items-center gap-2 mb-3">
+                            <Activity className="h-4 w-4 text-muted-foreground/50" />
+                            <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/50">Monthly Metrics</span>
+                        </div>
+                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                            {METRIC_CARDS_CONFIG.map(({ label, key, icon, accentColor, glowRgb }) => (
+                                <GlassCard
+                                    key={key}
+                                    label={label}
+                                    value={aggregateMetrics?.[key] ?? 0}
+                                    icon={icon}
+                                    accentColor={accentColor}
+                                    glowRgb={glowRgb}
+                                    loading={loading}
+                                    suffix={key === "booking_rate_month" ? "%" : ""}
+                                    formatValue={key === "avg_call_duration_seconds" ? formatDuration : undefined}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Bottom grid: tag breakdown + callback queue */}
+                <div className="grid gap-6 lg:grid-cols-2">
+                    {/* Tag breakdown */}
+                    <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm">
+                        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,hsl(var(--primary)/0.06),transparent_60%)]" />
+                        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+                        <div className="relative">
+                            <div className="p-6 pb-4">
+                                <h3 className="text-base font-semibold text-foreground">Call Tags Breakdown</h3>
+                                <p className="text-sm text-muted-foreground/60 mt-0.5">All-time calls by primary tag.</p>
+                            </div>
+                            <div className="px-6 pb-6">
+                                {loading ? (
+                                    <div className="space-y-4">
+                                        {Array.from({ length: 5 }).map((_, i) => (
+                                            <div key={i} className="flex items-center gap-3">
+                                                <Skeleton className="h-5 w-40 rounded-lg" />
+                                                <Skeleton className="h-2.5 flex-1 rounded-full" />
+                                                <Skeleton className="h-4 w-16" />
+                                            </div>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
-                        ) : tagCounts.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground gap-2">
-                                <Phone className="h-8 w-8 opacity-20" />
-                                <p className="text-sm font-medium">No calls recorded yet.</p>
-                                <p className="text-xs">Tags will appear here once your agent handles calls.</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-3.5">
-                                {tagCounts.map((tc) => {
-                                    const colorClass = STATUS_COLOR_MAP[tc.tag] ?? "bg-zinc-100 text-zinc-600 border-zinc-200"
-                                    const barColor = TAG_BAR_COLOR[tc.tag] ?? "bg-primary/70"
-                                    const maxCount = tagCounts[0]?.count ?? 1
-                                    const pct = Math.round((tc.count / maxCount) * 100)
-                                    return (
-                                        <TagBar
-                                            key={tc.tag}
-                                            tag={tc.tag}
-                                            label={tc.label}
-                                            count={tc.count}
-                                            total={totalTagCount}
-                                            pct={pct}
-                                            colorClass={colorClass}
-                                            barColor={barColor}
-                                        />
-                                    )
-                                })}
-                            </div>
-                        )}
+                                ) : tagCounts.length === 0 ? (
+                                    <div className="flex flex-col items-center justify-center py-10 text-center gap-2">
+                                        <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center">
+                                            <Phone className="h-6 w-6 text-primary/40" />
+                                        </div>
+                                        <p className="text-sm font-medium mt-2 text-foreground">No calls recorded yet.</p>
+                                        <p className="text-xs text-muted-foreground/50">Tags will appear here once your agent handles calls.</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3.5">
+                                        {tagCounts.map((tc) => {
+                                            const colorClass = STATUS_COLOR_MAP[tc.tag] ?? "bg-muted text-muted-foreground border-border"
+                                            const barColor = TAG_BAR_COLOR[tc.tag] ?? "bg-primary/70"
+                                            const maxCount = tagCounts[0]?.count ?? 1
+                                            const pct = Math.round((tc.count / maxCount) * 100)
+                                            return (
+                                                <TagBar
+                                                    key={tc.tag}
+                                                    tag={tc.tag}
+                                                    label={tc.label}
+                                                    count={tc.count}
+                                                    total={totalTagCount}
+                                                    pct={pct}
+                                                    colorClass={colorClass}
+                                                    barColor={barColor}
+                                                />
+                                            )
+                                        })}
+                                    </div>
+                                )}
 
-                        <div className="mt-5 pt-4 border-t">
-                            <Link to="/calls">
-                                <Button variant="ghost" size="sm" className="gap-1.5 text-xs h-7">
-                                    View all calls <ArrowRight className="h-3 w-3" />
-                                </Button>
-                            </Link>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                {/* Callback queue */}
-                <Card className={`transition-all duration-300 shadow-sm ${hasCallbacks ? "border-l-4 border-l-amber-500 bg-amber-50/20" : "border-border/80"}`}>
-                    <CardHeader className="pb-4">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <CardTitle className="text-base font-semibold flex items-center gap-2">
-                                    <Clock className={`h-4 w-4 ${hasCallbacks ? "text-amber-500" : "text-muted-foreground"}`} />
-                                    Needs Callback
-                                    {hasCallbacks && (
-                                        <Badge
-                                            variant="destructive"
-                                            className="text-[10px] h-5 px-1.5 font-semibold"
-                                        >
-                                            {callbackQueue.length}
-                                        </Badge>
-                                    )}
-                                </CardTitle>
-                                <CardDescription>Unresolved callback requests, oldest first.</CardDescription>
+                                <div className="mt-5 pt-4 border-t border-border/40">
+                                    <Link to="/calls">
+                                        <Button variant="ghost" size="sm" className="gap-1.5 text-xs h-7 text-muted-foreground hover:text-foreground">
+                                            View all calls <ArrowRight className="h-3 w-3" />
+                                        </Button>
+                                    </Link>
+                                </div>
                             </div>
                         </div>
-                    </CardHeader>
-                    <CardContent>
-                        {loading ? (
-                            <div className="space-y-3">
-                                {Array.from({ length: 3 }).map((_, i) => (
-                                    <Skeleton key={i} className="h-16 w-full rounded-lg" />
-                                ))}
-                            </div>
-                        ) : callbackQueue.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
-                                <div className="h-12 w-12 rounded-full bg-green-500/10 flex items-center justify-center">
-                                    <CheckCircle2 className="h-6 w-6 text-green-500" />
-                                </div>
-                                <div>
-                                    <p className="font-medium text-sm text-foreground">All caught up!</p>
-                                    <p className="text-xs text-muted-foreground mt-0.5">No pending callbacks right now.</p>
-                                </div>
-                                <Link to="/calls">
-                                    <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7 mt-1">
-                                        View all calls <ArrowRight className="h-3 w-3" />
-                                    </Button>
-                                </Link>
-                            </div>
-                        ) : (
-                            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1 -mr-1">
-                                {callbackQueue.map((item) => (
-                                    <QueueItem key={item.call_id} item={item} onResolved={fetchSummary} />
-                                ))}
-                            </div>
-                        )}
+                    </div>
 
+                    {/* Callback queue */}
+                    <div className={`relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border shadow-sm transition-all duration-300
+                        ${hasCallbacks ? "border-amber-500/20" : "border-border/60"}`}
+                    >
                         {hasCallbacks && (
-                            <div className="mt-4 pt-4 border-t">
-                                <Link to="/callbacks">
-                                    <Button variant="ghost" size="sm" className="gap-1.5 text-xs h-7">
-                                        <AlertCircle className="h-3 w-3 text-amber-500" />
-                                        View all callbacks <ArrowRight className="h-3 w-3" />
-                                    </Button>
-                                </Link>
-                            </div>
+                            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(245,158,11,0.05),transparent_60%)]" />
                         )}
-                    </CardContent>
-                </Card>
-            </div>
+                        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+                        <div className="relative">
+                            <div className="p-6 pb-4">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
+                                            <Clock className={`h-4 w-4 ${hasCallbacks ? "text-amber-500" : "text-muted-foreground/40"}`} />
+                                            Needs Callback
+                                            {hasCallbacks && (
+                                                <Badge
+                                                    variant="destructive"
+                                                    className="text-[10px] h-5 px-1.5 font-semibold rounded-lg"
+                                                >
+                                                    {callbackQueue.length}
+                                                </Badge>
+                                            )}
+                                        </h3>
+                                        <p className="text-sm text-muted-foreground/60 mt-0.5">Unresolved callback requests, oldest first.</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="px-6 pb-6">
+                                {loading ? (
+                                    <div className="space-y-3">
+                                        {Array.from({ length: 3 }).map((_, i) => (
+                                            <Skeleton key={i} className="h-16 w-full rounded-xl" />
+                                        ))}
+                                    </div>
+                                ) : callbackQueue.length === 0 ? (
+                                    <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
+                                        <div className="h-14 w-14 rounded-2xl bg-emerald-500/10 flex items-center justify-center">
+                                            <CheckCircle2 className="h-7 w-7 text-emerald-500" />
+                                        </div>
+                                        <div>
+                                            <p className="font-medium text-sm text-foreground">All caught up!</p>
+                                            <p className="text-xs text-muted-foreground/50 mt-0.5">No pending callbacks right now.</p>
+                                        </div>
+                                        <Link to="/calls">
+                                            <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7 mt-1">
+                                                View all calls <ArrowRight className="h-3 w-3" />
+                                            </Button>
+                                        </Link>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1 -mr-1">
+                                        {callbackQueue.map((item) => (
+                                            <QueueItem key={item.call_id} item={item} onResolved={fetchSummary} />
+                                        ))}
+                                    </div>
+                                )}
 
-            {/* Quick links */}
-            <div className="flex gap-2 flex-wrap">
-                <Link to="/calls">
-                    <Button variant="outline" size="sm" className="gap-2 h-8 text-xs">
-                        <PhoneIncoming className="h-3.5 w-3.5" /> All Calls
-                    </Button>
-                </Link>
-                <Link to="/calls" state={{ tags: ["appointment_booked"] }}>
-                    <Button variant="outline" size="sm" className="gap-2 h-8 text-xs">
-                        <PhoneOutgoing className="h-3.5 w-3.5" /> Booked Today
-                    </Button>
-                </Link>
+                                {hasCallbacks && (
+                                    <div className="mt-4 pt-4 border-t border-border/40">
+                                        <Link to="/callbacks">
+                                            <Button variant="ghost" size="sm" className="gap-1.5 text-xs h-7 text-muted-foreground hover:text-foreground">
+                                                <AlertCircle className="h-3 w-3 text-amber-500" />
+                                                View all callbacks <ArrowRight className="h-3 w-3" />
+                                            </Button>
+                                        </Link>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Quick links */}
+                <div className="flex gap-2 flex-wrap">
+                    <Link to="/calls">
+                        <Button variant="outline" size="sm" className="gap-2 h-8 text-xs">
+                            <PhoneIncoming className="h-3.5 w-3.5" /> All Calls
+                        </Button>
+                    </Link>
+                    <Link to="/calls" state={{ tags: ["appointment_booked"] }}>
+                        <Button variant="outline" size="sm" className="gap-2 h-8 text-xs">
+                            <PhoneOutgoing className="h-3.5 w-3.5" /> Booked Today
+                        </Button>
+                    </Link>
+                </div>
             </div>
         </div>
     )

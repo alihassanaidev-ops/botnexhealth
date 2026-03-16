@@ -14,13 +14,10 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
-import { useAuth } from "@/context/AuthContext"
-import { StatsCard } from "@/components/dashboard/StatsCard"
 import type { InstitutionDetail } from "@/types"
 import { listInstitutionsDetailed } from "@/lib/admin-api"
 
 export default function AdminDashboard() {
-    const { user } = useAuth()
     const [institutions, setInstitutions] = useState<InstitutionDetail[]>([])
     const [loading, setLoading] = useState(true)
 
@@ -54,18 +51,20 @@ export default function AdminDashboard() {
         retell: institutions.filter((t) => t.has_retell_secret).length,
     }
 
-    const hour = new Date().getHours()
-    const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
+    const adminCards = [
+        { label: "Total Institutions", value: institutions.length, icon: Building2, glowRgb: "139,92,246", description: "All registered practices" },
+        { label: "Active", value: activeInstitutions.length, icon: CheckCircle2, glowRgb: "16,185,129", description: "Currently active" },
+        { label: "Inactive", value: inactiveInstitutions.length, icon: XCircle, glowRgb: "239,68,68", description: "Disabled or paused" },
+        { label: "Fully Configured", value: fullyConfigured.length, icon: Settings, glowRgb: "59,130,246", description: "NexHealth + Retell ready" },
+    ]
 
     return (
         <div className="flex-1 space-y-6 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h2 className="text-3xl font-bold tracking-tight">
-                        {greeting}{user?.email ? `, ${user.email.split("@")[0]}` : ""}
-                    </h2>
-                    <p className="text-muted-foreground">
+                    <h2 className="text-2xl font-bold tracking-tight">Admin Dashboard</h2>
+                    <p className="text-sm text-muted-foreground/70 mt-0.5">
                         Platform overview and institution management.
                     </p>
                 </div>
@@ -78,54 +77,41 @@ export default function AdminDashboard() {
             </div>
 
             {/* Stats Cards */}
-            {loading ? (
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                        <Card key={i}>
-                            <CardContent className="p-6 space-y-3">
-                                <Skeleton className="h-4 w-24" />
-                                <Skeleton className="h-8 w-16" />
-                                <Skeleton className="h-3 w-32" />
-                            </CardContent>
-                        </Card>
-                    ))}
-                </div>
-            ) : (
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    <StatsCard
-                        title="Total Institutions"
-                        value={String(institutions.length)}
-                        description="All registered practices"
-                        icon={Building2}
-                        tone="neutral"
-                    />
-                    <StatsCard
-                        title="Active"
-                        value={String(activeInstitutions.length)}
-                        description="Currently active institutions"
-                        icon={CheckCircle2}
-                        tone="primary"
-                    />
-                    <StatsCard
-                        title="Inactive"
-                        value={String(inactiveInstitutions.length)}
-                        description="Disabled or paused institutions"
-                        icon={XCircle}
-                        tone="primarySoft"
-                    />
-                    <StatsCard
-                        title="Fully Configured"
-                        value={String(fullyConfigured.length)}
-                        description="NexHealth + Retell ready"
-                        icon={Settings}
-                        tone="accent"
-                    />
-                </div>
-            )}
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                {adminCards.map((card) => (
+                    <div key={card.label} className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg cursor-default">
+                        <div
+                            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 rounded-full opacity-[0.08] blur-3xl transition-opacity duration-300 group-hover:opacity-[0.15]"
+                            style={{ background: `radial-gradient(circle, rgba(${card.glowRgb}, 0.8) 0%, transparent 70%)` }}
+                        />
+                        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+                        <div className="relative p-6">
+                            <div className="flex items-center justify-between mb-5">
+                                <span className="text-sm font-medium text-muted-foreground">{card.label}</span>
+                                <div className="rounded-xl p-2.5 bg-primary/10">
+                                    <card.icon className="h-4 w-4 text-primary" />
+                                </div>
+                            </div>
+                            {loading ? (
+                                <Skeleton className="h-12 w-20" />
+                            ) : (
+                                <>
+                                    <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground">
+                                        {card.value}
+                                    </div>
+                                    <p className="text-xs mt-2 text-muted-foreground/60 font-medium tracking-wide uppercase">
+                                        {card.description}
+                                    </p>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </div>
 
             {/* Integration Overview */}
             {!loading && (
-                <Card className="border-primary/20 bg-gradient-to-r from-secondary/70 via-accent/60 to-primary2/25">
+                <Card className="border-border bg-gradient-to-r from-secondary/70 via-accent/60 to-primary2/25">
                     <CardHeader>
                         <CardTitle>Integration Coverage</CardTitle>
                         <CardDescription>
@@ -134,7 +120,7 @@ export default function AdminDashboard() {
                     </CardHeader>
                     <CardContent>
                         <div className="flex flex-wrap gap-3">
-                            <Badge variant="secondary" className="text-sm px-3 py-1 border border-primary/25 bg-primary/10 text-primary">
+                            <Badge variant="secondary" className="text-sm px-3 py-1 border border-border bg-primary/10 text-primary">
                                 NexHealth: {integrationCounts.nexhealth}
                             </Badge>
                             <Badge variant="secondary" className="text-sm px-3 py-1 border border-accent-foreground/20 bg-accent text-accent-foreground">
@@ -199,7 +185,7 @@ export default function AdminDashboard() {
                                                 <Badge
                                                     variant="secondary"
                                                     className={inst.is_active
-                                                        ? "border border-primary/25 bg-primary/10 text-primary"
+                                                        ? "border border-border bg-primary/10 text-primary"
                                                         : "border border-border bg-muted text-muted-foreground"}
                                                 >
                                                     {inst.is_active ? "Active" : "Inactive"}

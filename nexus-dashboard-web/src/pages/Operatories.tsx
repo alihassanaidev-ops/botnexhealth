@@ -69,7 +69,7 @@ export default function Operatories() {
                 </div>
             </div>
 
-            <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm mt-4">
+            <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm mt-4">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -103,7 +103,7 @@ export default function Operatories() {
                                         <Badge
                                             variant="secondary"
                                             className={op.is_active
-                                                ? "border border-primary/25 bg-primary/10 text-primary"
+                                                ? "border border-border bg-primary/10 text-primary"
                                                 : "border border-border bg-muted text-muted-foreground"}
                                         >
                                             {op.is_active ? "Active" : "Inactive"}

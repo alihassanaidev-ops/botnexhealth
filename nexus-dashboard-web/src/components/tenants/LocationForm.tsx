@@ -96,7 +96,7 @@ function formatPhone(raw: string): string {
 
 function SectionCard({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
     return (
-        <div className="space-y-4 rounded-xl border border-primary/20 bg-gradient-to-br from-card to-accent/25 p-6 shadow-sm">
+        <div className="space-y-4 rounded-xl border border-border bg-gradient-to-br from-card to-accent/25 p-6 shadow-sm">
             <div className="space-y-0.5">
                 <h3 className="text-base font-semibold leading-none tracking-tight">{title}</h3>
                 {description && <p className="text-sm text-muted-foreground">{description}</p>}
@@ -571,7 +571,7 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
                 </form>
 
                 {/* Sticky Footer */}
-                <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-primary/20 bg-gradient-to-r from-background/95 via-background/90 to-accent/40 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+                <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-gradient-to-r from-background/95 via-background/90 to-accent/40 backdrop-blur supports-[backdrop-filter]:bg-background/70">
                     <div className="px-6 py-3 flex items-center justify-between gap-4 w-full">
                         <div className="flex items-center gap-2">
                             {isDirty && (

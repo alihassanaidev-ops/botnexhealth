@@ -114,45 +114,33 @@ export default function TwilioPhoneNumbers() {
             {/* Stats row */}
             {!loading && (
                 <div className="grid gap-4 md:grid-cols-3">
-                    <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
-                                    <Phone className="h-5 w-5 text-violet-600 dark:text-violet-400" />
+                    {[
+                        { label: "Total Numbers", value: numbers.length, icon: Phone, glowRgb: "139,92,246" },
+                        { label: "SMS Capable", value: smsCapable.length, icon: MessageSquare, glowRgb: "59,130,246" },
+                        { label: "Voice Capable", value: voiceCapable.length, icon: Mic, glowRgb: "16,185,129" },
+                    ].map((card) => (
+                        <div key={card.label} className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg cursor-default">
+                            <div
+                                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 rounded-full opacity-[0.08] blur-3xl transition-opacity duration-300 group-hover:opacity-[0.15]"
+                                style={{ background: `radial-gradient(circle, rgba(${card.glowRgb}, 0.8) 0%, transparent 70%)` }}
+                            />
+                            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+                            <div className="relative p-6">
+                                <div className="flex items-center justify-between mb-5">
+                                    <span className="text-sm font-medium text-muted-foreground">{card.label}</span>
+                                    <div className="rounded-xl p-2.5 bg-primary/10">
+                                        <card.icon className="h-4 w-4 text-primary" />
+                                    </div>
                                 </div>
-                                <div>
-                                    <p className="text-2xl font-bold">{numbers.length}</p>
-                                    <p className="text-xs text-muted-foreground">Total Numbers</p>
+                                <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground">
+                                    {card.value}
                                 </div>
+                                <p className="text-xs mt-2 text-muted-foreground/60 font-medium tracking-wide uppercase">
+                                    numbers
+                                </p>
                             </div>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                                    <MessageSquare className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-                                </div>
-                                <div>
-                                    <p className="text-2xl font-bold">{smsCapable.length}</p>
-                                    <p className="text-xs text-muted-foreground">SMS Capable</p>
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center gap-3">
-                                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/30">
-                                    <Mic className="h-5 w-5 text-green-600 dark:text-green-400" />
-                                </div>
-                                <div>
-                                    <p className="text-2xl font-bold">{voiceCapable.length}</p>
-                                    <p className="text-xs text-muted-foreground">Voice Capable</p>
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
+                        </div>
+                    ))}
                 </div>
             )}
 

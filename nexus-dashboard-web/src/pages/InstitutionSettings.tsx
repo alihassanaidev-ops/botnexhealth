@@ -366,7 +366,7 @@ export default function InstitutionSettings() {
             </div>
 
             {/* Billing Section */}
-            <Card className="border-primary/20 bg-background/60 shadow-sm mt-4">
+            <Card className="border-border bg-background/60 shadow-sm mt-4">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <Mail className="h-4 w-4" />
@@ -396,7 +396,7 @@ export default function InstitutionSettings() {
             </Card>
 
             {/* ROI Configuration */}
-            <div className="rounded-lg border border-primary/20 bg-background/60 shadow-sm mt-4">
+            <div className="rounded-lg border border-border bg-background/60 shadow-sm mt-4">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <DollarSign className="h-4 w-4" />
@@ -478,7 +478,7 @@ export default function InstitutionSettings() {
 
             {/* Transfer Numbers Section */}
             <div className="space-y-4 mt-4">
-                <Card className="border-primary/20 bg-background/60 shadow-sm">
+                <Card className="border-border bg-background/60 shadow-sm">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <Phone className="h-4 w-4" />
@@ -556,7 +556,7 @@ export default function InstitutionSettings() {
                     </CardContent>
                 </Card>
 
-                <Card className="border-primary/20 bg-background/60 shadow-sm">
+                <Card className="border-border bg-background/60 shadow-sm">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <Phone className="h-4 w-4" />

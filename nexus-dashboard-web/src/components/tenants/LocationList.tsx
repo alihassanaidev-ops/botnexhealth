@@ -198,7 +198,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
             )}
 
             {viewMode === "list" && (
-                <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm">
+                <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -284,7 +284,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                                         <Badge
                                             variant="secondary"
                                             className={loc.is_active
-                                                ? "border border-primary/25 bg-primary/10 text-primary"
+                                                ? "border border-border bg-primary/10 text-primary"
                                                 : "border border-border bg-muted text-muted-foreground"}
                                         >
                                             {loc.is_active ? "Active" : "Inactive"}
@@ -340,7 +340,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
 
             {/* Create / Edit Form View */}
             {viewMode === "form" && (
-                <div className="rounded-xl border border-primary/20 bg-gradient-to-b from-card to-accent/20 p-4 shadow-sm">
+                <div className="rounded-xl border border-border bg-gradient-to-b from-card to-accent/20 p-4 shadow-sm">
                     <LocationForm
                         institutionSlug={institutionSlug}
                         location={editingLocation}

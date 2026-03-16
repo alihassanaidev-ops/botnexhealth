@@ -1,19 +1,19 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
     ArrowDown,
     ArrowUp,
-    BarChart3,
-    Building2,
     Loader2,
     MapPin,
     RefreshCcw,
     Settings2,
     TrendingUp,
 } from "lucide-react"
+import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from "recharts"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -22,13 +22,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
     calculateROI,
     getAggregateDashboard,
-    getInstitutionPortalMe,
     getLocationOperatingHours,
     getROIConfig,
     listInstitutionPortalLocations,
     updateLocationOperatingHours,
     updateLocationTimezone,
     type AggregateDashboardResponse,
+    type ClinicComparisonRow,
     type InstitutionPortalLocation,
     type ROICalculation,
     type ROIConfig,
@@ -130,7 +130,7 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
 
     return (
         <Dialog open={!!location} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-2xl border-primary/20 bg-gradient-to-b from-background to-accent/30">
+            <DialogContent className="max-w-2xl border-border bg-gradient-to-b from-background to-accent/30">
                 <DialogHeader>
                     <DialogTitle>Operating Hours: {location.name}</DialogTitle>
                 </DialogHeader>
@@ -182,9 +182,152 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
     )
 }
 
+// ── Metric options for the comparison chart ──────────────────────────────────
+
+const COMPARISON_METRICS = [
+    { key: "booking_rate_month" as const, label: "Booking Rate", suffix: "%" },
+    { key: "calls_today" as const, label: "Calls Today", suffix: "" },
+    { key: "calls_this_month" as const, label: "Calls (Month)", suffix: "" },
+    { key: "appointments_booked_month" as const, label: "Bookings", suffix: "" },
+    { key: "new_patients_month" as const, label: "New Patients", suffix: "" },
+    { key: "open_callbacks" as const, label: "Callbacks", suffix: "" },
+]
+
+type ComparisonMetricKey = (typeof COMPARISON_METRICS)[number]["key"]
+
+function ClinicComparisonChart({ rows, loading }: { rows: ClinicComparisonRow[]; loading: boolean }) {
+    const [activeMetric, setActiveMetric] = useState<ComparisonMetricKey>("booking_rate_month")
+    const activeDef = COMPARISON_METRICS.find((m) => m.key === activeMetric)!
+
+    const chartConfig = useMemo<ChartConfig>(() => ({
+        value: { label: activeDef.label, color: "hsl(var(--primary))" },
+        label: { color: "hsl(var(--primary-foreground))" },
+    }), [activeDef.label])
+
+    const chartData = useMemo(() =>
+        rows.map((row) => ({
+            location: row.location_name,
+            value: row[activeMetric],
+        })),
+    [rows, activeMetric])
+
+    const barSize = 20
+    const barGap = 12
+    const chartHeight = Math.max(rows.length * (barSize + barGap) + 20, 200)
+
+    return (
+        <Card className="border-border shadow-sm flex-1 flex flex-col">
+            <CardHeader className="pb-2">
+                <CardTitle className="text-base">Clinic Comparison</CardTitle>
+                <CardDescription>
+                    <div className="flex items-center gap-1 flex-wrap mt-1">
+                        {COMPARISON_METRICS.map((m) => (
+                            <button
+                                key={m.key}
+                                onClick={() => setActiveMetric(m.key)}
+                                className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-all duration-150
+                                    ${activeMetric === m.key
+                                        ? "bg-primary text-primary-foreground shadow-sm"
+                                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                                    }`}
+                            >
+                                {m.label}
+                            </button>
+                        ))}
+                    </div>
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col justify-center">
+                {loading ? (
+                    <div className="flex items-center justify-center py-12">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                ) : !rows.length ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-center gap-2">
+                        <MapPin className="h-7 w-7 text-muted-foreground/30" />
+                        <p className="text-sm text-muted-foreground">No location data yet.</p>
+                    </div>
+                ) : (
+                    <ChartContainer config={chartConfig} className="w-full" style={{ height: chartHeight }}>
+                        <BarChart
+                            accessibilityLayer
+                            data={chartData}
+                            layout="vertical"
+                            margin={{ right: 16 }}
+                            barSize={barSize}
+                            barGap={barGap}
+                        >
+                            <CartesianGrid horizontal={false} />
+                            <YAxis
+                                dataKey="location"
+                                type="category"
+                                tickLine={false}
+                                tickMargin={10}
+                                axisLine={false}
+                                tickFormatter={(v) => v.length > 12 ? v.slice(0, 12) + "…" : v}
+                                hide
+                            />
+                            <XAxis dataKey="value" type="number" hide />
+                            <ChartTooltip
+                                cursor={false}
+                                content={<ChartTooltipContent indicator="line" />}
+                            />
+                            <Bar
+                                dataKey="value"
+                                layout="vertical"
+                                fill="var(--color-value)"
+                                radius={4}
+                                minPointSize={2}
+                            >
+                                <LabelList
+                                    dataKey="location"
+                                    position="insideLeft"
+                                    offset={8}
+                                    className="fill-[--color-label]"
+                                    fontSize={12}
+                                    content={(props: Record<string, unknown>) => {
+                                        const { x, y, width, height, value } = props as { x: number; y: number; width: number; height: number; value: string }
+                                        if (!width || width < 60) {
+                                            return (
+                                                <text x={(x ?? 0) + (width ?? 0) + 8} y={(y ?? 0) + (height ?? 0) / 2} fill="hsl(var(--foreground))" fontSize={12} dominantBaseline="central">
+                                                    {value} · {chartData.find((d) => d.location === value)?.value ?? 0}{activeDef.suffix}
+                                                </text>
+                                            )
+                                        }
+                                        return (
+                                            <text x={(x ?? 0) + 8} y={(y ?? 0) + (height ?? 0) / 2} fill="hsl(var(--primary-foreground))" fontSize={12} dominantBaseline="central">
+                                                {value}
+                                            </text>
+                                        )
+                                    }}
+                                />
+                                <LabelList
+                                    dataKey="value"
+                                    position="right"
+                                    offset={8}
+                                    className="fill-foreground"
+                                    fontSize={12}
+                                    content={(props: Record<string, unknown>) => {
+                                        const { x, y, width, height, value } = props as { x: number; y: number; width: number; height: number; value: number }
+                                        if (!width || width < 60) return null
+                                        return (
+                                            <text x={(x ?? 0) + (width ?? 0) + 8} y={(y ?? 0) + (height ?? 0) / 2} fill="hsl(var(--foreground))" fontSize={12} dominantBaseline="central">
+                                                {value}{activeDef.suffix}
+                                            </text>
+                                        )
+                                    }}
+                                />
+                            </Bar>
+                        </BarChart>
+                    </ChartContainer>
+                )}
+            </CardContent>
+        </Card>
+    )
+}
+
 export default function InstitutionAdminPanel() {
     const [loading, setLoading] = useState(true)
-    const [institutionName, setInstitutionName] = useState("")
     const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
     const [aggregate, setAggregate] = useState<AggregateDashboardResponse | null>(null)
     const [selectedLocation, setSelectedLocation] = useState<InstitutionPortalLocation | null>(null)
@@ -199,13 +342,11 @@ export default function InstitutionAdminPanel() {
     const loadData = useCallback(async () => {
         setLoading(true)
         try {
-            const [me, locationRows, aggregateData] = await Promise.all([
-                getInstitutionPortalMe(),
+            const [locationRows, aggregateData] = await Promise.all([
                 listInstitutionPortalLocations(),
                 getAggregateDashboard(),
             ])
 
-            setInstitutionName(me.name)
             setLocations(locationRows)
             setAggregate(aggregateData)
         } catch (err: unknown) {
@@ -277,9 +418,7 @@ export default function InstitutionAdminPanel() {
         }
     }
 
-    const summary = aggregate?.summary
     const comparisonRows = aggregate?.clinic_comparison ?? []
-    const tagDistribution = aggregate?.tag_distribution ?? []
 
     return (
         <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
@@ -296,214 +435,86 @@ export default function InstitutionAdminPanel() {
                 </Button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <Card className="border-border/80 bg-gradient-to-br from-card to-accent/30 shadow-sm">
-                    <CardHeader className="pb-2">
-                        <CardDescription>Institution</CardDescription>
-                        <CardTitle className="text-lg">{institutionName || "—"}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="text-sm text-muted-foreground">
-                        <Building2 className="mr-2 inline h-4 w-4" />
-                        Centralized admin scope
-                    </CardContent>
-                </Card>
-                <Card className="border-primary/30 bg-gradient-to-br from-primary to-primary2 text-primary-foreground shadow-lg shadow-primary/20">
-                    <CardHeader className="pb-2">
-                        <CardDescription className="text-primary-foreground/85">Total Calls (Month)</CardDescription>
-                        <CardTitle className="text-3xl text-primary-foreground">{summary?.total_calls_month ?? 0}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="text-sm text-primary-foreground/85">
-                        <BarChart3 className="mr-2 inline h-4 w-4" />
-                        Cross-location volume
-                    </CardContent>
-                </Card>
-                <Card className="border-primary/20 bg-gradient-to-br from-secondary via-accent to-primary2/20 shadow-sm">
-                    <CardHeader className="pb-2">
-                        <CardDescription>Bookings (Month)</CardDescription>
-                        <CardTitle className="text-3xl">{summary?.appointments_booked_month ?? 0}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="text-sm text-muted-foreground">
-                        Booking rate: {summary?.booking_rate_month ?? 0}%
-                    </CardContent>
-                </Card>
-                <Card className="border-accent-foreground/20 bg-gradient-to-br from-accent via-secondary to-primary2/15 shadow-sm">
-                    <CardHeader className="pb-2">
-                        <CardDescription>Open Callbacks</CardDescription>
-                        <CardTitle className="text-3xl">{summary?.open_callbacks ?? 0}</CardTitle>
-                    </CardHeader>
-                    <CardContent className="text-sm text-muted-foreground">
-                        New patients this month: {summary?.new_patients_month ?? 0}
-                    </CardContent>
-                </Card>
+
+            {/* Chart + ROI side by side (chart goes full-width when ROI has no data) */}
+            <div className={`grid gap-6 items-start ${roiConfig && roiCalculation ? "lg:grid-cols-2" : ""}`}>
+                {/* Clinic Comparison Chart */}
+                <ClinicComparisonChart rows={comparisonRows} loading={loading} />
+
+                {/* ROI Summary — only render card when config exists */}
+                {roiConfig && (
+                    <Card className="border-border shadow-sm">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-base flex items-center gap-2">
+                                <TrendingUp className="h-4 w-4 text-primary" />
+                                ROI Summary
+                            </CardTitle>
+                            <CardDescription>This month's return on investment.</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            {roiLoading ? (
+                                <div className="flex items-center justify-center py-8">
+                                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                                </div>
+                            ) : roiCalculation ? (
+                                <div className="space-y-4">
+                                    {/* ROI hero */}
+                                    <div className="flex items-center justify-between rounded-xl border border-border p-4">
+                                        <div>
+                                            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Monthly ROI</p>
+                                            <div className="flex items-center gap-1.5 mt-1">
+                                                {roiCalculation.roi_percentage >= 0 ? (
+                                                    <ArrowUp className="h-4 w-4 text-emerald-600" />
+                                                ) : (
+                                                    <ArrowDown className="h-4 w-4 text-rose-600" />
+                                                )}
+                                                <span className={`text-3xl font-extralight tabular-nums ${roiCalculation.roi_percentage >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                                                    {roiCalculation.roi_percentage}%
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Net Value</p>
+                                            <p className="text-lg font-semibold text-foreground mt-1">${roiCalculation.net_value.toLocaleString()}</p>
+                                        </div>
+                                    </div>
+
+                                    {/* Metrics grid */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        {[
+                                            { label: "Calls Handled", value: roiCalculation.total_calls_month },
+                                            { label: "Bookings", value: roiCalculation.appointments_booked_month },
+                                            { label: "Booking Revenue", value: `$${roiCalculation.revenue_from_bookings.toLocaleString()}`, up: true },
+                                            { label: "New Patient Rev.", value: `$${roiCalculation.revenue_from_new_patients.toLocaleString()}`, up: true },
+                                            { label: "Staff Saved", value: `${roiCalculation.staff_time_saved_hours}h`, up: true, sub: `$${roiCalculation.staff_cost_saved.toLocaleString()}` },
+                                            { label: "Sub. Cost", value: `$${roiCalculation.monthly_cost.toLocaleString()}`, up: false },
+                                        ].map((m) => (
+                                            <div key={m.label} className="rounded-xl border border-border p-3">
+                                                <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">{m.label}</p>
+                                                <div className="flex items-center gap-1 mt-1">
+                                                    {m.up !== undefined && (
+                                                        m.up
+                                                            ? <ArrowUp className="h-3 w-3 text-emerald-600" />
+                                                            : <ArrowDown className="h-3 w-3 text-rose-600" />
+                                                    )}
+                                                    <span className="text-sm font-semibold tabular-nums text-foreground">{m.value}</span>
+                                                </div>
+                                                {m.sub && <p className="text-[10px] text-muted-foreground/70 mt-0.5">{m.sub} saved</p>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="py-8 text-center text-sm text-muted-foreground">
+                                    No calculation data available.
+                                </p>
+                            )}
+                        </CardContent>
+                    </Card>
+                )}
             </div>
 
-            <Card className="border-primary/20 shadow-sm">
-                <CardHeader>
-                    <CardTitle>Tag Distribution</CardTitle>
-                    <CardDescription>
-                        Primary call outcomes across your institution.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                    {tagDistribution.map((item) => (
-                        <div key={item.tag} className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-                            <span className="text-sm">{item.label}</span>
-                            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-sm font-semibold text-primary">
-                                {item.count}
-                            </span>
-                        </div>
-                    ))}
-                    {!tagDistribution.length && (
-                        <p className="text-sm text-muted-foreground">No call tags available yet.</p>
-                    )}
-                </CardContent>
-            </Card>
-
-            <Card className="border-primary/20 shadow-sm">
-                <CardHeader>
-                    <CardTitle>Clinic Comparison</CardTitle>
-                    <CardDescription>
-                        Side-by-side location performance across call and booking metrics.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="overflow-hidden rounded-lg border border-border/70 bg-background/60">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Location</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead>Calls Today</TableHead>
-                                    <TableHead>Calls Month</TableHead>
-                                    <TableHead>Bookings Month</TableHead>
-                                    <TableHead>New Patients</TableHead>
-                                    <TableHead>Booking Rate</TableHead>
-                                    <TableHead>Open Callbacks</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {comparisonRows.map((row) => (
-                                    <TableRow key={row.location_id}>
-                                        <TableCell className="font-medium">{row.location_name}</TableCell>
-                                        <TableCell>
-                                            <span className={row.status === "Active"
-                                                ? "inline-flex rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs text-primary"
-                                                : "inline-flex rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground"}
-                                            >
-                                                {row.status}
-                                            </span>
-                                        </TableCell>
-                                        <TableCell>{row.calls_today}</TableCell>
-                                        <TableCell>{row.calls_this_month}</TableCell>
-                                        <TableCell>{row.appointments_booked_month}</TableCell>
-                                        <TableCell>{row.new_patients_month}</TableCell>
-                                        <TableCell>{row.booking_rate_month}%</TableCell>
-                                        <TableCell>{row.open_callbacks}</TableCell>
-                                    </TableRow>
-                                ))}
-                                {!comparisonRows.length && (
-                                    <TableRow>
-                                        <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
-                                            No location comparison data yet.
-                                        </TableCell>
-                                    </TableRow>
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </CardContent>
-            </Card>
-
-            <Card className="border-primary/20 shadow-sm">
-                <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                        <TrendingUp className="h-4 w-4" />
-                        ROI Summary (This Month)
-                    </CardTitle>
-                    <CardDescription>
-                        {roiConfig ? "Calculated from your call data and configured values." : "Configure settings in the Settings page to see metrics."}
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    {!roiConfig ? (
-                        <p className="py-8 text-center text-sm text-muted-foreground">
-                            Configure your ROI settings in the Settings page to see metrics here.
-                        </p>
-                    ) : roiLoading ? (
-                        <div className="flex items-center justify-center py-8">
-                            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                        </div>
-                    ) : roiCalculation ? (
-                        <div className="space-y-4">
-                            <div className="grid grid-cols-2 gap-3">
-                                <div className="rounded-lg border bg-muted p-3">
-                                    <p className="text-xs text-muted-foreground">Calls Handled</p>
-                                    <p className="text-2xl font-bold">{roiCalculation.total_calls_month}</p>
-                                </div>
-                                <div className="rounded-lg border bg-muted p-3">
-                                    <p className="text-xs text-muted-foreground">Appointments Booked</p>
-                                    <p className="text-2xl font-bold">{roiCalculation.appointments_booked_month}</p>
-                                </div>
-                                <div className="rounded-lg border bg-muted p-3">
-                                    <p className="text-xs text-muted-foreground">Revenue from Bookings</p>
-                                    <div className="flex items-center gap-1">
-                                        <ArrowUp className="h-4 w-4 text-emerald-600" />
-                                        <p className="text-lg font-semibold">
-                                            ${roiCalculation.revenue_from_bookings.toLocaleString()}
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="rounded-lg border bg-muted p-3">
-                                    <p className="text-xs text-muted-foreground">New Patient Revenue</p>
-                                    <div className="flex items-center gap-1">
-                                        <ArrowUp className="h-4 w-4 text-emerald-600" />
-                                        <p className="text-lg font-semibold">
-                                            ${roiCalculation.revenue_from_new_patients.toLocaleString()}
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="rounded-lg border bg-muted p-3">
-                                    <p className="text-xs text-muted-foreground">Staff Time Saved</p>
-                                    <div className="flex items-center gap-1">
-                                        <ArrowUp className="h-4 w-4 text-emerald-600" />
-                                        <p className="text-lg font-semibold">{roiCalculation.staff_time_saved_hours}h</p>
-                                    </div>
-                                    <p className="text-xs text-muted-foreground">${roiCalculation.staff_cost_saved.toLocaleString()} saved</p>
-                                </div>
-                                <div className="rounded-lg border bg-muted p-3">
-                                    <p className="text-xs text-muted-foreground">Subscription Cost</p>
-                                    <div className="flex items-center gap-1">
-                                        <ArrowDown className="h-4 w-4 text-rose-600" />
-                                        <p className="text-lg font-semibold">${roiCalculation.monthly_cost.toLocaleString()}</p>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="rounded-xl border bg-muted p-4 text-center">
-                                <p className="text-xs uppercase tracking-wider text-muted-foreground">Monthly ROI</p>
-                                <div className="flex items-center justify-center gap-2">
-                                    {roiCalculation.roi_percentage >= 0 ? (
-                                        <ArrowUp className="h-6 w-6 text-emerald-600" />
-                                    ) : (
-                                        <ArrowDown className="h-6 w-6 text-rose-600" />
-                                    )}
-                                    <p className={`text-4xl font-bold ${roiCalculation.roi_percentage >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                                        {roiCalculation.roi_percentage}%
-                                    </p>
-                                </div>
-                                <p className="mt-1 text-sm text-muted-foreground">
-                                    Net value: ${roiCalculation.net_value.toLocaleString()}
-                                </p>
-                            </div>
-                        </div>
-                    ) : (
-                        <p className="py-8 text-center text-sm text-muted-foreground">
-                            No calculation data available.
-                        </p>
-                    )}
-                </CardContent>
-            </Card>
-
-            <Card className="border-primary/20 shadow-sm">
+            <Card className="border-border shadow-sm">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <MapPin className="h-4 w-4" />
@@ -559,7 +570,7 @@ export default function InstitutionAdminPanel() {
                                             </TableCell>
                                             <TableCell>
                                                 <span className={location.is_active
-                                                    ? "inline-flex rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs text-primary"
+                                                    ? "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10"
                                                     : "inline-flex rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground"}
                                                 >
                                                     {location.is_active ? "Active" : "Inactive"}

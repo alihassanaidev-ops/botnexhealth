@@ -128,7 +128,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
         const isEditing = editingSection === section;
 
         return (
-            <Card className={`group overflow-hidden border-primary/15 bg-gradient-to-br from-card to-accent/20 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-md hover:shadow-primary/10 ${isEditing ? "ring-1 ring-primary/40 border-primary/50" : ""}`}>
+            <Card className={`group overflow-hidden border-border bg-gradient-to-br from-card to-accent/20 transition-all duration-200 hover:-translate-y-0.5 hover:border-border hover:shadow-md hover:shadow-primary/10 ${isEditing ? "ring-1 ring-primary/40 border-border" : ""}`}>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 gap-4">
                     <div className="flex-1 space-y-1">
                         <div className="flex items-center gap-2">
@@ -166,7 +166,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                 </div>
 
                 {isEditing && (
-                    <div className="animate-in slide-in-from-top-2 fade-in space-y-4 border-t border-primary/15 bg-background/60 px-4 py-6 duration-200">
+                    <div className="animate-in slide-in-from-top-2 fade-in space-y-4 border-t border-border bg-background/60 px-4 py-6 duration-200">
                         {children}
                     </div>
                 )}

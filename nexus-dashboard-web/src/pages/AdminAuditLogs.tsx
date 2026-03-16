@@ -117,7 +117,7 @@ export default function AdminAuditLogs() {
                         </div>
                     ) : (
                         <div className="space-y-4">
-                            <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm">
+                            <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm">
                                 <Table>
                                     <TableHeader>
                                         <TableRow>

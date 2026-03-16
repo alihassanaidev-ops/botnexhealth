@@ -49,7 +49,7 @@ export function TenantForm({ onSuccess }: InstitutionFormProps) {
 
     return (
         <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 rounded-xl border border-primary/20 bg-background/70 p-4">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 rounded-xl border border-border bg-background/70 p-4">
                 <FormField
                     control={form.control}
                     name="name"

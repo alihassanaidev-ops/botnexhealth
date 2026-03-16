@@ -235,7 +235,7 @@ export default function CustomFields() {
                     onCheckedChange={setShowInactive}
                 />
             </div>
-            <div className="overflow-hidden rounded-lg border border-primary/20 bg-background/60 shadow-sm">
+            <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -286,7 +286,7 @@ export default function CustomFields() {
                                         <Badge
                                             variant="secondary"
                                             className={defn.is_active
-                                                ? "border border-primary/25 bg-primary/10 text-primary"
+                                                ? "border border-border bg-primary/10 text-primary"
                                                 : "border border-border bg-muted text-muted-foreground"}
                                         >
                                             {defn.is_active ? "Active" : "Inactive"}
@@ -504,7 +504,7 @@ export default function CustomFields() {
                     </DialogHeader>
                     <div className="space-y-3 py-2">
                         {deleteTarget?.is_active && (
-                            <div className="rounded-md border border-primary/20 bg-background/70 p-3">
+                            <div className="rounded-md border border-border bg-background/70 p-3">
                                 <p className="text-sm font-medium">Deactivate</p>
                                 <p className="text-xs text-muted-foreground mt-1">
                                     Hides the field from new data but keeps existing values intact.

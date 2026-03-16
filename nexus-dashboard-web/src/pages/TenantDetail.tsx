@@ -196,7 +196,7 @@ export default function InstitutionDetailPage() {
         }
 
         return (
-            <div className="group flex items-center justify-between rounded-xl border border-primary/15 bg-gradient-to-br from-card to-accent/20 p-4 transition-all hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-md hover:shadow-primary/10">
+            <div className="group flex items-center justify-between rounded-xl border border-border bg-gradient-to-br from-card to-accent/20 p-4 transition-all hover:-translate-y-0.5 hover:border-border hover:shadow-md hover:shadow-primary/10">
                 <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
                         <span className="font-semibold">{name}</span>
@@ -259,7 +259,7 @@ export default function InstitutionDetailPage() {
 
             {/* Tabs */}
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-                <TabsList className="border border-primary/20 bg-gradient-to-r from-secondary/70 to-accent/70">
+                <TabsList className="border border-border bg-gradient-to-r from-secondary/70 to-accent/70">
                     <TabsTrigger value="overview">Overview</TabsTrigger>
                     <TabsTrigger value="credentials">Credentials</TabsTrigger>
                     <TabsTrigger value="locations">Locations</TabsTrigger>
@@ -269,7 +269,7 @@ export default function InstitutionDetailPage() {
                 <TabsContent value="overview" className="space-y-6">
                     <div className="grid gap-6">
                         {/* Institution Details */}
-                        <Card className="border-primary/20 shadow-sm">
+                        <Card className="border-border shadow-sm">
                             <CardHeader className="flex flex-row items-center justify-between space-y-0">
                                 <div>
                                     <CardTitle>Institution Details</CardTitle>
@@ -318,7 +318,7 @@ export default function InstitutionDetailPage() {
 
                         {/* Admin User */}
                         {institution.user && (
-                            <Card className="border-primary/20 shadow-sm">
+                            <Card className="border-border shadow-sm">
                                 <CardHeader className="flex flex-row items-center justify-between space-y-0">
                                     <div>
                                         <CardTitle>Admin User</CardTitle>
@@ -383,7 +383,7 @@ export default function InstitutionDetailPage() {
                             </Card>
                         )}
 
-                        <Card className="border-primary/20 bg-gradient-to-br from-card to-accent/25 shadow-sm">
+                        <Card className="border-border bg-gradient-to-br from-card to-accent/25 shadow-sm">
                             <CardHeader>
                                 <CardTitle>Email Notification Test</CardTitle>
                                 <CardDescription>
@@ -400,7 +400,7 @@ export default function InstitutionDetailPage() {
                                         placeholder="you@example.com"
                                     />
                                 </div>
-                                <div className="flex items-center justify-between rounded-lg border border-primary/20 bg-background/70 p-3">
+                                <div className="flex items-center justify-between rounded-lg border border-border bg-background/70 p-3">
                                     <div>
                                         <p className="text-sm font-medium">Urgent mode</p>
                                         <p className="text-xs text-muted-foreground">
@@ -457,7 +457,7 @@ export default function InstitutionDetailPage() {
 
             {/* Edit Overview Sheet */}
             <Sheet open={editSheetOpen} onOpenChange={setEditSheetOpen}>
-                <SheetContent className="border-primary/20 bg-gradient-to-b from-background to-accent/30">
+                <SheetContent className="border-border bg-gradient-to-b from-background to-accent/30">
                     <SheetHeader>
                         <SheetTitle>Edit Institution</SheetTitle>
                         <SheetDescription>
@@ -484,7 +484,7 @@ export default function InstitutionDetailPage() {
                                     control={form.control}
                                     name="is_active"
                                     render={({ field }) => (
-                                        <FormItem className="flex items-center justify-between rounded-lg border border-primary/20 bg-background/70 p-4">
+                                        <FormItem className="flex items-center justify-between rounded-lg border border-border bg-background/70 p-4">
                                             <div>
                                                 <FormLabel className="text-base">Active</FormLabel>
                                                 <p className="text-sm text-muted-foreground">

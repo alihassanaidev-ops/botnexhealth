@@ -19,14 +19,14 @@ const TONE_STYLES = {
         description: "text-muted-foreground",
     },
     primary: {
-        card: "border-primary/30 bg-gradient-to-br from-primary to-primary2 text-primary-foreground shadow-lg shadow-primary/20",
+        card: "border-border bg-gradient-to-br from-primary to-primary2 text-primary-foreground shadow-lg shadow-primary/20",
         title: "text-primary-foreground/85",
         iconWrap: "bg-primary-foreground/15 text-primary-foreground",
         value: "text-primary-foreground",
         description: "text-primary-foreground/85",
     },
     primarySoft: {
-        card: "border-primary/25 bg-gradient-to-br from-secondary via-accent to-primary2/25 text-foreground shadow-md shadow-primary/10",
+        card: "border-border bg-gradient-to-br from-secondary via-accent to-primary2/25 text-foreground shadow-md shadow-primary/10",
         title: "text-muted-foreground",
         iconWrap: "bg-primary/15 text-primary",
         value: "text-foreground",

@@ -174,7 +174,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
 
     return (
         <Dialog open={!!location} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto border-primary/20 bg-gradient-to-b from-background to-accent/30">
+            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto border-border bg-gradient-to-b from-background to-accent/30">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <Clock className="w-5 h-5 text-muted-foreground" />
@@ -196,7 +196,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                                 <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
                             </div>
                         ) : (
-                            <div className="space-y-3 rounded-lg border border-primary/20 bg-background/70 p-4">
+                            <div className="space-y-3 rounded-lg border border-border bg-background/70 p-4">
                                 {hours.map((hour) => (
                                     <div key={hour.day_of_week} className="flex items-center gap-4 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
                                         <div className="w-32 flex items-center gap-2">
@@ -243,7 +243,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                         <div className="flex items-center justify-between">
                             <h3 className="text-lg font-medium">Scheduled Breaks</h3>
                         </div>
-                        <div className="space-y-4 rounded-lg border border-primary/20 bg-background/70 p-4">
+                        <div className="space-y-4 rounded-lg border border-border bg-background/70 p-4">
                             {isLoadingBreaks ? (
                                 <div className="flex justify-center p-4">
                                     <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -269,7 +269,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                                 </div>
                             )}
 
-                            <div className="mt-4 border-t border-primary/15 pt-4">
+                            <div className="mt-4 border-t border-border pt-4">
                                 <h4 className="text-sm font-medium mb-3">Add New Break</h4>
                                 <div className="grid grid-cols-5 gap-3 items-end">
                                     <div className="col-span-1 space-y-1">

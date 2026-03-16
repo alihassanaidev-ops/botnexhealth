@@ -103,7 +103,7 @@ const institutionAdminNav: NavItemDef[] = [
 
 const locationAdminNav: NavItemDef[] = [
     {
-        title: "Location Admin",
+        title: "Management",
         url: "/location-admin",
         icon: Building2,
         exact: true,
