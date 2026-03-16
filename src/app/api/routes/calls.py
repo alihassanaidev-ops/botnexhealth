@@ -105,15 +105,56 @@ def _tags_from_db(call_tags_str: str | None) -> list[str]:
     return [t.strip() for t in call_tags_str.split(",") if t.strip()]
 
 
-def _call_to_record(call: Call) -> CallRecord:
+def _mask_name(name: str | None) -> str | None:
+    """Partially redact a name, keeping first and last characters visible.
+
+    Examples:
+        ``"Sarah"``  → ``"S***h"``
+        ``"Loomer"`` → ``"L****r"``
+        ``"Jo"``     → ``"J*"``
+        ``"A"``      → ``"A"``
+    """
+    if not name:
+        return None
+    if len(name) <= 1:
+        return name
+    if len(name) == 2:
+        return name[0] + "*"
+    return name[0] + "*" * (len(name) - 2) + name[-1]
+
+
+def _mask_full_name(full_name: str | None) -> str | None:
+    """Mask each word in a full name independently."""
+    if not full_name:
+        return None
+    return " ".join(_mask_name(part) for part in full_name.split())
+
+
+def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
+    """Convert a Call ORM object to the API response model.
+
+    Args:
+        redact_phi: When True (default), patient names are partially masked
+            (e.g. ``Sarah Loomer`` → ``S***h L****r``) so the list endpoint
+            never exposes full PHI. The detail endpoint passes
+            ``redact_phi=False`` for authorised roles.
+    """
     contact_out: ContactSummary | None = None
     if call.contact:
-        contact_out = ContactSummary(
-            id=call.contact.id,
-            full_name=call.contact.full_name,
-            first_name=call.contact.first_name,
-            last_name=call.contact.last_name,
-        )
+        if redact_phi:
+            contact_out = ContactSummary(
+                id=call.contact.id,
+                full_name=_mask_full_name(call.contact.full_name),
+                first_name=_mask_name(call.contact.first_name),
+                last_name=_mask_name(call.contact.last_name),
+            )
+        else:
+            contact_out = ContactSummary(
+                id=call.contact.id,
+                full_name=call.contact.full_name,
+                first_name=call.contact.first_name,
+                last_name=call.contact.last_name,
+            )
     return CallRecord(
         id=call.id,
         call_direction=call.call_direction,
@@ -259,12 +300,17 @@ async def list_calls(
             )
         ).scalars().all()
 
+        items = [_call_to_record(c, redact_phi=True) for c in rows]
         response = CallsListResponse(
             total=total,
             limit=limit,
             offset=offset,
-            items=[_call_to_record(c) for c in rows],
+            items=items,
         )
+        # Log which contact IDs were in the result set for PHI audit trail
+        contact_ids = [
+            c.contact_id for c in rows if c.contact_id
+        ]
         log_audit_background(
             actor=current_user.id,
             action=AuditAction.VIEW_CALLS,
@@ -275,6 +321,7 @@ async def list_calls(
                 "institution_id": current_user.institution_id,
                 "location_id": current_user.location_id,
                 "result_count": len(response.items),
+                "contact_ids": contact_ids,
             },
             institution_id=current_user.institution_id,
         )
@@ -337,7 +384,10 @@ async def get_call(
             for defn, val in cf_pairs
         ]
 
-        base = _call_to_record(call)
+        # SUPER_ADMIN is platform-level and not in the circle of care — redact PHI.
+        # All other institution-scoped roles may view patient names for care operations.
+        redact = current_user.role == UserRole.SUPER_ADMIN.value
+        base = _call_to_record(call, redact_phi=redact)
         response = CallDetail(
             **base.model_dump(),
             transcript=call.transcript,
@@ -355,6 +405,7 @@ async def get_call(
                 "actor_role": current_user.role,
                 "institution_id": current_user.institution_id,
                 "location_id": current_user.location_id,
+                "contact_id": call.contact_id,
             },
             institution_id=current_user.institution_id,
         )

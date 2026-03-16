@@ -729,7 +729,7 @@ export default function Calls() {
                     <div className="relative">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                         <Input
-                            placeholder="Search patient..."
+                            placeholder="Search by patient name..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                             className="h-8 pl-8 w-[150px] lg:w-[250px]"
