@@ -388,12 +388,19 @@ async def get_call(
         # All other institution-scoped roles may view patient names for care operations.
         redact = current_user.role == UserRole.SUPER_ADMIN.value
         base = _call_to_record(call, redact_phi=redact)
+
+        # Generate a time-limited presigned URL so the browser can fetch the
+        # recording directly from S3 without the bucket being public.
+        from src.app.tasks.recordings import generate_presigned_url
+
+        signed_recording_url = generate_presigned_url(call.recording_url) if call.recording_url else None
+
         response = CallDetail(
             **base.model_dump(),
             transcript=call.transcript,
             transcript_with_tool_calls=call.transcript_with_tool_calls,
             scrubbed_transcript_with_tool_calls=call.scrubbed_transcript_with_tool_calls,
-            recording_url=call.recording_url,
+            recording_url=signed_recording_url,
             custom_fields=custom_fields,
         )
         log_audit_background(

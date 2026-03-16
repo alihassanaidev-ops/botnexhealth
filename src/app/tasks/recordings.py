@@ -108,6 +108,36 @@ async def _upload_recording_async(
     )
 
 
+def generate_presigned_url(s3_url: str, expires_in: int = 3600) -> str | None:
+    """Generate a presigned URL for an S3 recording.
+
+    Args:
+        s3_url: The stored S3 URL (e.g. https://bucket.s3.region.amazonaws.com/key)
+        expires_in: Expiry in seconds (default 1 hour).
+
+    Returns:
+        A presigned URL, or None if the URL can't be parsed or signing fails.
+    """
+    if not s3_url or not settings.aws_s3_bucket_name:
+        return None
+    try:
+        # Extract key from the stored URL
+        prefix = f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/"
+        if not s3_url.startswith(prefix):
+            return None
+        key = s3_url[len(prefix):]
+
+        s3 = _get_s3_client()
+        return s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": settings.aws_s3_bucket_name, "Key": key},
+            ExpiresIn=expires_in,
+        )
+    except Exception:
+        logger.exception("Failed to generate presigned URL for %s", s3_url)
+        return None
+
+
 def enqueue_recording_upload(
     *,
     call_id: str,
