@@ -572,8 +572,8 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
 
                         {/* Callback resolution */}
                         {isNeedsCallback && !alreadyResolved && (
-                            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
-                                <p className="text-xs font-medium text-amber-800">This call needs a callback</p>
+                            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 space-y-2">
+                                <p className="text-xs font-medium text-amber-600 dark:text-amber-400">This call needs a callback</p>
                                 <Input
                                     placeholder="Resolution note (optional)…"
                                     value={note}
@@ -592,7 +592,7 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                             </div>
                         )}
                         {isNeedsCallback && alreadyResolved && (
-                            <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
+                            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
                                 <CheckCircle2 className="h-4 w-4 shrink-0" />
                                 Callback resolved
                             </div>
