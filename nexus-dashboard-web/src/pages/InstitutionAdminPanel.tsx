@@ -9,6 +9,7 @@ import {
     TrendingUp,
 } from "lucide-react"
 import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from "recharts"
+import type { Props as LabelProps } from "recharts/types/component/Label"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -285,21 +286,25 @@ function ClinicComparisonChart({ rows, loading }: { rows: ClinicComparisonRow[];
                                     offset={8}
                                     className="fill-[--color-label]"
                                     fontSize={12}
-                                    content={(props: Record<string, unknown>) => {
-                                        const { x, y, width, height, value } = props as { x: number; y: number; width: number; height: number; value: string }
-                                        if (!width || width < 60) {
+                                    content={((props: LabelProps) => {
+                                        const x = Number(props.x ?? 0)
+                                        const y = Number(props.y ?? 0)
+                                        const w = Number(props.width ?? 0)
+                                        const h = Number(props.height ?? 0)
+                                        const value = props.value as string | undefined
+                                        if (!w || w < 60) {
                                             return (
-                                                <text x={(x ?? 0) + (width ?? 0) + 8} y={(y ?? 0) + (height ?? 0) / 2} fill="hsl(var(--foreground))" fontSize={12} dominantBaseline="central">
+                                                <text x={x + w + 8} y={y + h / 2} fill="hsl(var(--foreground))" fontSize={12} dominantBaseline="central">
                                                     {value} · {chartData.find((d) => d.location === value)?.value ?? 0}{activeDef.suffix}
                                                 </text>
                                             )
                                         }
                                         return (
-                                            <text x={(x ?? 0) + 8} y={(y ?? 0) + (height ?? 0) / 2} fill="hsl(var(--primary-foreground))" fontSize={12} dominantBaseline="central">
+                                            <text x={x + 8} y={y + h / 2} fill="hsl(var(--primary-foreground))" fontSize={12} dominantBaseline="central">
                                                 {value}
                                             </text>
                                         )
-                                    }}
+                                    })}
                                 />
                                 <LabelList
                                     dataKey="value"
@@ -307,15 +312,19 @@ function ClinicComparisonChart({ rows, loading }: { rows: ClinicComparisonRow[];
                                     offset={8}
                                     className="fill-foreground"
                                     fontSize={12}
-                                    content={(props: Record<string, unknown>) => {
-                                        const { x, y, width, height, value } = props as { x: number; y: number; width: number; height: number; value: number }
-                                        if (!width || width < 60) return null
+                                    content={((props: LabelProps) => {
+                                        const x = Number(props.x ?? 0)
+                                        const y = Number(props.y ?? 0)
+                                        const w = Number(props.width ?? 0)
+                                        const h = Number(props.height ?? 0)
+                                        const value = props.value as number | undefined
+                                        if (!w || w < 60) return null
                                         return (
-                                            <text x={(x ?? 0) + (width ?? 0) + 8} y={(y ?? 0) + (height ?? 0) / 2} fill="hsl(var(--foreground))" fontSize={12} dominantBaseline="central">
+                                            <text x={x + w + 8} y={y + h / 2} fill="hsl(var(--foreground))" fontSize={12} dominantBaseline="central">
                                                 {value}{activeDef.suffix}
                                             </text>
                                         )
-                                    }}
+                                    })}
                                 />
                             </Bar>
                         </BarChart>
