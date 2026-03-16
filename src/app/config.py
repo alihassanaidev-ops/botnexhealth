@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     # Celery
     celery_broker_url: str | None = None
 
+    # AWS S3 (call recordings)
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_s3_bucket_name: str | None = None
+    aws_region: str = "ca-central-1"
+
 
     # Twilio (SMS / phone numbers)
     twillio_sid: str | None = None          # Account SID (env: TWILLIO_SID)

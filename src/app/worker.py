@@ -18,6 +18,7 @@ def _build_celery_app() -> Celery:
             "src.app.tasks.notifications",
             "src.app.tasks.in_app_notifications",
             "src.app.tasks.sms",
+            "src.app.tasks.recordings",
         ],
     )
 

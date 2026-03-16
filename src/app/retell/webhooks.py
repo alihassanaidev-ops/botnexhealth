@@ -272,6 +272,24 @@ async def handle_retell_webhook(
                 # Commit the transaction so contacts and calls are saved!
                 await session.commit()
 
+            # ── Recording upload: enqueue S3 upload after DB commit ──
+            _rec_url = event.call.recording_url or event.call.scrubbed_recording_url
+            if _rec_url:
+                try:
+                    from src.app.tasks.recordings import enqueue_recording_upload
+
+                    enqueue_recording_upload(
+                        call_id=saved_call.id,
+                        institution_id=institution.id,
+                        recording_url=_rec_url,
+                    )
+                except Exception as rec_enqueue_err:
+                    logger.error(
+                        "Failed to enqueue recording upload: call=%s error=%s",
+                        hash_for_logging(event.call.call_id),
+                        rec_enqueue_err,
+                    )
+
             # ── Email notification: enqueue after DB commit (durable via Celery) ──
             try:
                 from src.app.tasks.notifications import enqueue_call_notification
