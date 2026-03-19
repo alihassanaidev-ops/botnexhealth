@@ -67,7 +67,8 @@ export default function Login() {
     }
 
     return (
-        <div className="flex h-screen w-full items-center justify-center bg-gradient-to-b from-background via-background to-accent/30 p-4">
+        <div className="relative flex h-screen w-full items-center justify-center bg-background p-4">
+            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <Card className="w-full max-w-sm border-border bg-gradient-to-b from-card to-accent/20 shadow-lg">
                 <CardHeader>
                     <CardTitle className="text-2xl">Login</CardTitle>

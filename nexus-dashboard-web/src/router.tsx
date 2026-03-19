@@ -1,28 +1,44 @@
+import { lazy, Suspense } from "react";
 import { createBrowserRouter } from "react-router-dom";
 import DashboardWrapper from "./components/DashboardWrapper";
 import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
-import AdminDashboard from "./pages/AdminDashboard";
-import Dashboard from "./pages/Dashboard";
-import Institutions from "./pages/Tenants";
-import InstitutionDetailPage from "./pages/TenantDetail";
+import AppLayout from "./components/AppLayout";
+
+// Auth pages — eagerly loaded (small, needed immediately)
 import Login from "./pages/Login";
 import SetPassword from "./pages/SetPassword";
-import AppLayout from "./components/AppLayout";
-import AppointmentTypes from "./pages/AppointmentTypes";
-import ProvidersScheduling from "./pages/ProvidersScheduling";
-import Operatories from "./pages/Operatories";
-import Calls from "./pages/Calls";
-import Callbacks from "./pages/Callbacks";
-import AuditLogs from "./pages/AuditLogs"
-import AdminAuditLogs from "./pages/AdminAuditLogs"
-import TwilioPhoneNumbers from "./pages/TwilioPhoneNumbers";
-import InstitutionAdminPanel from "./pages/InstitutionAdminPanel";
-import LocationAdminPanel from "./pages/LocationAdminPanel";
-import InstitutionUserManagement from "./pages/InstitutionUserManagement";
-import InstitutionSettings from "./pages/InstitutionSettings";
-import InsurancePlans from "./pages/InsurancePlans";
 
+// All other pages — lazy loaded
+const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Institutions = lazy(() => import("./pages/Tenants"));
+const InstitutionDetailPage = lazy(() => import("./pages/TenantDetail"));
+const AppointmentTypes = lazy(() => import("./pages/AppointmentTypes"));
+const ProvidersScheduling = lazy(() => import("./pages/ProvidersScheduling"));
+const Operatories = lazy(() => import("./pages/Operatories"));
+const Calls = lazy(() => import("./pages/Calls"));
+const Callbacks = lazy(() => import("./pages/Callbacks"));
+const AuditLogs = lazy(() => import("./pages/AuditLogs"));
+const AdminAuditLogs = lazy(() => import("./pages/AdminAuditLogs"));
+const TwilioPhoneNumbers = lazy(() => import("./pages/TwilioPhoneNumbers"));
+const InstitutionAdminPanel = lazy(() => import("./pages/InstitutionAdminPanel"));
+const LocationAdminPanel = lazy(() => import("./pages/LocationAdminPanel"));
+const InstitutionUserManagement = lazy(() => import("./pages/InstitutionUserManagement"));
+const InstitutionSettings = lazy(() => import("./pages/InstitutionSettings"));
+const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
+
+function LazyFallback() {
+    return (
+        <div className="flex items-center justify-center h-64">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-600 dark:border-zinc-400" />
+        </div>
+    );
+}
+
+function S({ children }: { children: React.ReactNode }) {
+    return <Suspense fallback={<LazyFallback />}>{children}</Suspense>;
+}
 
 export const router = createBrowserRouter([
     {
@@ -48,7 +64,7 @@ export const router = createBrowserRouter([
                         path: "admin",
                         element: (
                             <RoleGuard allowed={["SUPER_ADMIN"]}>
-                                <AdminDashboard />
+                                <S><AdminDashboard /></S>
                             </RoleGuard>
                         ),
                     },
@@ -56,7 +72,7 @@ export const router = createBrowserRouter([
                         path: "dashboard",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <Dashboard />
+                                <S><Dashboard /></S>
                             </RoleGuard>
                         ),
                     },
@@ -65,7 +81,7 @@ export const router = createBrowserRouter([
                         path: "institution-admin",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
-                                <InstitutionAdminPanel />
+                                <S><InstitutionAdminPanel /></S>
                             </RoleGuard>
                         ),
                     },
@@ -73,7 +89,7 @@ export const router = createBrowserRouter([
                         path: "institution-admin/users",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
-                                <InstitutionUserManagement />
+                                <S><InstitutionUserManagement /></S>
                             </RoleGuard>
                         ),
                     },
@@ -81,7 +97,7 @@ export const router = createBrowserRouter([
                         path: "institution-admin/settings",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
-                                <InstitutionSettings />
+                                <S><InstitutionSettings /></S>
                             </RoleGuard>
                         ),
                     },
@@ -89,7 +105,7 @@ export const router = createBrowserRouter([
                         path: "location-admin",
                         element: (
                             <RoleGuard allowed={["LOCATION_ADMIN"]}>
-                                <LocationAdminPanel />
+                                <S><LocationAdminPanel /></S>
                             </RoleGuard>
                         ),
                     },
@@ -98,7 +114,7 @@ export const router = createBrowserRouter([
                         path: "institutions",
                         element: (
                             <RoleGuard allowed={["SUPER_ADMIN"]}>
-                                <Institutions />
+                                <S><Institutions /></S>
                             </RoleGuard>
                         ),
                     },
@@ -106,7 +122,7 @@ export const router = createBrowserRouter([
                         path: "institutions/:slug",
                         element: (
                             <RoleGuard allowed={["SUPER_ADMIN"]}>
-                                <InstitutionDetailPage />
+                                <S><InstitutionDetailPage /></S>
                             </RoleGuard>
                         ),
                     },
@@ -114,7 +130,7 @@ export const router = createBrowserRouter([
                         path: "admin/twilio",
                         element: (
                             <RoleGuard allowed={["SUPER_ADMIN"]}>
-                                <TwilioPhoneNumbers />
+                                <S><TwilioPhoneNumbers /></S>
                             </RoleGuard>
                         ),
                     },
@@ -122,7 +138,7 @@ export const router = createBrowserRouter([
                         path: "admin/audit-logs",
                         element: (
                             <RoleGuard allowed={["SUPER_ADMIN"]}>
-                                <AdminAuditLogs />
+                                <S><AdminAuditLogs /></S>
                             </RoleGuard>
                         ),
                     },
@@ -130,7 +146,7 @@ export const router = createBrowserRouter([
                         path: "setup/appointment-types",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <AppointmentTypes />
+                                <S><AppointmentTypes /></S>
                             </RoleGuard>
                         ),
                     },
@@ -138,7 +154,7 @@ export const router = createBrowserRouter([
                         path: "setup/providers",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <ProvidersScheduling />
+                                <S><ProvidersScheduling /></S>
                             </RoleGuard>
                         ),
                     },
@@ -146,7 +162,7 @@ export const router = createBrowserRouter([
                         path: "setup/operatories",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <Operatories />
+                                <S><Operatories /></S>
                             </RoleGuard>
                         ),
                     },
@@ -154,7 +170,7 @@ export const router = createBrowserRouter([
                         path: "setup/insurance-plans",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <InsurancePlans />
+                                <S><InsurancePlans /></S>
                             </RoleGuard>
                         ),
                     },
@@ -162,7 +178,7 @@ export const router = createBrowserRouter([
                         path: "setup/audit-logs",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
-                                <AuditLogs />
+                                <S><AuditLogs /></S>
                             </RoleGuard>
                         ),
                     },
@@ -170,7 +186,7 @@ export const router = createBrowserRouter([
                         path: "calls",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <Calls />
+                                <S><Calls /></S>
                             </RoleGuard>
                         ),
                     },
@@ -178,7 +194,7 @@ export const router = createBrowserRouter([
                         path: "callbacks",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <Callbacks />
+                                <S><Callbacks /></S>
                             </RoleGuard>
                         ),
                     },

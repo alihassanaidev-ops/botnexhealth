@@ -136,7 +136,8 @@ export default function InsurancePlans() {
     const showLocationPicker = user?.role === "INSTITUTION_ADMIN" && locations.length > 1
 
     return (
-        <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
+        <div className="relative space-y-6 bg-background">
+            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Insurance Plans</h1>

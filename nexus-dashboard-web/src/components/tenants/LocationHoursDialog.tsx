@@ -93,8 +93,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                     setHours(loadedHours);
                 }
                 setBreaks(breaksRes.data);
-            } catch (error) {
-                console.error("Failed to fetch location hours/breaks", error);
+            } catch {
                 toast.error("Failed to load operating hours.");
             } finally {
                 setIsLoadingHours(false);

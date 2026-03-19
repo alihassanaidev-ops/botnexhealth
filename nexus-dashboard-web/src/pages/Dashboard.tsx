@@ -490,12 +490,10 @@ export default function Dashboard() {
     const totalTagCount = tagCounts.reduce((sum, tc) => sum + tc.count, 0)
 
     return (
-        <div className="flex-1 min-h-screen bg-gradient-to-br from-background via-background to-primary/5 animate-fade-in-up">
-            {/* Ambient background blobs */}
+        <div className="flex-1 min-h-screen bg-background animate-fade-in-up">
+            {/* Violet top-right corner glow */}
             <div className="fixed inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute -top-40 -right-40 w-80 h-80 bg-violet-500/[0.07] dark:bg-violet-500/[0.04] rounded-full blur-3xl" />
-                <div className="absolute top-1/3 -left-20 w-60 h-60 bg-blue-500/[0.05] dark:bg-blue-500/[0.03] rounded-full blur-3xl" />
-                <div className="absolute bottom-20 right-1/4 w-72 h-72 bg-purple-500/[0.05] dark:bg-purple-500/[0.03] rounded-full blur-3xl" />
+                <div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" />
             </div>
 
             <div className="relative z-10 p-8 pt-6 space-y-6">

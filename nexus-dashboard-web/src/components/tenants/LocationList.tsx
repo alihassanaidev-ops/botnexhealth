@@ -56,8 +56,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
         try {
             const { data } = await api.get<Location[]>(`/admin/institutions/${institutionSlug}/locations`);
             setLocations(data);
-        } catch (error) {
-            console.error("Failed to fetch locations", error);
+        } catch {
             toast.error("Failed to fetch locations");
         } finally {
             setIsLoading(false);

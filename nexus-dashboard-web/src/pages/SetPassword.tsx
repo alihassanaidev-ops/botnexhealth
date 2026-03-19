@@ -17,7 +17,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { toast } from "sonner"
 
 const formSchema = z.object({
-    password: z.string().min(6, { message: "Password must be at least 6 characters" }),
+    password: z.string()
+        .min(8, { message: "Password must be at least 8 characters" })
+        .regex(/[a-z]/, { message: "Password must include a lowercase letter" })
+        .regex(/[A-Z]/, { message: "Password must include an uppercase letter" })
+        .regex(/[0-9]/, { message: "Password must include a number" }),
     confirmPassword: z.string()
 }).refine((data) => data.password === data.confirmPassword, {
     message: "Passwords don't match",
@@ -49,12 +53,14 @@ export default function SetPassword() {
     }
 
     return (
-        <div className="flex h-screen w-full items-center justify-center bg-gradient-to-b from-background via-background to-accent/30 p-4">
+        <div className="relative flex h-screen w-full items-center justify-center bg-background p-4">
+            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <Card className="w-full max-w-sm border-border bg-gradient-to-b from-card to-accent/20 shadow-lg">
                 <CardHeader>
                     <CardTitle className="text-2xl">Set New Password</CardTitle>
                     <CardDescription>
                         Please set a new password for your account.
+                        Must be at least 8 characters with uppercase, lowercase, and a number.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>

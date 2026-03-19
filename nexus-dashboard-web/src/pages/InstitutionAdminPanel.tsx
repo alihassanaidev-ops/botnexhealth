@@ -9,7 +9,7 @@ import {
     TrendingUp,
 } from "lucide-react"
 import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from "recharts"
-import type { Props as LabelProps } from "recharts/types/component/Label"
+
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -212,10 +212,6 @@ function ClinicComparisonChart({ rows, loading }: { rows: ClinicComparisonRow[];
         })),
     [rows, activeMetric])
 
-    const barSize = 20
-    const barGap = 12
-    const chartHeight = Math.max(rows.length * (barSize + barGap) + 20, 200)
-
     return (
         <Card className="border-border shadow-sm flex-1 flex flex-col">
             <CardHeader className="pb-2">
@@ -249,82 +245,41 @@ function ClinicComparisonChart({ rows, loading }: { rows: ClinicComparisonRow[];
                         <p className="text-sm text-muted-foreground">No location data yet.</p>
                     </div>
                 ) : (
-                    <ChartContainer config={chartConfig} className="w-full" style={{ height: chartHeight }}>
+                    <ChartContainer config={chartConfig} className="w-full" style={{ height: 300 }}>
                         <BarChart
                             accessibilityLayer
                             data={chartData}
-                            layout="vertical"
-                            margin={{ right: 16 }}
-                            barSize={barSize}
-                            barGap={barGap}
+                            margin={{ top: 20, bottom: 40 }}
                         >
-                            <CartesianGrid horizontal={false} />
-                            <YAxis
+                            <CartesianGrid vertical={false} />
+                            <XAxis
                                 dataKey="location"
-                                type="category"
                                 tickLine={false}
-                                tickMargin={10}
                                 axisLine={false}
-                                tickFormatter={(v) => v.length > 12 ? v.slice(0, 12) + "…" : v}
-                                hide
+                                tickMargin={8}
+                                tickFormatter={(v: string) => v.length > 10 ? v.slice(0, 10) + "…" : v}
+                                fontSize={11}
+                                angle={-30}
+                                textAnchor="end"
                             />
-                            <XAxis dataKey="value" type="number" hide />
+                            <YAxis hide />
                             <ChartTooltip
                                 cursor={false}
                                 content={<ChartTooltipContent indicator="line" />}
                             />
                             <Bar
                                 dataKey="value"
-                                layout="vertical"
                                 fill="var(--color-value)"
-                                radius={4}
+                                radius={[4, 4, 0, 0]}
                                 minPointSize={2}
                             >
                                 <LabelList
-                                    dataKey="location"
-                                    position="insideLeft"
-                                    offset={8}
-                                    className="fill-[--color-label]"
-                                    fontSize={12}
-                                    content={((props: LabelProps) => {
-                                        const x = Number(props.x ?? 0)
-                                        const y = Number(props.y ?? 0)
-                                        const w = Number(props.width ?? 0)
-                                        const h = Number(props.height ?? 0)
-                                        const value = props.value as string | undefined
-                                        if (!w || w < 60) {
-                                            return (
-                                                <text x={x + w + 8} y={y + h / 2} fill="hsl(var(--foreground))" fontSize={12} dominantBaseline="central">
-                                                    {value} · {chartData.find((d) => d.location === value)?.value ?? 0}{activeDef.suffix}
-                                                </text>
-                                            )
-                                        }
-                                        return (
-                                            <text x={x + 8} y={y + h / 2} fill="hsl(var(--primary-foreground))" fontSize={12} dominantBaseline="central">
-                                                {value}
-                                            </text>
-                                        )
-                                    })}
-                                />
-                                <LabelList
                                     dataKey="value"
-                                    position="right"
-                                    offset={8}
+                                    position="top"
+                                    offset={6}
                                     className="fill-foreground"
                                     fontSize={12}
-                                    content={((props: LabelProps) => {
-                                        const x = Number(props.x ?? 0)
-                                        const y = Number(props.y ?? 0)
-                                        const w = Number(props.width ?? 0)
-                                        const h = Number(props.height ?? 0)
-                                        const value = props.value as number | undefined
-                                        if (!w || w < 60) return null
-                                        return (
-                                            <text x={x + w + 8} y={y + h / 2} fill="hsl(var(--foreground))" fontSize={12} dominantBaseline="central">
-                                                {value}{activeDef.suffix}
-                                            </text>
-                                        )
-                                    })}
+                                    formatter={(v: number) => `${v}${activeDef.suffix}`}
                                 />
                             </Bar>
                         </BarChart>
@@ -430,7 +385,8 @@ export default function InstitutionAdminPanel() {
     const comparisonRows = aggregate?.clinic_comparison ?? []
 
     return (
-        <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
+        <div className="relative space-y-6 bg-background">
+            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Institution Admin Panel</h1>

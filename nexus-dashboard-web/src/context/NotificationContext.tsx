@@ -50,6 +50,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
     // Track previous unread count to detect new notifications for toasts
     const prevUnreadRef = useRef<number>(0);
+    // Ref for notifications so polling interval doesn't depend on notifications state
+    const notificationsRef = useRef<Notification[]>(notifications);
+    useEffect(() => { notificationsRef.current = notifications; }, [notifications]);
 
     const showToast = useCallback((notification: Notification) => {
         const isUrgentNotification = isUrgent(notification.type);
@@ -223,7 +226,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
                 // New notifications arrived — refresh the full list to get them
                 const result = await listNotifications(PAGE_SIZE, 0);
                 // Find truly new ones (not in current list) for toast
-                const existingIds = new Set(notifications.map((n) => n.id));
+                const existingIds = new Set(notificationsRef.current.map((n) => n.id));
                 const brandNew = result.items.filter(
                     (n) => !existingIds.has(n.id) && !n.is_read
                 );
@@ -242,7 +245,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
         const interval = setInterval(poll, POLL_INTERVAL_MS);
         return () => clearInterval(interval);
-    }, [user, refreshUnreadCounts, notifications, showToast, notificationsEnabled]);
+    }, [user, refreshUnreadCounts, showToast, notificationsEnabled]);
 
     // Refresh full list when dialog opens
     useEffect(() => {

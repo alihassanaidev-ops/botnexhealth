@@ -107,7 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 const detail = error?.response?.data?.detail;
                 const timedOut = error?.code === "ECONNABORTED";
                 const retryable = !status || status === 429 || status >= 500;
-                console.error(`Token exchange failed (attempt ${attempt}/${EXCHANGE_MAX_ATTEMPTS})`, err);
+                if (import.meta.env.DEV) console.warn(`Token exchange failed (attempt ${attempt}/${EXCHANGE_MAX_ATTEMPTS})`, status);
 
                 if (timedOut) {
                     lastAuthFailureRef.current = "Authentication timed out. Please try again.";
@@ -135,10 +135,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setUser(data);
             return true;
         } catch (err: unknown) {
-            console.error("Failed to fetch user profile", err);
             const error = err as { response?: { status?: number; data?: { detail?: string } } };
             const status = error?.response?.status;
             const detail = error?.response?.data?.detail;
+            if (import.meta.env.DEV) console.warn("Failed to fetch user profile", status);
             lastAuthFailureRef.current = detail || (status ? `Failed to fetch user profile (${status})` : "Failed to fetch user profile");
             return false;
         }
@@ -180,8 +180,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     useEffect(() => {
         if (!user) return;
 
+        // Throttle high-frequency events (mousemove, scroll) to once per 30s
+        let lastActivity = 0;
+        const THROTTLE_MS = 30_000;
+
         const events = ["mousedown", "keydown", "mousemove", "touchstart", "scroll"];
-        const handler = () => resetInactivityTimer();
+        const handler = () => {
+            const now = Date.now();
+            if (now - lastActivity < THROTTLE_MS) return;
+            lastActivity = now;
+            resetInactivityTimer();
+        };
 
         events.forEach((e) => window.addEventListener(e, handler, { passive: true }));
         resetInactivityTimer(); // start the timer
@@ -237,7 +246,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     navigate("/login", { replace: true });
                 }
             } catch (err: unknown) {
-                console.error("Initial auth bootstrap failed", err);
+                if (import.meta.env.DEV) console.warn("Initial auth bootstrap failed");
                 const error = err as { message?: string };
                 lastAuthFailureRef.current = error?.message || "Failed to initialize session";
                 clearToken();
@@ -283,7 +292,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     navigate("/login");
                 }
             } catch (error) {
-                console.error("Auth state change handler failed", error);
+                if (import.meta.env.DEV) console.warn("Auth state change handler failed");
             } finally {
                 setIsLoading(false);
             }
@@ -302,7 +311,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const signInWithSupabase = async (email: string, password: string) => {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) {
-            console.error("Login error", error);
             toast.error(error.message);
             throw error;
         }

@@ -266,7 +266,8 @@ export default function ProvidersScheduling() {
     const relevantApptTypes = appointmentTypes.filter((at) => availableApptTypeIds.has(at.source_id))
 
     return (
-        <div className="flex-1 space-y-4 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6">
+        <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
+            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <div className="flex items-center justify-between space-y-2">
                 <div>
                     <h2 className="text-3xl font-bold tracking-tight">Providers & Scheduling</h2>
@@ -491,7 +492,9 @@ export default function ProvidersScheduling() {
                                 <div className="space-y-3">
                                     {filteredAvailabilities.map((av) => {
                                         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
-                                        const isPastDate = !!av.specific_date && av.specific_date < new Date().toISOString().slice(0, 10)
+                                        // Use local date (browser TZ) — the user is at the practice
+                                        const todayLocal = new Date().toLocaleDateString("en-CA") // YYYY-MM-DD
+                                        const isPastDate = !!av.specific_date && av.specific_date < todayLocal
                                         const isWarning = !hasTypes && !isPastDate
 
                                         const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"

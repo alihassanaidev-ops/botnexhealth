@@ -154,8 +154,8 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
             try {
                 const { data } = await api.get<InstitutionBasicListResponse>("/admin/institutions/nexhealth/locations");
                 setNexHealthInstitutions(data.data);
-            } catch (error) {
-                console.error("Failed to fetch NexHealth locations", error);
+            } catch {
+                // Silently fail — NexHealth locations are optional hints
             } finally {
                 setIsLoadingNH(false);
             }

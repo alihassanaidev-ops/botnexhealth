@@ -10,7 +10,7 @@ interface RoleGuardProps {
 export default function RoleGuard({ allowed, children }: RoleGuardProps) {
     const { user } = useAuth()
 
-    if (!user) return null
+    if (!user) return <Navigate to="/login" replace />
 
     if (!allowed.includes(user.role)) {
         const home = user.role === "SUPER_ADMIN"

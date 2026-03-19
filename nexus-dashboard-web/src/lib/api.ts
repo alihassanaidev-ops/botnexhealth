@@ -3,10 +3,11 @@ import { supabase } from "@/lib/supabase";
 import { getToken, setToken, clearToken } from "@/lib/token-manager";
 
 const api = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || "http://localhost:3000/api",
+    baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000/api",
     headers: {
         "Content-Type": "application/json",
     },
+    timeout: 30_000, // 30s default timeout to prevent hanging requests
 });
 
 let refreshPromise: Promise<string> | null = null;

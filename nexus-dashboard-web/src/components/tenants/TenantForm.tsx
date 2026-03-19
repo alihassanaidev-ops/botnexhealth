@@ -41,7 +41,6 @@ export function TenantForm({ onSuccess }: InstitutionFormProps) {
             form.reset()
             onSuccess()
         } catch (err: unknown) {
-            console.error("Failed to create institution", err)
             const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to create institution")
         }

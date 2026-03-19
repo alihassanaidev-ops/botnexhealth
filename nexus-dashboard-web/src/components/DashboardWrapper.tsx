@@ -7,7 +7,12 @@ export default function DashboardWrapper() {
     const { user, isLoading } = useAuth();
 
     if (isLoading) {
-        return <div className="flex items-center justify-center h-screen">Loading...</div>;
+        return (
+            <div className="flex flex-col items-center justify-center h-screen gap-3">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-600 dark:border-zinc-400" />
+                <p className="text-sm text-muted-foreground">Loading your session...</p>
+            </div>
+        );
     }
 
     if (!user) {

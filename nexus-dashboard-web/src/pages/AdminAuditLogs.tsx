@@ -34,9 +34,8 @@ export default function AdminAuditLogs() {
             setTotal(data.total);
             setPage(currentPage);
         } catch (err: unknown) {
-            console.error("Failed to fetch admin audit logs:", err);
             const error = err as { message?: string };
-            toast.error(error?.message || "Unknown error occurred.");
+            toast.error(error?.message || "Failed to fetch audit logs.");
         } finally {
             setLoading(false);
         }
@@ -76,7 +75,8 @@ export default function AdminAuditLogs() {
     }
 
     return (
-        <div className="space-y-6 bg-gradient-to-b from-background via-background to-accent/20">
+        <div className="relative space-y-6 bg-background">
+            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Platform Audit Logs</h1>
@@ -153,7 +153,9 @@ export default function AdminAuditLogs() {
                             {/* Pagination Controls */}
                             <div className="flex items-center justify-between px-2">
                                 <div className="text-sm text-muted-foreground">
-                                    Showing {Math.min((page - 1) * pageSize + 1, total)} to {Math.min(page * pageSize, total)} of {total} entries
+                                    {total > 0
+                                        ? `Showing ${(page - 1) * pageSize + 1} to ${Math.min(page * pageSize, total)} of ${total} entries`
+                                        : "No entries found"}
                                 </div>
                                 <div className="flex items-center space-x-2">
                                     <Button

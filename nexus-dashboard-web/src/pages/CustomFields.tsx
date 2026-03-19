@@ -210,7 +210,8 @@ export default function CustomFields() {
     }
 
     return (
-        <div className="flex-1 space-y-4 bg-gradient-to-b from-background via-background to-accent/20 p-8 pt-6">
+        <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
+            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <div className="flex items-center justify-between space-y-2">
                 <div>
                     <h2 className="text-3xl font-bold tracking-tight">Custom Fields</h2>
