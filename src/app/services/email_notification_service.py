@@ -83,33 +83,83 @@ class EmailNotificationService:
         html_tags = ", ".join(tags) if tags else "None"
 
         urgent_banner = (
-            "<div style=\"padding:12px;background:#b91c1c;color:#fff;font-weight:700;border-radius:6px;"
-            "margin-bottom:16px;\">URGENT: Emergency or complaint call requires immediate attention.</div>"
+            '<tr><td style="padding:0 0 16px;">'
+            '<div style="padding:12px 16px;background:#991b1b;color:#fef2f2;font-weight:600;'
+            'border-radius:8px;font-size:13px;text-align:center;">'
+            "URGENT: Emergency or complaint call requires immediate attention.</div>"
+            "</td></tr>"
             if urgent
             else ""
         )
 
+        row_style = "padding:10px 0;border-bottom:1px solid #27272a;font-size:14px;"
+        label_style = f"{row_style}color:#a1a1aa;width:120px;vertical-align:top;"
+        value_style = f"{row_style}color:#e4e4e7;"
+
         html = (
-            "<div style=\"font-family:Arial,sans-serif;line-height:1.45;color:#111;\">"
-            f"{urgent_banner}"
-            "<h2 style=\"margin:0 0 12px 0;\">New Call Created</h2>"
-            "<table style=\"border-collapse:collapse;width:100%;max-width:680px;\">"
-            f"<tr><td style=\"padding:6px 0;font-weight:600;\">Caller Phone</td><td style=\"padding:6px 0;\">{escape(str(caller_phone))}</td></tr>"
-            f"<tr><td style=\"padding:6px 0;font-weight:600;\">Duration</td><td style=\"padding:6px 0;\">{escape(str(duration))}</td></tr>"
-            f"<tr><td style=\"padding:6px 0;font-weight:600;\">Primary Tag</td><td style=\"padding:6px 0;\">{escape(_tag_label(primary_tag))}</td></tr>"
-            f"<tr><td style=\"padding:6px 0;font-weight:600;\">All Tags</td><td style=\"padding:6px 0;\">{escape(html_tags)}</td></tr>"
-            f"<tr><td style=\"padding:6px 0;font-weight:600;\">Summary</td><td style=\"padding:6px 0;\">{escape(str(summary))}</td></tr>"
+            '<!DOCTYPE html><html><head><meta charset="UTF-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
+            "</head>"
+            '<body style="margin:0;padding:0;background-color:#09090b;'
+            "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\">"
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+            ' style="background-color:#09090b;padding:40px 20px;"><tr><td align="center">'
+            '<table role="presentation" width="520" cellpadding="0" cellspacing="0"'
+            ' style="max-width:520px;width:100%;">'
+            # Brand
+            '<tr><td align="center" style="padding-bottom:32px;">'
+            '<span style="font-size:24px;font-weight:700;color:#ffffff;letter-spacing:-0.5px;">'
+            f"{escape(location_name)}</span></td></tr>"
+            # Card
+            '<tr><td style="background-color:#18181b;border:1px solid #27272a;'
+            'border-radius:12px;padding:40px 36px;">'
+            # Urgent banner
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{urgent_banner}</table>'
+            # Heading
+            '<h2 style="margin:0 0 4px;font-size:20px;font-weight:600;color:#fafafa;">New Call Alert</h2>'
+            '<p style="margin:0 0 24px;font-size:13px;color:#71717a;">A new call has been processed and classified.</p>'
+            # Call details
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+            ' style="border-collapse:collapse;">'
+            f'<tr><td style="{label_style}">Caller</td>'
+            f'<td style="{value_style}font-family:monospace;">{escape(str(caller_phone))}</td></tr>'
+            f'<tr><td style="{label_style}">Duration</td>'
+            f'<td style="{value_style}">{escape(str(duration))}</td></tr>'
+            f'<tr><td style="{label_style}">Primary Tag</td>'
+            f'<td style="{value_style}">'
+            f'<span style="display:inline-block;background:#7c3aed;color:#fff;padding:2px 10px;'
+            f'border-radius:12px;font-size:12px;font-weight:600;">{escape(_tag_label(primary_tag))}</span></td></tr>'
+            f'<tr><td style="{label_style}">All Tags</td>'
+            f'<td style="{value_style}font-size:13px;">{escape(html_tags)}</td></tr>'
+            f'<tr><td style="{label_style}">Summary</td>'
+            f'<td style="{value_style}font-size:13px;line-height:1.5;">{escape(str(summary))}</td></tr>'
             "</table>"
-            "<div style=\"margin-top:20px;padding:14px;border:2px solid #111;border-radius:8px;background:#f8fafc;\">"
-            "<div style=\"font-size:18px;font-weight:800;margin-bottom:10px;\">Appointment Confirmation</div>"
-            "<table style=\"border-collapse:collapse;width:100%;\">"
-            f"<tr><td style=\"padding:6px 0;font-weight:600;\">Patient</td><td style=\"padding:6px 0;\">{escape(str(appointment_patient))}</td></tr>"
-            f"<tr><td style=\"padding:6px 0;font-weight:600;\">Date/Time</td><td style=\"padding:6px 0;\">{escape(str(appointment_dt))}</td></tr>"
-            f"<tr><td style=\"padding:6px 0;font-weight:600;\">Provider</td><td style=\"padding:6px 0;\">{escape(str(appointment_provider))}</td></tr>"
-            f"<tr><td style=\"padding:6px 0;font-weight:600;\">Service</td><td style=\"padding:6px 0;\">{escape(str(appointment_service))}</td></tr>"
-            "</table>"
-            "</div>"
-            "</div>"
+            # Appointment section
+            '<div style="margin-top:24px;padding:20px;background:#09090b;border:1px solid #27272a;'
+            'border-radius:8px;">'
+            '<div style="font-size:14px;font-weight:600;color:#fafafa;margin-bottom:14px;">'
+            "Appointment Confirmation</div>"
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+            ' style="border-collapse:collapse;">'
+            f'<tr><td style="{label_style}">Patient</td>'
+            f'<td style="{value_style}">{escape(str(appointment_patient))}</td></tr>'
+            f'<tr><td style="{label_style}">Date/Time</td>'
+            f'<td style="{value_style}">{escape(str(appointment_dt))}</td></tr>'
+            f'<tr><td style="{label_style}">Provider</td>'
+            f'<td style="{value_style}">{escape(str(appointment_provider))}</td></tr>'
+            f'<tr><td style="{label_style}border-bottom:none;">'
+            f"Service</td>"
+            f'<td style="{value_style}border-bottom:none;">'
+            f"{escape(str(appointment_service))}</td></tr>"
+            "</table></div>"
+            # End card
+            "</td></tr>"
+            # Footer
+            '<tr><td align="center" style="padding-top:28px;">'
+            '<p style="margin:0;font-size:12px;color:#3f3f46;">'
+            f"&copy; {escape(location_name)}</p>"
+            "</td></tr>"
+            "</table></td></tr></table></body></html>"
         )
 
         text = (
