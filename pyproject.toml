@@ -25,6 +25,8 @@ dependencies = [
   "supabase>=2.0.0",
   "celery>=5.3.0",
   "redis>=5.0.0",
+  # Email template rendering
+  "Jinja2>=3.1",
   # Rate limiting (HIPAA)
   "slowapi>=0.1.9",
   # Twilio SMS

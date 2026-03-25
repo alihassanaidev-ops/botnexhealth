@@ -1,14 +1,21 @@
-"""Email notification helpers and Resend sender."""
+"""Email notification helpers and Resend sender.
+
+Loads templates from the database when available, falling back to defaults.
+"""
 
 from __future__ import annotations
 
 import logging
-from html import escape
 from typing import Any
 
 import httpx
 
 from src.app.config import settings
+from src.app.models.email_template import EmailTemplateType
+from src.app.services.email_template_service import (
+    DEFAULT_TEMPLATES,
+    EmailTemplateService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,16 +56,49 @@ def _tag_label(tag: str | None) -> str:
     return tag.replace("_", " ")
 
 
-class EmailNotificationService:
-    """Sends call alert emails through Resend."""
+def resolve_template_type(*, is_urgent: bool, is_appointment_booked: bool) -> str:
+    """Determine which email template type to use based on call classification."""
+    if is_urgent:
+        return EmailTemplateType.URGENT_ALERT.value
+    if is_appointment_booked:
+        return EmailTemplateType.APPOINTMENT_CONFIRMATION.value
+    return EmailTemplateType.CALL_SUMMARY.value
 
-    async def send_call_created_notification(
+
+def _build_template_variables(payload: dict[str, Any]) -> dict[str, str]:
+    """Convert raw call payload into template variables."""
+    tags = payload.get("tags") or []
+    return {
+        "location_name": payload.get("location_name") or "Clinic",
+        "caller_phone": payload.get("caller_phone_masked") or "Unknown",
+        "duration": format_duration(payload.get("duration_seconds")),
+        "primary_tag": _tag_label(payload.get("primary_tag")),
+        "all_tags": ", ".join(tags) if tags else "None",
+        "summary": payload.get("summary") or "No summary available.",
+        "patient_name": payload.get("appointment_patient_redacted") or "Not provided",
+        "appointment_datetime": payload.get("appointment_datetime") or "Not provided",
+        "appointment_provider": payload.get("appointment_provider") or "Not provided",
+        "appointment_service": payload.get("appointment_service") or "Not provided",
+    }
+
+
+class EmailNotificationService:
+    """Sends call alert emails through Resend using DB-backed templates."""
+
+    async def send_notification(
         self,
         *,
         recipients: list[str],
         payload: dict[str, Any],
         idempotency_key: str,
+        template_type: str,
+        institution_id: str | None = None,
     ) -> None:
+        """Send a notification email using the appropriate template.
+
+        Attempts to load a custom template from the DB for the institution.
+        Falls back to the built-in default if none is found or DB is unavailable.
+        """
         api_key = settings.resend_api_key
         sender = settings.resend_from_email
         if not api_key or not sender:
@@ -66,115 +106,44 @@ class EmailNotificationService:
         if not recipients:
             raise RuntimeError("No recipients for call notification")
 
-        location_name = payload.get("location_name") or "Clinic"
-        primary_tag = payload.get("primary_tag")
-        urgent = bool(payload.get("is_urgent"))
-        urgency_prefix = "URGENT: " if urgent else ""
-        subject = f"{urgency_prefix}{location_name} call alert ({_tag_label(primary_tag)})"
+        variables = _build_template_variables(payload)
 
-        caller_phone = payload.get("caller_phone_masked") or "Unknown"
-        duration = format_duration(payload.get("duration_seconds"))
-        tags = payload.get("tags") or []
-        summary = payload.get("summary") or "No summary available."
-        appointment_patient = payload.get("appointment_patient_redacted") or "Not provided"
-        appointment_dt = payload.get("appointment_datetime") or "Not provided"
-        appointment_provider = payload.get("appointment_provider") or "Not provided"
-        appointment_service = payload.get("appointment_service") or "Not provided"
-        html_tags = ", ".join(tags) if tags else "None"
+        # Try loading custom template from DB
+        subject_tpl: str | None = None
+        html_tpl: str | None = None
+        text_tpl: str | None = None
 
-        urgent_banner = (
-            '<tr><td style="padding:0 0 16px;">'
-            '<div style="padding:12px 16px;background:#991b1b;color:#fef2f2;font-weight:600;'
-            'border-radius:8px;font-size:13px;text-align:center;">'
-            "URGENT: Emergency or complaint call requires immediate attention.</div>"
-            "</td></tr>"
-            if urgent
-            else ""
-        )
+        if institution_id:
+            try:
+                from src.app.database import get_db_session
 
-        row_style = "padding:10px 0;border-bottom:1px solid #27272a;font-size:14px;"
-        label_style = f"{row_style}color:#a1a1aa;width:120px;vertical-align:top;"
-        value_style = f"{row_style}color:#e4e4e7;"
+                async with get_db_session() as session:
+                    svc = EmailTemplateService(session)
+                    template = await svc.get_template_by_type(institution_id, template_type)
+                    if template and template.is_active:
+                        subject_tpl = template.subject_template
+                        html_tpl = template.html_body
+                        text_tpl = template.text_body
+            except Exception:
+                logger.warning(
+                    "Failed to load email template from DB, using default: type=%s institution=%s",
+                    template_type,
+                    institution_id,
+                    exc_info=True,
+                )
 
-        html = (
-            '<!DOCTYPE html><html><head><meta charset="UTF-8">'
-            '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
-            "</head>"
-            '<body style="margin:0;padding:0;background-color:#09090b;'
-            "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\">"
-            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
-            ' style="background-color:#09090b;padding:40px 20px;"><tr><td align="center">'
-            '<table role="presentation" width="520" cellpadding="0" cellspacing="0"'
-            ' style="max-width:520px;width:100%;">'
-            # Brand
-            '<tr><td align="center" style="padding-bottom:32px;">'
-            '<span style="font-size:24px;font-weight:700;color:#ffffff;letter-spacing:-0.5px;">'
-            f"{escape(location_name)}</span></td></tr>"
-            # Card
-            '<tr><td style="background-color:#18181b;border:1px solid #27272a;'
-            'border-radius:12px;padding:40px 36px;">'
-            # Urgent banner
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{urgent_banner}</table>'
-            # Heading
-            '<h2 style="margin:0 0 4px;font-size:20px;font-weight:600;color:#fafafa;">New Call Alert</h2>'
-            '<p style="margin:0 0 24px;font-size:13px;color:#71717a;">A new call has been processed and classified.</p>'
-            # Call details
-            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
-            ' style="border-collapse:collapse;">'
-            f'<tr><td style="{label_style}">Caller</td>'
-            f'<td style="{value_style}font-family:monospace;">{escape(str(caller_phone))}</td></tr>'
-            f'<tr><td style="{label_style}">Duration</td>'
-            f'<td style="{value_style}">{escape(str(duration))}</td></tr>'
-            f'<tr><td style="{label_style}">Primary Tag</td>'
-            f'<td style="{value_style}">'
-            f'<span style="display:inline-block;background:#7c3aed;color:#fff;padding:2px 10px;'
-            f'border-radius:12px;font-size:12px;font-weight:600;">{escape(_tag_label(primary_tag))}</span></td></tr>'
-            f'<tr><td style="{label_style}">All Tags</td>'
-            f'<td style="{value_style}font-size:13px;">{escape(html_tags)}</td></tr>'
-            f'<tr><td style="{label_style}">Summary</td>'
-            f'<td style="{value_style}font-size:13px;line-height:1.5;">{escape(str(summary))}</td></tr>'
-            "</table>"
-            # Appointment section
-            '<div style="margin-top:24px;padding:20px;background:#09090b;border:1px solid #27272a;'
-            'border-radius:8px;">'
-            '<div style="font-size:14px;font-weight:600;color:#fafafa;margin-bottom:14px;">'
-            "Appointment Confirmation</div>"
-            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
-            ' style="border-collapse:collapse;">'
-            f'<tr><td style="{label_style}">Patient</td>'
-            f'<td style="{value_style}">{escape(str(appointment_patient))}</td></tr>'
-            f'<tr><td style="{label_style}">Date/Time</td>'
-            f'<td style="{value_style}">{escape(str(appointment_dt))}</td></tr>'
-            f'<tr><td style="{label_style}">Provider</td>'
-            f'<td style="{value_style}">{escape(str(appointment_provider))}</td></tr>'
-            f'<tr><td style="{label_style}border-bottom:none;">'
-            f"Service</td>"
-            f'<td style="{value_style}border-bottom:none;">'
-            f"{escape(str(appointment_service))}</td></tr>"
-            "</table></div>"
-            # End card
-            "</td></tr>"
-            # Footer
-            '<tr><td align="center" style="padding-top:28px;">'
-            '<p style="margin:0;font-size:12px;color:#3f3f46;">'
-            f"&copy; {escape(location_name)}</p>"
-            "</td></tr>"
-            "</table></td></tr></table></body></html>"
-        )
+        # Fall back to defaults
+        if not subject_tpl:
+            defaults = DEFAULT_TEMPLATES.get(template_type, DEFAULT_TEMPLATES[EmailTemplateType.CALL_SUMMARY.value])
+            subject_tpl = defaults["subject_template"]
+            html_tpl = defaults["html_body"]
+            text_tpl = defaults["text_body"]
 
-        text = (
-            f"{urgency_prefix}New Call Created\n\n"
-            f"Caller Phone: {caller_phone}\n"
-            f"Duration: {duration}\n"
-            f"Primary Tag: {_tag_label(primary_tag)}\n"
-            f"All Tags: {', '.join(tags) if tags else 'None'}\n"
-            f"Summary: {summary}\n\n"
-            "Appointment Confirmation\n"
-            f"Patient: {appointment_patient}\n"
-            f"Date/Time: {appointment_dt}\n"
-            f"Provider: {appointment_provider}\n"
-            f"Service: {appointment_service}\n"
-        )
+        # Render templates
+        render = EmailTemplateService.render
+        subject = render(subject_tpl, variables)
+        html = render(html_tpl, variables)
+        text = render(text_tpl, variables)
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -200,3 +169,30 @@ class EmailNotificationService:
             if response.status_code >= 400:
                 logger.error("Resend send failed: status=%s body=%s", response.status_code, response.text[:500])
                 response.raise_for_status()
+
+    # Backwards-compatible alias for existing callers
+    async def send_call_created_notification(
+        self,
+        *,
+        recipients: list[str],
+        payload: dict[str, Any],
+        idempotency_key: str,
+    ) -> None:
+        """Legacy method — routes to the correct template based on payload."""
+        is_urgent = bool(payload.get("is_urgent"))
+        # Check if this is an appointment-booked call
+        primary_tag = (payload.get("primary_tag") or "").lower().replace(" ", "_")
+        is_appointment = primary_tag == "appointment_booked"
+
+        template_type = resolve_template_type(
+            is_urgent=is_urgent,
+            is_appointment_booked=is_appointment,
+        )
+
+        await self.send_notification(
+            recipients=recipients,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            template_type=template_type,
+            institution_id=payload.get("institution_id"),
+        )

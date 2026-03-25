@@ -34,6 +34,7 @@ import {
     Shield,
     ShieldCheck,
     MessageSquare,
+    Mail,
     Moon,
     Sun,
     Bell,
@@ -301,6 +302,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         <span>Notifications</span>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
+                                <NavItem
+                                    item={{
+                                        title: "Email Templates",
+                                        url: "/institution-admin/email-templates",
+                                        icon: Mail,
+                                    }}
+                                    isActive={location.pathname === "/institution-admin/email-templates" || location.pathname.startsWith("/institution-admin/email-templates")}
+                                />
                                 <NavItem
                                     item={{
                                         title: "Settings",

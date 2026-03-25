@@ -205,6 +205,7 @@ async def _send_call_notification_async(
 
         payload = {
             "call_id": call.id,
+            "institution_id": institution_id,
             "location_name": location_name,
             "caller_phone_masked": mask_phone(call.contact.phone if call.contact else None),
             "duration_seconds": call.call_duration_seconds,
