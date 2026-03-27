@@ -21,7 +21,7 @@ import {
 } from "@/lib/institution-portal-api"
 import { formatRoleLabel } from "@/lib/utils"
 
-type InstitutionInviteRole = "INSTITUTION_ADMIN" | "LOCATION_ADMIN"
+type InstitutionInviteRole = "INSTITUTION_ADMIN" | "LOCATION_ADMIN" | "STAFF"
 
 export default function InstitutionUserManagement() {
     const INVITE_COOLDOWN_SECONDS = 30
@@ -62,8 +62,8 @@ export default function InstitutionUserManagement() {
     async function handleInviteUser() {
         if (!inviteEmail.trim()) return
         if (inviteCooldown.isActive) return
-        if (inviteRole === "LOCATION_ADMIN" && !inviteLocationSlug) {
-            toast.error("Select a location for location admin invite")
+        if ((inviteRole === "LOCATION_ADMIN" || inviteRole === "STAFF") && !inviteLocationSlug) {
+            toast.error("Select a location for this role")
             return
         }
 
@@ -72,7 +72,7 @@ export default function InstitutionUserManagement() {
             await inviteInstitutionUser({
                 email: inviteEmail.trim(),
                 role: inviteRole,
-                location_slug: inviteRole === "LOCATION_ADMIN" ? inviteLocationSlug : undefined,
+                location_slug: inviteRole !== "INSTITUTION_ADMIN" ? inviteLocationSlug : undefined,
             })
             toast.success("Invite sent")
             inviteCooldown.start()
@@ -141,7 +141,7 @@ export default function InstitutionUserManagement() {
                         Users
                     </CardTitle>
                     <CardDescription>
-                        Institution admins have institution-wide access. Location admins are restricted to one location.
+                        Institution admins have institution-wide access. Location admins and staff are assigned to a specific location.
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -168,6 +168,7 @@ export default function InstitutionUserManagement() {
                                 <SelectContent>
                                     <SelectItem value="INSTITUTION_ADMIN">Institution Admin</SelectItem>
                                     <SelectItem value="LOCATION_ADMIN">Location Admin</SelectItem>
+                                    <SelectItem value="STAFF">Staff</SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>
@@ -177,6 +178,7 @@ export default function InstitutionUserManagement() {
                                 value={inviteLocationSlug || undefined}
                                 onValueChange={setInviteLocationSlug}
                                 disabled={inviteRole === "INSTITUTION_ADMIN"}
+                                required={inviteRole !== "INSTITUTION_ADMIN"}
                             >
                                 <SelectTrigger>
                                     <SelectValue placeholder="Required for location roles" />

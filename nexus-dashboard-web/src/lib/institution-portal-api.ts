@@ -171,7 +171,7 @@ export async function listInstitutionUsers(): Promise<InstitutionUserRow[]> {
 
 export async function inviteInstitutionUser(payload: {
     email: string
-    role: "INSTITUTION_ADMIN" | "LOCATION_ADMIN"
+    role: "INSTITUTION_ADMIN" | "LOCATION_ADMIN" | "STAFF"
     location_slug?: string
 }): Promise<void> {
     await api.post("/institution/users/invite", payload)

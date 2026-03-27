@@ -197,6 +197,7 @@ def _validate_invite_role(role: str) -> str:
     allowed = {
         UserRole.INSTITUTION_ADMIN.value,
         UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
     }
     if normalized not in allowed:
         raise HTTPException(
@@ -883,7 +884,7 @@ async def invite_institution_user(
     Invite institution users with role + optional location assignment.
 
     - INSTITUTION_ADMIN: no location assignment
-    - LOCATION_ADMIN: location_slug required
+    - LOCATION_ADMIN / STAFF: location_slug required
     """
     if not current_user.institution_id:
         raise HTTPException(
@@ -903,11 +904,11 @@ async def invite_institution_user(
             )
 
         location_id: str | None = None
-        if role == UserRole.LOCATION_ADMIN.value:
+        if role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
             if not data.location_slug:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="location_slug is required for LOCATION_ADMIN",
+                    detail=f"location_slug is required for {role}",
                 )
             location = (
                 await session.execute(
