@@ -16,10 +16,13 @@ from src.app.database import get_db_session, init_database, is_database_initiali
 from src.app.models.call import Call, CallStatus
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import InviteStatus, User, UserRole
+from src.app.models.external_notification_recipient import ExternalNotificationRecipient
+from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
 from src.app.services.email_notification_service import (
     EmailNotificationService,
     mask_phone,
     redact_patient_name,
+    resolve_template_type,
 )
 from src.app.worker import celery_app
 
@@ -124,7 +127,12 @@ def _extract_appointment_data(
     }
 
 
-async def _resolve_recipients(session, institution_id: str, location_id: str | None) -> list[str]:
+async def _resolve_recipients(
+    session,
+    institution_id: str,
+    location_id: str | None,
+    template_type: str | None = None,
+) -> list[str]:
     filters = [
         User.institution_id == institution_id,
         User.is_active.is_(True),
@@ -141,10 +149,33 @@ async def _resolve_recipients(session, institution_id: str, location_id: str | N
             )
         )
 
-    result = await session.execute(
-        select(User.email).where(*filters).where(or_(*role_scope))
-    )
+    # Build the platform user query
+    user_query = select(User.email).where(*filters).where(or_(*role_scope))
+
+    # Exclude users who opted out of this template type
+    if template_type:
+        opted_out = (
+            select(UserEmailNotificationPreference.user_id).where(
+                UserEmailNotificationPreference.template_type == template_type,
+                UserEmailNotificationPreference.is_enabled.is_(False),
+            )
+        ).scalar_subquery()
+        user_query = user_query.where(User.id.not_in(opted_out))
+
+    result = await session.execute(user_query)
     db_emails = [row[0] for row in result.all() if row and row[0]]
+
+    # Add external recipients for this template type
+    if template_type:
+        ext_result = await session.execute(
+            select(ExternalNotificationRecipient.email).where(
+                ExternalNotificationRecipient.institution_id == institution_id,
+                ExternalNotificationRecipient.template_type == template_type,
+                ExternalNotificationRecipient.is_active.is_(True),
+            )
+        )
+        db_emails.extend(row[0] for row in ext_result.all() if row and row[0])
+
     fallback = _split_csv(settings.resend_alert_recipients)
     return _unique_emails(db_emails + fallback)
 
@@ -185,14 +216,18 @@ async def _send_call_notification_async(
             if location:
                 location_name = location.name
 
-        recipients = await _resolve_recipients(session, institution_id, location_id)
-        if not recipients:
-            logger.warning("No recipients configured for call notification (institution=%s)", institution_id)
-            return
-
+        # Determine template type BEFORE resolving recipients (needed for preference filtering)
         tags = _split_csv(call.call_tags)
         summary = (call.summary or "").strip() or None
         urgent = _is_urgent(call.call_status, tags)
+        primary_tag = (call.call_status or "").lower().replace(" ", "_")
+        is_appointment = primary_tag == "appointment_booked"
+        template_type = resolve_template_type(is_urgent=urgent, is_appointment_booked=is_appointment)
+
+        recipients = await _resolve_recipients(session, institution_id, location_id, template_type)
+        if not recipients:
+            logger.warning("No recipients configured for call notification (institution=%s)", institution_id)
+            return
 
         analysis = analysis_snapshot or {}
         custom = analysis.get("custom_analysis_data") or {}
@@ -221,10 +256,12 @@ async def _send_call_notification_async(
 
         idempotency_key = f"call-notification:{call.id}"
         sender = EmailNotificationService()
-        await sender.send_call_created_notification(
+        await sender.send_notification(
             recipients=recipients,
             payload=payload,
             idempotency_key=idempotency_key,
+            template_type=template_type,
+            institution_id=institution_id,
         )
 
         logger.info(

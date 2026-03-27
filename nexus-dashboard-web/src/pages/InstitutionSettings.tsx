@@ -8,6 +8,7 @@ import {
     Edit,
     Plus,
     Trash2,
+    Bell,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -45,6 +46,16 @@ import {
     type InstitutionPortalLocation,
     type TransferNumber,
 } from "@/lib/institution-portal-api"
+import {
+    listExternalRecipients,
+    addExternalRecipient,
+    updateExternalRecipient,
+    deleteExternalRecipient,
+    type ExternalRecipient,
+} from "@/lib/notification-settings-api"
+import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
 
 interface TransferRow {
     id: string
@@ -117,6 +128,17 @@ export default function InstitutionSettings() {
     const [editDepartment, setEditDepartment] = useState("")
     const [editTransferNumberError, setEditTransferNumberError] = useState("")
 
+    // External notification recipients state
+    const [extRecipients, setExtRecipients] = useState<ExternalRecipient[]>([])
+    const [extRecipientsLoading, setExtRecipientsLoading] = useState(false)
+    const [extEmail, setExtEmail] = useState("")
+    const [extTypes, setExtTypes] = useState<Record<string, boolean>>({
+        call_summary: true,
+        urgent_alert: true,
+        appointment_confirmation: true,
+    })
+    const [extSaving, setExtSaving] = useState(false)
+
     const loadData = useCallback(async () => {
         setLoading(true)
         try {
@@ -172,6 +194,71 @@ export default function InstitutionSettings() {
     useEffect(() => {
         void loadTransferNumbers()
     }, [loadTransferNumbers])
+
+    const loadExtRecipients = useCallback(async () => {
+        setExtRecipientsLoading(true)
+        try {
+            const rows = await listExternalRecipients()
+            setExtRecipients(rows)
+        } catch {
+            toast.error("Failed to load external recipients")
+        } finally {
+            setExtRecipientsLoading(false)
+        }
+    }, [])
+
+    useEffect(() => {
+        void loadExtRecipients()
+    }, [loadExtRecipients])
+
+    async function handleAddExtRecipient() {
+        const email = extEmail.trim().toLowerCase()
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            toast.error("Enter a valid email address")
+            return
+        }
+        const selectedTypes = Object.entries(extTypes)
+            .filter(([, v]) => v)
+            .map(([k]) => k)
+        if (selectedTypes.length === 0) {
+            toast.error("Select at least one notification type")
+            return
+        }
+        setExtSaving(true)
+        try {
+            await addExternalRecipient({ email, template_types: selectedTypes })
+            setExtEmail("")
+            setExtTypes({ call_summary: true, urgent_alert: true, appointment_confirmation: true })
+            await loadExtRecipients()
+            toast.success(`Added ${email} as notification recipient`)
+        } catch (err: unknown) {
+            const message = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+            toast.error(message || "Failed to add recipient")
+        } finally {
+            setExtSaving(false)
+        }
+    }
+
+    async function handleToggleExtRecipient(id: string, currentActive: boolean) {
+        try {
+            await updateExternalRecipient(id, { is_active: !currentActive })
+            setExtRecipients((prev) =>
+                prev.map((r) => (r.id === id ? { ...r, is_active: !currentActive } : r)),
+            )
+        } catch {
+            toast.error("Failed to update recipient")
+        }
+    }
+
+    async function handleDeleteExtRecipient(id: string) {
+        try {
+            await deleteExternalRecipient(id)
+            setExtRecipients((prev) => prev.filter((r) => r.id !== id))
+            toast.success("Recipient removed")
+        } catch {
+            toast.error("Failed to delete recipient")
+        }
+    }
 
     async function handleSaveROIConfig() {
         setRoiSaving(true)
@@ -616,6 +703,104 @@ export default function InstitutionSettings() {
                     </CardContent>
                 </Card>
             </div>
+
+            {/* External Notification Recipients */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Bell className="h-5 w-5" />
+                        External Notification Recipients
+                    </CardTitle>
+                    <CardDescription>
+                        Add email addresses for people outside the platform who should receive notification emails.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    {/* Add form */}
+                    <div className="flex flex-col gap-3 p-4 border border-border rounded-lg bg-muted/30">
+                        <div className="flex gap-2">
+                            <Input
+                                type="email"
+                                placeholder="email@example.com"
+                                value={extEmail}
+                                onChange={(e) => setExtEmail(e.target.value)}
+                                className="flex-1"
+                            />
+                            <Button onClick={handleAddExtRecipient} disabled={extSaving || !extEmail.trim()}>
+                                {extSaving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Plus className="h-4 w-4 mr-1" />}
+                                Add
+                            </Button>
+                        </div>
+                        <div className="flex items-center gap-4 text-sm">
+                            <span className="text-muted-foreground">Notification types:</span>
+                            {([
+                                ["call_summary", "Call Summary"],
+                                ["urgent_alert", "Urgent Alert"],
+                                ["appointment_confirmation", "Appointment Confirmation"],
+                            ] as const).map(([key, label]) => (
+                                <label key={key} className="flex items-center gap-1.5 cursor-pointer">
+                                    <Checkbox
+                                        checked={extTypes[key]}
+                                        onCheckedChange={(checked) =>
+                                            setExtTypes((prev) => ({ ...prev, [key]: !!checked }))
+                                        }
+                                    />
+                                    <span>{label}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Table */}
+                    {extRecipientsLoading ? (
+                        <div className="flex justify-center py-4">
+                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                        </div>
+                    ) : extRecipients.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">
+                            No external recipients configured. Platform users receive notifications based on their role automatically.
+                        </p>
+                    ) : (
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Email</TableHead>
+                                    <TableHead>Type</TableHead>
+                                    <TableHead>Active</TableHead>
+                                    <TableHead className="w-[80px]" />
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {extRecipients.map((r) => (
+                                    <TableRow key={r.id}>
+                                        <TableCell className="font-mono text-sm">{r.email}</TableCell>
+                                        <TableCell>
+                                            <Badge variant="outline" className="text-xs">
+                                                {r.template_type.replace(/_/g, " ")}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Switch
+                                                checked={r.is_active}
+                                                onCheckedChange={() => handleToggleExtRecipient(r.id, r.is_active)}
+                                            />
+                                        </TableCell>
+                                        <TableCell>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => handleDeleteExtRecipient(r.id)}
+                                            >
+                                                <Trash2 className="h-4 w-4 text-muted-foreground" />
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    )}
+                </CardContent>
+            </Card>
 
             {/* Edit Modal */}
             <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>

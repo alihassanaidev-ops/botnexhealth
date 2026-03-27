@@ -21,7 +21,9 @@ from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.models.email_template import EmailTemplate, EmailTemplateType
+from src.app.models.external_notification_recipient import ExternalNotificationRecipient
 from src.app.models.notification import Notification, NotificationType
+from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
 from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 
@@ -54,8 +56,10 @@ __all__ = [
     "RetellWebhookStatus",
     "EmailTemplate",
     "EmailTemplateType",
+    "ExternalNotificationRecipient",
     "Notification",
     "NotificationType",
+    "UserEmailNotificationPreference",
     "SmsHistoryLog",
     "SmsStatus",
 ]

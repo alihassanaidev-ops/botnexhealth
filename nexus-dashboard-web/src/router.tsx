@@ -28,6 +28,7 @@ const InstitutionUserManagement = lazy(() => import("./pages/InstitutionUserMana
 const InstitutionSettings = lazy(() => import("./pages/InstitutionSettings"));
 const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
+const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
 
 function LazyFallback() {
     return (
@@ -107,6 +108,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <S><EmailTemplates /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "notification-preferences",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <S><NotificationPreferences /></S>
                             </RoleGuard>
                         ),
                     },
