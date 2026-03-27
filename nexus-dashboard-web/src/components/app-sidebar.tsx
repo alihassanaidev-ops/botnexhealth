@@ -303,14 +303,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         <span>Notifications</span>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
-                                <NavItem
-                                    item={{
-                                        title: "Email Templates",
-                                        url: "/institution-admin/email-templates",
-                                        icon: Mail,
-                                    }}
-                                    isActive={location.pathname === "/institution-admin/email-templates" || location.pathname.startsWith("/institution-admin/email-templates")}
-                                />
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Email Templates",
+                                            url: "/institution-admin/email-templates",
+                                            icon: Mail,
+                                        }}
+                                        isActive={location.pathname === "/institution-admin/email-templates" || location.pathname.startsWith("/institution-admin/email-templates")}
+                                    />
+                                )}
                                 <NavItem
                                     item={{
                                         title: "Email Preferences",
@@ -319,14 +321,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     }}
                                     isActive={location.pathname === "/notification-preferences"}
                                 />
-                                <NavItem
-                                    item={{
-                                        title: "Settings",
-                                        url: "/institution-admin/settings",
-                                        icon: Settings,
-                                    }}
-                                    isActive={location.pathname === "/institution-admin/settings" || location.pathname.startsWith("/institution-admin/settings")}
-                                />
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Settings",
+                                            url: "/institution-admin/settings",
+                                            icon: Settings,
+                                        }}
+                                        isActive={location.pathname === "/institution-admin/settings" || location.pathname.startsWith("/institution-admin/settings")}
+                                    />
+                                )}
                             </SidebarMenu>
                         </SidebarGroupContent>
                     </SidebarGroup>

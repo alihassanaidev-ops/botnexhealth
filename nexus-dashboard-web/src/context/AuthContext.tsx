@@ -291,7 +291,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     setUser(null);
                     navigate("/login");
                 }
-            } catch (error) {
+            } catch {
                 if (import.meta.env.DEV) console.warn("Auth state change handler failed");
             } finally {
                 setIsLoading(false);
