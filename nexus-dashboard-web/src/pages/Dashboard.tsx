@@ -40,6 +40,12 @@ import { STATUS_OPTIONS } from "@/lib/constants"
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = 30_000
+const EMPTY_AGGREGATE_METRICS = {
+    appointments_booked_month: 0,
+    new_patients_month: 0,
+    booking_rate_month: 0,
+    avg_call_duration_seconds: 0,
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -439,30 +445,11 @@ export default function Dashboard() {
                         }
                     }
                 } catch {
-                    setAggregateMetrics({
-                        appointments_booked_month: 0,
-                        new_patients_month: 0,
-                        booking_rate_month: 0,
-                        avg_call_duration_seconds: 0,
-                    })
+                    setAggregateMetrics({ ...EMPTY_AGGREGATE_METRICS })
                 }
             } else {
-                try {
-                    const aggregateData = await getAggregateDashboard()
-                    setAggregateMetrics({
-                        appointments_booked_month: aggregateData.summary.appointments_booked_month,
-                        new_patients_month: aggregateData.summary.new_patients_month,
-                        booking_rate_month: aggregateData.summary.booking_rate_month,
-                        avg_call_duration_seconds: aggregateData.summary.avg_call_duration_seconds,
-                    })
-                } catch {
-                    setAggregateMetrics({
-                        appointments_booked_month: 0,
-                        new_patients_month: 0,
-                        booking_rate_month: 0,
-                        avg_call_duration_seconds: 0,
-                    })
-                }
+                setAggregateMetrics({ ...EMPTY_AGGREGATE_METRICS })
+                setLocations([])
             }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load dashboard"

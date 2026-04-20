@@ -114,6 +114,14 @@ TAG_LABELS: dict[str, str] = {
 }
 
 
+def _count_calls(*conditions):
+    """Return a COUNT(calls.id) expression with optional filtered conditions."""
+    count_expr = func.count(Call.id)
+    if conditions:
+        return count_expr.filter(*conditions)
+    return count_expr
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 
@@ -172,23 +180,16 @@ async def get_dashboard_summary(
             extra_conditions.append(Call.agent_used == scoped_location.retell_agent_id)
 
         # ── Volume counts ─────────────────────────────────────────────────
-        base = select(func.count(Call.id)).where(Call.institution_id == institution_id, *extra_conditions)
-
-        today_count: int = (
-            await session.execute(base.where(Call.call_date == today))
-        ).scalar_one()
-
-        week_count: int = (
-            await session.execute(base.where(Call.call_date >= week_start))
-        ).scalar_one()
-
-        month_count: int = (
-            await session.execute(base.where(Call.call_date >= month_start))
-        ).scalar_one()
-
-        all_time_count: int = (
-            await session.execute(base)
-        ).scalar_one()
+        volume_row = (
+            await session.execute(
+                select(
+                    _count_calls(Call.call_date == today).label("today_count"),
+                    _count_calls(Call.call_date >= week_start).label("week_count"),
+                    _count_calls(Call.call_date >= month_start).label("month_count"),
+                    _count_calls().label("all_time_count"),
+                ).where(Call.institution_id == institution_id, *extra_conditions)
+            )
+        ).one()
 
         # ── Tag counts (by primary call_status) ───────────────────────────
         tag_rows = (
@@ -242,10 +243,10 @@ async def get_dashboard_summary(
 
         response = DashboardSummary(
             call_volume=CallVolume(
-                today=today_count,
-                this_week=week_count,
-                this_month=month_count,
-                all_time=all_time_count,
+                today=int(volume_row.today_count or 0),
+                this_week=int(volume_row.week_count or 0),
+                this_month=int(volume_row.month_count or 0),
+                all_time=int(volume_row.all_time_count or 0),
             ),
             tag_counts=tag_counts,
             callback_queue=callback_queue,
@@ -298,52 +299,48 @@ async def get_aggregate_dashboard(
         ).scalars().all()
 
         # Institution-wide summary cards
-        base = select(func.count(Call.id)).where(Call.institution_id == institution_id)
-        total_calls_today = (await session.execute(base.where(Call.call_date == today))).scalar_one()
-        total_calls_week = (await session.execute(base.where(Call.call_date >= week_start))).scalar_one()
-        total_calls_month = (await session.execute(base.where(Call.call_date >= month_start))).scalar_one()
-        total_calls_all_time = (await session.execute(base)).scalar_one()
-
-        appointments_booked_month = (
+        summary_row = (
             await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
-                    Call.call_date >= month_start,
-                )
+                select(
+                    _count_calls(Call.call_date == today).label("total_calls_today"),
+                    _count_calls(Call.call_date >= week_start).label("total_calls_week"),
+                    _count_calls(Call.call_date >= month_start).label("total_calls_month"),
+                    _count_calls().label("total_calls_all_time"),
+                    _count_calls(
+                        and_(
+                            Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
+                            Call.call_date >= month_start,
+                        )
+                    ).label("appointments_booked_month"),
+                    _count_calls(
+                        and_(
+                            Call.is_new_patient.is_(True),
+                            Call.call_date >= month_start,
+                        )
+                    ).label("new_patients_month"),
+                    _count_calls(
+                        and_(
+                            Call.call_status == CallStatus.NEEDS_CALLBACK.value,
+                            Call.callback_resolved.is_(False),
+                        )
+                    ).label("open_callbacks"),
+                    func.coalesce(func.avg(Call.call_duration_seconds), 0.0).label("avg_call_duration_seconds"),
+                ).where(Call.institution_id == institution_id)
             )
-        ).scalar_one()
-        new_patients_month = (
-            await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.is_new_patient.is_(True),
-                    Call.call_date >= month_start,
-                )
-            )
-        ).scalar_one()
-        open_callbacks = (
-            await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.call_status == CallStatus.NEEDS_CALLBACK.value,
-                    Call.callback_resolved.is_(False),
-                )
-            )
-        ).scalar_one()
+        ).one()
+        total_calls_today = int(summary_row.total_calls_today or 0)
+        total_calls_week = int(summary_row.total_calls_week or 0)
+        total_calls_month = int(summary_row.total_calls_month or 0)
+        total_calls_all_time = int(summary_row.total_calls_all_time or 0)
+        appointments_booked_month = int(summary_row.appointments_booked_month or 0)
+        new_patients_month = int(summary_row.new_patients_month or 0)
+        open_callbacks = int(summary_row.open_callbacks or 0)
         booking_rate_month = (
             round((appointments_booked_month / total_calls_month) * 100, 2)
             if total_calls_month
             else 0.0
         )
-        avg_call_duration_seconds = (
-            await session.execute(
-                select(func.avg(Call.call_duration_seconds)).where(
-                    Call.institution_id == institution_id,
-                    Call.call_duration_seconds.isnot(None),
-                )
-            )
-        ).scalar_one() or 0.0
+        avg_call_duration_seconds = float(summary_row.avg_call_duration_seconds or 0.0)
 
         # Institution-wide tag distribution
         tag_rows = (
