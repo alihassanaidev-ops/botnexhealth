@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import secrets
+from binascii import Error as BinasciiError
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -14,6 +15,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
+from src.app.security import derive_secret_key
 
 
 # =============================================================================
@@ -26,26 +28,34 @@ from src.app.database import Base
 # =============================================================================
 
 def _get_encryption_key() -> bytes:
-    """Get 32-byte AES-256 encryption key from Settings.
-
-    Uses the Settings object (which reads from .env, env vars, and Docker secrets)
-    rather than os.getenv() directly. os.getenv() does NOT read .env files —
-    pydantic-settings does, but only into the Settings instance.
-    """
+    """Get a stable 32-byte AES-256 encryption key from Settings."""
     from src.app.config import get_settings
 
-    key_b64 = get_settings().encryption_key
-    if not key_b64:
+    key_material = get_settings().encryption_key
+    if not key_material:
         raise RuntimeError("ENCRYPTION_KEY not set in environment or .env file")
 
-    key = base64.urlsafe_b64decode(key_b64)
-    if len(key) != 32:
-        raise RuntimeError(
-            f"ENCRYPTION_KEY must be 32 bytes (256 bits) for AES-256. "
-            f"Got {len(key)} bytes. Generate with: "
-            f"python -c \"import secrets, base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())\""
-        )
-    return key
+    decoded_key = _decode_base64_key(key_material)
+    if decoded_key and len(decoded_key) == 32:
+        return decoded_key
+
+    raw_key = key_material.encode("utf-8")
+    if len(raw_key) == 32:
+        return raw_key
+
+    return derive_secret_key(
+        purpose="aes-encryption-key-v1",
+        secret=key_material,
+        length=32,
+    )
+
+
+def _decode_base64_key(key_material: str) -> bytes | None:
+    padded = key_material + ("=" * (-len(key_material) % 4))
+    try:
+        return base64.urlsafe_b64decode(padded)
+    except (BinasciiError, ValueError):
+        return None
 
 
 def encrypt_value(value: str | None) -> str | None:

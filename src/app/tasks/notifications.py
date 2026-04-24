@@ -18,6 +18,7 @@ from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import InviteStatus, User, UserRole
 from src.app.models.external_notification_recipient import ExternalNotificationRecipient
 from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
+from src.app.services.event_bus import publish_event
 from src.app.services.email_notification_service import (
     EmailNotificationService,
     mask_phone,
@@ -45,6 +46,14 @@ def _unique_emails(emails: list[str]) -> list[str]:
         seen.add(email)
         out.append(email)
     return out
+
+
+def _sse_events_for_new_call(call_status: str | None) -> list[str]:
+    """Return the SSE event types to publish when a new call is processed."""
+    events = ["calls_updated", "dashboard_updated"]
+    if (call_status or "").lower() == CallStatus.NEEDS_CALLBACK.value:
+        events.append("callbacks_updated")
+    return events
 
 
 def _is_urgent(primary_tag: str | None, tags: list[str]) -> bool:
@@ -136,6 +145,7 @@ async def _resolve_recipients(
     filters = [
         User.institution_id == institution_id,
         User.is_active.is_(True),
+        User.deleted_at.is_(None),
         User.invite_status == InviteStatus.ACCEPTED.value,
     ]
 
@@ -271,6 +281,18 @@ async def _send_call_notification_async(
             len(recipients),
             urgent,
         )
+
+    for event_type in _sse_events_for_new_call(call.call_status):
+        try:
+            publish_event(institution_id, event_type)
+        except Exception:
+            logger.warning(
+                "Failed to publish %s SSE event: call=%s institution=%s",
+                event_type,
+                call_id,
+                institution_id,
+                exc_info=True,
+            )
 
 
 @celery_app.task(

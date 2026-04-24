@@ -1,14 +1,15 @@
 """
 User model for authentication and role management.
 
-The User.id is the Supabase auth.users.id (UUID) — single source of truth.
-It is set explicitly during user creation, not auto-generated.
+The application owns User IDs. Auth provider integration must not be the
+source of truth for primary keys in our database.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -38,11 +39,13 @@ class User(Base):
     User model for authentication.
 
     Fields:
-    - id: Supabase auth.users.id (UUID) — set explicitly, not auto-generated
+    - id: Application-owned UUID
     - email: User's email address (login credential)
     - role: User role (SUPER_ADMIN, INSTITUTION_ADMIN, LOCATION_ADMIN, STAFF)
     - institution_id: Institution this user belongs to (nullable for SUPER_ADMIN)
     - location_id: Location this user is scoped to (nullable for INSTITUTION_ADMIN)
+    - password_hash: Bcrypt password hash for local authentication
+    - invite_token_hash/password_reset_token_hash: hashed one-time tokens
     - is_active: Whether the user can log in
     - failed_login_attempts: Consecutive failed login attempts since last success
     - locked_until: Account locked until this UTC timestamp (None = not locked)
@@ -53,6 +56,7 @@ class User(Base):
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         primary_key=True,
+        default=lambda: str(uuid4()),
     )
 
     email: Mapped[str] = mapped_column(
@@ -85,6 +89,41 @@ class User(Base):
         default=InviteStatus.PENDING.value,
         nullable=False,
         server_default="PENDING",
+    )
+
+    password_hash: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    password_set_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
+
+    invite_token_hash: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        index=True,
+    )
+
+    invite_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
+
+    password_reset_token_hash: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        index=True,
+    )
+
+    password_reset_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
     )
 
     invite_cooldown_until: Mapped[datetime | None] = mapped_column(
@@ -125,6 +164,13 @@ class User(Base):
         default=None,
     )
 
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+        index=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -136,6 +182,11 @@ class User(Base):
         if self.locked_until is None:
             return False
         return datetime.now(timezone.utc) < self.locked_until
+
+    def mark_deleted(self) -> None:
+        """Soft-delete a user account and revoke interactive access."""
+        self.is_active = False
+        self.deleted_at = datetime.now(timezone.utc)
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email}, role={self.role})>"

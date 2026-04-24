@@ -77,7 +77,11 @@ class AuditAction(str, Enum):
 
     # Auth operations
     LOGIN = "LOGIN"
+    PASSWORD_SET = "PASSWORD_SET"
+    PASSWORD_RESET_REQUEST = "PASSWORD_RESET_REQUEST"
+    PASSWORD_RESET_COMPLETE = "PASSWORD_RESET_COMPLETE"
     ACCOUNT_UNLOCK = "ACCOUNT_UNLOCK"
+    USER_REINVITED = "USER_REINVITED"
 
 
 class AuditOutcome(str, Enum):
@@ -169,6 +173,18 @@ class AuditLog(Base):
         nullable=True,
         index=True  # For institution-scoped queries
     )
+
+    # Optional: Acting user and location for direct filtering without JSON metadata scans.
+    user_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        nullable=True,
+        index=True,
+    )
+    location_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        nullable=True,
+        index=True,
+    )
     
     def __repr__(self) -> str:
         return (
@@ -189,6 +205,8 @@ class AuditLog(Base):
         outcome: AuditOutcome | str,
         audit_metadata: dict[str, Any] | None = None,
         institution_id: str | None = None,
+        user_id: str | None = None,
+        location_id: str | None = None,
     ) -> "AuditLog":
         """
         Factory method for creating audit log entries.
@@ -202,4 +220,6 @@ class AuditLog(Base):
             outcome=outcome.value if isinstance(outcome, AuditOutcome) else outcome,
             audit_metadata=audit_metadata,
             institution_id=institution_id,
+            user_id=user_id,
+            location_id=location_id,
         )

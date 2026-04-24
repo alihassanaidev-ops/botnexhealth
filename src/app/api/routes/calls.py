@@ -27,6 +27,7 @@ from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background
+from src.app.services.event_bus import publish_event
 
 logger = logging.getLogger(__name__)
 
@@ -477,4 +478,16 @@ async def resolve_callback(
             },
             institution_id=current_user.institution_id,
         )
+
+        try:
+            publish_event(current_user.institution_id, "callbacks_updated")
+            publish_event(current_user.institution_id, "dashboard_updated")
+            publish_event(current_user.institution_id, "calls_updated")
+        except Exception:
+            logger.warning(
+                "Failed to publish callback-resolution SSE events: call=%s institution=%s",
+                call_id,
+                current_user.institution_id,
+                exc_info=True,
+            )
         return _call_to_record(call)

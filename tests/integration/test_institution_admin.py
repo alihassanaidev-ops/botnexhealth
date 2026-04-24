@@ -12,6 +12,7 @@ from httpx import AsyncClient
 
 from src.app.api.deps import get_current_admin
 from src.app.main import app
+from src.app.models.audit_log import AuditAction
 from src.app.models.user import User, UserRole
 
 
@@ -37,8 +38,8 @@ async def test_create_institution_with_initial_admin(async_client: AsyncClient):
     with patch("src.app.api.routes.admin_institutions.get_db_session") as mock_get_db, patch(
         "src.app.api.routes.admin_institutions.InstitutionService"
     ) as MockInstitutionService, patch(
-        "src.app.api.routes.admin_institutions.SupabaseService"
-    ) as MockSupabaseService:
+        "src.app.api.routes.admin_institutions.UserInviteService"
+    ) as MockUserInviteService:
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_get_db.return_value.__aenter__.return_value = mock_session
@@ -60,14 +61,21 @@ async def test_create_institution_with_initial_admin(async_client: AsyncClient):
         )
         MockInstitutionService.return_value = mock_service
 
-        mock_supabase = MagicMock()
-        mock_response = MagicMock()
-        mock_response.user.id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-        mock_supabase.invite_user.return_value = mock_response
-        MockSupabaseService.return_value = mock_supabase
+        invited_user = User(
+            id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            email=payload["email"],
+            role=UserRole.INSTITUTION_ADMIN.value,
+            institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            is_active=True,
+            invite_status="PENDING",
+        )
+        mock_invite_service = MagicMock()
+        mock_invite_service.create_invited_user = AsyncMock(return_value=invited_user)
+        MockUserInviteService.return_value = mock_invite_service
+        MockUserInviteService.normalize_email.side_effect = lambda email: email.strip().lower()
 
         try:
-            response = await async_client.post("/admin/institutions", json=payload)
+            response = await async_client.post("/api/admin/institutions", json=payload)
         finally:
             app.dependency_overrides = {}
 
@@ -79,8 +87,67 @@ async def test_create_institution_with_initial_admin(async_client: AsyncClient):
     assert data["user"]["email"] == payload["email"]
     assert data["user"]["role"] == UserRole.INSTITUTION_ADMIN.value
 
-    mock_supabase.invite_user.assert_called_once()
-    invite_kwargs = mock_supabase.invite_user.call_args.kwargs
+    mock_invite_service.create_invited_user.assert_called_once()
+    invite_kwargs = mock_invite_service.create_invited_user.call_args.kwargs
     assert invite_kwargs["email"] == payload["email"]
     assert invite_kwargs["institution_id"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     assert invite_kwargs["role"] == UserRole.INSTITUTION_ADMIN.value
+
+
+@pytest.mark.asyncio
+async def test_admin_reinvite_institution_user_logs_reinvite_action(async_client: AsyncClient):
+    """SUPER_ADMIN reinvite should reuse the same user and emit USER_REINVITED."""
+    current_admin = User(
+        id="99999999-9999-9999-9999-999999999999",
+        email="super@example.com",
+        role=UserRole.SUPER_ADMIN.value,
+        is_active=True,
+    )
+    target_user = User(
+        id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        email="owner@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_admin] = lambda: current_admin
+
+    with patch("src.app.api.routes.admin_institutions.get_db_session") as mock_get_db, patch(
+        "src.app.api.routes.admin_institutions.InstitutionService"
+    ) as MockInstitutionService, patch(
+        "src.app.api.routes.admin_institutions.UserInviteService"
+    ) as MockUserInviteService, patch(
+        "src.app.api.routes.admin_institutions.log_audit_background"
+    ) as mock_log_audit:
+        mock_session = AsyncMock()
+        mock_get_db.return_value.__aenter__.return_value = mock_session
+
+        mock_service = AsyncMock()
+        mock_service.get_by_slug.return_value = SimpleNamespace(
+            id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            slug="scalenexus-dental",
+            is_active=True,
+        )
+        MockInstitutionService.return_value = mock_service
+        MockUserInviteService.normalize_email.side_effect = lambda email: email.strip().lower()
+
+        query_result = MagicMock()
+        query_result.scalar_one_or_none.return_value = target_user
+        mock_session.execute.return_value = query_result
+
+        mock_invite_service = MagicMock()
+        mock_invite_service.reinvite_user = AsyncMock(return_value=target_user)
+        MockUserInviteService.return_value = mock_invite_service
+
+        try:
+            response = await async_client.post(
+                "/api/admin/institutions/scalenexus-dental/reinvite",
+                json={"email": "owner@example.com"},
+            )
+        finally:
+            app.dependency_overrides = {}
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Invite re-sent to owner@example.com"
+    mock_invite_service.reinvite_user.assert_called_once_with(target_user)
+    assert mock_log_audit.call_args.kwargs["action"] == AuditAction.USER_REINVITED

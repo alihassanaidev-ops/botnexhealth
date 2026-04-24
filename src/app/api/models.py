@@ -643,6 +643,8 @@ class AuditLogResponse(BaseModel):
     id: str
     timestamp: datetime
     institution_id: str | None = None
+    user_id: str | None = None
+    location_id: str | None = None
     actor: str
     action: str
     target_resource: str

@@ -1,10 +1,11 @@
-import { Outlet, Navigate } from "react-router-dom";
+import { Outlet, Navigate, useLocation } from "react-router-dom";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
 import { useAuth } from "@/context/AuthContext"
 
 export default function DashboardWrapper() {
     const { user, isLoading } = useAuth();
+    const location = useLocation();
 
     if (isLoading) {
         return (
@@ -16,7 +17,7 @@ export default function DashboardWrapper() {
     }
 
     if (!user) {
-        return <Navigate to="/login" replace />;
+        return <Navigate to="/login" replace state={{ from: location }} />;
     }
 
     return (

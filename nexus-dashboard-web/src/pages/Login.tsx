@@ -22,7 +22,7 @@ const formSchema = z.object({
 })
 
 export default function Login() {
-    const { signInWithSupabase, requestPasswordReset } = useAuth()
+    const { signIn, requestPasswordReset } = useAuth()
     const [loading, setLoading] = useState(false)
     const [resetLoading, setResetLoading] = useState(false)
 
@@ -37,10 +37,9 @@ export default function Login() {
     async function onSubmit(values: z.infer<typeof formSchema>) {
         setLoading(true)
         try {
-            await signInWithSupabase(values.email, values.password);
-            // onAuthStateChange in AuthContext handles navigation after token exchange
+            await signIn(values.email, values.password)
         } catch {
-            // Error handled in AuthContext with toast
+            // AuthContext surfaces the error toast.
         } finally {
             setLoading(false)
         }
@@ -54,12 +53,10 @@ export default function Login() {
         setResetLoading(true);
         try {
             await requestPasswordReset(email);
-            // Generic success message avoids account enumeration.
             form.setValue("password", "");
             toast.success("If an account exists, a password reset email has been sent.");
         } catch (err: unknown) {
             const error = err as { message?: string };
-            // Keep surface minimal - Supabase message is usually actionable.
             form.setError("email", { message: error?.message || "Failed to send reset email" });
         } finally {
             setResetLoading(false);

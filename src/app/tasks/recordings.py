@@ -8,6 +8,7 @@ import boto3
 import httpx
 
 from src.app.config import settings
+from src.app.services.event_bus import publish_event
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -17,8 +18,6 @@ def _get_s3_client():
     return boto3.client(
         "s3",
         region_name=settings.aws_region,
-        aws_access_key_id=settings.aws_access_key_id,
-        aws_secret_access_key=settings.aws_secret_access_key,
     )
 
 
@@ -106,6 +105,16 @@ async def _upload_recording_async(
         key,
         len(audio_bytes),
     )
+
+    try:
+        publish_event(institution_id, "calls_updated")
+    except Exception:
+        logger.warning(
+            "Failed to publish calls_updated SSE event: call=%s institution=%s",
+            call_id,
+            institution_id,
+            exc_info=True,
+        )
 
 
 def generate_presigned_url(s3_url: str, expires_in: int = 3600) -> str | None:

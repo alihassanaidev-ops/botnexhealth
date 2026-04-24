@@ -6,63 +6,53 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+from jose import JWTError
 from sqlalchemy import select
 
-from src.app.config import settings
 from src.app.database import get_db_session
 from src.app.models.user import User, UserRole
+from src.app.services.auth import AuthService
+from src.app.services.refresh_token_service import RefreshTokenService
 
 # OAuth2 scheme for Swagger UI
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
 
 async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> User:
-    """
-    Validate JWT token and return current user.
-
-    Strategy 1 (primary): Decode local JWT — sub = user UUID.
-    Strategy 2 (fallback): Verify via Supabase API — for raw Supabase tokens
-                           (e.g. before token exchange on /auth/users/me).
-    """
+    """Validate JWT token and return current user."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    user_id: str | None = None
-
-    # Strategy 1: Decode local JWT (sub = UUID)
     try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm]
-        )
+        payload = AuthService.decode_access_token(token)
         user_id = payload.get("sub")
+        jti = payload.get("jti")
     except JWTError:
-        pass
-
-    # Strategy 2: Fallback to Supabase API verification
-    if not user_id:
-        from src.app.services.supabase_service import SupabaseService
-        try:
-            supabase_service = SupabaseService()
-            if supabase_service.client:
-                supabase_user = supabase_service.get_user_by_token(token)
-                if supabase_user:
-                    user_id = str(supabase_user.id)
-        except Exception:
-            pass
-
-    if not user_id:
         raise credentials_exception
 
-    # Look up by UUID (user.id = auth.users.id)
+    if not user_id or not jti:
+        raise credentials_exception
+
+    try:
+        if await RefreshTokenService.is_access_token_jti_revoked(jti):
+            raise credentials_exception
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication session store is unavailable",
+        ) from exc
+
     async with get_db_session() as session:
         result = await session.execute(
-            select(User).where(User.id == user_id)
+            select(User).where(
+                User.id == user_id,
+                User.deleted_at.is_(None),
+            )
         )
         user = result.scalar_one_or_none()
 

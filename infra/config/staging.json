@@ -1,0 +1,68 @@
+{
+  "appName": "nex-health",
+  "environmentName": "staging",
+  "account": "287553036543",
+  "region": "ca-central-1",
+  "appEnv": "staging",
+  "logLevel": "info",
+  "network": {
+    "vpcId": "vpc-0bed8eb67fa340f59"
+  },
+  "corsAllowedOrigins": [
+    "https://d1uhqlnfxonu18.cloudfront.net"
+  ],
+  "recordingsBucketName": "nex-health-staging-recordings",
+  "database": {
+    "name": "nexhealth",
+    "username": "nexhealth_admin",
+    "instanceType": "t3.micro",
+    "allocatedStorage": 20,
+    "maxAllocatedStorage": 100,
+    "multiAz": false,
+    "backupRetentionDays": 7,
+    "deletionProtection": false,
+    "engineMajorVersion": "16",
+    "engineFullVersion": "16.6"
+  },
+  "redis": {
+    "nodeType": "cache.t3.micro",
+    "engineVersion": "7.1",
+    "numNodeGroups": 1,
+    "replicasPerNodeGroup": 0,
+    "automaticFailoverEnabled": false,
+    "multiAzEnabled": false
+  },
+  "api": {
+    "cpu": 512,
+    "memoryMiB": 1024,
+    "desiredCount": 1,
+    "minCount": 1,
+    "maxCount": 2,
+    "containerPort": 8000
+  },
+  "worker": {
+    "cpu": 512,
+    "memoryMiB": 1024,
+    "desiredCount": 1,
+    "minCount": 1,
+    "maxCount": 2,
+    "command": [
+      "celery",
+      "-A",
+      "src.app.worker",
+      "worker",
+      "--loglevel=info"
+    ]
+  },
+  "frontend": {
+    "enabled": true
+  },
+  "externalSecrets": {
+    "NEXHEALTH_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/nexhealth-api-key-AjY7Um",
+    "RETELL_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/retell-api-secret-Q5QVaI",
+    "RESEND_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-api-key-3JaSHl",
+    "RESEND_FROM_EMAIL": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-from-email-A4umYM",
+    "TWILLIO_SID": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-sid-08rFL8",
+    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-api-secret-xfrJIi"
+  }
+}

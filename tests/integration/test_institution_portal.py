@@ -17,6 +17,7 @@ from src.app.api.deps import (
     get_current_location_admin,
 )
 from src.app.main import app
+from src.app.models.audit_log import AuditAction
 from src.app.models.user import User, UserRole, InviteStatus
 
 
@@ -49,7 +50,7 @@ async def test_get_my_institution_context_success(async_client: AsyncClient):
         MockInstitutionService.return_value = mock_service
 
         try:
-            response = await async_client.get("/institution/me")
+            response = await async_client.get("/api/institution/me")
         finally:
             app.dependency_overrides = {}
 
@@ -77,7 +78,7 @@ async def test_get_my_institution_context_requires_institution(async_client: Asy
 
     app.dependency_overrides[get_current_institution_or_location_user] = lambda: mock_user
     try:
-        response = await async_client.get("/institution/me")
+        response = await async_client.get("/api/institution/me")
     finally:
         app.dependency_overrides = {}
 
@@ -128,7 +129,7 @@ async def test_list_institution_users_success(async_client: AsyncClient):
         mock_session.execute.side_effect = [users_result, locs_result]
 
         try:
-            response = await async_client.get("/institution/users")
+            response = await async_client.get("/api/institution/users")
         finally:
             app.dependency_overrides = {}
 
@@ -163,7 +164,7 @@ async def test_invite_institution_user_rejects_staff_role(async_client: AsyncCli
 
         try:
             response = await async_client.post(
-                "/institution/users/invite",
+                "/api/institution/users/invite",
                 json={"email": "staff@clinic.com", "role": "STAFF"},
             )
         finally:
@@ -186,11 +187,12 @@ async def test_invite_institution_user_location_admin_success(async_client: Asyn
     app.dependency_overrides[get_current_institution_admin] = lambda: mock_user
 
     with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.institution_portal.SupabaseService"
-    ) as MockSupabaseService:
+        "src.app.api.routes.institution_portal.UserInviteService"
+    ) as MockUserInviteService:
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_get_db.return_value.__aenter__.return_value = mock_session
+        MockUserInviteService.normalize_email.side_effect = lambda email: email.strip().lower()
 
         actor_result = MagicMock()
         actor_result.scalar_one_or_none.return_value = mock_user
@@ -204,15 +206,21 @@ async def test_invite_institution_user_location_admin_success(async_client: Asyn
         )
         mock_session.execute.side_effect = [actor_result, existing_result, location_result]
 
-        mock_supabase = MagicMock()
-        mock_response = MagicMock()
-        mock_response.user.id = "44444444-4444-4444-4444-444444444444"
-        mock_supabase.invite_user.return_value = mock_response
-        MockSupabaseService.return_value = mock_supabase
+        invited_user = User(
+            id="44444444-4444-4444-4444-444444444444",
+            email="new-location-admin@clinic.com",
+            role=UserRole.LOCATION_ADMIN.value,
+            institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            location_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            is_active=True,
+        )
+        mock_invite_service = MagicMock()
+        mock_invite_service.create_invited_user = AsyncMock(return_value=invited_user)
+        MockUserInviteService.return_value = mock_invite_service
 
         try:
             response = await async_client.post(
-                "/institution/users/invite",
+                "/api/institution/users/invite",
                 json={
                     "email": "new-location-admin@clinic.com",
                     "role": "LOCATION_ADMIN",
@@ -225,8 +233,8 @@ async def test_invite_institution_user_location_admin_success(async_client: Asyn
     assert response.status_code == 201
     payload = response.json()
     assert payload["user_id"] == "44444444-4444-4444-4444-444444444444"
-    mock_supabase.invite_user.assert_called_once()
-    invite_kwargs = mock_supabase.invite_user.call_args.kwargs
+    mock_invite_service.create_invited_user.assert_called_once()
+    invite_kwargs = mock_invite_service.create_invited_user.call_args.kwargs
     assert invite_kwargs["email"] == "new-location-admin@clinic.com"
     assert invite_kwargs["role"] == UserRole.LOCATION_ADMIN.value
     assert invite_kwargs["location_id"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -247,13 +255,14 @@ async def test_location_admin_can_invite_staff_for_own_location(async_client: As
     app.dependency_overrides[get_current_location_admin] = lambda: mock_user
 
     with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.institution_portal.SupabaseService"
-    ) as MockSupabaseService, patch(
+        "src.app.api.routes.institution_portal.UserInviteService"
+    ) as MockUserInviteService, patch(
         "src.app.api.routes.institution_portal.InstitutionService"
     ) as MockInstitutionService:
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_get_db.return_value.__aenter__.return_value = mock_session
+        MockUserInviteService.normalize_email.side_effect = lambda email: email.strip().lower()
 
         mock_svc = AsyncMock()
         mock_svc.get_location_by_slug.return_value = SimpleNamespace(
@@ -269,23 +278,29 @@ async def test_location_admin_can_invite_staff_for_own_location(async_client: As
         existing_result.scalar_one_or_none.return_value = None
         mock_session.execute.side_effect = [actor_result, existing_result]
 
-        mock_supabase = MagicMock()
-        mock_response = MagicMock()
-        mock_response.user.id = "44444444-4444-4444-4444-444444444444"
-        mock_supabase.invite_user.return_value = mock_response
-        MockSupabaseService.return_value = mock_supabase
+        invited_user = User(
+            id="44444444-4444-4444-4444-444444444444",
+            email="staff@clinic.com",
+            role=UserRole.STAFF.value,
+            institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            location_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            is_active=True,
+        )
+        mock_invite_service = MagicMock()
+        mock_invite_service.create_invited_user = AsyncMock(return_value=invited_user)
+        MockUserInviteService.return_value = mock_invite_service
 
         try:
             response = await async_client.post(
-                "/institution/locations/downtown/invite-staff",
+                "/api/institution/locations/downtown/invite-staff",
                 json={"email": "staff@clinic.com"},
             )
         finally:
             app.dependency_overrides = {}
 
     assert response.status_code == 201
-    mock_supabase.invite_user.assert_called_once()
-    invite_kwargs = mock_supabase.invite_user.call_args.kwargs
+    mock_invite_service.create_invited_user.assert_called_once()
+    invite_kwargs = mock_invite_service.create_invited_user.call_args.kwargs
     assert invite_kwargs["email"] == "staff@clinic.com"
     assert invite_kwargs["role"] == UserRole.STAFF.value
     assert invite_kwargs["location_id"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -304,7 +319,9 @@ async def test_deactivate_institution_user_rejects_self(async_client: AsyncClien
     )
     app.dependency_overrides[get_current_institution_admin] = lambda: mock_user
     try:
-        response = await async_client.post("/institution/users/11111111-1111-1111-1111-111111111111/deactivate")
+        response = await async_client.post(
+            "/api/institution/users/11111111-1111-1111-1111-111111111111/deactivate"
+        )
     finally:
         app.dependency_overrides = {}
 
@@ -313,8 +330,50 @@ async def test_deactivate_institution_user_rejects_self(async_client: AsyncClien
 
 
 @pytest.mark.asyncio
+async def test_deactivate_institution_user_soft_deletes_target(async_client: AsyncClient):
+    """Institution admin deactivation should soft-delete the target user."""
+    mock_user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="admin@clinic.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        is_active=True,
+    )
+    target_user = User(
+        id="22222222-2222-2222-2222-222222222222",
+        email="staff@clinic.com",
+        role=UserRole.STAFF.value,
+        institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_institution_admin] = lambda: mock_user
+
+    with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db, patch(
+        "src.app.api.routes.institution_portal.log_audit_background"
+    ) as mock_log_audit:
+        mock_session = AsyncMock()
+        mock_get_db.return_value.__aenter__.return_value = mock_session
+
+        target_result = MagicMock()
+        target_result.scalar_one_or_none.return_value = target_user
+        mock_session.execute.return_value = target_result
+
+        try:
+            response = await async_client.post(
+                "/api/institution/users/22222222-2222-2222-2222-222222222222/deactivate"
+            )
+        finally:
+            app.dependency_overrides = {}
+
+    assert response.status_code == 200
+    assert target_user.is_active is False
+    assert target_user.deleted_at is not None
+    assert mock_log_audit.call_args.kwargs["action"] == AuditAction.LOCATION_USER_DELETE
+
+
+@pytest.mark.asyncio
 async def test_reinvite_institution_user_success(async_client: AsyncClient):
-    """Reinvite replaces auth account and returns new user UUID."""
+    """Reinvite rotates local invite state and keeps the same user UUID."""
     mock_user = User(
         id="11111111-1111-1111-1111-111111111111",
         email="admin@clinic.com",
@@ -335,12 +394,14 @@ async def test_reinvite_institution_user_success(async_client: AsyncClient):
     )
 
     with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.institution_portal.SupabaseService"
-    ) as MockSupabaseService:
+        "src.app.api.routes.institution_portal.UserInviteService"
+    ) as MockUserInviteService, patch(
+        "src.app.api.routes.institution_portal.log_audit_background"
+    ) as mock_log_audit:
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
-        mock_session.delete = AsyncMock()
         mock_get_db.return_value.__aenter__.return_value = mock_session
+        MockUserInviteService.normalize_email.side_effect = lambda email: email.strip().lower()
 
         actor_result = MagicMock()
         actor_result.scalar_one_or_none.return_value = mock_user
@@ -348,27 +409,23 @@ async def test_reinvite_institution_user_success(async_client: AsyncClient):
         target_result.scalar_one_or_none.return_value = target_user
         mock_session.execute.side_effect = [actor_result, target_result]
 
-        mock_supabase = MagicMock()
-        mock_response = MagicMock()
-        mock_response.user.id = "33333333-3333-3333-3333-333333333333"
-        mock_supabase.invite_user.return_value = mock_response
-        MockSupabaseService.return_value = mock_supabase
+        mock_invite_service = MagicMock()
+        mock_invite_service.reinvite_user = AsyncMock(return_value=target_user)
+        MockUserInviteService.return_value = mock_invite_service
 
         try:
-            response = await async_client.post("/institution/users/22222222-2222-2222-2222-222222222222/reinvite")
+            response = await async_client.post(
+                "/api/institution/users/22222222-2222-2222-2222-222222222222/reinvite"
+            )
         finally:
             app.dependency_overrides = {}
 
     assert response.status_code == 200
     body = response.json()
-    assert body["user_id"] == "33333333-3333-3333-3333-333333333333"
+    assert body["user_id"] == "22222222-2222-2222-2222-222222222222"
+    mock_invite_service.reinvite_user.assert_called_once_with(target_user)
+    assert mock_log_audit.call_args.kwargs["action"] == AuditAction.USER_REINVITED
 
-    mock_supabase.delete_user.assert_called_once_with("22222222-2222-2222-2222-222222222222")
-    mock_supabase.invite_user.assert_called_once()
-    invite_kwargs = mock_supabase.invite_user.call_args.kwargs
-    assert invite_kwargs["email"] == "staff@clinic.com"
-    assert invite_kwargs["role"] == UserRole.STAFF.value
-    assert invite_kwargs["location_id"] == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
 
 @pytest.mark.asyncio
@@ -418,7 +475,7 @@ async def test_list_transfer_numbers_institution_admin_success(async_client: Asy
         mock_session.execute.return_value = rows_result
 
         try:
-            response = await async_client.get("/institution/transfer-numbers")
+            response = await async_client.get("/api/institution/transfer-numbers")
         finally:
             app.dependency_overrides = {}
 
@@ -466,7 +523,7 @@ async def test_create_transfer_number_location_admin_success(async_client: Async
 
         try:
             response = await async_client.post(
-                "/institution/locations/downtown/transfer-numbers",
+                "/api/institution/locations/downtown/transfer-numbers",
                 json={"phone_number": "+15551230099", "department": "Front Desk"},
             )
         finally:

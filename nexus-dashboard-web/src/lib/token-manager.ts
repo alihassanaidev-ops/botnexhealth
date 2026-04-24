@@ -1,20 +1,27 @@
 /**
- * In-memory backend JWT manager.
+ * In-memory auth token manager.
  *
- * The token lives only in a module-scoped variable — never persisted
- * to localStorage, sessionStorage, or cookies.
+ * Access and refresh tokens live only in module-scoped variables and are never
+ * persisted to localStorage, sessionStorage, IndexedDB, or cookies.
  */
 
-let backendToken: string | null = null;
+let accessToken: string | null = null;
+let refreshToken: string | null = null;
 
-export function getToken(): string | null {
-    return backendToken;
+export function getAccessToken(): string | null {
+    return accessToken;
 }
 
-export function setToken(token: string): void {
-    backendToken = token;
+export function getRefreshToken(): string | null {
+    return refreshToken;
 }
 
-export function clearToken(): void {
-    backendToken = null;
+export function setTokens(tokens: { accessToken: string; refreshToken: string }): void {
+    accessToken = tokens.accessToken;
+    refreshToken = tokens.refreshToken;
+}
+
+export function clearTokens(): void {
+    accessToken = null;
+    refreshToken = null;
 }

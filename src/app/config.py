@@ -1,9 +1,11 @@
 """Application configuration."""
 
+import ipaddress
 import logging
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +19,40 @@ def read_secret_file(file_path: str | None) -> str | None:
     if path.exists():
         return path.read_text().strip()
     return None
+
+
+def normalize_redis_url(url: str | None) -> str | None:
+    """Ensure TLS Redis URLs include an explicit certificate policy."""
+    if not url:
+        return None
+
+    parsed = urlparse(url)
+    if parsed.scheme != "rediss":
+        return url
+
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.setdefault("ssl_cert_reqs", os.getenv("REDIS_SSL_CERT_REQS", "required"))
+
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def build_database_url(
+    *,
+    username: str | None,
+    password: str | None,
+    host: str | None,
+    port: int | None,
+    database_name: str | None,
+) -> str | None:
+    """Compose an asyncpg connection URL from discrete database settings."""
+    if not all([username, password, host, port, database_name]):
+        return None
+
+    return (
+        "postgresql+asyncpg://"
+        f"{quote_plus(username)}:{quote_plus(password)}@"
+        f"{host}:{port}/{database_name}"
+    )
 
 
 class Settings(BaseSettings):
@@ -48,10 +84,9 @@ class Settings(BaseSettings):
 
     # Celery
     celery_broker_url: str | None = None
+    redis_url: str | None = None
 
     # AWS S3 (call recordings)
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
     aws_s3_bucket_name: str | None = None
     aws_region: str = "ca-central-1"
 
@@ -60,29 +95,39 @@ class Settings(BaseSettings):
     twillio_sid: str | None = None          # Account SID (env: TWILLIO_SID)
     twillio_api_secret: str | None = None   # Auth Token (env: TWILLIO_API_SECRET)
 
-    # Database (Supabase PostgreSQL)
+    # Database (PostgreSQL)
     database_url: str | None = None
+    database_host: str | None = None
+    database_port: int | None = None
+    database_name: str | None = None
+    database_user: str | None = None
+    database_password: str | None = None
     encryption_key: str | None = None
-    
-    # Supabase Auth / Invite
-    supabase_url: str | None = None
-    supabase_service_role_key: str | None = None
-    supabase_redirect_url: str | None = None
 
     # Account lockout (HIPAA §164.312(d))
     max_failed_login_attempts: int = 5
     account_lockout_minutes: int = 30
+    access_token_ttl_minutes: int = 15
+    refresh_token_ttl_days: int = 7
+    invite_token_ttl_hours: int = 72
+    password_reset_token_ttl_minutes: int = 60
+    auth_frontend_base_url: str | None = None
+    auth_redirect_allowed_hosts: str = ""
 
     # CORS — comma-separated allowed origins; defaults to "*" for local dev only
     cors_allowed_origins: str = "*"
 
+    # Proxy / request source validation
+    trusted_proxy_cidrs: str = ""
+
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
-    supabase_service_role_key_file: str | None = None
-    # Auth / JWT (REQUIRED — no defaults, must be set in .env or Render secrets)
+    # Auth / JWT (REQUIRED — no defaults, must be set in .env or secrets manager)
     jwt_secret: str
     jwt_algorithm: str = "HS256"
+    jwt_issuer: str = "nexhealth-api"
+    jwt_audience: str = "nexhealth-dashboard"
     jwt_secret_file: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -102,17 +147,34 @@ class Settings(BaseSettings):
         # JWT Secret
         if secret := read_secret_file(self.jwt_secret_file):
             object.__setattr__(self, "jwt_secret", secret)
-            
-        # Supabase Service Role Key
-        if secret := read_secret_file(self.supabase_service_role_key_file):
-            object.__setattr__(self, "supabase_service_role_key", secret)
 
         # Block wildcard CORS in production
-        if self.app_env == "production" and self.cors_allowed_origins.strip() == "*":
+        if self.is_production and self.cors_allowed_origins.strip() == "*":
             raise ValueError(
                 "CORS_ALLOWED_ORIGINS must not be '*' in production. "
                 "Set explicit origins, e.g. 'https://dashboard.yourdomain.com'"
             )
+
+        if (
+            self.is_production
+            and self.auth_frontend_base_url
+            and urlparse(self.auth_frontend_base_url).scheme != "https"
+        ):
+            raise ValueError("AUTH_FRONTEND_BASE_URL must use https in production")
+
+        for cidr in self._split_csv(self.trusted_proxy_cidrs):
+            ipaddress.ip_network(cidr, strict=False)
+
+        if not self.database_url:
+            database_url = build_database_url(
+                username=self.database_user,
+                password=self.database_password,
+                host=self.database_host,
+                port=self.database_port,
+                database_name=self.database_name,
+            )
+            if database_url:
+                object.__setattr__(self, "database_url", database_url)
 
         return self
 
@@ -135,6 +197,54 @@ class Settings(BaseSettings):
     def api_version(self) -> str:
         """Alias for nexhealth_api_version (implements AuthConfig protocol)."""
         return self.nexhealth_api_version
+
+    @property
+    def normalized_redis_url(self) -> str | None:
+        """Redis URL with TLS requirements normalized for managed Redis."""
+        return normalize_redis_url(self.redis_url)
+
+    @property
+    def normalized_celery_broker_url(self) -> str | None:
+        """Broker URL with TLS requirements normalized for managed Redis."""
+        return normalize_redis_url(self.celery_broker_url)
+
+    @property
+    def effective_redis_url(self) -> str | None:
+        """Return the best available Redis URL for session storage."""
+        return self.normalized_redis_url or self.normalized_celery_broker_url
+
+    @staticmethod
+    def _split_csv(raw: str | None) -> list[str]:
+        return [item.strip() for item in (raw or "").split(",") if item.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.lower() in {"production", "prod"}
+
+    @property
+    def allowed_auth_redirect_netlocs(self) -> frozenset[str]:
+        allowed: set[str] = set()
+        if self.auth_frontend_base_url:
+            netloc = urlparse(self.auth_frontend_base_url).netloc
+            if netloc:
+                allowed.add(netloc.lower())
+
+        for host in self._split_csv(self.auth_redirect_allowed_hosts):
+            parsed = urlparse(host if "://" in host else f"https://{host}")
+            netloc = parsed.netloc or parsed.path
+            if netloc:
+                allowed.add(netloc.lower())
+
+        return frozenset(allowed)
+
+    @property
+    def trusted_proxy_networks(
+        self,
+    ) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+        return tuple(
+            ipaddress.ip_network(cidr, strict=False)
+            for cidr in self._split_csv(self.trusted_proxy_cidrs)
+        )
 
 
 

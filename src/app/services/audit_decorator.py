@@ -19,6 +19,7 @@ import logging
 from typing import Any, Callable, TypeVar, Union
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.security import get_client_ip
 from src.app.services.audit import get_audit_service, log_audit_background
 
 logger = logging.getLogger(__name__)
@@ -172,14 +173,13 @@ def _resolve_client_ip(args: tuple, kwargs: dict) -> str | None:
     Prefers X-Forwarded-For (set by reverse proxies / Render's load balancer)
     and falls back to the direct connection IP.
     """
-    for arg in args:
+    for arg in list(args) + list(kwargs.values()):
         if hasattr(arg, "headers") and hasattr(arg, "client"):
-            # X-Forwarded-For may contain a comma-separated chain; take the first (original client)
-            forwarded_for = arg.headers.get("x-forwarded-for")
-            if forwarded_for:
-                return forwarded_for.split(",")[0].strip()
-            if arg.client:
-                return arg.client.host
+            direct_host = arg.client.host if arg.client else None
+            return get_client_ip(
+                forwarded_for=arg.headers.get("x-forwarded-for"),
+                direct_host=direct_host,
+            )
     return None
 
 

@@ -1,4 +1,4 @@
-"""Async database connection for PostgreSQL (Supabase)."""
+"""Async database connection for PostgreSQL."""
 
 from __future__ import annotations
 
@@ -33,13 +33,13 @@ def init_database(database_url: str) -> None:
     """
     global _engine, _session_factory
     
-    from sqlalchemy.pool import NullPool
-    
     _engine = create_async_engine(
         database_url,
-        echo=False,  # Set to True for SQL debugging
-        poolclass=NullPool,  # Use NullPool for Supabase Transaction Mode (port 6543)
-        # No pool_size/max_overflow needed with NullPool - connections are created/closed per request
+        echo=False,
+        pool_size=20,
+        max_overflow=10,
+        pool_recycle=3600,
+        pool_pre_ping=True,
     )
     
     _session_factory = async_sessionmaker(

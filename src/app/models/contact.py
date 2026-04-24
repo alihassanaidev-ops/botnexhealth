@@ -15,7 +15,6 @@ Identity Model:
 
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime
 from uuid import uuid4
 
@@ -25,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.app.database import Base
 from src.app.models.institution import decrypt_value, encrypt_value
+from src.app.security import keyed_hash
 
 
 class Contact(Base):
@@ -67,7 +67,7 @@ class Contact(Base):
     phone_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     date_of_birth_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Phone hash for caller-ID lookups (SHA-256, not reversible)
+    # Phone hash for caller-ID lookups (keyed HMAC-SHA256, not reversible)
     phone_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # PMS link
@@ -128,10 +128,10 @@ class Contact(Base):
 
     @staticmethod
     def _hash_phone(phone: str) -> str:
-        """SHA-256 hash of phone number for lookup without decryption."""
+        """Keyed hash of phone number for lookup without decryption."""
         # Normalize: strip spaces, dashes, parens — keep only digits and +
         normalized = "".join(c for c in phone if c.isdigit() or c == "+")
-        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return keyed_hash(normalized, purpose="phone-lookup-hash-v1")
 
     @classmethod
     def find_by_phone_hash(cls, phone: str) -> str:

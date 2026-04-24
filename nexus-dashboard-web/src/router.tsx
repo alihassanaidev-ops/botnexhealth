@@ -13,6 +13,7 @@ import SetPassword from "./pages/SetPassword";
 // All other pages — lazy loaded
 const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const SetupOverview = lazy(() => import("./pages/SetupOverview"));
 const Institutions = lazy(() => import("./pages/Tenants"));
 const InstitutionDetailPage = lazy(() => import("./pages/TenantDetail"));
 const AppointmentTypes = lazy(() => import("./pages/AppointmentTypes"));
@@ -158,6 +159,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["SUPER_ADMIN"]}>
                                 <S><AdminAuditLogs /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "setup",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <S><SetupOverview /></S>
                             </RoleGuard>
                         ),
                     },

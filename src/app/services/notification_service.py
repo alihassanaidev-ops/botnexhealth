@@ -71,6 +71,7 @@ class NotificationService:
         filters = [
             User.institution_id == institution_id,
             User.is_active.is_(True),
+            User.deleted_at.is_(None),
             User.invite_status == InviteStatus.ACCEPTED.value,
         ]
 

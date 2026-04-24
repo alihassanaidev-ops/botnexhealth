@@ -55,6 +55,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
+import { useSSE } from "@/hooks/useSSE"
 import { listCalls, getCall, resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS, DIRECTION_OPTIONS } from "@/lib/constants"
 import { cn } from "@/lib/utils"
@@ -63,7 +64,6 @@ import type { CallRecord, CallDetail, CallsListResponse, CustomFieldValue, Trans
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 25
-const POLL_INTERVAL_MS = 30_000
 
 const STATUS_MAP = Object.fromEntries(STATUS_OPTIONS.map((o) => [o.value, o]))
 
@@ -628,6 +628,7 @@ function SkeletonRows() {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Calls() {
+    const { lastEvent } = useSSE()
     const [searchParams, setSearchParams] = useSearchParams()
     const [data, setData] = useState<CallsListResponse | null>(null)
     const [loading, setLoading] = useState(true)
@@ -686,11 +687,12 @@ export default function Calls() {
 
     useEffect(() => { fetchCalls() }, [fetchCalls])
 
-    // 30-second auto-poll
     useEffect(() => {
-        const id = setInterval(fetchCalls, POLL_INTERVAL_MS)
-        return () => clearInterval(id)
-    }, [fetchCalls])
+        if (lastEvent?.type !== "calls_updated") {
+            return
+        }
+        fetchCalls()
+    }, [fetchCalls, lastEvent])
 
     const hasFilters = !!(selectedTags.length || directionFilter || dateFrom || dateTo || search)
 

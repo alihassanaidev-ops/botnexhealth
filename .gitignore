@@ -23,7 +23,11 @@ MANIFEST
 
 # Virtual Env
 .env
+.env.*
+!.env.example
+.nexusdental.env
 .venv
+infra/.venv/
 env/
 venv/
 ENV/
@@ -88,3 +92,7 @@ certbot/www/
 
 # Temporary scripts
 temp_script.py
+
+# CDK
+infra/cdk.out/
+cdk.out/

@@ -9,7 +9,7 @@ from src.app.config import settings
 
 
 def _build_celery_app() -> Celery:
-    broker_url = settings.celery_broker_url or "redis://localhost:6379/0"
+    broker_url = settings.normalized_celery_broker_url or "redis://localhost:6379/0"
 
     app = Celery(
         "nex_health",

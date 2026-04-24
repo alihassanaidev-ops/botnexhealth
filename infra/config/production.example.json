@@ -1,0 +1,79 @@
+{
+  "appName": "nex-health",
+  "environmentName": "production",
+  "account": "123456789012",
+  "region": "ca-central-1",
+  "appEnv": "production",
+  "logLevel": "info",
+  "network": {
+    "vpcId": "vpc-xxxxxxxxxxxxxxxxx"
+  },
+  "corsAllowedOrigins": [
+    "https://dashboard.example.com"
+  ],
+  "authFrontendBaseUrl": "https://dashboard.example.com",
+  "recordingsBucketName": "nex-health-production-recordings",
+  "database": {
+    "name": "nexhealth",
+    "username": "nexhealth_admin",
+    "instanceType": "m6g.large",
+    "allocatedStorage": 100,
+    "maxAllocatedStorage": 500,
+    "multiAz": true,
+    "backupRetentionDays": 14,
+    "deletionProtection": true,
+    "engineMajorVersion": "16",
+    "engineFullVersion": "16.6"
+  },
+  "redis": {
+    "nodeType": "cache.t4g.small",
+    "engineVersion": "7.1",
+    "numNodeGroups": 1,
+    "replicasPerNodeGroup": 1,
+    "automaticFailoverEnabled": true,
+    "multiAzEnabled": true
+  },
+  "api": {
+    "cpu": 1024,
+    "memoryMiB": 2048,
+    "desiredCount": 2,
+    "minCount": 2,
+    "maxCount": 6,
+    "containerPort": 8000,
+    "domainName": "api.example.com",
+    "certificateArn": "arn:aws:acm:ca-central-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "hostedZoneName": "example.com"
+  },
+  "worker": {
+    "cpu": 1024,
+    "memoryMiB": 2048,
+    "desiredCount": 2,
+    "minCount": 2,
+    "maxCount": 6,
+    "command": [
+      "celery",
+      "-A",
+      "src.app.worker",
+      "worker",
+      "--loglevel=info"
+    ]
+  },
+  "frontend": {
+    "enabled": true,
+    "domainName": "dashboard.example.com",
+    "certificateArn": "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "hostedZoneName": "example.com"
+  },
+  "externalSecrets": {
+    "NEXHEALTH_API_KEY": "nex-health/production/nexhealth-api-key",
+    "RETELL_API_SECRET": "nex-health/production/retell-api-secret",
+    "RESEND_API_KEY": "nex-health/production/resend-api-key",
+    "RESEND_FROM_EMAIL": "nex-health/production/resend-from-email",
+    "TWILLIO_SID": "nex-health/production/twillio-sid",
+    "TWILLIO_API_SECRET": "nex-health/production/twillio-api-secret"
+  },
+  "optionalSecrets": {
+    "RESEND_REPLY_TO": "nex-health/production/resend-reply-to",
+    "RESEND_ALERT_RECIPIENTS": "nex-health/production/resend-alert-recipients"
+  }
+}

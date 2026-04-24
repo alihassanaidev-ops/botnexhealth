@@ -177,6 +177,8 @@ export async function triggerSync(locationId?: string): Promise<SyncResult> {
 export interface AuditLog {
     id: string;
     institution_id?: string;
+    user_id?: string | null;
+    location_id?: string | null;
     timestamp: string;
     actor: string;
     action: string;

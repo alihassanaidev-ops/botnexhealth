@@ -2,255 +2,249 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import axios from "axios";
 import api from "@/lib/api";
 import { User } from "@/types";
-import { authBootstrapUrlSnapshot, supabase } from "@/lib/supabase";
-import { setToken, clearToken } from "@/lib/token-manager";
+import { Button } from "@/components/ui/button";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import {
+    clearTokens,
+    getAccessToken,
+    getRefreshToken,
+    setTokens,
+} from "@/lib/token-manager";
 import { toast } from "sonner";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
-const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — HIPAA automatic logoff
-const EXCHANGE_MAX_ATTEMPTS = 3;
-const EXCHANGE_RETRY_DELAY_MS = 250;
-const AUTH_REQUEST_TIMEOUT_MS = 12000;
-const SIGNIN_FLOW_TIMEOUT_MS = 15000;
-const INVITE_SESSION_RETRY_COUNT = 10;
-const INVITE_SESSION_RETRY_DELAY_MS = 300;
+const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
+const SESSION_WARNING_MS = 60 * 1000;
+const SESSION_WARNING_SECONDS = Math.ceil(SESSION_WARNING_MS / 1000);
+const AUTH_REQUEST_TIMEOUT_MS = 12_000;
+
+type PasswordFlow = "invite" | "reset";
+
+interface AuthSessionResponse {
+    access_token: string;
+    refresh_token: string;
+    token_type: string;
+}
 
 interface AuthContextType {
     user: User | null;
     isLoading: boolean;
-    signInWithSupabase: (email: string, password: string) => Promise<void>;
+    signIn: (email: string, password: string) => Promise<void>;
     requestPasswordReset: (email: string) => Promise<void>;
     signOut: () => Promise<void>;
-    updatePassword: (password: string) => Promise<void>;
+    updatePassword: (password: string, token: string, flow: PasswordFlow) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function getErrorMessage(error: unknown, fallback: string): string {
+    if (axios.isAxiosError(error)) {
+        const detail = error.response?.data?.detail;
+        if (typeof detail === "string" && detail.trim()) {
+            return detail;
+        }
+        if (typeof error.message === "string" && error.message.trim()) {
+            return error.message;
+        }
+    }
+
+    if (error instanceof Error && error.message.trim()) {
+        return error.message;
+    }
+
+    return fallback;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [isSessionWarningOpen, setIsSessionWarningOpen] = useState(false);
+    const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState(SESSION_WARNING_SECONDS);
     const navigate = useNavigate();
     const location = useLocation();
     const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const signInFlowRef = useRef<Promise<boolean> | null>(null);
-    const lastAuthFailureRef = useRef<string | null>(null);
+    const warningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Use refs so the onAuthStateChange callback always has current values
-    const locationRef = useRef(location);
-    const userRef = useRef(user);
-    useEffect(() => { locationRef.current = location; }, [location]);
-    useEffect(() => { userRef.current = user; }, [user]);
-
-    const getAuthFlowType = useCallback((): string | null => {
-        const hash = window.location.hash || authBootstrapUrlSnapshot.hash || "";
-        const search = window.location.search || authBootstrapUrlSnapshot.search || "";
-
-        const hashParams = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
-        const searchParams = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
-
-        return hashParams.get("type") || searchParams.get("type");
+    const clearInactivityTimers = useCallback(() => {
+        if (inactivityTimer.current) {
+            clearTimeout(inactivityTimer.current);
+            inactivityTimer.current = null;
+        }
+        if (warningTimer.current) {
+            clearTimeout(warningTimer.current);
+            warningTimer.current = null;
+        }
+        if (countdownTimer.current) {
+            clearInterval(countdownTimer.current);
+            countdownTimer.current = null;
+        }
     }, []);
 
-    const getAuthFlowError = useCallback((): string | null => {
-        const hash = window.location.hash || authBootstrapUrlSnapshot.hash || "";
-        const search = window.location.search || authBootstrapUrlSnapshot.search || "";
+    const clearSessionState = useCallback(() => {
+        clearInactivityTimers();
+        clearTokens();
+        setUser(null);
+        setIsSessionWarningOpen(false);
+        setSessionSecondsRemaining(SESSION_WARNING_SECONDS);
+    }, [clearInactivityTimers]);
 
-        const hashParams = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
-        const searchParams = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
-
-        const description =
-            hashParams.get("error_description") || searchParams.get("error_description");
-        return description ? decodeURIComponent(description) : null;
+    const fetchUserProfile = useCallback(async (): Promise<User> => {
+        const { data } = await api.get<User>("/auth/users/me", {
+            timeout: AUTH_REQUEST_TIMEOUT_MS,
+        });
+        setUser(data);
+        return data;
     }, []);
 
-    const hasInviteOrRecoveryHash = useCallback((): boolean => {
-        const flowType = getAuthFlowType();
-        return flowType === "invite" || flowType === "recovery";
-    }, [getAuthFlowType]);
+    const applyAuthSession = useCallback(
+        async (session: AuthSessionResponse): Promise<User> => {
+            setTokens({
+                accessToken: session.access_token,
+                refreshToken: session.refresh_token,
+            });
 
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-    const withTimeout = useCallback(async <T,>(
-        promise: Promise<T>,
-        timeoutMs: number,
-        timeoutMessage: string,
-    ): Promise<T> => {
-        return await Promise.race([
-            promise,
-            new Promise<T>((_, reject) => {
-                setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
-            }),
-        ]);
-    }, []);
-
-    // ---- Token exchange helper ----
-    const exchangeToken = useCallback(async (supabaseAccessToken: string): Promise<boolean> => {
-        const authUrl = `${api.defaults.baseURL}/auth/supabase/token`;
-        lastAuthFailureRef.current = null;
-
-        for (let attempt = 1; attempt <= EXCHANGE_MAX_ATTEMPTS; attempt += 1) {
             try {
-                // Use plain axios here to avoid auth interceptor recursion during bootstrap.
-                const { data } = await axios.post<{ access_token: string }>(
-                    authUrl,
-                    { access_token: supabaseAccessToken },
+                return await fetchUserProfile();
+            } catch (error) {
+                clearSessionState();
+                throw error;
+            }
+        },
+        [clearSessionState, fetchUserProfile],
+    );
+
+    const navigateAfterSignIn = useCallback(() => {
+        const from = (
+            location.state as { from?: { pathname?: string } } | null
+        )?.from?.pathname;
+        navigate(from || "/", { replace: true });
+    }, [location.state, navigate]);
+
+    const signOut = useCallback(async () => {
+        const refreshToken = getRefreshToken();
+        const accessToken = getAccessToken();
+        clearSessionState();
+
+        if (refreshToken) {
+            try {
+                await axios.post(
+                    `${api.defaults.baseURL}/auth/logout`,
+                    { refresh_token: refreshToken },
                     {
-                        headers: { "Content-Type": "application/json" },
+                        headers: {
+                            "Content-Type": "application/json",
+                            ...(accessToken
+                                ? { Authorization: `Bearer ${accessToken}` }
+                                : {}),
+                        },
                         timeout: AUTH_REQUEST_TIMEOUT_MS,
                     },
                 );
-                setToken(data.access_token);
-                return true;
-            } catch (err: unknown) {
-                const error = err as { response?: { status?: number; data?: { detail?: string } }; code?: string };
-                const status = error?.response?.status;
-                const detail = error?.response?.data?.detail;
-                const timedOut = error?.code === "ECONNABORTED";
-                const retryable = !status || status === 429 || status >= 500;
-                if (import.meta.env.DEV) console.warn(`Token exchange failed (attempt ${attempt}/${EXCHANGE_MAX_ATTEMPTS})`, status);
-
-                if (timedOut) {
-                    lastAuthFailureRef.current = "Authentication timed out. Please try again.";
-                    return false;
+            } catch {
+                if (import.meta.env.DEV) {
+                    console.warn("Logout request failed; local session was still cleared");
                 }
-
-                if (retryable && attempt < EXCHANGE_MAX_ATTEMPTS) {
-                    await sleep(EXCHANGE_RETRY_DELAY_MS * attempt);
-                    continue;
-                }
-                lastAuthFailureRef.current = detail || (status ? `Authentication failed (${status})` : "Authentication failed");
-                return false;
             }
         }
 
-        return false;
-    }, []);
+        navigate("/login", { replace: true });
+    }, [clearSessionState, navigate]);
 
-    // ---- Fetch backend user profile ----
-    const fetchUserProfile = useCallback(async (): Promise<boolean> => {
-        try {
-            const { data } = await api.get<User>("/auth/users/me", {
-                timeout: AUTH_REQUEST_TIMEOUT_MS,
-            });
-            setUser(data);
-            return true;
-        } catch (err: unknown) {
-            const error = err as { response?: { status?: number; data?: { detail?: string } } };
-            const status = error?.response?.status;
-            const detail = error?.response?.data?.detail;
-            if (import.meta.env.DEV) console.warn("Failed to fetch user profile", status);
-            lastAuthFailureRef.current = detail || (status ? `Failed to fetch user profile (${status})` : "Failed to fetch user profile");
-            return false;
-        }
-    }, []);
-
-    // ---- Full sign-in flow: exchange + fetch ----
-    const completeSignIn = useCallback(async (supabaseAccessToken: string): Promise<boolean> => {
-        const exchanged = await exchangeToken(supabaseAccessToken);
-        if (!exchanged) return false;
-        return await fetchUserProfile();
-    }, [exchangeToken, fetchUserProfile]);
-
-    const completeSignInSingleFlight = useCallback((supabaseAccessToken: string): Promise<boolean> => {
-        if (!signInFlowRef.current) {
-            signInFlowRef.current = completeSignIn(supabaseAccessToken).finally(() => {
-                signInFlowRef.current = null;
-            });
-        }
-        return signInFlowRef.current;
-    }, [completeSignIn]);
-
-    // ---- Sign out (clears everything) ----
-    const signOut = useCallback(async () => {
-        clearToken();
-        setUser(null);
-        await supabase.auth.signOut();
-        navigate("/login");
-    }, [navigate]);
-
-    // ---- Inactivity auto-logout (HIPAA) ----
     const resetInactivityTimer = useCallback(() => {
-        if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
-        inactivityTimer.current = setTimeout(async () => {
-            toast.info("Session expired due to inactivity");
-            await signOut();
-        }, INACTIVITY_TIMEOUT_MS);
-    }, [signOut]);
+        clearInactivityTimers();
+        setIsSessionWarningOpen(false);
+        setSessionSecondsRemaining(SESSION_WARNING_SECONDS);
+
+        const warningDelay = Math.max(INACTIVITY_TIMEOUT_MS - SESSION_WARNING_MS, 0);
+
+        warningTimer.current = setTimeout(() => {
+            const warningStartedAt = Date.now();
+            setIsSessionWarningOpen(true);
+            setSessionSecondsRemaining(SESSION_WARNING_SECONDS);
+
+            countdownTimer.current = setInterval(() => {
+                const elapsedMs = Date.now() - warningStartedAt;
+                const remainingMs = SESSION_WARNING_MS - elapsedMs;
+                if (remainingMs <= 0) {
+                    setSessionSecondsRemaining(0);
+                    if (countdownTimer.current) {
+                        clearInterval(countdownTimer.current);
+                        countdownTimer.current = null;
+                    }
+                    return;
+                }
+                setSessionSecondsRemaining(Math.ceil(remainingMs / 1000));
+            }, 1000);
+
+            inactivityTimer.current = setTimeout(async () => {
+                toast.info("Session expired due to inactivity");
+                await signOut();
+            }, SESSION_WARNING_MS);
+        }, warningDelay);
+    }, [clearInactivityTimers, signOut]);
+
+    const handleStaySignedIn = useCallback(() => {
+        toast.success("Session extended");
+        resetInactivityTimer();
+    }, [resetInactivityTimer]);
 
     useEffect(() => {
-        if (!user) return;
+        if (!user) {
+            clearInactivityTimers();
+            setIsSessionWarningOpen(false);
+            return;
+        }
 
-        // Throttle high-frequency events (mousemove, scroll) to once per 30s
         let lastActivity = 0;
         const THROTTLE_MS = 30_000;
-
         const events = ["mousedown", "keydown", "mousemove", "touchstart", "scroll"];
+
         const handler = () => {
             const now = Date.now();
-            if (now - lastActivity < THROTTLE_MS) return;
+            if (now - lastActivity < THROTTLE_MS) {
+                return;
+            }
             lastActivity = now;
             resetInactivityTimer();
         };
 
-        events.forEach((e) => window.addEventListener(e, handler, { passive: true }));
-        resetInactivityTimer(); // start the timer
+        events.forEach((eventName) =>
+            window.addEventListener(eventName, handler, { passive: true }),
+        );
+        resetInactivityTimer();
 
         return () => {
-            events.forEach((e) => window.removeEventListener(e, handler));
-            if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+            events.forEach((eventName) => window.removeEventListener(eventName, handler));
+            clearInactivityTimers();
         };
-    }, [user, resetInactivityTimer]);
+    }, [clearInactivityTimers, resetInactivityTimer, user]);
 
-    // ---- Session restore on mount + auth state changes ----
     useEffect(() => {
         let cancelled = false;
 
         const bootstrapSession = async () => {
-            const isInviteOrRecovery = hasInviteOrRecoveryHash();
-            const authFlowError = getAuthFlowError();
-
-            if (authFlowError) {
-                lastAuthFailureRef.current = authFlowError;
-                toast.error(authFlowError);
-            }
             try {
-                let { data: { session } } = await supabase.auth.getSession();
-                if (cancelled) return;
-
-                // Invite links can briefly race with Supabase hash parsing on first load.
-                if (!session?.user && isInviteOrRecovery) {
-                    for (let i = 0; i < INVITE_SESSION_RETRY_COUNT; i += 1) {
-                        await sleep(INVITE_SESSION_RETRY_DELAY_MS);
-                        const { data } = await supabase.auth.getSession();
-                        session = data.session;
-                        if (session?.user || cancelled) break;
-                    }
+                if (!getAccessToken() && !getRefreshToken()) {
+                    return;
                 }
 
-                if (session?.user) {
-                    if (isInviteOrRecovery) {
-                        navigate("/set-password", { replace: true });
-                    } else {
-                        const ok = await withTimeout(
-                            completeSignInSingleFlight(session.access_token),
-                            SIGNIN_FLOW_TIMEOUT_MS,
-                            "Authentication timed out. Please try again.",
-                        );
-                        if (!ok) {
-                            toast.error(lastAuthFailureRef.current || "Failed to load user profile. Please log in again.");
-                            await signOut();
-                        }
-                    }
-                } else if (isInviteOrRecovery) {
-                    toast.error(lastAuthFailureRef.current || "Invite link is invalid or has expired. Request a new invite.");
-                    navigate("/login", { replace: true });
+                await fetchUserProfile();
+
+                if (!cancelled && location.pathname === "/login") {
+                    navigate("/", { replace: true });
                 }
-            } catch (err: unknown) {
-                if (import.meta.env.DEV) console.warn("Initial auth bootstrap failed");
-                const error = err as { message?: string };
-                lastAuthFailureRef.current = error?.message || "Failed to initialize session";
-                clearToken();
-                setUser(null);
+            } catch {
+                if (!cancelled) {
+                    clearSessionState();
+                }
             } finally {
                 if (!cancelled) {
                     setIsLoading(false);
@@ -258,110 +252,130 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
         };
 
-        // Auth state change listener
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-            try {
-                if (event === 'PASSWORD_RECOVERY') {
-                    navigate("/set-password", { replace: true });
-                } else if (event === 'SIGNED_IN' && session?.user) {
-                    const inviteOrRecoveryNow = hasInviteOrRecoveryHash();
-                    if (inviteOrRecoveryNow) {
-                        if (locationRef.current.pathname !== "/set-password") {
-                            navigate("/set-password", { replace: true });
-                        }
-                    } else if (!userRef.current) {
-                        const ok = await withTimeout(
-                            completeSignInSingleFlight(session.access_token),
-                            SIGNIN_FLOW_TIMEOUT_MS,
-                            "Authentication timed out. Please try again.",
-                        );
-                        if (ok) {
-                            const loc = locationRef.current;
-                            const from = (loc.state as Record<string, { pathname?: string }>)?.from?.pathname || "/";
-                            if (loc.pathname === "/login") {
-                                navigate(from, { replace: true });
-                            }
-                        } else {
-                            toast.error(lastAuthFailureRef.current || "Login failed. Please try again.");
-                            await signOut();
-                        }
-                    }
-                } else if (event === 'SIGNED_OUT') {
-                    clearToken();
-                    setUser(null);
-                    navigate("/login");
-                }
-            } catch {
-                if (import.meta.env.DEV) console.warn("Auth state change handler failed");
-            } finally {
-                setIsLoading(false);
-            }
-        });
-
         void bootstrapSession();
 
         return () => {
             cancelled = true;
-            subscription.unsubscribe();
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [getAuthFlowError, hasInviteOrRecoveryHash, withTimeout]);
+    }, [clearSessionState, fetchUserProfile, location.pathname, navigate]);
 
-    // ---- Sign in with email + password ----
-    const signInWithSupabase = async (email: string, password: string) => {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) {
-            toast.error(error.message);
-            throw error;
-        }
-        // onAuthStateChange handles the rest (token exchange, navigate)
-    };
+    const signIn = useCallback(
+        async (email: string, password: string) => {
+            try {
+                const { data } = await axios.post<AuthSessionResponse>(
+                    `${api.defaults.baseURL}/auth/login`,
+                    { email, password },
+                    {
+                        headers: { "Content-Type": "application/json" },
+                        timeout: AUTH_REQUEST_TIMEOUT_MS,
+                    },
+                );
 
-    // ---- Request password reset (forgot password flow) ----
-    const requestPasswordReset = async (email: string) => {
+                await applyAuthSession(data);
+                navigateAfterSignIn();
+            } catch (error) {
+                const message = getErrorMessage(error, "Login failed");
+                toast.error(message);
+                throw error;
+            }
+        },
+        [applyAuthSession, navigateAfterSignIn],
+    );
+
+    const requestPasswordReset = useCallback(async (email: string) => {
         const normalizedEmail = email.trim().toLowerCase();
         if (!normalizedEmail) {
             throw new Error("Email is required");
         }
 
-        const redirectTo = `${window.location.origin}/set-password`;
-        const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-            redirectTo,
-        });
-        if (error) {
-            throw error;
+        try {
+            await axios.post(
+                `${api.defaults.baseURL}/auth/forgot-password`,
+                {
+                    email: normalizedEmail,
+                    redirect_url: `${window.location.origin}/set-password`,
+                },
+                {
+                    headers: { "Content-Type": "application/json" },
+                    timeout: AUTH_REQUEST_TIMEOUT_MS,
+                },
+            );
+        } catch (error) {
+            throw new Error(getErrorMessage(error, "Failed to send reset email"));
         }
-    };
+    }, []);
 
-    // ---- Update password (invite / recovery flow) ----
-    const updatePassword = async (password: string) => {
-        const { error } = await supabase.auth.updateUser({ password });
-        if (error) throw error;
+    const updatePassword = useCallback(
+        async (password: string, token: string, flow: PasswordFlow) => {
+            try {
+                const endpoint = flow === "reset" ? "/auth/reset-password" : "/auth/set-password";
 
-        // After password set, complete backend token exchange + profile fetch
-        // so role redirect works immediately without forcing a manual re-login.
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.access_token) {
-            throw new Error("Password updated, but session is missing. Please sign in again.");
-        }
+                const { data } = await axios.post<AuthSessionResponse>(
+                    `${api.defaults.baseURL}${endpoint}`,
+                    { token, password },
+                    {
+                        headers: { "Content-Type": "application/json" },
+                        timeout: AUTH_REQUEST_TIMEOUT_MS,
+                    },
+                );
 
-        const ok = await completeSignInSingleFlight(session.access_token);
-        if (!ok) {
-            throw new Error("Password updated, but sign-in bootstrap failed. Please sign in again.");
-        }
-
-        // Clear invite/recovery hash to prevent redirecting back to /set-password.
-        if (window.location.hash) {
-            window.history.replaceState(null, document.title, window.location.pathname);
-        }
-
-        toast.success("Password updated successfully");
-        navigate("/", { replace: true });
-    };
+                await applyAuthSession(data);
+                toast.success(
+                    flow === "reset"
+                        ? "Password reset successfully"
+                        : "Password set successfully",
+                );
+                navigate("/", { replace: true });
+            } catch (error) {
+                throw new Error(getErrorMessage(error, "Failed to update password"));
+            }
+        },
+        [applyAuthSession, navigate],
+    );
 
     return (
-        <AuthContext.Provider value={{ user, isLoading, signInWithSupabase, requestPasswordReset, signOut, updatePassword }}>
+        <AuthContext.Provider
+            value={{
+                user,
+                isLoading,
+                signIn,
+                requestPasswordReset,
+                signOut,
+                updatePassword,
+            }}
+        >
             {children}
+            <Dialog
+                open={isSessionWarningOpen}
+                onOpenChange={(open) => {
+                    if (open) {
+                        setIsSessionWarningOpen(true);
+                    }
+                }}
+            >
+                <DialogContent
+                    className="sm:max-w-md"
+                    onEscapeKeyDown={(event) => event.preventDefault()}
+                    onPointerDownOutside={(event) => event.preventDefault()}
+                >
+                    <DialogHeader>
+                        <DialogTitle>Session expiring soon</DialogTitle>
+                        <DialogDescription>
+                            You&apos;ve been inactive for a while. Stay signed in to keep working, or you&apos;ll be
+                            logged out automatically.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
+                        Your session will end in <span className="font-semibold">{sessionSecondsRemaining}s</span>.
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => void signOut()}>
+                            Sign out now
+                        </Button>
+                        <Button onClick={handleStaySignedIn}>Stay signed in</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </AuthContext.Provider>
     );
 }

@@ -1,6 +1,10 @@
 import axios from "axios";
-import { supabase } from "@/lib/supabase";
-import { getToken, setToken, clearToken } from "@/lib/token-manager";
+import {
+    clearTokens,
+    getAccessToken,
+    getRefreshToken,
+    setTokens,
+} from "@/lib/token-manager";
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000/api",
@@ -13,6 +17,12 @@ const api = axios.create({
 let refreshPromise: Promise<string> | null = null;
 let signOutPromise: Promise<void> | null = null;
 
+interface AuthSessionResponse {
+    access_token: string;
+    refresh_token: string;
+    token_type: string;
+}
+
 function redirectToLoginIfNeeded() {
     if (window.location.pathname !== "/login" && window.location.pathname !== "/set-password") {
         window.location.href = "/login";
@@ -22,8 +32,7 @@ function redirectToLoginIfNeeded() {
 async function forceSignOut(): Promise<void> {
     if (!signOutPromise) {
         signOutPromise = (async () => {
-            clearToken();
-            await supabase.auth.signOut();
+            clearTokens();
             redirectToLoginIfNeeded();
         })().finally(() => {
             signOutPromise = null;
@@ -33,27 +42,32 @@ async function forceSignOut(): Promise<void> {
 }
 
 async function refreshBackendToken(): Promise<string> {
-    const { data, error: refreshError } = await supabase.auth.refreshSession();
-    if (refreshError || !data.session) {
-        const err = new Error("Supabase session refresh failed");
-        (err as Error & { code?: string }).code = "NO_SUPABASE_SESSION";
+    const refreshToken = getRefreshToken();
+    if (!refreshToken) {
+        const err = new Error("Refresh token is missing");
+        (err as Error & { code?: string }).code = "NO_REFRESH_TOKEN";
         throw err;
     }
 
-    const exchangeRes = await axios.post(
-        `${api.defaults.baseURL}/auth/supabase/token`,
-        { access_token: data.session.access_token },
-        { headers: { "Content-Type": "application/json" } }
+    const response = await axios.post<AuthSessionResponse>(
+        `${api.defaults.baseURL}/auth/refresh`,
+        { refresh_token: refreshToken },
+        {
+            headers: { "Content-Type": "application/json" },
+            timeout: 30_000,
+        },
     );
 
-    const newBackendToken: string = exchangeRes.data.access_token;
-    setToken(newBackendToken);
-    return newBackendToken;
+    setTokens({
+        accessToken: response.data.access_token,
+        refreshToken: response.data.refresh_token,
+    });
+    return response.data.access_token;
 }
 
 function shouldForceLogoutFromRefreshError(error: unknown): boolean {
     const err = error as { code?: string; response?: { status?: number } };
-    if (err?.code === "NO_SUPABASE_SESSION") return true;
+    if (err?.code === "NO_REFRESH_TOKEN") return true;
 
     const status = err?.response?.status;
     return status === 401 || status === 403 || status === 423;
@@ -71,7 +85,7 @@ async function getRefreshedToken(): Promise<string> {
 // Request interceptor — attach backend JWT
 api.interceptors.request.use(
     (config) => {
-        const token = getToken();
+        const token = getAccessToken();
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
@@ -80,15 +94,22 @@ api.interceptors.request.use(
     (error) => Promise.reject(error)
 );
 
-// Response interceptor — handle 401 with Supabase refresh + re-exchange
+// Response interceptor — handle 401 with backend refresh-token rotation
 api.interceptors.response.use(
     (response) => response,
     async (error) => {
         const originalRequest = error?.config;
         const requestUrl: string = String(originalRequest?.url ?? "");
 
-        // Never recurse on token-exchange requests.
-        if (requestUrl.includes("/auth/supabase/token")) {
+        // Never recurse on auth bootstrap endpoints.
+        if (
+            requestUrl.includes("/auth/login")
+            || requestUrl.includes("/auth/refresh")
+            || requestUrl.includes("/auth/logout")
+            || requestUrl.includes("/auth/set-password")
+            || requestUrl.includes("/auth/reset-password")
+            || requestUrl.includes("/auth/forgot-password")
+        ) {
             return Promise.reject(error);
         }
 

@@ -33,7 +33,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Protocol, runtime_checkable
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
 
@@ -57,6 +57,8 @@ class AuditEntry:
     outcome: AuditOutcome | str
     metadata: dict[str, Any] = field(default_factory=dict)
     institution_id: str | None = None
+    user_id: str | None = None
+    location_id: str | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     request_id: str = field(default_factory=lambda: str(uuid4()))
 
@@ -115,6 +117,8 @@ class PostgresAuditRepository:
                 **entry.metadata
             },
             institution_id=entry.institution_id,
+            user_id=entry.user_id,
+            location_id=entry.location_id,
         )
         # Override timestamp if provided
         audit_log.timestamp = entry.timestamp
@@ -139,6 +143,8 @@ class PostgresAuditRepository:
                         **entry.metadata
                     },
                     institution_id=entry.institution_id,
+                    user_id=entry.user_id,
+                    location_id=entry.location_id,
                 )
                 audit_log.timestamp = entry.timestamp
                 session.add(audit_log)
@@ -208,6 +214,8 @@ class AuditService:
         outcome: AuditOutcome | str,
         metadata: dict[str, Any] | None = None,
         institution_id: str | None = None,
+        user_id: str | None = None,
+        location_id: str | None = None,
         request_id: str | None = None,
     ) -> None:
         """
@@ -223,6 +231,12 @@ class AuditService:
             outcome=outcome,
             metadata=metadata or {},
             institution_id=institution_id,
+            user_id=user_id or _coerce_uuid(
+                (metadata or {}).get("actor_user_id")
+                or (metadata or {}).get("user_id")
+                or actor
+            ),
+            location_id=location_id or _coerce_uuid((metadata or {}).get("location_id")),
             request_id=request_id or str(uuid4()),
         )
         
@@ -243,6 +257,8 @@ class AuditService:
         outcome: AuditOutcome | str,
         metadata: dict[str, Any] | None = None,
         institution_id: str | None = None,
+        user_id: str | None = None,
+        location_id: str | None = None,
         request_id: str | None = None,
     ) -> None:
         """
@@ -258,6 +274,8 @@ class AuditService:
                 outcome=outcome,
                 metadata=metadata,
                 institution_id=institution_id,
+                user_id=user_id,
+                location_id=location_id,
                 request_id=request_id,
             )
         )
@@ -357,6 +375,16 @@ def _classify_exception(e: Exception) -> AuditOutcome:
     return AuditOutcome.FAILURE_INTERNAL
 
 
+def _coerce_uuid(value: Any) -> str | None:
+    if not value:
+        return None
+    text = str(value)
+    try:
+        return str(UUID(text))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 # =============================================================================
 # Global Service Instance (Singleton for convenience)
 # =============================================================================
@@ -397,6 +425,8 @@ async def log_audit(
     outcome: AuditOutcome | str,
     metadata: dict[str, Any] | None = None,
     institution_id: str | None = None,
+    user_id: str | None = None,
+    location_id: str | None = None,
     request_id: str | None = None,
 ) -> None:
     """
@@ -412,6 +442,8 @@ async def log_audit(
         outcome=outcome,
         metadata=metadata,
         institution_id=institution_id,
+        user_id=user_id,
+        location_id=location_id,
         request_id=request_id,
     )
 
@@ -423,6 +455,8 @@ def log_audit_background(
     outcome: AuditOutcome | str,
     metadata: dict[str, Any] | None = None,
     institution_id: str | None = None,
+    user_id: str | None = None,
+    location_id: str | None = None,
     request_id: str | None = None,
 ) -> None:
     """
@@ -438,5 +472,7 @@ def log_audit_background(
         outcome=outcome,
         metadata=metadata,
         institution_id=institution_id,
+        user_id=user_id,
+        location_id=location_id,
         request_id=request_id,
     )

@@ -21,13 +21,13 @@ from src.app.api.deps import (
 )
 from src.app.api.models import AuditLogPaginatedResponse, AuditLogResponse
 from src.app.database import get_db_session
-from src.app.models.user import User, UserRole, InviteStatus
+from src.app.models.user import User, UserRole
 from src.app.models.audit_log import AuditLog
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.services.institution_service import InstitutionService
 from src.app.services.invite_cooldown import apply_invite_cooldown, ensure_invite_cooldown
-from src.app.services.supabase_service import SupabaseService
+from src.app.services.user_invite_service import UserInviteService
 from src.app.services.audit import log_audit_background
 from src.app.models.audit_log import AuditAction, AuditOutcome
 
@@ -184,6 +184,8 @@ def _sanitize_audit_item(item: AuditLog) -> AuditLogResponse:
         id=str(item.id),
         timestamp=item.timestamp,
         institution_id=str(item.institution_id) if item.institution_id else None,
+        user_id=str(item.user_id) if item.user_id else None,
+        location_id=str(item.location_id) if item.location_id else None,
         actor=actor,
         action=item.action,
         target_resource=_sanitize_target_resource(item.target_resource),
@@ -197,7 +199,6 @@ def _validate_invite_role(role: str) -> str:
     allowed = {
         UserRole.INSTITUTION_ADMIN.value,
         UserRole.LOCATION_ADMIN.value,
-        UserRole.STAFF.value,
     }
     if normalized not in allowed:
         raise HTTPException(
@@ -750,46 +751,33 @@ async def invite_institution_admin(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
         )
 
+    email = UserInviteService.normalize_email(data.email)
     async with get_db_session() as session:
         actor = await ensure_invite_cooldown(session, current_user)
-        existing = await session.execute(select(User).where(User.email == data.email))
+        existing = await session.execute(select(User).where(User.email == email))
         if existing.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail="User already exists"
             )
 
-        supabase = SupabaseService()
-        response = supabase.invite_user(
-            email=data.email,
-            institution_id=current_user.institution_id,
-            role=UserRole.INSTITUTION_ADMIN.value,
-        )
-        supabase_user_id = None
-        if hasattr(response, "user") and hasattr(response.user, "id"):
-            supabase_user_id = str(response.user.id)
-        elif isinstance(response, dict) and "id" in response:
-            supabase_user_id = str(response["id"])
-        if not supabase_user_id:
+        invite_service = UserInviteService(session)
+        try:
+            await invite_service.create_invited_user(
+                email=email,
+                institution_id=current_user.institution_id,
+                role=UserRole.INSTITUTION_ADMIN.value,
+            )
+        except Exception:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Invite did not return user id",
+                detail="Failed to send invite email",
             )
-
-        user = User(
-            id=supabase_user_id,
-            email=data.email,
-            role=UserRole.INSTITUTION_ADMIN.value,
-            institution_id=current_user.institution_id,
-            invite_status=InviteStatus.PENDING.value,
-            is_active=True,
-        )
-        session.add(user)
         apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,
         action=AuditAction.LOCATION_USER_CREATE,
-        target_resource=f"user:{data.email}",
+        target_resource=f"user:{email}",
         outcome=AuditOutcome.SUCCESS,
         metadata={
             "actor_role": current_user.role,
@@ -798,7 +786,7 @@ async def invite_institution_admin(
         },
         institution_id=current_user.institution_id,
     )
-    return {"message": f"Institution admin invite sent to {data.email}"}
+    return {"message": f"Institution admin invite sent to {email}"}
 
 
 @router.get("/users", response_model=list[InstitutionUserRowResponse])
@@ -822,6 +810,7 @@ async def list_institution_users(
                 await session.execute(
                     select(User).where(
                         User.institution_id == current_user.institution_id,
+                        User.deleted_at.is_(None),
                         User.role.in_(
                             [
                                 UserRole.INSTITUTION_ADMIN.value,
@@ -891,13 +880,14 @@ async def invite_institution_user(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
         )
 
+    email = UserInviteService.normalize_email(data.email)
     role = _validate_invite_role(data.role)
 
     async with get_db_session() as session:
         actor = await ensure_invite_cooldown(session, current_user)
         from src.app.models.institution_location import InstitutionLocation
 
-        existing = await session.execute(select(User).where(User.email == data.email))
+        existing = await session.execute(select(User).where(User.email == email))
         if existing.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail="User already exists"
@@ -925,40 +915,25 @@ async def invite_institution_user(
                 )
             location_id = str(location.id)
 
-        supabase = SupabaseService()
-        response = supabase.invite_user(
-            email=data.email,
-            institution_id=current_user.institution_id,
-            role=role,
-            location_id=location_id,
-        )
-        supabase_user_id = None
-        if hasattr(response, "user") and hasattr(response.user, "id"):
-            supabase_user_id = str(response.user.id)
-        elif isinstance(response, dict) and "id" in response:
-            supabase_user_id = str(response["id"])
-        if not supabase_user_id:
+        invite_service = UserInviteService(session)
+        try:
+            created = await invite_service.create_invited_user(
+                email=email,
+                institution_id=current_user.institution_id,
+                role=role,
+                location_id=location_id,
+            )
+        except Exception:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Invite did not return user id",
+                detail="Failed to send invite email",
             )
-
-        created = User(
-            id=supabase_user_id,
-            email=data.email,
-            role=role,
-            institution_id=current_user.institution_id,
-            location_id=location_id,
-            invite_status=InviteStatus.PENDING.value,
-            is_active=True,
-        )
-        session.add(created)
         apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,
         action=AuditAction.LOCATION_USER_CREATE,
-        target_resource=f"user:{data.email}",
+        target_resource=f"user:{email}",
         outcome=AuditOutcome.SUCCESS,
         metadata={
             "actor_role": current_user.role,
@@ -970,7 +945,7 @@ async def invite_institution_user(
         institution_id=current_user.institution_id,
     )
     return UserActionResponse(
-        message=f"Invite sent to {data.email}", user_id=supabase_user_id
+        message=f"Invite sent to {email}", user_id=str(created.id)
     )
 
 
@@ -998,6 +973,7 @@ async def deactivate_institution_user(
                 select(User).where(
                     User.id == user_id,
                     User.institution_id == current_user.institution_id,
+                    User.deleted_at.is_(None),
                     User.role.in_(
                         [
                             UserRole.INSTITUTION_ADMIN.value,
@@ -1013,7 +989,7 @@ async def deactivate_institution_user(
                 status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
             )
 
-        target.is_active = False
+        target.mark_deleted()
 
     log_audit_background(
         actor=current_user.id,
@@ -1026,6 +1002,7 @@ async def deactivate_institution_user(
             "deactivated_user_id": user_id,
         },
         institution_id=current_user.institution_id,
+        user_id=str(current_user.id),
     )
     return UserActionResponse(message="User deactivated", user_id=user_id)
 
@@ -1036,8 +1013,7 @@ async def reinvite_institution_user(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
 ):
     """
-    Reinvite an institution-scoped user: deletes old Supabase user and
-    creates a fresh invite/local user row with a new UUID.
+    Reinvite an institution-scoped user by rotating their local invite token.
     """
     if not current_user.institution_id:
         raise HTTPException(
@@ -1051,6 +1027,7 @@ async def reinvite_institution_user(
                 select(User).where(
                     User.id == user_id,
                     User.institution_id == current_user.institution_id,
+                    User.deleted_at.is_(None),
                     User.role.in_(
                         [
                             UserRole.INSTITUTION_ADMIN.value,
@@ -1075,64 +1052,35 @@ async def reinvite_institution_user(
         old_email = target.email
         old_role = target.role
         old_location_id = str(target.location_id) if target.location_id else None
-        old_is_active = target.is_active
-
-        supabase = SupabaseService()
+        invite_service = UserInviteService(session)
         try:
-            supabase.delete_user(old_user_id)
+            await invite_service.reinvite_user(target)
         except Exception:
-            # Continue: if already deleted on Supabase, reinvite should still proceed.
-            pass
-
-        response = supabase.invite_user(
-            email=old_email,
-            institution_id=current_user.institution_id,
-            role=old_role,
-            location_id=old_location_id,
-        )
-        new_supabase_user_id = None
-        if hasattr(response, "user") and hasattr(response.user, "id"):
-            new_supabase_user_id = str(response.user.id)
-        elif isinstance(response, dict) and "id" in response:
-            new_supabase_user_id = str(response["id"])
-        if not new_supabase_user_id:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Invite did not return user id",
+                detail="Failed to send invite email",
             )
-
-        await session.delete(target)
-        await session.flush()
-
-        replacement = User(
-            id=new_supabase_user_id,
-            email=old_email,
-            role=old_role,
-            institution_id=current_user.institution_id,
-            location_id=old_location_id,
-            invite_status=InviteStatus.PENDING.value,
-            is_active=old_is_active,
-        )
-        session.add(replacement)
         apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,
-        action=AuditAction.LOCATION_USER_CREATE,
+        action=AuditAction.USER_REINVITED,
         target_resource=f"user:{old_email}:reinvite",
         outcome=AuditOutcome.SUCCESS,
         metadata={
             "actor_role": current_user.role,
             "institution_id": current_user.institution_id,
             "old_user_id": old_user_id,
-            "new_user_id": new_supabase_user_id,
+            "new_user_id": old_user_id,
             "role": old_role,
             "location_id": old_location_id,
         },
         institution_id=current_user.institution_id,
+        user_id=str(current_user.id),
+        location_id=old_location_id,
     )
     return UserActionResponse(
-        message=f"Reinvite sent to {old_email}", user_id=new_supabase_user_id
+        message=f"Reinvite sent to {old_email}", user_id=old_user_id
     )
 
 
@@ -1157,6 +1105,7 @@ async def list_location_users(
                     select(User).where(
                         User.institution_id == current_user.institution_id,
                         User.location_id == current_user.location_id,
+                        User.deleted_at.is_(None),
                         User.role == UserRole.STAFF.value,
                     )
                 )
@@ -1214,6 +1163,7 @@ async def deactivate_location_user(
                     User.id == user_id,
                     User.institution_id == current_user.institution_id,
                     User.location_id == current_user.location_id,
+                    User.deleted_at.is_(None),
                     User.role == UserRole.STAFF.value,
                 )
             )
@@ -1224,7 +1174,7 @@ async def deactivate_location_user(
                 detail="Staff user not found at your location",
             )
 
-        target.is_active = False
+        target.mark_deleted()
 
     log_audit_background(
         actor=current_user.id,
@@ -1238,6 +1188,8 @@ async def deactivate_location_user(
             "deactivated_user_id": user_id,
         },
         institution_id=current_user.institution_id,
+        user_id=str(current_user.id),
+        location_id=str(current_user.location_id),
     )
     return UserActionResponse(message="Staff user deactivated", user_id=user_id)
 
@@ -1254,7 +1206,9 @@ async def invite_location_admin(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
         )
+    email = UserInviteService.normalize_email(data.email)
     async with get_db_session() as session:
+        actor = await ensure_invite_cooldown(session, current_user)
         svc = InstitutionService(session)
         location = await svc.get_location_by_slug(loc_slug)
         if not location or location.institution_id != current_user.institution_id:
@@ -1262,46 +1216,33 @@ async def invite_location_admin(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
 
-        existing = await session.execute(select(User).where(User.email == data.email))
+        existing = await session.execute(
+            select(User).where(User.email == email)
+        )
         if existing.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail="User already exists"
             )
 
-        supabase = SupabaseService()
-        response = supabase.invite_user(
-            email=data.email,
-            institution_id=current_user.institution_id,
-            role=UserRole.LOCATION_ADMIN.value,
-            location_id=str(location.id),
-        )
-        supabase_user_id = None
-        if hasattr(response, "user") and hasattr(response.user, "id"):
-            supabase_user_id = str(response.user.id)
-        elif isinstance(response, dict) and "id" in response:
-            supabase_user_id = str(response["id"])
-        if not supabase_user_id:
+        invite_service = UserInviteService(session)
+        try:
+            await invite_service.create_invited_user(
+                email=email,
+                institution_id=current_user.institution_id,
+                role=UserRole.LOCATION_ADMIN.value,
+                location_id=str(location.id),
+            )
+        except Exception:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Invite did not return user id",
+                detail="Failed to send invite email",
             )
-
-        user = User(
-            id=supabase_user_id,
-            email=data.email,
-            role=UserRole.LOCATION_ADMIN.value,
-            institution_id=current_user.institution_id,
-            location_id=location.id,
-            invite_status=InviteStatus.PENDING.value,
-            is_active=True,
-        )
-        session.add(user)
         apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,
         action=AuditAction.LOCATION_USER_CREATE,
-        target_resource=f"location:{loc_slug}/user:{data.email}",
+        target_resource=f"location:{loc_slug}/user:{email}",
         outcome=AuditOutcome.SUCCESS,
         metadata={
             "actor_role": current_user.role,
@@ -1311,7 +1252,7 @@ async def invite_location_admin(
         },
         institution_id=current_user.institution_id,
     )
-    return {"message": f"Location admin invite sent to {data.email}"}
+    return {"message": f"Location admin invite sent to {email}"}
 
 
 @router.post("/locations/{loc_slug}/invite-staff", status_code=status.HTTP_201_CREATED)
@@ -1324,6 +1265,7 @@ async def invite_staff(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No location assignment"
         )
+    email = UserInviteService.normalize_email(data.email)
     async with get_db_session() as session:
         actor = await ensure_invite_cooldown(session, current_user)
         svc = InstitutionService(session)
@@ -1338,46 +1280,33 @@ async def invite_staff(
                 detail="Can only invite staff for your location",
             )
 
-        existing = await session.execute(select(User).where(User.email == data.email))
+        existing = await session.execute(
+            select(User).where(User.email == email)
+        )
         if existing.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail="User already exists"
             )
 
-        supabase = SupabaseService()
-        response = supabase.invite_user(
-            email=data.email,
-            institution_id=current_user.institution_id,
-            role=UserRole.STAFF.value,
-            location_id=str(location.id),
-        )
-        supabase_user_id = None
-        if hasattr(response, "user") and hasattr(response.user, "id"):
-            supabase_user_id = str(response.user.id)
-        elif isinstance(response, dict) and "id" in response:
-            supabase_user_id = str(response["id"])
-        if not supabase_user_id:
+        invite_service = UserInviteService(session)
+        try:
+            await invite_service.create_invited_user(
+                email=email,
+                institution_id=current_user.institution_id,
+                role=UserRole.STAFF.value,
+                location_id=str(location.id),
+            )
+        except Exception:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Invite did not return user id",
+                detail="Failed to send invite email",
             )
-
-        user = User(
-            id=supabase_user_id,
-            email=data.email,
-            role=UserRole.STAFF.value,
-            institution_id=current_user.institution_id,
-            location_id=location.id,
-            invite_status=InviteStatus.PENDING.value,
-            is_active=True,
-        )
-        session.add(user)
         apply_invite_cooldown(actor)
 
     log_audit_background(
         actor=current_user.id,
         action=AuditAction.LOCATION_USER_CREATE,
-        target_resource=f"location:{loc_slug}/staff:{data.email}",
+        target_resource=f"location:{loc_slug}/staff:{email}",
         outcome=AuditOutcome.SUCCESS,
         metadata={
             "actor_role": current_user.role,
@@ -1387,7 +1316,7 @@ async def invite_staff(
         },
         institution_id=current_user.institution_id,
     )
-    return {"message": f"Staff invite sent to {data.email}"}
+    return {"message": f"Staff invite sent to {email}"}
 
 
 # =============================================================================
@@ -1721,7 +1650,7 @@ async def get_location_audit_logs(
 
     location_id = str(current_user.location_id)
     async with get_db_session() as session:
-        filter_expr = AuditLog.audit_metadata["location_id"].as_string() == location_id
+        filter_expr = AuditLog.location_id == location_id
         count_result = await session.execute(
             select(func.count())
             .select_from(AuditLog)

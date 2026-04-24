@@ -1,16 +1,12 @@
-"""
-Authentication routes.
-
-Two login flows:
-1. POST /auth/token          — Admin login with local email+password (bcrypt)
-2. POST /auth/supabase/token — Institution login via Supabase token exchange
-"""
+"""Authentication routes."""
 
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -19,8 +15,11 @@ from src.app.config import settings
 from src.app.database import get_db_session
 from src.app.models.user import User, InviteStatus
 from src.app.services.auth import AuthService
-from src.app.services.supabase_service import SupabaseService
+from src.app.services.auth_email_service import AuthEmailService
+from src.app.services.password_service import PasswordService
+from src.app.services.refresh_token_service import RefreshTokenService
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.security import get_client_ip
 from src.app.services.audit import log_audit_background
 from src.app.api.rate_limit import limiter
 
@@ -36,8 +35,40 @@ class Token(BaseModel):
     token_type: str
 
 
-class SupabaseTokenRequest(BaseModel):
-    access_token: str
+class AuthSession(Token):
+    refresh_token: str
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+    redirect_url: str | None = None
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
+class SetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
 
 
 class UserRead(BaseModel):
@@ -50,95 +81,155 @@ class UserRead(BaseModel):
     location_id: str | None = None
 
 
-@router.post("/supabase/token", response_model=Token)
-@limiter.limit("30/minute")
-async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) -> Token:
-    """
-    Exchange a Supabase access token for a local JWT.
-
-    Unified Login Flow (Admins & Institutions):
-    1. Frontend authenticates with Supabase (email + password / magic link)
-    2. Frontend sends the Supabase access_token here
-    3. We verify it server-side via Supabase admin API
-    4. We look up the matching local user, check lockout, then issue our own JWT
-
-    HIPAA §164.312(d): Accounts lock after MAX_FAILED_LOGIN_ATTEMPTS consecutive
-    failures. Lockout duration is ACCOUNT_LOCKOUT_MINUTES. Admins can unlock via
-    POST /admin/users/{user_id}/unlock.
-    """
-    supabase_service = SupabaseService()
-
-    # Capture client IP once — used in every audit log for this request
-    forwarded_for = request.headers.get("x-forwarded-for")
-    client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (
-        request.client.host if request.client else None
+def _client_ip(request: Request) -> str | None:
+    return get_client_ip(
+        forwarded_for=request.headers.get("x-forwarded-for"),
+        direct_host=request.client.host if request.client else None,
     )
 
-    audit_meta: dict = {"action": "token_exchange"}
+
+def _extract_bearer_token(request: Request) -> str | None:
+    authorization = request.headers.get("authorization")
+    if not authorization:
+        return None
+
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+async def _issue_access_token(user: User) -> Token:
+    auth_service = AuthService()
+    access_token, jti, ttl_seconds = auth_service.build_access_token(
+        data={
+            "sub": user.id,
+            "role": user.role,
+            "institution_id": user.institution_id,
+            "location_id": user.location_id,
+        },
+        expires_delta=timedelta(minutes=settings.access_token_ttl_minutes),
+    )
+    await RefreshTokenService.register_access_token(user.id, jti, ttl_seconds=ttl_seconds)
+    return Token(access_token=access_token, token_type="bearer")
+
+
+async def _issue_auth_session(user: User, *, revoke_existing: bool = False) -> AuthSession:
+    try:
+        if revoke_existing:
+            await RefreshTokenService.revoke_all_for_user(user.id)
+            await RefreshTokenService.revoke_all_access_tokens_for_user(user.id)
+        refresh_token = await RefreshTokenService.issue_token(user.id)
+        access = await _issue_access_token(user)
+    except Exception as e:
+        logger.error("Failed to issue auth session: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication session store is unavailable",
+        )
+
+    return AuthSession(
+        access_token=access.access_token,
+        token_type=access.token_type,
+        refresh_token=refresh_token,
+    )
+
+
+async def _revoke_access_token_from_request(request: Request) -> None:
+    bearer_token = _extract_bearer_token(request)
+    if not bearer_token:
+        return
+
+    try:
+        claims = AuthService.decode_access_token(bearer_token)
+    except JWTError:
+        return
+
+    jti = claims.get("jti")
+    if not jti:
+        return
+
+    await RefreshTokenService.revoke_access_token_jti(
+        jti,
+        user_id=claims.get("sub"),
+        ttl_seconds=AuthService.remaining_ttl_seconds(claims),
+    )
+
+
+def _register_failed_login_attempt(user: User) -> bool:
+    user.failed_login_attempts += 1
+    if user.failed_login_attempts >= settings.max_failed_login_attempts:
+        user.locked_until = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.account_lockout_minutes
+        )
+        return True
+    return False
+
+
+def _clear_password_reset_state(user: User) -> None:
+    user.password_reset_token_hash = None
+    user.password_reset_expires_at = None
+
+
+def _clear_invite_state(user: User) -> None:
+    user.invite_token_hash = None
+    user.invite_expires_at = None
+
+
+def _set_password_on_user(user: User, password: str) -> None:
+    user.password_hash = PasswordService.hash_password(password)
+    user.password_set_at = datetime.now(timezone.utc)
+    user.failed_login_attempts = 0
+    user.locked_until = None
+
+
+@router.post("/login", response_model=AuthSession)
+@limiter.limit("30/minute")
+async def login(request: Request, data: LoginRequest) -> AuthSession:
+    """Authenticate a user with local email/password credentials."""
+    email = _normalize_email(data.email)
+    client_ip = _client_ip(request)
+    audit_meta: dict[str, str] = {"action": "local_login"}
     if client_ip:
         audit_meta["ip_address"] = client_ip
 
-    # --- Step 1: Verify Supabase token ---
-    try:
-        supabase_user = supabase_service.get_user_by_token(data.access_token)
-    except Exception as e:
-        logger.warning(f"Supabase token verification failed: {e}")
-        log_audit_background(
-            actor=AuditActor.API_CLIENT,
-            action=AuditAction.LOGIN,
-            target_resource="auth:login",
-            outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
-            metadata={**audit_meta, "reason": "invalid_supabase_token"},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-        )
-
-    if not supabase_user or not supabase_user.email:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-        )
-
-    audit_meta["supabase_uid"] = str(supabase_user.id)
-    supabase_uid = str(supabase_user.id)
-
-    # --- Steps 2–5: DB checks and counter updates in a single session ---
     async with get_db_session() as session:
-        result = await session.execute(select(User).where(User.id == supabase_uid))
+        result = await session.execute(
+            select(User).where(
+                User.email == email,
+                User.deleted_at.is_(None),
+            )
+        )
         user = result.scalar_one_or_none()
 
-        # Step 2: Local user must exist
         if not user:
             log_audit_background(
                 actor=AuditActor.API_CLIENT,
                 action=AuditAction.LOGIN,
                 target_resource="auth:login",
-                outcome=AuditOutcome.FAILURE_NOT_FOUND,
-                metadata=audit_meta,
+                outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
+                metadata={**audit_meta, "reason": "invalid_credentials"},
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token",
+                detail="Invalid email or password",
             )
 
+        target_resource = f"user:{user.id}"
         audit_meta["user_id"] = user.id
         audit_meta["role"] = user.role
-        target_resource = f"user:{user.id}"
 
-        # Step 3: Check account lockout
         if user.is_locked():
             log_audit_background(
                 actor=AuditActor.API_CLIENT,
                 action=AuditAction.LOGIN,
                 target_resource=target_resource,
                 outcome=AuditOutcome.FAILURE_ACCOUNT_LOCKED,
-                metadata={
-                    **audit_meta,
-                    "reason": "account_locked",
-                    "locked_until": user.locked_until.isoformat(),
-                },
+                metadata={**audit_meta, "reason": "account_locked"},
                 institution_id=user.institution_id,
             )
             raise HTTPException(
@@ -146,18 +237,8 @@ async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) 
                 detail="Account is temporarily locked. Contact your administrator.",
             )
 
-        # Step 4: Check active status — count as a failed attempt
         if not user.is_active:
-            user.failed_login_attempts += 1
-            if user.failed_login_attempts >= settings.max_failed_login_attempts:
-                user.locked_until = datetime.now(timezone.utc) + timedelta(
-                    minutes=settings.account_lockout_minutes
-                )
-                logger.warning(
-                    f"Account locked after {user.failed_login_attempts} failed attempts: "
-                    f"user={user.id}"
-                )
-            # session auto-commits on exit
+            _register_failed_login_attempt(user)
             log_audit_background(
                 actor=AuditActor.API_CLIENT,
                 action=AuditAction.LOGIN,
@@ -171,37 +252,322 @@ async def exchange_supabase_token(request: Request, data: SupabaseTokenRequest) 
                 detail="Account is inactive",
             )
 
-        # Step 5: Success — reset lockout state
+        if not PasswordService.verify_password(data.password, user.password_hash):
+            is_now_locked = _register_failed_login_attempt(user)
+            outcome = (
+                AuditOutcome.FAILURE_ACCOUNT_LOCKED
+                if is_now_locked
+                else AuditOutcome.FAILURE_UNAUTHORIZED
+            )
+            log_audit_background(
+                actor=AuditActor.API_CLIENT,
+                action=AuditAction.LOGIN,
+                target_resource=target_resource,
+                outcome=outcome,
+                metadata={**audit_meta, "reason": "invalid_credentials"},
+                institution_id=user.institution_id,
+            )
+            if is_now_locked:
+                raise HTTPException(
+                    status_code=status.HTTP_423_LOCKED,
+                    detail="Account is temporarily locked. Contact your administrator.",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+            )
+
         user.failed_login_attempts = 0
         user.locked_until = None
-
-        # Step 6: Mark invite as accepted on first successful login
-        if user.invite_status == InviteStatus.PENDING.value:
-            user.invite_status = InviteStatus.ACCEPTED.value
-        # session auto-commits on exit
-
-    # --- Issue local JWT (sub = user UUID) ---
-    auth_service = AuthService()
-    access_token = auth_service.create_access_token(
-        data={
-            "sub": user.id,
-            "role": user.role,
-            "institution_id": user.institution_id,
-            "location_id": user.location_id,
-        },
-        expires_delta=timedelta(minutes=15),
-    )
+    session = await _issue_auth_session(user)
 
     log_audit_background(
         actor=user.role,
         action=AuditAction.LOGIN,
-        target_resource=target_resource,
+        target_resource=f"user:{user.id}",
         outcome=AuditOutcome.SUCCESS,
         metadata=audit_meta,
         institution_id=user.institution_id,
     )
+    return session
 
-    return Token(access_token=access_token, token_type="bearer")
+
+@router.post("/token", response_model=AuthSession)
+@limiter.limit("30/minute")
+async def login_oauth_form(
+    request: Request,
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+) -> AuthSession:
+    """OAuth2 form-compatible alias for local login."""
+    return await login(
+        request=request,
+        data=LoginRequest(email=form_data.username, password=form_data.password),
+    )
+
+
+@router.post("/forgot-password", response_model=MessageResponse)
+@limiter.limit("10/minute")
+async def forgot_password(request: Request, data: ForgotPasswordRequest) -> MessageResponse:
+    """Generate a password reset token and send a reset email if the account exists."""
+    email = _normalize_email(data.email)
+    client_ip = _client_ip(request)
+    email_service = AuthEmailService()
+
+    if data.redirect_url:
+        try:
+            email_service.resolve_redirect_url(
+                redirect_url=data.redirect_url,
+                default_path="/set-password",
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
+    async with get_db_session() as session:
+        result = await session.execute(
+            select(User).where(
+                User.email == email,
+                User.deleted_at.is_(None),
+            )
+        )
+        user = result.scalar_one_or_none()
+
+        if user and user.is_active:
+            token = PasswordService.generate_one_time_token()
+            user.password_reset_token_hash = PasswordService.hash_token(token)
+            user.password_reset_expires_at = datetime.now(timezone.utc) + timedelta(
+                minutes=settings.password_reset_token_ttl_minutes
+            )
+            await email_service.send_password_reset_email(
+                email=user.email,
+                token=token,
+                redirect_url=data.redirect_url,
+            )
+
+            log_audit_background(
+                actor=AuditActor.API_CLIENT,
+                action=AuditAction.PASSWORD_RESET_REQUEST,
+                target_resource=f"user:{user.id}",
+                outcome=AuditOutcome.SUCCESS,
+                metadata={
+                    "action": "forgot_password",
+                    "ip_address": client_ip,
+                },
+                institution_id=user.institution_id,
+            )
+
+    return MessageResponse(
+        message="If an account exists for that email, a password reset email has been sent."
+    )
+
+
+@router.post("/reset-password", response_model=AuthSession)
+@limiter.limit("20/minute")
+async def reset_password(request: Request, data: ResetPasswordRequest) -> AuthSession:
+    """Consume a password reset token, set a new password, and issue a JWT."""
+    token_hash = PasswordService.hash_token(data.token)
+    client_ip = _client_ip(request)
+
+    async with get_db_session() as session:
+        result = await session.execute(
+            select(User).where(
+                User.password_reset_token_hash == token_hash,
+                User.deleted_at.is_(None),
+            )
+        )
+        user = result.scalar_one_or_none()
+
+        if (
+            not user
+            or not user.password_reset_expires_at
+            or user.password_reset_expires_at < datetime.now(timezone.utc)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired password reset token",
+            )
+
+        _set_password_on_user(user, data.password)
+        _clear_password_reset_state(user)
+    session = await _issue_auth_session(user, revoke_existing=True)
+
+    log_audit_background(
+        actor=user.role,
+        action=AuditAction.PASSWORD_RESET_COMPLETE,
+        target_resource=f"user:{user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={"action": "reset_password", "ip_address": client_ip},
+        institution_id=user.institution_id,
+    )
+    return session
+
+
+@router.post("/set-password", response_model=AuthSession)
+@limiter.limit("20/minute")
+async def set_password(request: Request, data: SetPasswordRequest) -> AuthSession:
+    """Consume an invite token, set a password, and issue a JWT."""
+    token_hash = PasswordService.hash_token(data.token)
+    client_ip = _client_ip(request)
+
+    async with get_db_session() as session:
+        result = await session.execute(
+            select(User).where(
+                User.invite_token_hash == token_hash,
+                User.deleted_at.is_(None),
+            )
+        )
+        user = result.scalar_one_or_none()
+
+        if (
+            not user
+            or not user.invite_expires_at
+            or user.invite_expires_at < datetime.now(timezone.utc)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired invite token",
+            )
+
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is inactive",
+            )
+
+        _set_password_on_user(user, data.password)
+        user.invite_status = InviteStatus.ACCEPTED.value
+        _clear_invite_state(user)
+        _clear_password_reset_state(user)
+    session = await _issue_auth_session(user, revoke_existing=True)
+
+    log_audit_background(
+        actor=user.role,
+        action=AuditAction.PASSWORD_SET,
+        target_resource=f"user:{user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={"action": "set_password", "ip_address": client_ip},
+        institution_id=user.institution_id,
+    )
+    return session
+
+
+@router.post("/refresh", response_model=AuthSession)
+@limiter.limit("60/minute")
+async def refresh_session(request: Request, data: RefreshRequest) -> AuthSession:
+    """Rotate a refresh token and issue a new access token."""
+    client_ip = _client_ip(request)
+
+    try:
+        user_id = await RefreshTokenService.get_user_id_for_token(data.refresh_token)
+    except Exception as e:
+        logger.error("Failed to validate refresh token: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication session store is unavailable",
+        )
+
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+
+    async with get_db_session() as session:
+        result = await session.execute(
+            select(User).where(
+                User.id == user_id,
+                User.deleted_at.is_(None),
+            )
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            await RefreshTokenService.revoke_token(data.refresh_token)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired refresh token",
+            )
+
+        if user.is_locked():
+            await RefreshTokenService.revoke_token(data.refresh_token)
+            raise HTTPException(
+                status_code=status.HTTP_423_LOCKED,
+                detail="Account is temporarily locked. Contact your administrator.",
+            )
+
+        if not user.is_active:
+            await RefreshTokenService.revoke_token(data.refresh_token)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is inactive",
+            )
+
+    try:
+        new_refresh_token = await RefreshTokenService.rotate_token(user.id, data.refresh_token)
+    except Exception as e:
+        logger.error("Failed to rotate refresh token: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication session store is unavailable",
+        )
+
+    if not new_refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+
+    try:
+        access = await _issue_access_token(user)
+    except Exception as e:
+        logger.error("Failed to issue access token: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication session store is unavailable",
+        ) from e
+    log_audit_background(
+        actor=user.role,
+        action=AuditAction.LOGIN,
+        target_resource=f"user:{user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={"action": "refresh_session", "ip_address": client_ip},
+        institution_id=user.institution_id,
+    )
+    return AuthSession(
+        access_token=access.access_token,
+        token_type=access.token_type,
+        refresh_token=new_refresh_token,
+    )
+
+
+@router.post("/logout", response_model=MessageResponse)
+@limiter.limit("60/minute")
+async def logout(request: Request, data: LogoutRequest) -> MessageResponse:
+    """Invalidate a refresh token. Idempotent by design."""
+    client_ip = _client_ip(request)
+    revoked_user_id: str | None = None
+    try:
+        revoked_user_id = await RefreshTokenService.revoke_token(data.refresh_token)
+        await _revoke_access_token_from_request(request)
+    except Exception as e:
+        logger.error("Failed to revoke refresh token: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication session store is unavailable",
+        )
+
+    if revoked_user_id:
+        log_audit_background(
+            actor=AuditActor.API_CLIENT,
+            action=AuditAction.LOGIN,
+            target_resource=f"user:{revoked_user_id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={"action": "logout", "ip_address": client_ip},
+        )
+
+    return MessageResponse(message="Logged out successfully")
 
 
 # =============================================================================
@@ -227,7 +593,12 @@ async def unlock_user_account(
     audit-logged with the acting admin's identity.
     """
     async with get_db_session() as session:
-        result = await session.execute(select(User).where(User.id == user_id))
+        result = await session.execute(
+            select(User).where(
+                User.id == user_id,
+                User.deleted_at.is_(None),
+            )
+        )
         target_user = result.scalar_one_or_none()
 
         if not target_user:

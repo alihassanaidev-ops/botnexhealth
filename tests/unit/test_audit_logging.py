@@ -43,6 +43,8 @@ class TestAuditLogModel:
             outcome=AuditOutcome.SUCCESS,
             audit_metadata={"request_id": "abc123"},
             institution_id="institution-uuid",
+            user_id="11111111-1111-1111-1111-111111111111",
+            location_id="22222222-2222-2222-2222-222222222222",
         )
         
         assert log.actor == "RETELL_AGENT"
@@ -51,6 +53,8 @@ class TestAuditLogModel:
         assert log.outcome == "SUCCESS"
         assert log.audit_metadata["request_id"] == "abc123"
         assert log.institution_id == "institution-uuid"
+        assert log.user_id == "11111111-1111-1111-1111-111111111111"
+        assert log.location_id == "22222222-2222-2222-2222-222222222222"
     
     def test_audit_log_create_with_strings(self):
         """Test creating AuditLog with string values."""
@@ -243,6 +247,26 @@ class TestAuditService:
         entries = repo.get_all()
         assert len(entries) == 1
         assert entries[0].outcome == AuditOutcome.FAILURE_VALIDATION
+
+    @pytest.mark.asyncio
+    async def test_log_infers_user_and_location_ids_from_metadata(self, service):
+        """Test logging infers direct filter columns from audit metadata."""
+        audit_service, repo = service
+
+        await audit_service.log(
+            actor=AuditActor.ADMIN,
+            action=AuditAction.VIEW_AUDIT_LOGS,
+            target_resource="institution:audit_logs",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_user_id": "11111111-1111-1111-1111-111111111111",
+                "location_id": "22222222-2222-2222-2222-222222222222",
+            },
+        )
+
+        entry = repo.get_all()[0]
+        assert entry.user_id == "11111111-1111-1111-1111-111111111111"
+        assert entry.location_id == "22222222-2222-2222-2222-222222222222"
     
     @pytest.mark.asyncio
     async def test_log_handles_repository_error(self, service):

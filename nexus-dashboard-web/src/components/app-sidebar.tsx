@@ -39,7 +39,8 @@ import {
     Moon,
     Sun,
     Bell,
-    Settings
+    Settings,
+    ClipboardList,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useTheme } from "next-themes"
@@ -147,6 +148,12 @@ const staffNav: NavItemDef[] = [
 
 // Institution setup nav items
 const navSetup: NavItemDef[] = [
+    {
+        title: "Setup Overview",
+        url: "/setup",
+        icon: ClipboardList,
+        exact: true,
+    },
     {
         title: "Appointment Types",
         url: "/setup/appointment-types",

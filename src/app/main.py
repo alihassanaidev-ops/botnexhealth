@@ -22,6 +22,7 @@ from src.app.api.routes.callbacks import router as callbacks_router
 from src.app.api.routes.email_templates import router as email_templates_router
 from src.app.api.routes.notification_preferences import router as notification_preferences_router
 from src.app.api.routes.notification_recipients import router as notification_recipients_router
+from src.app.api.routes.sse import router as sse_router
 from src.app.api.routes.twilio import router as twilio_router
 
 from slowapi import _rate_limit_exceeded_handler
@@ -122,21 +123,22 @@ def create_app() -> FastAPI:
     app.include_router(retell_webhook_router, prefix="/api/v1")
     
     # Admin routes
-    app.include_router(auth_router)
-    app.include_router(institutions_router)
+    app.include_router(auth_router, prefix="/api")
+    app.include_router(institutions_router, prefix="/api")
 
     # Institution portal routes (authenticated institution users)
-    app.include_router(institution_portal_router)
-    app.include_router(institution_setup_router)
-    app.include_router(calls_router)
-    app.include_router(dashboard_router)
-    app.include_router(custom_fields_router)
-    app.include_router(notifications_router)
-    app.include_router(callbacks_router)
-    app.include_router(email_templates_router)
-    app.include_router(notification_preferences_router)
-    app.include_router(notification_recipients_router)
-    app.include_router(twilio_router)
+    app.include_router(institution_portal_router, prefix="/api")
+    app.include_router(institution_setup_router, prefix="/api")
+    app.include_router(calls_router, prefix="/api")
+    app.include_router(dashboard_router, prefix="/api")
+    app.include_router(custom_fields_router, prefix="/api")
+    app.include_router(notifications_router, prefix="/api")
+    app.include_router(callbacks_router, prefix="/api")
+    app.include_router(email_templates_router, prefix="/api")
+    app.include_router(notification_preferences_router, prefix="/api")
+    app.include_router(notification_recipients_router, prefix="/api")
+    app.include_router(sse_router, prefix="/api")
+    app.include_router(twilio_router, prefix="/api")
 
     return app
 

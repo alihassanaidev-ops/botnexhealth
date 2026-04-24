@@ -175,7 +175,6 @@ class InstitutionService:
         self,
         institution: Institution,
         hard_delete: bool = False,
-        supabase_service: Any = None
     ) -> None:
         """
         Delete an institution.
@@ -183,10 +182,8 @@ class InstitutionService:
         Args:
             institution: Institution to delete
             hard_delete: If True, permanently delete. If False, soft delete (set is_active=False).
-            supabase_service: Optional SupabaseService instance for cleaning up Supabase auth users.
         """
         if hard_delete:
-            # Delete associated users first to avoid foreign key constraint violation
             from src.app.models.user import User
             result = await self.session.execute(
                 select(User).where(User.institution_id == institution.id)
@@ -194,15 +191,6 @@ class InstitutionService:
             users = result.scalars().all()
 
             for user in users:
-                # Delete from Supabase auth (user.id IS the Supabase UUID)
-                if supabase_service:
-                    try:
-                        supabase_service.delete_user(user.id)
-                        logger.info(f"Deleted Supabase auth user {user.id}")
-                    except Exception as e:
-                        logger.warning(f"Failed to delete Supabase user {user.id}: {e}")
-                        # Continue with local deletion even if Supabase fails
-
                 await self.session.delete(user)
                 logger.info(f"Deleted user {user.id} associated with institution {institution.slug}")
 

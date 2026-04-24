@@ -14,12 +14,17 @@ from pydantic import BaseModel, Field
 from src.app.database import get_db_session
 from src.app.api.deps import get_current_admin
 from src.app.config import settings
-from src.app.models.audit_log import AuditAction, AuditActor
-from src.app.models.user import User, UserRole, InviteStatus
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.models.user import User, UserRole
+from src.app.services.audit import log_audit_background
 from src.app.services.audit_decorator import audit
 from src.app.services.institution_service import InstitutionService
-from src.app.services.supabase_service import SupabaseService
-from src.app.api.models import InstitutionResponse, InstitutionBasicListResponse, AuditLogPaginatedResponse
+from src.app.services.user_invite_service import UserInviteService
+from src.app.api.models import (
+    AuditLogPaginatedResponse,
+    InstitutionBasicListResponse,
+    InstitutionResponse,
+)
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.dependencies import get_nexhealth_client_dependency
 from src.app.nexhealth.client import NexHealthClient
@@ -130,7 +135,7 @@ class InstitutionCreate(BaseModel):
     slug: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
 
     # Initial Institution User (Mandatory)
-    email: str = Field(..., description="Email for the initial institution user (Supabase invite)")
+    email: str = Field(..., description="Email for the initial institution user invite")
 
     # NexHealth
     nexhealth_api_key: str | None = None
@@ -249,6 +254,7 @@ async def list_institutions(
                 .where(
                     User.institution_id.in_(institution_ids),
                     User.role == UserRole.INSTITUTION_ADMIN.value,
+                    User.deleted_at.is_(None),
                 )
                 .order_by(User.created_at.asc())
             )
@@ -289,10 +295,11 @@ async def create_institution(
     data: InstitutionCreate,
     _: User = Depends(get_current_admin),
 ):
-    """Create a new institution with an initial institution user via Supabase invite."""
+    """Create a new institution with an initial institution user invite."""
     async with get_db_session() as session:
         institution_service = InstitutionService(session)
-        supabase_service = SupabaseService()
+        invite_service = UserInviteService(session)
+        email = UserInviteService.normalize_email(data.email)
 
         # --- Validate uniqueness BEFORE any mutations ---
 
@@ -303,13 +310,11 @@ async def create_institution(
                 detail=f"Institution with slug '{data.slug}' already exists"
             )
 
-        existing_user = await session.execute(
-            select(User).where(User.email == data.email)
-        )
+        existing_user = await session.execute(select(User).where(User.email == email))
         if existing_user.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with email '{data.email}' already exists"
+                detail=f"User with email '{email}' already exists"
             )
 
         # --- Create institution (flush only, not committed yet) ---
@@ -323,55 +328,18 @@ async def create_institution(
                 detail=f"Institution with slug '{data.slug}' already exists (race condition)"
             )
 
-        # --- Invite user via Supabase ---
-
-        supabase_user_id = None
+        # --- Create local user and send invite email ---
         try:
-            response = supabase_service.invite_user(
-                email=data.email,
+            user = await invite_service.create_invited_user(
+                email=email,
                 institution_id=str(institution.id),
-                role=UserRole.INSTITUTION_ADMIN.value
+                role=UserRole.INSTITUTION_ADMIN.value,
             )
-            if hasattr(response, 'user') and hasattr(response.user, 'id'):
-                supabase_user_id = str(response.user.id)
-            elif isinstance(response, dict) and 'id' in response:
-                supabase_user_id = str(response['id'])
         except Exception as e:
-            logger.error(f"Supabase invite failed: {e}")
+            logger.error("Initial institution invite failed: %s", e, exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to send Supabase invite"
-            )
-
-        if not supabase_user_id:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Supabase invite did not return a user ID"
-            )
-
-        # --- Create local user record (id = Supabase UUID) ---
-
-        user = User(
-            id=supabase_user_id,
-            email=data.email,
-            role=UserRole.INSTITUTION_ADMIN.value,
-            institution_id=institution.id,
-            invite_status=InviteStatus.PENDING.value,
-            is_active=True,
-        )
-        session.add(user)
-
-        try:
-            await session.commit()
-        except Exception as e:
-            logger.error(f"Failed to commit institution creation to DB: {e}")
-            # Compensating transaction: clean up the orphaned Supabase user
-            if supabase_user_id:
-                logger.warning(f"Compensating: deleting Supabase user {supabase_user_id}")
-                supabase_service.delete_user(supabase_user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create institution locally. External invite rolled back."
+                detail="Failed to send invite email",
             )
 
         return InstitutionResponse.from_institution(institution, user, has_retell_secret=False)
@@ -399,6 +367,7 @@ async def get_institution(
             .where(
                 User.institution_id == institution.id,
                 User.role == UserRole.INSTITUTION_ADMIN.value,
+                User.deleted_at.is_(None),
             )
             .order_by(User.created_at.asc())
             .limit(1)
@@ -489,13 +458,7 @@ async def delete_institution(
                 detail=f"Institution '{slug}' not found"
             )
 
-        # Initialize SupabaseService for cleaning up Supabase auth users
-        supabase_service = None
-        if hard:
-            from src.app.services.supabase_service import SupabaseService
-            supabase_service = SupabaseService()
-
-        await institution_service.delete(institution, hard_delete=hard, supabase_service=supabase_service)
+        await institution_service.delete(institution, hard_delete=hard)
 
 
 class ResendInviteRequest(BaseModel):
@@ -515,17 +478,15 @@ class TestCallNotificationRequest(BaseModel):
 async def reinvite_institution_user(
     slug: str,
     data: ResendInviteRequest,
-    _: User = Depends(get_current_admin),
+    current_admin: User = Depends(get_current_admin),
 ):
     """
-    Re-invite an institution user via Supabase.
-
-    Deletes the old Supabase auth user (if any) and creates a fresh invite.
-    Use this when the original invite link expired or the Supabase user was
-    accidentally deleted.
+    Re-invite an institution user with a fresh local invite token.
     """
     async with get_db_session() as session:
         institution_service = InstitutionService(session)
+        invite_service = UserInviteService(session)
+        email = UserInviteService.normalize_email(data.email)
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
 
         if not institution:
@@ -536,65 +497,47 @@ async def reinvite_institution_user(
 
         # Find the local user
         result = await session.execute(
-            select(User).where(User.email == data.email, User.institution_id == institution.id)
+            select(User).where(
+                User.email == email,
+                User.institution_id == institution.id,
+                User.deleted_at.is_(None),
+            )
         )
         user = result.scalar_one_or_none()
 
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User '{data.email}' not found for institution '{slug}'"
+                detail=f"User '{email}' not found for institution '{slug}'"
             )
 
-        supabase_service = SupabaseService()
-
-        # Delete old Supabase auth user (user.id IS the Supabase UUID)
         try:
-            supabase_service.delete_user(user.id)
-            logger.info(f"Deleted old Supabase user {user.id} for re-invite")
+            await invite_service.reinvite_user(user)
         except Exception as e:
-            logger.warning(f"Could not delete old Supabase user {user.id}: {e}")
-
-        # Send fresh invite
-        try:
-            response = supabase_service.invite_user(
-                email=data.email,
-                institution_id=str(institution.id),
-                role=user.role
-            )
-            new_supabase_id = None
-            if hasattr(response, 'user') and hasattr(response.user, 'id'):
-                new_supabase_id = str(response.user.id)
-            elif isinstance(response, dict) and 'id' in response:
-                new_supabase_id = str(response['id'])
-
-            if not new_supabase_id:
-                raise ValueError("Supabase invite did not return a user ID")
-
-            # PK changed — delete old row, create new one with new Supabase UUID
-            old_role = user.role
-            old_institution_id = user.institution_id
-            old_is_active = user.is_active
-            await session.delete(user)
-            await session.flush()
-
-            new_user = User(
-                id=new_supabase_id,
-                email=data.email,
-                role=old_role,
-                institution_id=old_institution_id,
-                invite_status=InviteStatus.PENDING.value,
-                is_active=old_is_active,
-            )
-            session.add(new_user)
-        except Exception as e:
-            logger.error(f"Re-invite failed: {e}")
+            logger.error("Institution reinvite failed: %s", e, exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to re-invite user: {e}"
+                detail="Failed to re-invite user"
             )
 
-    return {"message": f"Invite re-sent to {data.email}"}
+    log_audit_background(
+        actor=current_admin.id,
+        action=AuditAction.USER_REINVITED,
+        target_resource=f"user:{email}:reinvite",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_admin.role,
+            "institution_id": str(institution.id),
+            "location_id": str(user.location_id) if user.location_id else None,
+            "old_user_id": str(user.id),
+            "new_user_id": str(user.id),
+            "role": user.role,
+        },
+        institution_id=str(institution.id),
+        user_id=str(current_admin.id),
+        location_id=str(user.location_id) if user.location_id else None,
+    )
+    return {"message": f"Invite re-sent to {email}"}
 
 
 @router.post("/{slug}/test-call-notification", status_code=status.HTTP_202_ACCEPTED)
@@ -817,6 +760,7 @@ async def list_locations(
                 select(User).where(
                     User.location_id.in_(location_ids),
                     User.role == UserRole.LOCATION_ADMIN.value,
+                    User.deleted_at.is_(None),
                 )
             )
             for u in user_result.scalars().all():
@@ -952,7 +896,7 @@ async def sync_location(
 
 class LocationUserInvite(BaseModel):
     """Request body for inviting a location user."""
-    email: str = Field(..., description="Email for the location user (Supabase invite)")
+    email: str = Field(..., description="Email for the location user invite")
 
 
 @router.post("/{slug}/locations/{loc_slug}/invite", response_model=LocationResponse, status_code=status.HTTP_201_CREATED)
@@ -974,12 +918,13 @@ async def invite_location_user(
     Flow mirrors create_institution:
     1. Validate institution + location exist
     2. Check email uniqueness
-    3. Invite via Supabase
-    4. Create local User with role=LOCATION_ADMIN, institution_id, location_id
+    3. Create local invite state
+    4. Send invite email
     """
     async with get_db_session() as session:
         institution_service = InstitutionService(session)
-        supabase_service = SupabaseService()
+        invite_service = UserInviteService(session)
+        email = UserInviteService.normalize_email(data.email)
 
         # Validate institution
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
@@ -993,12 +938,12 @@ async def invite_location_user(
 
         # Check email uniqueness
         existing_user = await session.execute(
-            select(User).where(User.email == data.email)
+            select(User).where(User.email == email)
         )
         if existing_user.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with email '{data.email}' already exists"
+                detail=f"User with email '{email}' already exists"
             )
 
         # Check if location already has a user
@@ -1006,6 +951,7 @@ async def invite_location_user(
             select(User).where(
                 User.location_id == location.id,
                 User.role == UserRole.LOCATION_ADMIN.value,
+                User.deleted_at.is_(None),
             )
         )
         if existing_loc_user.scalar_one_or_none():
@@ -1014,54 +960,19 @@ async def invite_location_user(
                 detail=f"Location '{loc_slug}' already has an assigned user"
             )
 
-        # Invite via Supabase
-        supabase_user_id = None
+        # Create local user and send invite email
         try:
-            response = supabase_service.invite_user(
-                email=data.email,
+            user = await invite_service.create_invited_user(
+                email=email,
                 institution_id=str(institution.id),
                 role=UserRole.LOCATION_ADMIN.value,
                 location_id=str(location.id),
             )
-            if hasattr(response, 'user') and hasattr(response.user, 'id'):
-                supabase_user_id = str(response.user.id)
-            elif isinstance(response, dict) and 'id' in response:
-                supabase_user_id = str(response['id'])
         except Exception as e:
-            logger.error(f"Supabase invite failed for location user: {e}")
+            logger.error("Location user invite failed: %s", e, exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to send Supabase invite",
-            )
-
-        if not supabase_user_id:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Supabase invite did not return a user ID",
-            )
-
-        # Create local user record
-        user = User(
-            id=supabase_user_id,
-            email=data.email,
-            role=UserRole.LOCATION_ADMIN.value,
-            institution_id=institution.id,
-            location_id=location.id,
-            invite_status=InviteStatus.PENDING.value,
-            is_active=True,
-        )
-        session.add(user)
-
-        try:
-            await session.commit()
-        except Exception as e:
-            logger.error(f"Failed to commit location user to DB: {e}")
-            if supabase_user_id:
-                logger.warning(f"Compensating: deleting Supabase user {supabase_user_id}")
-                supabase_service.delete_user(supabase_user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create location user locally. External invite rolled back.",
+                detail="Failed to send invite email",
             )
 
         return LocationResponse.from_location(location, user=user)
@@ -1089,6 +1000,7 @@ async def list_location_users(
             select(User).where(
                 User.location_id == location.id,
                 User.role.in_([UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value]),
+                User.deleted_at.is_(None),
             )
         )
         users = result.scalars().all()
@@ -1109,16 +1021,15 @@ async def reinvite_location_user(
     slug: str,
     loc_slug: str,
     data: ResendInviteRequest,
-    _: User = Depends(get_current_admin),
+    current_admin: User = Depends(get_current_admin),
 ):
     """
-    Re-invite a location user via Supabase.
-
-    Deletes the old Supabase auth user and creates a fresh invite,
-    preserving the local user record with updated Supabase UUID.
+    Re-invite a location user with a fresh local invite token.
     """
     async with get_db_session() as session:
         institution_service = InstitutionService(session)
+        invite_service = UserInviteService(session)
+        email = UserInviteService.normalize_email(data.email)
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
@@ -1131,8 +1042,9 @@ async def reinvite_location_user(
         # Find the user
         result = await session.execute(
             select(User).where(
-                User.email == data.email,
+                User.email == email,
                 User.location_id == location.id,
+                User.deleted_at.is_(None),
             )
         )
         user = result.scalar_one_or_none()
@@ -1140,61 +1052,36 @@ async def reinvite_location_user(
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User '{data.email}' not found for location '{loc_slug}'",
+                detail=f"User '{email}' not found for location '{loc_slug}'",
             )
 
-        supabase_service = SupabaseService()
-
-        # Delete old Supabase auth user
         try:
-            supabase_service.delete_user(user.id)
-            logger.info(f"Deleted old Supabase user {user.id} for location re-invite")
+            await invite_service.reinvite_user(user)
         except Exception as e:
-            logger.warning(f"Could not delete old Supabase user {user.id}: {e}")
-
-        # Send fresh invite
-        try:
-            response = supabase_service.invite_user(
-                email=data.email,
-                institution_id=str(institution.id),
-                role=user.role,
-                location_id=str(user.location_id) if user.location_id else None,
-            )
-            new_supabase_id = None
-            if hasattr(response, 'user') and hasattr(response.user, 'id'):
-                new_supabase_id = str(response.user.id)
-            elif isinstance(response, dict) and 'id' in response:
-                new_supabase_id = str(response['id'])
-
-            if not new_supabase_id:
-                raise ValueError("Supabase invite did not return a user ID")
-
-            # PK changed — delete old row, create new one
-            old_role = user.role
-            old_institution_id = user.institution_id
-            old_location_id = user.location_id
-            old_is_active = user.is_active
-            await session.delete(user)
-            await session.flush()
-
-            new_user = User(
-                id=new_supabase_id,
-                email=data.email,
-                role=old_role,
-                institution_id=old_institution_id,
-                location_id=old_location_id,
-                invite_status=InviteStatus.PENDING.value,
-                is_active=old_is_active,
-            )
-            session.add(new_user)
-        except Exception as e:
-            logger.error(f"Location re-invite failed: {e}")
+            logger.error("Location reinvite failed: %s", e, exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to re-invite user: {e}",
+                detail="Failed to re-invite user",
             )
 
-    return {"message": f"Invite re-sent to {data.email}"}
+    log_audit_background(
+        actor=current_admin.id,
+        action=AuditAction.USER_REINVITED,
+        target_resource=f"location:{loc_slug}/user:{email}:reinvite",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_admin.role,
+            "institution_id": str(institution.id),
+            "location_id": str(location.id),
+            "old_user_id": str(user.id),
+            "new_user_id": str(user.id),
+            "role": user.role,
+        },
+        institution_id=str(institution.id),
+        user_id=str(current_admin.id),
+        location_id=str(location.id),
+    )
+    return {"message": f"Invite re-sent to {email}"}
 
 
 # =============================================================================

@@ -42,6 +42,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
+import { useSSE } from "@/hooks/useSSE"
 import { listCallbacks } from "@/lib/callbacks-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { cn } from "@/lib/utils"
@@ -50,7 +51,6 @@ import type { CallbackListItem, CallbacksListResponse } from "@/types"
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 25
-const POLL_INTERVAL_MS = 30_000
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -326,6 +326,7 @@ function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 export default function Callbacks() {
+    const { lastEvent } = useSSE()
     const navigate = useNavigate()
     const [data, setData] = useState<CallbacksListResponse | null>(null)
     const [loading, setLoading] = useState(true)
@@ -377,11 +378,12 @@ export default function Callbacks() {
 
     useEffect(() => { fetchCallbacks() }, [fetchCallbacks])
 
-    // 30-second auto-poll
     useEffect(() => {
-        const id = setInterval(fetchCallbacks, POLL_INTERVAL_MS)
-        return () => clearInterval(id)
-    }, [fetchCallbacks])
+        if (lastEvent?.type !== "callbacks_updated" && lastEvent?.type !== "calls_updated") {
+            return
+        }
+        fetchCallbacks()
+    }, [fetchCallbacks, lastEvent])
 
     const hasFilters = !!(resolvedFilter !== "unresolved" || dateFrom || dateTo || search)
 

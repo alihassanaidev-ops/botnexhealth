@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
+import { useSSE } from "@/hooks/useSSE";
 import type { Notification, NotificationBadgeCounts } from "@/types";
 import {
     listNotifications,
@@ -11,7 +12,6 @@ import {
     isUrgent,
 } from "@/lib/notifications-api";
 
-const POLL_INTERVAL_MS = 20_000; // 20 seconds
 const PAGE_SIZE = 50;
 
 interface NotificationContextType {
@@ -33,6 +33,7 @@ const NotificationContext = createContext<NotificationContextType | undefined>(u
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
     const { user } = useAuth();
+    const { lastEvent } = useSSE();
     const notificationsEnabled = Boolean(user?.institution_id);
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [totalNotifications, setTotalNotifications] = useState(0);
@@ -50,6 +51,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
     // Track previous unread count to detect new notifications for toasts
     const prevUnreadRef = useRef<number>(0);
+    const hasHydratedUnreadRef = useRef(false);
     // Ref for notifications so polling interval doesn't depend on notifications state
     const notificationsRef = useRef<Notification[]>(notifications);
     useEffect(() => { notificationsRef.current = notifications; }, [notifications]);
@@ -123,7 +125,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
         setIsLoading(true);
         try {
-            const [listResult] = await Promise.all([
+            const [listResult, unreadTotal] = await Promise.all([
                 listNotifications(PAGE_SIZE, 0),
                 refreshUnreadCounts(),
             ]);
@@ -132,6 +134,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             setTotalNotifications(listResult.total);
             setOffset(listResult.items.length);
             setHasMore(listResult.items.length < listResult.total);
+            if (unreadTotal !== undefined) {
+                prevUnreadRef.current = unreadTotal;
+                hasHydratedUnreadRef.current = true;
+            }
         } catch {
             // If API isn't available yet, just clear loading state
         } finally {
@@ -169,18 +175,31 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             setNotifications((prev) =>
                 prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
             );
-            setUnreadCount((prev) => Math.max(0, prev - 1));
+            setUnreadCount((prev) => {
+                const next = Math.max(0, prev - 1);
+                prevUnreadRef.current = next;
+                hasHydratedUnreadRef.current = true;
+                return next;
+            });
 
             try {
                 await apiMarkAsRead(id);
                 // Refresh counts from server for accuracy
-                await refreshUnreadCounts();
+                const newTotal = await refreshUnreadCounts();
+                if (newTotal !== undefined) {
+                    prevUnreadRef.current = newTotal;
+                    hasHydratedUnreadRef.current = true;
+                }
             } catch {
                 // Revert optimistic update on failure
                 setNotifications((prev) =>
                     prev.map((n) => (n.id === id ? { ...n, is_read: false } : n))
                 );
-                await refreshUnreadCounts();
+                const newTotal = await refreshUnreadCounts();
+                if (newTotal !== undefined) {
+                    prevUnreadRef.current = newTotal;
+                    hasHydratedUnreadRef.current = true;
+                }
             }
         },
         [refreshUnreadCounts, notificationsEnabled]
@@ -192,6 +211,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
         setUnreadCount(0);
         setBadgeCounts({ calls: 0, callbacks: 0, appointments: 0 });
+        prevUnreadRef.current = 0;
+        hasHydratedUnreadRef.current = true;
 
         try {
             await apiMarkAllAsRead();
@@ -210,42 +231,49 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
             setNotifications([]);
             setUnreadCount(0);
             setBadgeCounts({ calls: 0, callbacks: 0, appointments: 0 });
+            setTotalNotifications(0);
             setOffset(0);
             setHasMore(false);
             prevUnreadRef.current = 0;
+            hasHydratedUnreadRef.current = false;
         }
     }, [user, refreshNotifications, notificationsEnabled]);
 
-    // Poll unread counts (lightweight) and detect new notifications
-    useEffect(() => {
-        if (!user || !notificationsEnabled) return;
-
-        const poll = async () => {
+    const handleNotificationEvent = useCallback(async () => {
+        try {
             const newTotal = await refreshUnreadCounts();
-            if (newTotal !== undefined && newTotal > prevUnreadRef.current && prevUnreadRef.current > 0) {
-                // New notifications arrived — refresh the full list to get them
+            if (newTotal === undefined) {
+                return;
+            }
+
+            if (hasHydratedUnreadRef.current && newTotal > prevUnreadRef.current) {
                 const result = await listNotifications(PAGE_SIZE, 0);
-                // Find truly new ones (not in current list) for toast
                 const existingIds = new Set(notificationsRef.current.map((n) => n.id));
                 const brandNew = result.items.filter(
                     (n) => !existingIds.has(n.id) && !n.is_read
                 );
+
                 for (const n of brandNew.slice(0, 3)) {
                     showToast(n);
                 }
+
                 setNotifications(result.items);
                 setTotalNotifications(result.total);
                 setOffset(result.items.length);
                 setHasMore(result.items.length < result.total);
             }
-            if (newTotal !== undefined) {
-                prevUnreadRef.current = newTotal;
-            }
-        };
 
-        const interval = setInterval(poll, POLL_INTERVAL_MS);
-        return () => clearInterval(interval);
-    }, [user, refreshUnreadCounts, showToast, notificationsEnabled]);
+            prevUnreadRef.current = newTotal;
+            hasHydratedUnreadRef.current = true;
+        } catch {
+            // Silently fail on SSE refresh
+        }
+    }, [refreshUnreadCounts, showToast]);
+
+    useEffect(() => {
+        if (!user || !notificationsEnabled || lastEvent?.type !== "notification") return;
+        void handleNotificationEvent();
+    }, [handleNotificationEvent, lastEvent, notificationsEnabled, user]);
 
     // Refresh full list when dialog opens
     useEffect(() => {

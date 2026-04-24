@@ -67,3 +67,7 @@ secrets/
 
 # Render config (not needed in image)
 render.yaml
+
+# Infrastructure (CDK, Copilot)
+infra/
+copilot/

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import Callable
 
 from fastapi import HTTPException, Request
 from retell.lib.webhook_auth import verify as retell_verify
+
+from src.app.security import keyed_hash
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,6 @@ def hash_for_logging(value: str) -> str:
         value: Value to hash
         
     Returns:
-        SHA256 hash of the value (first 16 chars)
+        Keyed HMAC-SHA256 hash of the value (first 16 chars)
     """
-    return hashlib.sha256(value.encode()).hexdigest()[:16]
+    return keyed_hash(value, purpose="retell-log-hash-v1", truncate_hex=16)

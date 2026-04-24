@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/select"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
+import { useSSE } from "@/hooks/useSSE"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
 import { getDashboardSummary, getAggregateDashboard } from "@/lib/dashboard-api"
 import { resolveCallback } from "@/lib/calls-api"
@@ -39,7 +40,6 @@ import { STATUS_OPTIONS } from "@/lib/constants"
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS = 30_000
 const EMPTY_AGGREGATE_METRICS = {
     appointments_booked_month: 0,
     new_patients_month: 0,
@@ -393,6 +393,7 @@ function TagBar({ tag, label, count, total, pct, colorClass, barColor }: TagBarP
 
 export default function Dashboard() {
     const { user } = useAuth()
+    const { lastEvent } = useSSE()
     const [summary, setSummary] = useState<DashboardSummary | null>(null)
     const [loading, setLoading] = useState(true)
     const [selectedLocationSlug, setSelectedLocationSlug] = useState<string>("all")
@@ -464,9 +465,11 @@ export default function Dashboard() {
     }, [fetchSummary])
 
     useEffect(() => {
-        const id = setInterval(fetchSummary, POLL_INTERVAL_MS)
-        return () => clearInterval(id)
-    }, [fetchSummary])
+        if (lastEvent?.type !== "dashboard_updated" && lastEvent?.type !== "calls_updated") {
+            return
+        }
+        fetchSummary()
+    }, [fetchSummary, lastEvent])
 
     const todayStr = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })
 
