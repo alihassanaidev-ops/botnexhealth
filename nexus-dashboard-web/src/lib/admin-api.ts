@@ -1,5 +1,12 @@
 import api from "@/lib/api"
-import type { InstitutionDetail, TwilioPhoneNumber, SendSmsRequest, SendSmsResponse } from "@/types"
+import type {
+    InstitutionDetail,
+    SmsLocation,
+    SmsSuppression,
+    TwilioPhoneNumber,
+    SendSmsRequest,
+    SendSmsResponse,
+} from "@/types"
 import type { AuditLogPaginatedResponse } from "./tenant-api"
 
 export async function listInstitutionsDetailed(): Promise<InstitutionDetail[]> {
@@ -19,6 +26,30 @@ export async function listTwilioPhoneNumbers(): Promise<TwilioPhoneNumber[]> {
 
 export async function sendSms(payload: SendSmsRequest): Promise<SendSmsResponse> {
     const { data } = await api.post<SendSmsResponse>("/admin/twilio/send-sms", payload)
+    return data
+}
+
+export async function listSmsLocations(): Promise<SmsLocation[]> {
+    const { data } = await api.get<SmsLocation[]>("/admin/sms/locations")
+    return data
+}
+
+export async function listSmsSuppressions(): Promise<SmsSuppression[]> {
+    const { data } = await api.get<SmsSuppression[]>("/admin/sms/suppressions")
+    return data
+}
+
+export async function createSmsSuppression(payload: {
+    location_id: string
+    phone: string
+    reason?: string
+}): Promise<SmsSuppression> {
+    const { data } = await api.post<SmsSuppression>("/admin/sms/suppressions", payload)
+    return data
+}
+
+export async function releaseSmsSuppression(id: string): Promise<SmsSuppression> {
+    const { data } = await api.post<SmsSuppression>(`/admin/sms/suppressions/${id}/release`)
     return data
 }
 

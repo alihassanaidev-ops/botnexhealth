@@ -67,7 +67,7 @@ class SendSmsResponse(BaseModel):
     message_sid: str
     status: str
     from_number: str
-    to_number: str
+    to_number_masked: str | None
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -118,7 +118,7 @@ async def list_phone_numbers(
 async def send_sms(
     request: Request,
     body: SendSmsRequest,
-    _: Annotated[User, Depends(get_current_admin)],
+    current_admin: Annotated[User, Depends(get_current_admin)],
 ) -> SendSmsResponse:
     """
     Send an SMS via Twilio from one of the platform's phone numbers.
@@ -129,6 +129,9 @@ async def send_sms(
     from src.app.database import get_db_session
     from src.app.services.sms_service import SmsService
     from src.app.models.sms_history_log import SmsStatus
+    from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+    from src.app.services.audit import log_audit
+    from src.app.services.sms_privacy import hash_for_logging
     
     try:
         async with get_db_session() as session:
@@ -151,17 +154,37 @@ async def send_sms(
                     detail=f"Failed to send SMS: {log_record.error_message}",
                 )
 
+            await log_audit(
+                actor=AuditActor.ADMIN,
+                action=AuditAction.SMS_SEND,
+                target_resource=f"sms:{log_record.id}",
+                outcome=AuditOutcome.SUCCESS,
+                metadata={
+                    "status": log_record.status,
+                    "to_phone_hash": hash_for_logging(body.to_number),
+                    "location_id": body.institution_location_id,
+                },
+                user_id=str(current_admin.id),
+                location_id=body.institution_location_id,
+            )
+
             return SendSmsResponse(
                 message_sid=log_record.message_sid or "",
                 status=log_record.status,
                 from_number=body.from_number,
-                to_number=body.to_number,
+                to_number_masked=log_record.to_number_masked,
             )
     except HTTPException:
         raise
+    except ValueError as e:
+        logger.warning("Invalid SMS send request: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
     except Exception as e:
         logger.error("Failed to send SMS via Twilio: %s", e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to send SMS: {e}",
+            detail="Failed to send SMS",
         )

@@ -24,6 +24,10 @@ from src.app.api.routes.notification_preferences import router as notification_p
 from src.app.api.routes.notification_recipients import router as notification_recipients_router
 from src.app.api.routes.sse import router as sse_router
 from src.app.api.routes.twilio import router as twilio_router
+from src.app.api.routes.twilio_webhooks import router as twilio_webhooks_router
+from src.app.api.routes.sms import admin_router as admin_sms_router
+from src.app.api.routes.sms import institution_router as institution_sms_router
+from src.app.api.routes.dead_letter import router as dead_letter_router
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -121,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router, prefix="/api/v1")
     app.include_router(retell_router, prefix="/api/v1")
     app.include_router(retell_webhook_router, prefix="/api/v1")
+    app.include_router(twilio_webhooks_router, prefix="/api/v1")
     
     # Admin routes
     app.include_router(auth_router, prefix="/api")
@@ -139,6 +144,9 @@ def create_app() -> FastAPI:
     app.include_router(notification_recipients_router, prefix="/api")
     app.include_router(sse_router, prefix="/api")
     app.include_router(twilio_router, prefix="/api")
+    app.include_router(admin_sms_router, prefix="/api")
+    app.include_router(institution_sms_router, prefix="/api")
+    app.include_router(dead_letter_router, prefix="/api")
 
     return app
 

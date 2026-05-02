@@ -1,0 +1,269 @@
+"""SMS consent, suppression, and do-not-contact enforcement."""
+
+from __future__ import annotations
+
+from contextlib import suppress as ignore_errors
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.app.models.sms_consent import (
+    ConsentChannel,
+    ConsentRecord,
+    ConsentSource,
+    ConsentStatus,
+    DoNotContact,
+    SmsSuppression,
+)
+from src.app.services.sms_privacy import hash_phone, mask_phone
+
+
+class SmsSendBlockedError(RuntimeError):
+    """Raised when an SMS must not be sent for compliance reasons."""
+
+
+@dataclass(frozen=True)
+class SmsRecipientIdentity:
+    phone_hash: str
+    phone_masked: str
+
+
+class SmsComplianceService:
+    """Enforces SMS consent and suppression rules."""
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    def identify(self, phone: str) -> SmsRecipientIdentity:
+        phone_hash = hash_phone(phone)
+        if not phone_hash:
+            raise ValueError("Recipient phone number is required")
+        return SmsRecipientIdentity(phone_hash=phone_hash, phone_masked=mask_phone(phone))
+
+    async def assert_can_send(
+        self,
+        *,
+        institution_id: str,
+        location_id: str | None,
+        to_number: str,
+        contact_id: str | None = None,
+    ) -> SmsRecipientIdentity:
+        """Block only explicit suppressions, DNC records, and latest revoked consent."""
+        identity = self.identify(to_number)
+
+        dnc = (
+            await self.session.execute(
+                select(DoNotContact).where(
+                    DoNotContact.institution_id == institution_id,
+                    DoNotContact.phone_hash == identity.phone_hash,
+                    DoNotContact.is_active.is_(True),
+                )
+            )
+        ).scalars().first()
+        if dnc:
+            raise SmsSendBlockedError("Recipient is on the do-not-contact list")
+
+        suppression = (
+            await self.session.execute(
+                select(SmsSuppression).where(
+                    SmsSuppression.institution_id == institution_id,
+                    SmsSuppression.channel == ConsentChannel.SMS.value,
+                    SmsSuppression.phone_hash == identity.phone_hash,
+                    SmsSuppression.is_active.is_(True),
+                )
+            )
+        ).scalars().first()
+        if suppression:
+            raise SmsSendBlockedError("Recipient has opted out of SMS")
+
+        latest_consent = (
+            await self.session.execute(
+                select(ConsentRecord)
+                .where(
+                    ConsentRecord.institution_id == institution_id,
+                    ConsentRecord.channel == ConsentChannel.SMS.value,
+                    ConsentRecord.phone_hash == identity.phone_hash,
+                )
+                .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
+            )
+        ).scalars().first()
+        if latest_consent and latest_consent.status == ConsentStatus.REVOKED.value:
+            raise SmsSendBlockedError("Recipient SMS consent is revoked")
+
+        return identity
+
+    async def suppress(
+        self,
+        *,
+        institution_id: str,
+        phone: str,
+        location_id: str | None = None,
+        contact_id: str | None = None,
+        source: ConsentSource | str = ConsentSource.MANUAL,
+        keyword: str | None = None,
+        reason: str | None = None,
+        created_by_user_id: str | None = None,
+    ) -> SmsSuppression:
+        """Create an active suppression if one does not already exist."""
+        identity = self.identify(phone)
+        active = await self._active_suppression(
+            institution_id=institution_id,
+            phone_hash=identity.phone_hash,
+        )
+        if active:
+            return active
+
+        row = SmsSuppression(
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_id=contact_id,
+            channel=ConsentChannel.SMS.value,
+            phone_hash=identity.phone_hash,
+            phone_masked=identity.phone_masked,
+            is_active=True,
+            source=source.value if isinstance(source, ConsentSource) else source,
+            keyword=keyword,
+            reason=reason,
+            created_by_user_id=created_by_user_id,
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(row)
+                await self.session.flush()
+        except IntegrityError:
+            with ignore_errors(Exception):
+                self.session.expunge(row)
+            active = await self._active_suppression(
+                institution_id=institution_id,
+                phone_hash=identity.phone_hash,
+            )
+            if active:
+                return active
+            raise
+
+        await self.record_consent(
+            institution_id=institution_id,
+            phone=phone,
+            status=ConsentStatus.REVOKED,
+            location_id=location_id,
+            contact_id=contact_id,
+            source=source,
+            reason=reason or "SMS opt-out",
+            created_by_user_id=created_by_user_id,
+        )
+        return row
+
+    async def release_suppression(
+        self,
+        *,
+        institution_id: str,
+        phone: str,
+        source: ConsentSource | str = ConsentSource.MANUAL,
+        reason: str | None = None,
+        released_by_user_id: str | None = None,
+        grant_consent: bool = True,
+        location_id: str | None = None,
+        contact_id: str | None = None,
+    ) -> int:
+        """Release all active suppressions for a phone within an institution."""
+        identity = self.identify(phone)
+        rows = (
+            await self.session.execute(
+                select(SmsSuppression).where(
+                    SmsSuppression.institution_id == institution_id,
+                    SmsSuppression.channel == ConsentChannel.SMS.value,
+                    SmsSuppression.phone_hash == identity.phone_hash,
+                    SmsSuppression.is_active.is_(True),
+                )
+            )
+        ).scalars().all()
+
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            row.is_active = False
+            row.released_at = now
+            row.released_by_user_id = released_by_user_id
+
+        if rows and grant_consent:
+            await self.record_consent(
+                institution_id=institution_id,
+                phone=phone,
+                status=ConsentStatus.GRANTED,
+                location_id=location_id,
+                contact_id=contact_id,
+                source=source,
+                reason=reason or "SMS opt-in",
+                created_by_user_id=released_by_user_id,
+            )
+        return len(rows)
+
+    async def record_consent(
+        self,
+        *,
+        institution_id: str,
+        phone: str,
+        status: ConsentStatus | str,
+        location_id: str | None = None,
+        contact_id: str | None = None,
+        source: ConsentSource | str = ConsentSource.MANUAL,
+        reason: str | None = None,
+        created_by_user_id: str | None = None,
+    ) -> ConsentRecord:
+        identity = self.identify(phone)
+        row = ConsentRecord(
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_id=contact_id,
+            channel=ConsentChannel.SMS.value,
+            phone_hash=identity.phone_hash,
+            phone_masked=identity.phone_masked,
+            status=status.value if isinstance(status, ConsentStatus) else status,
+            source=source.value if isinstance(source, ConsentSource) else source,
+            reason=reason,
+            created_by_user_id=created_by_user_id,
+        )
+        self.session.add(row)
+        return row
+
+    async def _active_suppression(self, *, institution_id: str, phone_hash: str) -> SmsSuppression | None:
+        return (
+            await self.session.execute(
+                select(SmsSuppression).where(
+                    SmsSuppression.institution_id == institution_id,
+                    SmsSuppression.channel == ConsentChannel.SMS.value,
+                    SmsSuppression.phone_hash == phone_hash,
+                    SmsSuppression.is_active.is_(True),
+                )
+            )
+        ).scalars().first()
+
+    async def record_consent_identity(
+        self,
+        *,
+        institution_id: str,
+        phone_hash: str,
+        phone_masked: str,
+        status: ConsentStatus | str,
+        location_id: str | None = None,
+        contact_id: str | None = None,
+        source: ConsentSource | str = ConsentSource.MANUAL,
+        reason: str | None = None,
+        created_by_user_id: str | None = None,
+    ) -> ConsentRecord:
+        row = ConsentRecord(
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_id=contact_id,
+            channel=ConsentChannel.SMS.value,
+            phone_hash=phone_hash,
+            phone_masked=phone_masked,
+            status=status.value if isinstance(status, ConsentStatus) else status,
+            source=source.value if isinstance(source, ConsentSource) else source,
+            reason=reason,
+            created_by_user_id=created_by_user_id,
+        )
+        self.session.add(row)
+        return row

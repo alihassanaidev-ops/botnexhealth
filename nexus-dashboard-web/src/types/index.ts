@@ -273,6 +273,8 @@ export interface CustomFieldValue {
     field_type: "text" | "number" | "boolean" | "date" | "dropdown";
     value: string | null;
     is_phi: boolean;
+    value_masked: boolean;
+    reveal_available: boolean;
     display_order: number;
 }
 
@@ -307,13 +309,37 @@ export interface TranscriptTurn {
 }
 
 export interface CallDetail extends CallRecord {
-    // Raw plain-text (may contain PHI — kept for completeness)
+    // Raw plain-text transcript is only populated after an audited reveal.
     transcript: string | null;
     // Structured JSONB turn-by-turn arrays from the voice platform
-    transcript_with_tool_calls: TranscriptTurn[] | null;       // unredacted full conversation
+    transcript_with_tool_calls: TranscriptTurn[] | null;       // populated after audited reveal
     scrubbed_transcript_with_tool_calls: TranscriptTurn[] | null;  // PII-scrubbed (default UI)
-    recording_url: string | null;
+    recording_url: string | null;                              // populated after audited reveal
+    full_transcript_available: boolean;
+    raw_transcript_available: boolean;
+    recording_available: boolean;
     custom_fields: CustomFieldValue[];
+}
+
+export interface FullTranscriptRevealResponse {
+    call_id: string;
+    transcript_with_tool_calls: TranscriptTurn[] | null;
+}
+
+export interface RawTranscriptRevealResponse {
+    call_id: string;
+    transcript: string | null;
+}
+
+export interface RecordingRevealResponse {
+    call_id: string;
+    recording_url: string | null;
+}
+
+export interface CustomFieldRevealResponse {
+    call_id: string;
+    field_key: string;
+    value: string | null;
 }
 
 export interface CallsListResponse {
@@ -341,13 +367,35 @@ export interface SendSmsRequest {
     from_number: string;
     to_number: string;
     body: string;
+    institution_location_id: string;
 }
 
 export interface SendSmsResponse {
     message_sid: string;
     status: string;
     from_number: string;
-    to_number: string;
+    to_number_masked: string | null;
+}
+
+export interface SmsLocation {
+    id: string;
+    institution_id: string;
+    institution_name: string;
+    location_name: string;
+    twilio_from_number: string | null;
+}
+
+export interface SmsSuppression {
+    id: string;
+    institution_id: string;
+    location_id: string | null;
+    phone_masked: string;
+    is_active: boolean;
+    source: string;
+    keyword: string | null;
+    reason: string | null;
+    created_at: string;
+    released_at: string | null;
 }
 
 // ── Notifications ────────────────────────────────────────────────────────────────

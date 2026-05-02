@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     # Twilio (SMS / phone numbers)
     twillio_sid: str | None = None          # Account SID (env: TWILLIO_SID)
     twillio_api_secret: str | None = None   # Auth Token (env: TWILLIO_API_SECRET)
+    twilio_sms_status_callback_url: str | None = None
 
     # Database (PostgreSQL)
     database_url: str | None = None

@@ -21,6 +21,11 @@ export interface SSEEvent {
     receivedAt: number;
 }
 
+interface ScopedSSEEvent {
+    institutionId: string;
+    event: SSEEvent;
+}
+
 const EVENT_TYPES: SSEEventType[] = [
     "calls_updated",
     "callbacks_updated",
@@ -208,18 +213,17 @@ function releaseSharedConnection() {
 
 export function useSSE() {
     const { user } = useAuth();
-    const [lastEvent, setLastEvent] = useState<SSEEvent | null>(null);
+    const institutionId = user?.institution_id ?? null;
+    const [lastEvent, setLastEvent] = useState<ScopedSSEEvent | null>(null);
     const [connectionState, setConnectionState] = useState<SSEConnectionState>(currentState);
 
     useEffect(() => {
-        if (!user?.institution_id) {
-            setLastEvent(null);
-            setConnectionState("idle");
+        if (!institutionId) {
             return;
         }
 
         const handleEvent = (event: SSEEvent) => {
-            setLastEvent(event);
+            setLastEvent({ institutionId, event });
         };
         const handleState = (state: SSEConnectionState) => {
             setConnectionState(state);
@@ -234,10 +238,10 @@ export function useSSE() {
             stateListeners.delete(handleState);
             releaseSharedConnection();
         };
-    }, [user?.institution_id]);
+    }, [institutionId]);
 
     return {
-        lastEvent,
-        connectionState,
+        lastEvent: lastEvent?.institutionId === institutionId ? lastEvent.event : null,
+        connectionState: institutionId ? connectionState : "idle",
     };
 }

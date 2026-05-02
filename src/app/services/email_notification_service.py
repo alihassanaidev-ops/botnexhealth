@@ -16,6 +16,7 @@ from src.app.services.email_template_service import (
     DEFAULT_TEMPLATES,
     EmailTemplateService,
 )
+from src.app.services.sms_privacy import sanitize_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,11 @@ class EmailNotificationService:
                 json=request_body,
             )
             if response.status_code >= 400:
-                logger.error("Resend send failed: status=%s body=%s", response.status_code, response.text[:500])
+                logger.error(
+                    "Resend send failed: status=%s body=%s",
+                    response.status_code,
+                    sanitize_provider_error(response.text, max_length=500),
+                )
                 response.raise_for_status()
 
     # Backwards-compatible alias for existing callers

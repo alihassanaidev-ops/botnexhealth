@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, String, Text
+from sqlalchemy import JSON, DateTime, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,11 +57,22 @@ class AuditAction(str, Enum):
     READ_APPOINTMENT_TYPES = "READ_APPOINTMENT_TYPES"
     VIEW_CALLS = "VIEW_CALLS"
     VIEW_CALL_DETAIL = "VIEW_CALL_DETAIL"
+    VIEW_FULL_TRANSCRIPT = "VIEW_FULL_TRANSCRIPT"
+    VIEW_RAW_TRANSCRIPT = "VIEW_RAW_TRANSCRIPT"
+    VIEW_CALL_RECORDING = "VIEW_CALL_RECORDING"
+    VIEW_CUSTOM_PHI_FIELD = "VIEW_CUSTOM_PHI_FIELD"
     VIEW_DASHBOARD = "VIEW_DASHBOARD"
     VIEW_AUDIT_LOGS = "VIEW_AUDIT_LOGS"
     
     # External Integrations
     WEBHOOK_RECEIVED = "WEBHOOK_RECEIVED"
+    SMS_SEND = "SMS_SEND"
+    SMS_SUPPRESSION_CREATE = "SMS_SUPPRESSION_CREATE"
+    SMS_SUPPRESSION_RELEASE = "SMS_SUPPRESSION_RELEASE"
+    VIEW_FULL_PHONE = "VIEW_FULL_PHONE"
+    VIEW_SMS_BODY = "VIEW_SMS_BODY"
+    DEAD_LETTER_REPLAY = "DEAD_LETTER_REPLAY"
+    DEAD_LETTER_DISCARD = "DEAD_LETTER_DISCARD"
 
     
     # Admin operations

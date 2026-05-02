@@ -7,13 +7,13 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from src.app.config import settings
 from src.app.retell.security import get_retell_secret, get_signature_dependency, hash_for_logging
+from src.app.services.sms_privacy import sanitize_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,11 @@ router = APIRouter(prefix="/retell", tags=["Retell Webhooks"])
 
 # Create signature verification dependency
 verify_webhook_signature = get_signature_dependency(get_retell_secret)
+
+
+def _preferred_recording_url(call) -> str | None:
+    """Prefer Retell's scrubbed recording URL whenever it is available."""
+    return getattr(call, "scrubbed_recording_url", None) or getattr(call, "recording_url", None)
 
 
 # ============================================================================
@@ -168,6 +173,7 @@ async def handle_retell_webhook(
     processing_started = False
     processing_call_id: str | None = None
     processing_event_type: str | None = None
+    payload: dict[str, Any] | None = None
 
     try:
         # Parse the verified body (bytes -> dict)
@@ -273,7 +279,7 @@ async def handle_retell_webhook(
                 await session.commit()
 
             # ── Recording upload: enqueue S3 upload after DB commit ──
-            _rec_url = event.call.recording_url or event.call.scrubbed_recording_url
+            _rec_url = _preferred_recording_url(event.call)
             if _rec_url:
                 try:
                     from src.app.tasks.recordings import enqueue_recording_upload
@@ -427,7 +433,8 @@ async def handle_retell_webhook(
         }
 
     except Exception as e:
-        logger.exception(f"Webhook processing error: {e}")
+        safe_error = sanitize_provider_error(e)
+        logger.exception("Webhook processing error: %s", safe_error)
         
         # Audit Webhook Failure (General)
         try:
@@ -437,10 +444,24 @@ async def handle_retell_webhook(
                 action=AuditAction.WEBHOOK_RECEIVED,
                 target_resource="webhook:retell",
                 outcome=AuditOutcome.FAILURE_INTERNAL,
-                metadata={"error": str(e)},
+                metadata={"error": safe_error},
             )
         except Exception:
             pass # Failsafe
+
+        try:
+            from src.app.services.dead_letter import capture_dead_letter
+
+            await capture_dead_letter(
+                source="retell_webhook",
+                event_type=processing_event_type or "retell_webhook",
+                error=safe_error,
+                payload=payload or {"raw_body_present": bool(body)},
+                raw_payload=body.decode("utf-8", errors="replace") if body else None,
+                attempts=1,
+            )
+        except Exception:
+            logger.warning("Failed to capture Retell webhook DLQ event", exc_info=True)
 
         if processing_started and processing_call_id and processing_event_type:
             try:
@@ -448,9 +469,9 @@ async def handle_retell_webhook(
                     processing_call_id,
                     processing_event_type,
                     status="FAILED",
-                    error=str(e),
+                    error=safe_error,
                 )
             except Exception:
                 logger.warning("Failed to mark webhook event as FAILED")
             
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=safe_error)

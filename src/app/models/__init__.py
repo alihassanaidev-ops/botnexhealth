@@ -26,6 +26,15 @@ from src.app.models.notification import Notification, NotificationType
 from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
 from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
+from src.app.models.sms_consent import (
+    ConsentChannel,
+    ConsentRecord,
+    ConsentSource,
+    ConsentStatus,
+    DoNotContact,
+    SmsSuppression,
+)
+from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
 
 __all__ = [
     "Institution",
@@ -62,4 +71,12 @@ __all__ = [
     "UserEmailNotificationPreference",
     "SmsHistoryLog",
     "SmsStatus",
+    "ConsentChannel",
+    "ConsentRecord",
+    "ConsentSource",
+    "ConsentStatus",
+    "DoNotContact",
+    "SmsSuppression",
+    "DeadLetterEvent",
+    "DeadLetterStatus",
 ]

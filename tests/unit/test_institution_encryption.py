@@ -5,7 +5,7 @@ import base64
 import pytest
 
 from src.app.config import settings
-from src.app.models.institution import decrypt_value, encrypt_value
+from src.app.models.institution import _get_encryption_key, decrypt_value, encrypt_value
 
 
 def test_encrypt_value_supports_base64_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -31,3 +31,13 @@ def test_encrypt_value_supports_legacy_random_string_secret(
 
     assert encrypted is not None
     assert decrypt_value(encrypted) == "another-secret"
+
+
+def test_cdk_generated_unpadded_base64_key_decodes_to_aes_256(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # CDK generates 43 alphanumeric chars. That is valid unpadded base64 and
+    # decodes to exactly 32 bytes once padding is restored by the app.
+    monkeypatch.setattr(settings, "encryption_key", "A" * 43)
+
+    assert len(_get_encryption_key()) == 32

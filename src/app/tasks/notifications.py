@@ -19,6 +19,7 @@ from src.app.models.user import InviteStatus, User, UserRole
 from src.app.models.external_notification_recipient import ExternalNotificationRecipient
 from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
 from src.app.services.event_bus import publish_event
+from src.app.services.dead_letter import capture_dead_letter, should_retry_vendor_error
 from src.app.services.email_notification_service import (
     EmailNotificationService,
     mask_phone,
@@ -298,27 +299,44 @@ async def _send_call_notification_async(
 @celery_app.task(
     name="src.app.tasks.notifications.send_call_notification",
     bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=600,
-    retry_jitter=True,
-    retry_kwargs={"max_retries": 5},
+    max_retries=5,
 )
 def send_call_notification(
-    self,  # noqa: ARG001 - required for bind=True retries
+    self,
     call_id: str,
     institution_id: str,
     location_id: str | None = None,
     analysis_snapshot: dict[str, Any] | None = None,
 ) -> None:
-    asyncio.run(
-        _send_call_notification_async(
-            call_id=call_id,
-            institution_id=institution_id,
-            location_id=location_id,
-            analysis_snapshot=analysis_snapshot,
+    payload = {
+        "call_id": call_id,
+        "institution_id": institution_id,
+        "location_id": location_id,
+        "analysis_snapshot": analysis_snapshot or {},
+    }
+    try:
+        asyncio.run(
+            _send_call_notification_async(
+                call_id=call_id,
+                institution_id=institution_id,
+                location_id=location_id,
+                analysis_snapshot=analysis_snapshot,
+            )
         )
-    )
+    except Exception as exc:
+        if should_retry_vendor_error(exc) and self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=min(600, 2 ** max(self.request.retries, 0)))
+        asyncio.run(
+            capture_dead_letter(
+                source="notification_task",
+                event_type="send_call_notification",
+                error=exc,
+                payload=payload,
+                attempts=self.request.retries + 1,
+                institution_id=institution_id,
+                location_id=location_id,
+            )
+        )
 
 
 def enqueue_call_notification(
@@ -352,14 +370,10 @@ def enqueue_call_notification(
 @celery_app.task(
     name="src.app.tasks.notifications.send_test_call_notification",
     bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_backoff_max=300,
-    retry_jitter=True,
-    retry_kwargs={"max_retries": 3},
+    max_retries=3,
 )
 def send_test_call_notification(
-    self,  # noqa: ARG001 - required for bind=True retries
+    self,
     recipients: list[str],
     institution_slug: str,
     requested_by: str | None = None,
@@ -400,7 +414,28 @@ def send_test_call_notification(
             requested_by,
         )
 
-    asyncio.run(_run())
+    payload = {
+        "recipients": recipients,
+        "institution_slug": institution_slug,
+        "requested_by": requested_by,
+        "urgent": urgent,
+        "tag": tag,
+        "idempotency_key": idempotency_key,
+    }
+    try:
+        asyncio.run(_run())
+    except Exception as exc:
+        if should_retry_vendor_error(exc) and self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=min(300, 2 ** max(self.request.retries, 0)))
+        asyncio.run(
+            capture_dead_letter(
+                source="notification_task",
+                event_type="send_test_call_notification",
+                error=exc,
+                payload=payload,
+                attempts=self.request.retries + 1,
+            )
+        )
 
 
 def enqueue_test_call_notification(

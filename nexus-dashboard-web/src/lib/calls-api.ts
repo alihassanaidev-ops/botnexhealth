@@ -5,7 +5,15 @@
  */
 
 import api from "@/lib/api";
-import type { CallDetail, CallRecord, CallsListResponse } from "@/types";
+import type {
+    CallDetail,
+    CallRecord,
+    CallsListResponse,
+    CustomFieldRevealResponse,
+    FullTranscriptRevealResponse,
+    RawTranscriptRevealResponse,
+    RecordingRevealResponse,
+} from "@/types";
 
 export interface CallsFilters {
     limit?: number;
@@ -38,6 +46,37 @@ export async function listCalls(filters: CallsFilters = {}): Promise<CallsListRe
 
 export async function getCall(callId: string): Promise<CallDetail> {
     const { data } = await api.get<CallDetail>(`/institution/calls/${callId}`);
+    return data;
+}
+
+export async function revealFullTranscript(callId: string): Promise<FullTranscriptRevealResponse> {
+    const { data } = await api.post<FullTranscriptRevealResponse>(
+        `/institution/calls/${callId}/reveal/full-transcript`,
+    );
+    return data;
+}
+
+export async function revealRawTranscript(callId: string): Promise<RawTranscriptRevealResponse> {
+    const { data } = await api.post<RawTranscriptRevealResponse>(
+        `/institution/calls/${callId}/reveal/raw-transcript`,
+    );
+    return data;
+}
+
+export async function revealRecording(callId: string): Promise<RecordingRevealResponse> {
+    const { data } = await api.post<RecordingRevealResponse>(
+        `/institution/calls/${callId}/reveal/recording`,
+    );
+    return data;
+}
+
+export async function revealCustomPhiField(
+    callId: string,
+    fieldKey: string,
+): Promise<CustomFieldRevealResponse> {
+    const { data } = await api.post<CustomFieldRevealResponse>(
+        `/institution/calls/${callId}/reveal/custom-fields/${encodeURIComponent(fieldKey)}`,
+    );
     return data;
 }
 

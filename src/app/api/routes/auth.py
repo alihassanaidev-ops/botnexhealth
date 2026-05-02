@@ -279,6 +279,9 @@ async def login(request: Request, data: LoginRequest) -> AuthSession:
 
         user.failed_login_attempts = 0
         user.locked_until = None
+        if PasswordService.needs_rehash(user.password_hash):
+            user.password_hash = PasswordService.hash_password(data.password)
+            user.password_set_at = datetime.now(timezone.utc)
     session = await _issue_auth_session(user)
 
     log_audit_background(

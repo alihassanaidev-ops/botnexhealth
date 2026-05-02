@@ -78,8 +78,11 @@ class NexHealthPlatformStack(Stack):
             "EncryptionKeySecret",
             secret_name=f"{config.app_name}/{config.environment_name}/encryption-key",
             generate_secret_string=secretsmanager.SecretStringGenerator(
+                # 43 base64-compatible chars decode to exactly 32 bytes once
+                # padded by the app, giving AES-256 key material without
+                # embedding plaintext secrets in the synthesized template.
                 exclude_punctuation=True,
-                password_length=64,
+                password_length=43,
             ),
         )
 

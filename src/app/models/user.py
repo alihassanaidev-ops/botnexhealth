@@ -44,7 +44,7 @@ class User(Base):
     - role: User role (SUPER_ADMIN, INSTITUTION_ADMIN, LOCATION_ADMIN, STAFF)
     - institution_id: Institution this user belongs to (nullable for SUPER_ADMIN)
     - location_id: Location this user is scoped to (nullable for INSTITUTION_ADMIN)
-    - password_hash: Bcrypt password hash for local authentication
+    - password_hash: Argon2id password hash for local authentication
     - invite_token_hash/password_reset_token_hash: hashed one-time tokens
     - is_active: Whether the user can log in
     - failed_login_attempts: Consecutive failed login attempts since last success

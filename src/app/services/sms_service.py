@@ -9,12 +9,23 @@ SOLID Principles Applied:
 
 import logging
 from typing import Any
+from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
 
 from src.app.config import settings
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
+from src.app.services.dead_letter import should_retry_vendor_error
+from src.app.services.sms_compliance import SmsComplianceService, SmsSendBlockedError
+from src.app.services.sms_privacy import (
+    hash_for_logging,
+    prepare_outbound_sms_body,
+    sanitize_provider_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +69,56 @@ class SmsService:
         Returns:
             The SmsHistoryLog database record.
         """
+        location = (
+            await self.session.execute(
+                select(InstitutionLocation).where(InstitutionLocation.id == institution_location_id)
+            )
+        ).scalar_one_or_none()
+        if not location:
+            raise ValueError("Institution location not found for SMS send")
+
+        compliance = SmsComplianceService(self.session)
+        identity = compliance.identify(to_number)
+        from_hash = hash_for_logging(from_number)
+        to_hash = hash_for_logging(to_number)
+
+        try:
+            await compliance.assert_can_send(
+                institution_id=location.institution_id,
+                location_id=str(location.id),
+                to_number=to_number,
+                contact_id=patient_contact_id,
+            )
+            prepared_body = prepare_outbound_sms_body(
+                body=body,
+                clinic_identity=location.name,
+            )
+        except SmsSendBlockedError as blocked:
+            sms_log = SmsHistoryLog(
+                from_number=from_number,
+                status=SmsStatus.SUPPRESSED.value,
+                provider_status="suppressed",
+                error_message=sanitize_provider_error(blocked),
+                institution_location_id=institution_location_id,
+                patient_contact_id=patient_contact_id,
+                call_id=call_id,
+                to_number_hash=identity.phone_hash,
+                to_number_masked=identity.phone_masked,
+                last_status_at=datetime.now(timezone.utc),
+            )
+            sms_log.to_number = to_number
+            sms_log.body = body
+            self.session.add(sms_log)
+            await self.session.flush()
+            logger.info(
+                "SMS suppressed: from=%s to=%s location=%s reason=%s",
+                from_hash,
+                to_hash,
+                hash_for_logging(str(location.id)),
+                sanitize_provider_error(blocked),
+            )
+            return sms_log
+
         # 1. Create pending log record
         sms_log = SmsHistoryLog(
             from_number=from_number,
@@ -65,11 +126,13 @@ class SmsService:
             institution_location_id=institution_location_id,
             patient_contact_id=patient_contact_id,
             call_id=call_id,
+            to_number_hash=identity.phone_hash,
+            to_number_masked=identity.phone_masked,
         )
         
         # Set PHI fields using properties to trigger encryption
         sms_log.to_number = to_number
-        sms_log.body = body
+        sms_log.body = prepared_body
         
         self.session.add(sms_log)
         
@@ -81,28 +144,96 @@ class SmsService:
             
             # Using asyncio to offload the blocking Twilio client network call
             import asyncio
+            create_kwargs: dict[str, Any] = {
+                "body": prepared_body,
+                "from_": from_number,
+                "to": to_number,
+            }
+            if settings.twilio_sms_status_callback_url:
+                create_kwargs["status_callback"] = settings.twilio_sms_status_callback_url
+
             message = await asyncio.to_thread(
                 client.messages.create,
-                body=body,
-                from_=from_number,
-                to=to_number,
+                **create_kwargs,
             )
             
             # Update log on success
             sms_log.status = SmsStatus.SENT.value
             sms_log.message_sid = message.sid
-            logger.info("SMS sent successfully: sid=%s from=%s to=%s", message.sid, from_number, to_number)
+            sms_log.provider_status = getattr(message, "status", None) or SmsStatus.SENT.value
+            sms_log.last_status_at = datetime.now(timezone.utc)
+            logger.info(
+                "SMS sent successfully: sid=%s from=%s to=%s location=%s",
+                message.sid,
+                from_hash,
+                to_hash,
+                hash_for_logging(str(location.id)),
+            )
             
         except RuntimeError as cred_err:
              # Configuration issue
             sms_log.status = SmsStatus.FAILED.value
-            sms_log.error_message = str(cred_err)
-            logger.error("Configuration error sending SMS: %s", cred_err)
+            sms_log.provider_status = "config_error"
+            sms_log.error_message = sanitize_provider_error(cred_err)
+            sms_log.last_status_at = datetime.now(timezone.utc)
+            logger.error("Configuration error sending SMS: %s", sanitize_provider_error(cred_err))
+        except TwilioRestException as e:
+            sms_log.status = SmsStatus.FAILED.value
+            status_code = getattr(e, "status", None) or getattr(e, "code", None)
+            retryable = should_retry_vendor_error(e)
+            sms_log.provider_status = f"{'retryable' if retryable else 'failed'}:{status_code or 'twilio'}"
+            sms_log.error_message = sanitize_provider_error(e)
+            sms_log.last_status_at = datetime.now(timezone.utc)
+            logger.error(
+                "Failed to send SMS via Twilio: from=%s to=%s status=%s error=%s",
+                from_hash,
+                to_hash,
+                status_code,
+                sanitize_provider_error(e),
+            )
         except Exception as e:
             # Update log on failure, being careful not to log full body/phone number here
             sms_log.status = SmsStatus.FAILED.value
-            sms_log.error_message = str(e)
-            logger.error("Failed to send SMS via Twilio. Error: %s", e)
+            retryable = should_retry_vendor_error(e)
+            sms_log.provider_status = "retryable:network" if retryable else "failed:provider"
+            sms_log.error_message = sanitize_provider_error(e)
+            sms_log.last_status_at = datetime.now(timezone.utc)
+            logger.error(
+                "Failed to send SMS via Twilio: from=%s to=%s error=%s",
+                from_hash,
+                to_hash,
+                sanitize_provider_error(e),
+            )
             
         return sms_log
 
+    async def update_delivery_status(
+        self,
+        *,
+        message_sid: str,
+        provider_status: str,
+        provider_error: str | None = None,
+    ) -> SmsHistoryLog | None:
+        """Update an SMS history row from a Twilio status callback."""
+        row = (
+            await self.session.execute(
+                select(SmsHistoryLog).where(SmsHistoryLog.message_sid == message_sid)
+            )
+        ).scalar_one_or_none()
+        if not row:
+            return None
+
+        status = provider_status.lower().strip()
+        row.provider_status = status
+        row.last_status_at = datetime.now(timezone.utc)
+        if status == "delivered":
+            row.status = SmsStatus.DELIVERED.value
+        elif status in {"failed", "undelivered"}:
+            row.status = SmsStatus.FAILED.value
+            if provider_error:
+                row.error_message = sanitize_provider_error(provider_error)
+        elif status in {"sent"}:
+            row.status = SmsStatus.SENT.value
+        elif status in {"queued", "accepted", "scheduled", "sending"}:
+            row.status = SmsStatus.PENDING.value
+        return row

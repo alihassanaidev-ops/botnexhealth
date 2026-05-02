@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from argon2 import PasswordHasher
+from argon2.low_level import Type
 from httpx import AsyncClient
 
 from src.app.config import settings
@@ -71,6 +73,53 @@ async def test_local_login_success(async_client: AsyncClient):
     assert data["token_type"] == "bearer"
     assert data["access_token"]
     assert data["refresh_token"] == "refresh-token-123"
+
+
+@pytest.mark.asyncio
+async def test_local_login_rehashes_outdated_argon2_parameters(async_client: AsyncClient):
+    password = "ValidPass123!"
+    weak_hash = PasswordHasher(
+        time_cost=1,
+        memory_cost=8_192,
+        parallelism=1,
+        hash_len=16,
+        salt_len=8,
+        type=Type.ID,
+    ).hash(password)
+    user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="admin@example.com",
+        role=UserRole.SUPER_ADMIN.value,
+        is_active=True,
+        invite_status=InviteStatus.ACCEPTED.value,
+        password_hash=weak_hash,
+    )
+
+    mock_session = AsyncMock()
+    query_result = MagicMock()
+    query_result.scalar_one_or_none.return_value = user
+    mock_session.execute.return_value = query_result
+
+    with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
+        "src.app.api.routes.auth.RefreshTokenService.issue_token",
+        new=AsyncMock(return_value="refresh-token-123"),
+    ), patch(
+        "src.app.api.routes.auth.RefreshTokenService.register_access_token",
+        new=AsyncMock(),
+    ), patch(
+        "src.app.api.routes.auth.log_audit_background"
+    ):
+        mock_get_db.return_value.__aenter__.return_value = mock_session
+
+        response = await async_client.post(
+            "/api/auth/login",
+            json={"email": "admin@example.com", "password": password},
+        )
+
+    assert response.status_code == 200
+    assert user.password_hash != weak_hash
+    assert user.password_hash.startswith("$argon2id$")
+    assert PasswordService.needs_rehash(user.password_hash) is False
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,7 @@ class SmsStatus(str, Enum):
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
+    SUPPRESSED = "suppressed"
     DELIVERED = "delivered"
 
 
@@ -58,6 +59,8 @@ class SmsHistoryLog(Base):
     # PHI fields — AES-256-GCM encrypted at application level
     to_number_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     body_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    to_number_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    to_number_masked: Mapped[str] = mapped_column(String(32), nullable=False)
     
     # Status of the message delivery
     status: Mapped[str] = mapped_column(
@@ -68,7 +71,9 @@ class SmsHistoryLog(Base):
     )
     
     # Twilio SID (if sent successfully)
-    message_sid: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    message_sid: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    provider_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     
     # Error message (if failed) - BE CAREFUL NOT TO LOG RAW PHI HERE
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -106,7 +111,14 @@ class SmsHistoryLog(Base):
     def to_number(self, value: str | None) -> None:
         """Set the recipient phone number, encrypting it."""
         if value is not None:
+            from src.app.services.sms_privacy import hash_phone, mask_phone
+
+            phone_hash = hash_phone(value)
+            if not phone_hash:
+                raise ValueError("to_number must be a valid phone number")
             self.to_number_encrypted = encrypt_value(value) # type: ignore
+            self.to_number_hash = phone_hash
+            self.to_number_masked = mask_phone(value)
         else:
             raise ValueError("to_number cannot be None")
             

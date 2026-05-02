@@ -7,6 +7,8 @@ import {
     Mic,
     Image,
     CheckCircle2,
+    Ban,
+    Unlock,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -23,27 +25,48 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
-import { listTwilioPhoneNumbers, sendSms } from "@/lib/admin-api"
-import type { TwilioPhoneNumber } from "@/types"
+import {
+    createSmsSuppression,
+    listSmsLocations,
+    listSmsSuppressions,
+    listTwilioPhoneNumbers,
+    releaseSmsSuppression,
+    sendSms,
+} from "@/lib/admin-api"
+import type { SmsLocation, SmsSuppression, TwilioPhoneNumber } from "@/types"
 
 export default function TwilioPhoneNumbers() {
     const [numbers, setNumbers] = useState<TwilioPhoneNumber[]>([])
+    const [smsLocations, setSmsLocations] = useState<SmsLocation[]>([])
+    const [suppressions, setSuppressions] = useState<SmsSuppression[]>([])
     const [loading, setLoading] = useState(true)
     const [refreshing, setRefreshing] = useState(false)
 
     // SMS Dialog
     const [smsOpen, setSmsOpen] = useState(false)
     const [selectedFrom, setSelectedFrom] = useState("")
+    const [selectedLocationId, setSelectedLocationId] = useState("")
     const [toNumber, setToNumber] = useState("")
     const [smsBody, setSmsBody] = useState("")
     const [sending, setSending] = useState(false)
+    const [suppressionLocationId, setSuppressionLocationId] = useState("")
+    const [suppressionPhone, setSuppressionPhone] = useState("")
+    const [suppressionReason, setSuppressionReason] = useState("")
+    const [savingSuppression, setSavingSuppression] = useState(false)
 
     const fetchNumbers = useCallback(async (isRefresh = false) => {
         if (isRefresh) setRefreshing(true)
         else setLoading(true)
         try {
-            const data = await listTwilioPhoneNumbers()
-            setNumbers(data)
+            const [numberData, locationData, suppressionData] = await Promise.all([
+                listTwilioPhoneNumbers(),
+                listSmsLocations(),
+                listSmsSuppressions(),
+            ])
+            setNumbers(numberData)
+            setSmsLocations(locationData)
+            setSuppressions(suppressionData)
+            setSuppressionLocationId((current) => current || locationData[0]?.id || "")
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load phone numbers"
             toast.error(message)
@@ -59,14 +82,16 @@ export default function TwilioPhoneNumbers() {
 
     function openSmsDialog(phoneNumber: string) {
         setSelectedFrom(phoneNumber)
+        const matchingLocation = smsLocations.find((loc) => loc.twilio_from_number === phoneNumber)
+        setSelectedLocationId(matchingLocation?.id || "")
         setToNumber("")
         setSmsBody("")
         setSmsOpen(true)
     }
 
     async function handleSendSms() {
-        if (!toNumber.trim() || !smsBody.trim()) {
-            toast.error("Recipient and message body are required")
+        if (!toNumber.trim() || !smsBody.trim() || !selectedLocationId) {
+            toast.error("Recipient, location, and message body are required")
             return
         }
         setSending(true)
@@ -75,14 +100,54 @@ export default function TwilioPhoneNumbers() {
                 from_number: selectedFrom,
                 to_number: toNumber.trim(),
                 body: smsBody.trim(),
+                institution_location_id: selectedLocationId,
             })
-            toast.success(`SMS sent — SID: ${result.message_sid}`)
+            toast.success(
+                result.status === "suppressed"
+                    ? `SMS suppressed for ${result.to_number_masked || "recipient"}`
+                    : `SMS ${result.status} — SID: ${result.message_sid}`
+            )
             setSmsOpen(false)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to send SMS"
             toast.error(message)
         } finally {
             setSending(false)
+        }
+    }
+
+    async function handleCreateSuppression() {
+        if (!suppressionLocationId || !suppressionPhone.trim()) {
+            toast.error("Location and phone number are required")
+            return
+        }
+        setSavingSuppression(true)
+        try {
+            await createSmsSuppression({
+                location_id: suppressionLocationId,
+                phone: suppressionPhone.trim(),
+                reason: suppressionReason.trim() || undefined,
+            })
+            toast.success("SMS suppression added")
+            setSuppressionPhone("")
+            setSuppressionReason("")
+            setSuppressions(await listSmsSuppressions())
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to add suppression"
+            toast.error(message)
+        } finally {
+            setSavingSuppression(false)
+        }
+    }
+
+    async function handleReleaseSuppression(id: string) {
+        try {
+            await releaseSmsSuppression(id)
+            toast.success("SMS suppression released")
+            setSuppressions(await listSmsSuppressions())
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to release suppression"
+            toast.error(message)
         }
     }
 
@@ -236,6 +301,113 @@ export default function TwilioPhoneNumbers() {
                 </CardContent>
             </Card>
 
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Ban className="h-4 w-4" />
+                        SMS Suppressions
+                    </CardTitle>
+                    <CardDescription>
+                        Manually opt a patient phone number out of outbound SMS.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                    <div className="grid gap-3 md:grid-cols-[1.4fr_1fr_1.4fr_auto]">
+                        <div className="space-y-2">
+                            <Label htmlFor="suppression-location">Location</Label>
+                            <select
+                                id="suppression-location"
+                                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                                value={suppressionLocationId}
+                                onChange={(e) => setSuppressionLocationId(e.target.value)}
+                            >
+                                <option value="">Select a location</option>
+                                {smsLocations.map((loc) => (
+                                    <option key={loc.id} value={loc.id}>
+                                        {loc.institution_name} — {loc.location_name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="suppression-phone">Phone</Label>
+                            <Input
+                                id="suppression-phone"
+                                placeholder="+12125551234"
+                                value={suppressionPhone}
+                                onChange={(e) => setSuppressionPhone(e.target.value)}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="suppression-reason">Reason</Label>
+                            <Input
+                                id="suppression-reason"
+                                placeholder="Manual opt-out"
+                                value={suppressionReason}
+                                onChange={(e) => setSuppressionReason(e.target.value)}
+                            />
+                        </div>
+                        <div className="flex items-end">
+                            <Button
+                                className="gap-2"
+                                onClick={handleCreateSuppression}
+                                disabled={savingSuppression || !suppressionLocationId || !suppressionPhone.trim()}
+                            >
+                                {savingSuppression ? (
+                                    <RefreshCw className="h-4 w-4 animate-spin" />
+                                ) : (
+                                    <Ban className="h-4 w-4" />
+                                )}
+                                Suppress
+                            </Button>
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b text-left text-muted-foreground">
+                                    <th className="pb-3 font-medium">Phone</th>
+                                    <th className="pb-3 font-medium">Source</th>
+                                    <th className="pb-3 font-medium">Reason</th>
+                                    <th className="pb-3 font-medium">Created</th>
+                                    <th className="pb-3 font-medium sr-only">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {suppressions.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={5} className="py-6 text-center text-muted-foreground">
+                                            No active SMS suppressions.
+                                        </td>
+                                    </tr>
+                                ) : suppressions.map((row) => (
+                                    <tr key={row.id} className="border-b last:border-0">
+                                        <td className="py-3 font-mono">{row.phone_masked}</td>
+                                        <td className="py-3 text-muted-foreground">{row.source}</td>
+                                        <td className="py-3 text-muted-foreground">{row.reason || "—"}</td>
+                                        <td className="py-3 text-muted-foreground">
+                                            {new Date(row.created_at).toLocaleString()}
+                                        </td>
+                                        <td className="py-3 text-right">
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="gap-1.5"
+                                                onClick={() => handleReleaseSuppression(row.id)}
+                                            >
+                                                <Unlock className="h-3.5 w-3.5" />
+                                                Release
+                                            </Button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </CardContent>
+            </Card>
+
             {/* Send SMS Dialog */}
             <Dialog open={smsOpen} onOpenChange={setSmsOpen}>
                 <DialogContent className="sm:max-w-md">
@@ -247,6 +419,24 @@ export default function TwilioPhoneNumbers() {
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                            <Label htmlFor="sms-location">Location</Label>
+                            <select
+                                id="sms-location"
+                                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                                value={selectedLocationId}
+                                onChange={(e) => setSelectedLocationId(e.target.value)}
+                            >
+                                <option value="">Select a location</option>
+                                {smsLocations
+                                    .filter((loc) => !selectedFrom || loc.twilio_from_number === selectedFrom)
+                                    .map((loc) => (
+                                        <option key={loc.id} value={loc.id}>
+                                            {loc.institution_name} — {loc.location_name}
+                                        </option>
+                                    ))}
+                            </select>
+                        </div>
                         <div className="space-y-2">
                             <Label htmlFor="to-number">To (E.164 format)</Label>
                             <Input
@@ -273,7 +463,7 @@ export default function TwilioPhoneNumbers() {
                         <Button
                             className="w-full gap-2"
                             onClick={handleSendSms}
-                            disabled={sending || !toNumber.trim() || !smsBody.trim()}
+                            disabled={sending || !selectedLocationId || !toNumber.trim() || !smsBody.trim()}
                         >
                             {sending ? (
                                 <RefreshCw className="h-4 w-4 animate-spin" />

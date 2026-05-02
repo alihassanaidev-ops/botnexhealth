@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { useSearchParams } from "react-router-dom"
-import { MaskedPHI } from "@/components/ui/masked-phi"
 import {
     Phone,
     PhoneIncoming,
@@ -14,6 +13,8 @@ import {
     CheckCircle2,
     RefreshCcw,
     PlusCircle,
+    Eye,
+    Loader2,
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -56,7 +57,15 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { useSSE } from "@/hooks/useSSE"
-import { listCalls, getCall, resolveCallback } from "@/lib/calls-api"
+import {
+    getCall,
+    listCalls,
+    resolveCallback,
+    revealCustomPhiField,
+    revealFullTranscript,
+    revealRawTranscript,
+    revealRecording,
+} from "@/lib/calls-api"
 import { STATUS_OPTIONS, DIRECTION_OPTIONS } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import type { CallRecord, CallDetail, CallsListResponse, CustomFieldValue, TranscriptTurn } from "@/types"
@@ -308,7 +317,49 @@ function renderFieldValue(field: CustomFieldValue): string {
     }
 }
 
-function CustomFieldsSection({ fields }: { fields: CustomFieldValue[] }) {
+function CustomFieldDisplay({ callId, field }: { callId: string; field: CustomFieldValue }) {
+    const [revealed, setRevealed] = useState(false)
+    const [revealedValue, setRevealedValue] = useState<string | null>(null)
+    const [revealing, setRevealing] = useState(false)
+
+    async function handleReveal() {
+        setRevealing(true)
+        try {
+            const result = await revealCustomPhiField(callId, field.field_key)
+            setRevealedValue(result.value)
+            setRevealed(true)
+            toast.success("Field revealed and audited")
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Failed to reveal field")
+        } finally {
+            setRevealing(false)
+        }
+    }
+
+    if (field.is_phi && field.reveal_available && !revealed) {
+        return (
+            <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-1 h-7 gap-1.5 px-2 text-xs"
+                onClick={handleReveal}
+                disabled={revealing}
+            >
+                {revealing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Eye className="h-3 w-3" />}
+                Reveal
+            </Button>
+        )
+    }
+
+    return (
+        <p className="font-medium mt-0.5">
+            {renderFieldValue({ ...field, value: revealed ? revealedValue : field.value })}
+        </p>
+    )
+}
+
+function CustomFieldsSection({ callId, fields }: { callId: string; fields: CustomFieldValue[] }) {
     if (!fields || fields.length === 0) return null
     return (
         <div>
@@ -321,11 +372,7 @@ function CustomFieldsSection({ fields }: { fields: CustomFieldValue[] }) {
                         <p className="text-muted-foreground flex items-center gap-1">
                             {f.field_name}
                         </p>
-                        <MaskedPHI
-                            value={renderFieldValue(f)}
-                            isPhi={f.is_phi}
-                            className="font-medium mt-0.5"
-                        />
+                        <CustomFieldDisplay callId={callId} field={f} />
                     </div>
                 ))}
             </div>
@@ -380,10 +427,20 @@ type TranscriptTab = "scrubbed" | "full" | "raw"
 
 function TranscriptSection({ detail }: { detail: CallDetail }) {
     const [tab, setTab] = useState<TranscriptTab>("scrubbed")
+    const [fullTurns, setFullTurns] = useState<TranscriptTurn[] | null>(null)
+    const [rawTranscript, setRawTranscript] = useState<string | null>(null)
+    const [revealing, setRevealing] = useState<TranscriptTab | null>(null)
+
+    useEffect(() => {
+        setTab("scrubbed")
+        setFullTurns(null)
+        setRawTranscript(null)
+        setRevealing(null)
+    }, [detail.id])
 
     const hasScrubbed = !!detail.scrubbed_transcript_with_tool_calls?.length
-    const hasFull = !!detail.transcript_with_tool_calls?.length
-    const hasRaw = !!detail.transcript
+    const hasFull = !!fullTurns?.length || detail.full_transcript_available
+    const hasRaw = !!rawTranscript || detail.raw_transcript_available
 
     if (!hasScrubbed && !hasFull && !hasRaw) return null
 
@@ -398,6 +455,53 @@ function TranscriptSection({ detail }: { detail: CallDetail }) {
         ? tab
         : (tabs.find(t => t.available)?.id ?? "scrubbed")
 
+    async function handleReveal(nextTab: TranscriptTab) {
+        setTab(nextTab)
+        if (nextTab === "full" && !fullTurns && detail.full_transcript_available) {
+            setRevealing("full")
+            try {
+                const result = await revealFullTranscript(detail.id)
+                setFullTurns(result.transcript_with_tool_calls ?? [])
+                toast.success("Full transcript revealed and audited")
+            } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Failed to reveal transcript")
+            } finally {
+                setRevealing(null)
+            }
+        }
+        if (nextTab === "raw" && rawTranscript === null && detail.raw_transcript_available) {
+            setRevealing("raw")
+            try {
+                const result = await revealRawTranscript(detail.id)
+                setRawTranscript(result.transcript ?? "")
+                toast.success("Raw transcript revealed and audited")
+            } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Failed to reveal transcript")
+            } finally {
+                setRevealing(null)
+            }
+        }
+    }
+
+    function revealPrompt(label: string, onReveal: () => void, loading: boolean) {
+        return (
+            <div className="flex min-h-24 flex-col items-center justify-center gap-2 p-3 text-center">
+                <p className="text-xs text-muted-foreground">This view may contain PHI.</p>
+                <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    onClick={onReveal}
+                    disabled={loading}
+                >
+                    {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+                    Reveal {label}
+                </Button>
+            </div>
+        )
+    }
+
     return (
         <div>
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1.5">Transcript</p>
@@ -408,7 +512,7 @@ function TranscriptSection({ detail }: { detail: CallDetail }) {
                     <button
                         key={t.id}
                         type="button"
-                        onClick={() => setTab(t.id)}
+                        onClick={() => handleReveal(t.id)}
                         className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${activeTab === t.id
                             ? "bg-primary text-primary-foreground"
                             : "bg-muted text-muted-foreground hover:bg-muted/70"
@@ -427,13 +531,73 @@ function TranscriptSection({ detail }: { detail: CallDetail }) {
                 {activeTab === "scrubbed" && hasScrubbed && (
                     <TranscriptChatBubbles turns={detail.scrubbed_transcript_with_tool_calls!} />
                 )}
-                {activeTab === "full" && hasFull && (
-                    <TranscriptChatBubbles turns={detail.transcript_with_tool_calls!} />
+                {activeTab === "full" && fullTurns && (
+                    <TranscriptChatBubbles turns={fullTurns} />
                 )}
-                {activeTab === "raw" && hasRaw && (
+                {activeTab === "full" && !fullTurns && (
+                    revealPrompt("full transcript", () => handleReveal("full"), revealing === "full")
+                )}
+                {activeTab === "raw" && rawTranscript !== null && (
                     <pre className="text-xs leading-relaxed p-3 whitespace-pre-wrap font-sans">
-                        {detail.transcript}
+                        {rawTranscript || "No raw transcript available."}
                     </pre>
+                )}
+                {activeTab === "raw" && rawTranscript === null && (
+                    revealPrompt("raw transcript", () => handleReveal("raw"), revealing === "raw")
+                )}
+            </div>
+        </div>
+    )
+}
+
+function RecordingSection({ detail }: { detail: CallDetail }) {
+    const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
+    const [revealing, setRevealing] = useState(false)
+
+    useEffect(() => {
+        setRecordingUrl(null)
+        setRevealing(false)
+    }, [detail.id])
+
+    if (!detail.recording_available && !recordingUrl) return null
+
+    async function handleRevealRecording() {
+        setRevealing(true)
+        try {
+            const result = await revealRecording(detail.id)
+            setRecordingUrl(result.recording_url)
+            if (result.recording_url) {
+                toast.success("Recording revealed and audited")
+            } else {
+                toast.info("No recording is available for this call")
+            }
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Failed to reveal recording")
+        } finally {
+            setRevealing(false)
+        }
+    }
+
+    return (
+        <div>
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Call Recording</p>
+            <div className="rounded-lg border bg-muted p-3 flex items-center justify-center">
+                {recordingUrl ? (
+                    <audio controls className="w-full h-10 outline-none" src={recordingUrl}>
+                        Your browser does not support the audio element.
+                    </audio>
+                ) : (
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5"
+                        onClick={handleRevealRecording}
+                        disabled={revealing}
+                    >
+                        {revealing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+                        Reveal recording
+                    </Button>
                 )}
             </div>
         </div>
@@ -554,19 +718,10 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                         )}
 
                         {/* Recording */}
-                        {detail.recording_url && (
-                            <div>
-                                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Call Recording</p>
-                                <div className="rounded-lg border bg-muted p-3 flex items-center justify-center">
-                                    <audio controls className="w-full h-10 outline-none" src={detail.recording_url}>
-                                        Your browser does not support the audio element.
-                                    </audio>
-                                </div>
-                            </div>
-                        )}
+                        <RecordingSection detail={detail} />
 
                         {/* Custom fields */}
-                        <CustomFieldsSection fields={detail.custom_fields} />
+                        <CustomFieldsSection callId={detail.id} fields={detail.custom_fields} />
 
                         {/* Transcript — 3-tab viewer */}
                         <TranscriptSection detail={detail} />

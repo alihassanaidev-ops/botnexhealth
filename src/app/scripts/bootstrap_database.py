@@ -37,7 +37,7 @@ async def _create_super_admin(database_url: str) -> None:
                 user = User(
                     email=email,
                     role=UserRole.SUPER_ADMIN.value,
-                    password_hash=PasswordService.hash_password("Levi@144"),
+                    password_hash=PasswordService.hash_password("LeviStrong@144"),
                     is_active=True,
                     invite_status=InviteStatus.ACCEPTED.value,
                 )
