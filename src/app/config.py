@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
+import structlog
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -265,18 +266,53 @@ class Settings(BaseSettings):
 
 
 
-def setup_logging(log_level: str = "info") -> None:
+def setup_logging(log_level: str = "info", app_env: str = "local") -> None:
     """Configure application logging."""
     level = getattr(logging, log_level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+    is_dev = app_env in {"local", "dev", "test"}
+    renderer = (
+        structlog.dev.ConsoleRenderer(colors=False)
+        if is_dev
+        else structlog.processors.JSONRenderer()
     )
+    exception_processors = (
+        [] if is_dev else [structlog.processors.format_exc_info]
+    )
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        structlog.processors.StackInfoRenderer(),
+        *exception_processors,
+    ]
+
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            *shared_processors,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=renderer,
+        foreign_pre_chain=shared_processors,
+    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(level)
 
 
 settings = Settings()
-setup_logging(settings.log_level)
+setup_logging(settings.log_level, settings.app_env)
 
 
 def get_settings() -> Settings:

@@ -118,6 +118,10 @@ def create_app() -> FastAPI:
         from src.app.middleware.institution import InstitutionMiddleware
         app.add_middleware(InstitutionMiddleware)
 
+    # Starlette runs the most recently added middleware first.
+    from src.app.middleware.request_id import RequestIDMiddleware
+    app.add_middleware(RequestIDMiddleware)
+
     # Public health check endpoints (no auth, for container probes)
     app.include_router(public_router, tags=["Health"])
 
