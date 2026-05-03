@@ -78,10 +78,11 @@ async def test_stream_closes_when_subscribe_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_delivers_events_from_reader() -> None:
+    keep_subscription_open = asyncio.Event()
+
     async def good_subscribe(_institution_id: str) -> AsyncIterator[dict[str, Any]]:
         yield {"type": "calls_updated", "data": {"x": 1}, "timestamp": "2026-01-01T00:00:00Z"}
-        # Keep the generator alive so the main loop can read it.
-        await asyncio.sleep(0.5)
+        await keep_subscription_open.wait()
 
     chunks = await _run_stream(
         subscribe_side_effect=good_subscribe,
@@ -98,9 +99,10 @@ async def test_stream_delivers_events_from_reader() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_emits_heartbeat_when_idle() -> None:
+    keep_subscription_open = asyncio.Event()
+
     async def idle_subscribe(_institution_id: str) -> AsyncIterator[dict[str, Any]]:
-        # Never yield. Stay alive until cancelled so the stream stays connected.
-        await asyncio.sleep(5)
+        await keep_subscription_open.wait()
         if False:
             yield {}  # pragma: no cover — make this an async generator
 

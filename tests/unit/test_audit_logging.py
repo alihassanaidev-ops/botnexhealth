@@ -8,11 +8,13 @@ Tests cover:
 - Error handling and outcome classification
 """
 
-import pytest
-import pytest_asyncio
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+import pytest
+import pytest_asyncio
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
 from src.app.services.audit import (
@@ -26,6 +28,16 @@ from src.app.services.audit import (
     set_audit_service,
 )
 
+
+
+class _SignalingAuditRepository(InMemoryAuditRepository):
+    def __init__(self, event: asyncio.Event) -> None:
+        super().__init__()
+        self._event = event
+
+    async def save(self, entry: AuditEntry) -> None:
+        await super().save(entry)
+        self._event.set()
 
 
 # =============================================================================
@@ -353,9 +365,13 @@ class TestAuditedDecorator:
     @pytest.fixture(autouse=True)
     def setup_service(self):
         """Set up in-memory audit service for tests."""
-        self.repo = InMemoryAuditRepository()
+        self.audit_saved = asyncio.Event()
+        self.repo = _SignalingAuditRepository(self.audit_saved)
         self.service = AuditService(self.repo)
         set_audit_service(self.service)
+
+    async def _wait_for_audit(self) -> None:
+        await asyncio.wait_for(self.audit_saved.wait(), timeout=2.0)
     
     @pytest.mark.asyncio
     async def test_decorator_logs_success_explicit(self):
@@ -368,8 +384,7 @@ class TestAuditedDecorator:
         
         await mock_lookup({"id": "123"})
         
-        import asyncio
-        await asyncio.sleep(0.1)
+        await self._wait_for_audit()
         
         entries = self.repo.get_all()
         assert len(entries) == 1
@@ -389,8 +404,7 @@ class TestAuditedDecorator:
         # Call with missing key
         await mock_broken({"name": "john"})
         
-        import asyncio
-        await asyncio.sleep(0.1)
+        await self._wait_for_audit()
         
         entries = self.repo.get_all()
         assert len(entries) == 1
@@ -410,8 +424,7 @@ class TestAuditedDecorator:
         with pytest.raises(RuntimeError):
             await mock_fail({})
         
-        import asyncio
-        await asyncio.sleep(0.1)
+        await self._wait_for_audit()
         
         entries = self.repo.get_all()
         assert len(entries) == 1
@@ -436,8 +449,7 @@ class TestAuditedDecorator:
 
         await mock_route(current_user=current_user)
 
-        import asyncio
-        await asyncio.sleep(0.1)
+        await self._wait_for_audit()
 
         entries = self.repo.get_all()
         assert len(entries) == 1
