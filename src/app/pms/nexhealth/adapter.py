@@ -318,15 +318,21 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             return BookingResult(success=False, source="nexhealth", status="error", error=str(e))
 
     async def reschedule_appointment(self, old_appointment_id: str, new_booking: BookingRequest) -> BookingResult:
+        # Book the new slot first so the patient never loses coverage if the new
+        # booking fails. Only cancel the old appointment after the new one is
+        # confirmed.
+        book_result = await self.book_appointment(new_booking)
+        if not book_result.success:
+            return book_result
+
         cancel_result = await self.cancel_appointment(old_appointment_id)
         if not cancel_result.success and "already cancelled" not in (cancel_result.error or "").lower():
-            return BookingResult(
-                success=False, source="nexhealth", status="error",
-                error=f"Failed to cancel old appointment: {cancel_result.error}",
+            book_result.message = (
+                "Rescheduled (new booked) but failed to cancel old appointment: "
+                f"{cancel_result.error}. Please cancel manually."
             )
-        book_result = await self.book_appointment(new_booking)
-        if book_result.success:
-            book_result.message = "Rescheduled successfully (old cancelled, new booked)."
+        else:
+            book_result.message = "Rescheduled successfully (new booked, old cancelled)."
         return book_result
 
     # ── Locations ────────────────────────────────────────────────────────

@@ -65,3 +65,88 @@ async def test_has_provider_appointments_safe_fallback_on_unexpected_payload(mon
 
     result = await adapter.has_provider_appointments_on_date("nh-123", "2026-03-09")
     assert result is True
+
+
+# ── Reschedule ordering: book new before cancelling old ─────────────────────
+
+
+def _booking_request() -> "BookingRequest":  # noqa: F821
+    from src.app.pms.models import BookingRequest
+
+    return BookingRequest(
+        patient_id="patient-1",
+        provider_id="provider-1",
+        slot_start="2026-05-04T09:00:00Z",
+        slot_end="2026-05-04T09:30:00Z",
+        appointment_type_id="type-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_reschedule_does_not_cancel_when_new_booking_fails(monkeypatch: pytest.MonkeyPatch):
+    """If the new slot cannot be booked, the existing appointment must be left intact."""
+    from unittest.mock import AsyncMock
+    from src.app.pms.models import BookingResult
+
+    adapter = _make_adapter()
+    book_mock = AsyncMock(return_value=BookingResult(success=False, source="nexhealth", status="error", error="slot full"))
+    cancel_mock = AsyncMock()
+    monkeypatch.setattr(adapter, "book_appointment", book_mock)
+    monkeypatch.setattr(adapter, "cancel_appointment", cancel_mock)
+
+    result = await adapter.reschedule_appointment("old-1", _booking_request())
+
+    assert result.success is False
+    book_mock.assert_awaited_once()
+    cancel_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reschedule_books_new_then_cancels_old_on_success(monkeypatch: pytest.MonkeyPatch):
+    from unittest.mock import AsyncMock
+    from src.app.pms.models import BookingResult
+
+    adapter = _make_adapter()
+    call_order: list[str] = []
+
+    async def fake_book(_req):
+        call_order.append("book")
+        return BookingResult(success=True, source="nexhealth", status="booked", appointment_id="new-1")
+
+    async def fake_cancel(_id):
+        call_order.append("cancel")
+        return BookingResult(success=True, source="nexhealth", status="cancelled")
+
+    monkeypatch.setattr(adapter, "book_appointment", fake_book)
+    monkeypatch.setattr(adapter, "cancel_appointment", fake_cancel)
+
+    result = await adapter.reschedule_appointment("old-1", _booking_request())
+
+    assert result.success is True
+    assert call_order == ["book", "cancel"]
+    assert "new booked, old cancelled" in (result.message or "")
+
+
+@pytest.mark.asyncio
+async def test_reschedule_returns_warning_when_cancel_fails_after_new_booked(monkeypatch: pytest.MonkeyPatch):
+    """New slot is booked but cancel fails — we must surface the manual cleanup warning, not a clean success."""
+    from unittest.mock import AsyncMock
+    from src.app.pms.models import BookingResult
+
+    adapter = _make_adapter()
+    monkeypatch.setattr(
+        adapter,
+        "book_appointment",
+        AsyncMock(return_value=BookingResult(success=True, source="nexhealth", status="booked", appointment_id="new-1")),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "cancel_appointment",
+        AsyncMock(return_value=BookingResult(success=False, source="nexhealth", status="error", error="appointment locked")),
+    )
+
+    result = await adapter.reschedule_appointment("old-1", _booking_request())
+
+    assert result.success is True  # the booking did happen
+    assert "failed to cancel old appointment" in (result.message or "").lower()
+    assert "please cancel manually" in (result.message or "").lower()
