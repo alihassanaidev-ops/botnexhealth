@@ -49,7 +49,7 @@ async def async_client():
         
     await cleanup_nexhealth_client()
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_audit_service():
     """Ensure tests don't try to use PostgresAuditRepository."""
     from src.app.services.audit import InMemoryAuditRepository, AuditService, set_audit_service
