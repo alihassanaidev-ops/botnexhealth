@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import enum
 import secrets
 from binascii import Error as BinasciiError
 from datetime import datetime
@@ -16,6 +17,31 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
 from src.app.security import derive_secret_key
+
+
+class Jurisdiction(str, enum.Enum):
+    """Regulatory jurisdiction governing an institution's PHI handling.
+
+    ISO 3166-2:CA codes — drives data-residency controls, breach-notification
+    windows, and provincial privacy-law application (PHIPA, PIPA, Law 25, etc.)
+    """
+
+    CA_ON = "CA-ON"  # Ontario — PHIPA
+    CA_BC = "CA-BC"  # British Columbia — PIPA BC
+    CA_AB = "CA-AB"  # Alberta — HIA
+    CA_QC = "CA-QC"  # Quebec — Law 25
+    CA_MB = "CA-MB"  # Manitoba — PHIA
+    CA_SK = "CA-SK"  # Saskatchewan — HIPA
+    CA_NS = "CA-NS"  # Nova Scotia — PHIA
+    CA_NB = "CA-NB"  # New Brunswick — PHIPAA
+    CA_NL = "CA-NL"  # Newfoundland & Labrador — PHIA
+    CA_PE = "CA-PE"  # Prince Edward Island — HIA
+    CA_YT = "CA-YT"  # Yukon
+    CA_NT = "CA-NT"  # Northwest Territories
+    CA_NU = "CA-NU"  # Nunavut
+
+
+DEFAULT_JURISDICTION = Jurisdiction.CA_ON
 
 
 # =============================================================================
@@ -128,6 +154,15 @@ class Institution(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     location_limit: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
+
+    # Regulatory jurisdiction (ISO 3166-2:CA). Drives residency-of-record and
+    # provincial privacy-law application; see Jurisdiction enum above.
+    jurisdiction: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+        default=DEFAULT_JURISDICTION.value,
+        server_default=DEFAULT_JURISDICTION.value,
+    )
 
     # ROI configuration (institution-configurable)
     roi_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)

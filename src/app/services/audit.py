@@ -95,53 +95,76 @@ class IAuditRepository(Protocol):
 # Concrete Repository Implementation (LSP)
 # =============================================================================
 
+async def _resolve_jurisdiction(session: Any, institution_id: str | None) -> str | None:
+    """Look up an institution's jurisdiction for residency-of-record stamping."""
+    if not institution_id:
+        return None
+    from sqlalchemy import select
+    from src.app.models.institution import Institution
+
+    result = await session.execute(
+        select(Institution.jurisdiction).where(Institution.id == institution_id)
+    )
+    return result.scalar_one_or_none()
+
+
 class PostgresAuditRepository:
     """
     PostgreSQL implementation of audit repository.
-    
+
     LSP: Can substitute for IAuditRepository in any context.
     SRP: Only responsible for database persistence.
     """
-    
+
     async def save(self, entry: AuditEntry) -> None:
         """Persist a single audit entry to PostgreSQL."""
         from src.app.database import get_db_session
-        
-        audit_log = AuditLog.create(
-            actor=entry.actor,
-            action=entry.action,
-            target_resource=entry.target_resource,
-            outcome=entry.outcome,
-            audit_metadata={
-                "request_id": entry.request_id,
-                **entry.metadata
-            },
-            institution_id=entry.institution_id,
-            user_id=entry.user_id,
-            location_id=entry.location_id,
-        )
-        # Override timestamp if provided
-        audit_log.timestamp = entry.timestamp
-        
+
         async with get_db_session() as session:
+            metadata = {"request_id": entry.request_id, **entry.metadata}
+            if "jurisdiction" not in metadata:
+                jurisdiction = await _resolve_jurisdiction(session, entry.institution_id)
+                if jurisdiction:
+                    metadata["jurisdiction"] = jurisdiction
+
+            audit_log = AuditLog.create(
+                actor=entry.actor,
+                action=entry.action,
+                target_resource=entry.target_resource,
+                outcome=entry.outcome,
+                audit_metadata=metadata,
+                institution_id=entry.institution_id,
+                user_id=entry.user_id,
+                location_id=entry.location_id,
+            )
+            # Override timestamp if provided
+            audit_log.timestamp = entry.timestamp
             session.add(audit_log)
             # Commit happens automatically on context exit
-    
+
     async def save_batch(self, entries: list[AuditEntry]) -> None:
         """Persist multiple audit entries atomically."""
         from src.app.database import get_db_session
-        
+
         async with get_db_session() as session:
+            jurisdiction_cache: dict[str, str | None] = {}
             for entry in entries:
+                metadata = {"request_id": entry.request_id, **entry.metadata}
+                if "jurisdiction" not in metadata and entry.institution_id:
+                    if entry.institution_id not in jurisdiction_cache:
+                        jurisdiction_cache[entry.institution_id] = (
+                            await _resolve_jurisdiction(session, entry.institution_id)
+                        )
+                    cached = jurisdiction_cache[entry.institution_id]
+                    if cached:
+                        metadata["jurisdiction"] = cached
+
                 audit_log = AuditLog.create(
                     actor=entry.actor,
                     action=entry.action,
                     target_resource=entry.target_resource,
                     outcome=entry.outcome,
-                    audit_metadata={
-                        "request_id": entry.request_id,
-                        **entry.metadata
-                    },
+                    audit_metadata=metadata,
                     institution_id=entry.institution_id,
                     user_id=entry.user_id,
                     location_id=entry.location_id,

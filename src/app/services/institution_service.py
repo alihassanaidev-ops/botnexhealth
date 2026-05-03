@@ -53,12 +53,16 @@ class InstitutionService:
         *,
         nexhealth_api_key: str | None = None,
         location_limit: int = 1,
+        jurisdiction: str | None = None,
     ) -> Institution:
         """Create a new institution."""
+        from src.app.models.institution import DEFAULT_JURISDICTION
+
         institution = Institution(
             name=name,
             slug=slug,
             location_limit=location_limit,
+            jurisdiction=jurisdiction or DEFAULT_JURISDICTION.value,
         )
 
         # Set encrypted fields via properties

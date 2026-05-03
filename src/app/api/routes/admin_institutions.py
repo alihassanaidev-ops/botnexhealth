@@ -15,6 +15,7 @@ from src.app.database import get_db_session
 from src.app.api.deps import get_current_admin
 from src.app.config import settings
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.models.institution import DEFAULT_JURISDICTION, Jurisdiction
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background
 from src.app.services.audit_decorator import audit
@@ -141,6 +142,12 @@ class InstitutionCreate(BaseModel):
     nexhealth_api_key: str | None = None
     location_limit: int = Field(1, ge=1, le=500, description="Maximum number of locations this institution can have")
 
+    # Regulatory jurisdiction (ISO 3166-2:CA)
+    jurisdiction: Jurisdiction = Field(
+        default=DEFAULT_JURISDICTION,
+        description="Regulatory jurisdiction governing PHI for this institution",
+    )
+
 
 class InstitutionUpdate(BaseModel):
     """Request body for updating an institution.
@@ -154,6 +161,9 @@ class InstitutionUpdate(BaseModel):
     # NexHealth
     nexhealth_api_key: str | None = None
     location_limit: int | None = Field(None, ge=1, le=500)
+
+    # Regulatory jurisdiction
+    jurisdiction: Jurisdiction | None = None
 
 
 

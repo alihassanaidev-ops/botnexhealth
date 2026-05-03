@@ -109,6 +109,8 @@ def audit(
                     outcome=AuditOutcome.SUCCESS,
                     metadata=safe_metadata,
                     institution_id=institution_id,
+                    user_id=actor_ctx.get("actor_user_id"),
+                    location_id=actor_ctx.get("location_id"),
                     request_id=request_id,
                 )
                 return result
@@ -125,6 +127,8 @@ def audit(
                     outcome=outcome,
                     metadata=safe_metadata,
                     institution_id=institution_id,
+                    user_id=actor_ctx.get("actor_user_id"),
+                    location_id=actor_ctx.get("location_id"),
                     request_id=request_id,
                 )
                 raise

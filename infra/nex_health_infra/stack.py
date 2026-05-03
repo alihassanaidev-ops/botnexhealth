@@ -420,6 +420,8 @@ class NexHealthPlatformStack(Stack):
             environment["CORS_ALLOWED_ORIGINS"] = ",".join(cors_origins)
         if frontend_base_url:
             environment["AUTH_FRONTEND_BASE_URL"] = frontend_base_url
+        if self.config.trusted_proxy_cidrs:
+            environment["TRUSTED_PROXY_CIDRS"] = ",".join(self.config.trusted_proxy_cidrs)
         return environment
 
     def _build_runtime_secrets(

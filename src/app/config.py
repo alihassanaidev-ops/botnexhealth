@@ -118,6 +118,13 @@ class Settings(BaseSettings):
     # CORS — comma-separated allowed origins; defaults to "*" for local dev only
     cors_allowed_origins: str = "*"
 
+    # Refresh-token cookie. Browsers special-case localhost so Secure=True works
+    # over HTTP locally; override only if running dev on a non-localhost host.
+    refresh_cookie_name: str = "refresh_token"
+    refresh_cookie_path: str = "/api/auth"
+    cookie_secure: bool = True
+    cookie_samesite: str = "strict"
+
     # Proxy / request source validation
     trusted_proxy_cidrs: str = ""
 
@@ -155,6 +162,15 @@ class Settings(BaseSettings):
                 "CORS_ALLOWED_ORIGINS must not be '*' in production. "
                 "Set explicit origins, e.g. 'https://dashboard.yourdomain.com'"
             )
+
+        if self.cookie_samesite.lower() not in {"strict", "lax", "none"}:
+            raise ValueError(
+                "COOKIE_SAMESITE must be 'strict', 'lax', or 'none'."
+            )
+        if self.is_production and not self.cookie_secure:
+            raise ValueError("COOKIE_SECURE must be true in production.")
+        if self.cookie_samesite.lower() == "none" and not self.cookie_secure:
+            raise ValueError("COOKIE_SAMESITE=none requires COOKIE_SECURE=true.")
 
         if (
             self.is_production

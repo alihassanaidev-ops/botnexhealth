@@ -1,0 +1,445 @@
+"""Route-level RBAC boundary tests.
+
+These tests intentionally sit above the dependency unit tests: every FastAPI
+route must be classified here so a new endpoint cannot accidentally ship
+without an explicit access-control boundary.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from typing import Callable
+
+import pytest
+from fastapi import HTTPException
+from fastapi.routing import APIRoute
+
+from src.app.api import deps as auth_deps
+from src.app.main import app
+from src.app.models.user import User, UserRole
+
+
+PUBLIC = "public"
+SIGNED_WEBHOOK = "signed_webhook"
+TICKET_AUTH = "ticket_auth"
+
+SUPER_ADMIN = "get_current_admin"
+SUPER_ADMIN_STRICT = "get_current_super_admin"
+INSTITUTION_ADMIN = "get_current_institution_admin"
+INSTITUTION_USER = "get_current_institution_user"
+LOCATION_ADMIN = "get_current_location_admin"
+INSTITUTION_OR_LOCATION_ADMIN = "get_current_institution_or_location_admin"
+LOCATION_STAFF_OR_ADMIN = "get_current_location_staff_or_admin"
+INSTITUTION_OR_LOCATION_USER = "get_current_institution_or_location_user"
+ACTIVE_USER = "get_current_active_user"
+
+
+ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
+    PUBLIC: (
+        "GET /livez",
+        "GET /readyz",
+        "POST /api/auth/login",
+        "POST /api/auth/token",
+        "POST /api/auth/forgot-password",
+        "POST /api/auth/reset-password",
+        "POST /api/auth/set-password",
+        "POST /api/auth/refresh",
+        "POST /api/auth/logout",
+    ),
+    SIGNED_WEBHOOK: (
+        "POST /api/v1/retell/functions",
+        "POST /api/v1/retell/webhook",
+        "POST /api/v1/twilio/webhooks/inbound-sms",
+        "POST /api/v1/twilio/webhooks/sms-status",
+    ),
+    TICKET_AUTH: (
+        "GET /api/institution/events",
+    ),
+    ACTIVE_USER: (
+        "GET /api/v1/health",
+        "GET /api/auth/users/me",
+        "GET /api/institution/setup/overview",
+        "GET /api/institution/setup/locations",
+        "GET /api/institution/setup/providers",
+        "GET /api/institution/setup/appointment-types",
+        "GET /api/institution/setup/operatories",
+        "GET /api/institution/setup/descriptors",
+        "GET /api/institution/setup/availabilities",
+        "GET /api/institution/setup/operating-hours",
+        "GET /api/institution/setup/breaks",
+        "GET /api/institution/calls",
+        "GET /api/institution/calls/{call_id}",
+        "POST /api/institution/calls/{call_id}/reveal/full-transcript",
+        "POST /api/institution/calls/{call_id}/reveal/raw-transcript",
+        "POST /api/institution/calls/{call_id}/reveal/recording",
+        "POST /api/institution/calls/{call_id}/reveal/custom-fields/{field_key}",
+        "PATCH /api/institution/calls/{call_id}/resolve",
+        "GET /api/institution/dashboard/summary",
+        "GET /api/institution/custom-fields/definitions",
+        "GET /api/institution/notifications",
+        "GET /api/institution/notifications/unread-count",
+        "PATCH /api/institution/notifications/{notification_id}/read",
+        "POST /api/institution/notifications/mark-all-read",
+        "GET /api/institution/callbacks",
+        "GET /api/institution/notification-preferences",
+        "PUT /api/institution/notification-preferences",
+        "POST /api/institution/events/ticket",
+    ),
+    SUPER_ADMIN: (
+        "GET /api/v1/nexhealth/institutions",
+        "GET /api/v1/nexhealth/institutions/{institution_id}",
+        "GET /api/v1/nexhealth/locations",
+        "GET /api/v1/nexhealth/locations/{location_id}",
+        "GET /api/v1/nexhealth/locations/{location_id}/appointment_descriptors",
+        "POST /api/auth/admin/users/{user_id}/unlock",
+        "GET /api/admin/institutions/retell/agents",
+        "GET /api/admin/institutions/retell/agents/{agent_id}",
+        "GET /api/admin/institutions/nexhealth/locations",
+        "GET /api/admin/institutions/audit-logs",
+        "GET /api/admin/institutions",
+        "POST /api/admin/institutions",
+        "GET /api/admin/institutions/{slug}",
+        "PATCH /api/admin/institutions/{slug}",
+        "DELETE /api/admin/institutions/{slug}",
+        "POST /api/admin/institutions/{slug}/reinvite",
+        "POST /api/admin/institutions/{slug}/test-call-notification",
+        "POST /api/admin/institutions/{slug}/locations",
+        "GET /api/admin/institutions/{slug}/locations",
+        "GET /api/admin/institutions/{slug}/locations/{loc_slug}",
+        "PATCH /api/admin/institutions/{slug}/locations/{loc_slug}",
+        "DELETE /api/admin/institutions/{slug}/locations/{loc_slug}",
+        "POST /api/admin/institutions/{slug}/locations/{loc_slug}/sync",
+        "POST /api/admin/institutions/{slug}/locations/{loc_slug}/invite",
+        "GET /api/admin/institutions/{slug}/locations/{loc_slug}/users",
+        "POST /api/admin/institutions/{slug}/locations/{loc_slug}/reinvite",
+        "GET /api/admin/institutions/{slug}/locations/{loc_slug}/operating-hours",
+        "PUT /api/admin/institutions/{slug}/locations/{loc_slug}/operating-hours",
+        "GET /api/admin/institutions/{slug}/locations/{loc_slug}/breaks",
+        "POST /api/admin/institutions/{slug}/locations/{loc_slug}/breaks",
+        "DELETE /api/admin/institutions/{slug}/locations/{loc_slug}/breaks/{break_id}",
+        "GET /api/admin/twilio/phone-numbers",
+        "POST /api/admin/twilio/send-sms",
+        "GET /api/admin/sms/locations",
+        "GET /api/admin/sms/logs",
+        "GET /api/admin/sms/suppressions",
+        "POST /api/admin/sms/suppressions",
+        "POST /api/admin/sms/suppressions/{suppression_id}/release",
+        "GET /api/admin/dead-letter-events",
+        "POST /api/admin/dead-letter-events/{event_id}/discard",
+        "POST /api/admin/dead-letter-events/{event_id}/replay",
+    ),
+    INSTITUTION_ADMIN: (
+        "POST /api/institution/users/invite-institution-admin",
+        "GET /api/institution/users",
+        "POST /api/institution/users/invite",
+        "POST /api/institution/users/{user_id}/deactivate",
+        "POST /api/institution/users/{user_id}/reinvite",
+        "POST /api/institution/locations/{loc_slug}/invite-location-admin",
+        "GET /api/institution/billing-email",
+        "PUT /api/institution/billing-email",
+        "GET /api/institution/roi/config",
+        "PUT /api/institution/roi/config",
+        "GET /api/institution/roi/calculate",
+        "GET /api/institution/audit-logs",
+        "GET /api/institution/dashboard/aggregate",
+        "POST /api/institution/custom-fields/definitions",
+        "PATCH /api/institution/custom-fields/definitions/{definition_id}",
+        "DELETE /api/institution/custom-fields/definitions/{definition_id}",
+        "GET /api/institution/email-templates",
+        "POST /api/institution/email-templates/preview/live",
+        "POST /api/institution/email-templates/validate",
+        "GET /api/institution/email-templates/{template_type}",
+        "PUT /api/institution/email-templates/{template_type}",
+        "POST /api/institution/email-templates/{template_type}/reset",
+        "GET /api/institution/email-templates/{template_type}/preview",
+        "GET /api/institution/email-templates/{template_type}/variables",
+        "GET /api/institution/notification-recipients",
+        "POST /api/institution/notification-recipients",
+        "PUT /api/institution/notification-recipients/{recipient_id}",
+        "DELETE /api/institution/notification-recipients/{recipient_id}",
+    ),
+    LOCATION_ADMIN: (
+        "GET /api/institution/location/users",
+        "POST /api/institution/location/users/{user_id}/deactivate",
+        "POST /api/institution/locations/{loc_slug}/invite-staff",
+        "GET /api/institution/location/audit-logs",
+    ),
+    INSTITUTION_OR_LOCATION_ADMIN: (
+        "POST /api/v1/pms/appointment-types",
+        "POST /api/v1/pms/setup/availabilities",
+        "PATCH /api/v1/pms/setup/availabilities/{availability_id}",
+        "POST /api/institution/locations/{loc_slug}/transfer-numbers",
+        "PATCH /api/institution/locations/{loc_slug}/transfer-numbers/{transfer_id}",
+        "DELETE /api/institution/locations/{loc_slug}/transfer-numbers/{transfer_id}",
+        "PATCH /api/institution/setup/providers/{provider_id}",
+        "POST /api/institution/setup/appointment-types",
+        "PATCH /api/institution/setup/appointment-types/{source_id}",
+        "DELETE /api/institution/setup/appointment-types/{source_id}",
+        "PATCH /api/institution/setup/availabilities/{source_id}",
+        "POST /api/institution/setup/sync",
+        "PUT /api/institution/setup/operating-hours",
+        "POST /api/institution/setup/breaks",
+        "DELETE /api/institution/setup/breaks/{break_id}",
+        "POST /api/institution/locations/{loc_slug}/insurance-plans",
+        "PATCH /api/institution/locations/{loc_slug}/insurance-plans/{plan_id}",
+        "DELETE /api/institution/locations/{loc_slug}/insurance-plans/{plan_id}",
+    ),
+    INSTITUTION_OR_LOCATION_USER: (
+        "GET /api/v1/pms/patients",
+        "POST /api/v1/pms/patients",
+        "GET /api/v1/pms/slots",
+        "POST /api/v1/pms/appointments",
+        "PATCH /api/v1/pms/appointments/{appointment_id}/cancel",
+        "POST /api/v1/pms/appointments/{old_appointment_id}/reschedule",
+        "GET /api/v1/pms/appointment-types",
+        "GET /api/v1/pms/providers",
+        "GET /api/v1/pms/operatories",
+        "GET /api/v1/pms/locations",
+        "GET /api/v1/pms/locations/{location_id}",
+        "GET /api/v1/pms/setup/capabilities",
+        "GET /api/v1/pms/setup/steps",
+        "GET /api/v1/pms/setup/descriptors",
+        "GET /api/v1/pms/setup/availabilities",
+        "GET /api/institution/me",
+        "GET /api/institution/locations",
+        "GET /api/institution/locations/{loc_slug}/operating-hours",
+        "PUT /api/institution/locations/{loc_slug}/operating-hours",
+        "PATCH /api/institution/locations/{loc_slug}/timezone",
+        "GET /api/institution/transfer-numbers",
+        "GET /api/institution/locations/{loc_slug}/insurance-plans",
+        "GET /api/institution/sms/logs",
+        "GET /api/institution/sms/logs/{sms_id}",
+        "POST /api/institution/sms/logs/{sms_id}/reveal-phone",
+        "POST /api/institution/sms/logs/{sms_id}/reveal-body",
+    ),
+}
+
+
+AUTH_BOUNDARIES = {
+    SUPER_ADMIN,
+    SUPER_ADMIN_STRICT,
+    INSTITUTION_ADMIN,
+    INSTITUTION_USER,
+    LOCATION_ADMIN,
+    INSTITUTION_OR_LOCATION_ADMIN,
+    LOCATION_STAFF_OR_ADMIN,
+    INSTITUTION_OR_LOCATION_USER,
+    ACTIVE_USER,
+}
+
+BOUNDARY_PRECEDENCE = (
+    SUPER_ADMIN,
+    SUPER_ADMIN_STRICT,
+    INSTITUTION_ADMIN,
+    INSTITUTION_USER,
+    LOCATION_ADMIN,
+    INSTITUTION_OR_LOCATION_ADMIN,
+    LOCATION_STAFF_OR_ADMIN,
+    INSTITUTION_OR_LOCATION_USER,
+    ACTIVE_USER,
+)
+
+ALLOWED_ROLES_BY_BOUNDARY: dict[str, set[UserRole]] = {
+    SUPER_ADMIN: {UserRole.SUPER_ADMIN},
+    SUPER_ADMIN_STRICT: {UserRole.SUPER_ADMIN},
+    INSTITUTION_ADMIN: {UserRole.INSTITUTION_ADMIN},
+    INSTITUTION_USER: {UserRole.INSTITUTION_ADMIN},
+    LOCATION_ADMIN: {UserRole.LOCATION_ADMIN},
+    INSTITUTION_OR_LOCATION_ADMIN: {
+        UserRole.INSTITUTION_ADMIN,
+        UserRole.LOCATION_ADMIN,
+    },
+    LOCATION_STAFF_OR_ADMIN: {UserRole.LOCATION_ADMIN, UserRole.STAFF},
+    INSTITUTION_OR_LOCATION_USER: {
+        UserRole.INSTITUTION_ADMIN,
+        UserRole.LOCATION_ADMIN,
+        UserRole.STAFF,
+    },
+    ACTIVE_USER: {
+        UserRole.SUPER_ADMIN,
+        UserRole.INSTITUTION_ADMIN,
+        UserRole.LOCATION_ADMIN,
+        UserRole.STAFF,
+    },
+}
+
+EXPECTED_ROUTE_BOUNDARIES = {
+    route: boundary
+    for boundary, routes in ROUTES_BY_BOUNDARY.items()
+    for route in routes
+}
+
+
+def _routes() -> dict[str, APIRoute]:
+    routes: dict[str, APIRoute] = {}
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in sorted(route.methods or ()):
+            if method == "HEAD":
+                continue
+            routes[f"{method} {route.path}"] = route
+    return routes
+
+
+def _dependency_names(route: APIRoute) -> set[str]:
+    names: set[str] = set()
+
+    def walk(dependant) -> None:
+        for dependency in dependant.dependencies:
+            call = dependency.call
+            name = getattr(call, "__name__", "")
+            if name:
+                names.add(name)
+            walk(dependency)
+
+    walk(route.dependant)
+    return names
+
+
+def _selected_auth_boundary(route: APIRoute) -> str | None:
+    names = _dependency_names(route)
+    for boundary in BOUNDARY_PRECEDENCE:
+        if boundary in names:
+            return boundary
+    return None
+
+
+def _user(
+    role: UserRole,
+    *,
+    location_id: str | None = "22222222-2222-2222-2222-222222222222",
+    is_active: bool = True,
+) -> User:
+    return User(
+        id="11111111-1111-1111-1111-111111111111",
+        email=f"{role.value.lower()}@example.com",
+        role=role.value,
+        institution_id=None
+        if role == UserRole.SUPER_ADMIN
+        else "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        location_id=location_id
+        if role in (UserRole.LOCATION_ADMIN, UserRole.STAFF)
+        else None,
+        is_active=is_active,
+    )
+
+
+def _auth_dependency(boundary: str) -> Callable:
+    return getattr(auth_deps, boundary)
+
+
+def test_route_matrix_has_no_duplicate_expectations():
+    expected_routes = [
+        route
+        for routes in ROUTES_BY_BOUNDARY.values()
+        for route in routes
+    ]
+    duplicates = sorted(route for route, count in Counter(expected_routes).items() if count > 1)
+
+    assert duplicates == []
+
+
+def test_every_route_has_an_explicit_rbac_boundary_expectation():
+    actual = set(_routes())
+    expected = set(EXPECTED_ROUTE_BOUNDARIES)
+
+    assert actual - expected == set()
+    assert expected - actual == set()
+
+
+@pytest.mark.parametrize("route_key", sorted(EXPECTED_ROUTE_BOUNDARIES))
+def test_route_uses_expected_auth_boundary(route_key: str):
+    route = _routes()[route_key]
+    expected_boundary = EXPECTED_ROUTE_BOUNDARIES[route_key]
+    auth_boundary = _selected_auth_boundary(route)
+
+    if expected_boundary in AUTH_BOUNDARIES:
+        assert auth_boundary == expected_boundary
+        assert ACTIVE_USER in _dependency_names(route)
+    else:
+        assert auth_boundary is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_key",
+    sorted(
+        route
+        for route, boundary in EXPECTED_ROUTE_BOUNDARIES.items()
+        if boundary in AUTH_BOUNDARIES
+    ),
+)
+async def test_endpoint_rbac_role_matrix(route_key: str):
+    boundary = EXPECTED_ROUTE_BOUNDARIES[route_key]
+    allowed_roles = ALLOWED_ROLES_BY_BOUNDARY[boundary]
+    dependency = _auth_dependency(boundary)
+
+    for role in UserRole:
+        user = _user(role)
+        if role in allowed_roles:
+            assert await dependency(user) is user
+        else:
+            with pytest.raises(HTTPException) as exc:
+                await dependency(user)
+            assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dependency",
+    (
+        auth_deps.get_current_location_admin,
+        auth_deps.get_current_location_staff_or_admin,
+    ),
+)
+async def test_location_scoped_boundaries_require_location_assignment(dependency: Callable):
+    for role in (UserRole.LOCATION_ADMIN, UserRole.STAFF):
+        user = _user(role, location_id=None)
+        with pytest.raises(HTTPException) as exc:
+            await dependency(user)
+        assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_active_user_boundary_rejects_inactive_accounts():
+    with pytest.raises(HTTPException) as exc:
+        await auth_deps.get_current_active_user(
+            _user(UserRole.INSTITUTION_ADMIN, is_active=False)
+        )
+    assert exc.value.status_code == 403
+
+
+def test_internal_admin_surfaces_remain_super_admin_only():
+    for route_key, boundary in EXPECTED_ROUTE_BOUNDARIES.items():
+        _method, path = route_key.split(" ", 1)
+        if path.startswith((
+            "/api/admin/",
+            "/api/auth/admin/",
+            "/api/v1/nexhealth/",
+        )):
+            assert boundary in {SUPER_ADMIN, SUPER_ADMIN_STRICT}
+
+
+def test_user_management_surfaces_keep_admin_boundaries():
+    for route_key, boundary in EXPECTED_ROUTE_BOUNDARIES.items():
+        _method, path = route_key.split(" ", 1)
+        if path.startswith("/api/institution/users"):
+            assert boundary == INSTITUTION_ADMIN
+        if path.startswith("/api/institution/location/users"):
+            assert boundary == LOCATION_ADMIN
+        if path.endswith("/invite-staff"):
+            assert boundary == LOCATION_ADMIN
+
+
+def test_staff_cannot_cross_mutation_boundaries_at_dependency_layer():
+    mutation_boundaries = {
+        INSTITUTION_ADMIN,
+        LOCATION_ADMIN,
+        INSTITUTION_OR_LOCATION_ADMIN,
+    }
+
+    for route_key, boundary in EXPECTED_ROUTE_BOUNDARIES.items():
+        if boundary not in mutation_boundaries:
+            continue
+        assert UserRole.STAFF not in ALLOWED_ROLES_BY_BOUNDARY[boundary], route_key

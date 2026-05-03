@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from jose import jwt
+from jose import JWTError, jwt
 
 from src.app.config import get_settings
 
@@ -53,15 +53,25 @@ class AuthService:
 
     @staticmethod
     def decode_access_token(token: str) -> dict[str, Any]:
-        """Decode and validate a JWT access token."""
+        """Decode and validate a JWT access token.
+
+        python-jose only enforces iss/aud claims when they are *present* in the
+        token. Tokens that omit them entirely would otherwise pass — so we
+        require both claims explicitly here.
+        """
         settings = get_settings()
-        return jwt.decode(
+        claims = jwt.decode(
             token,
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
             issuer=settings.jwt_issuer,
             audience=settings.jwt_audience,
         )
+        if not claims.get("iss"):
+            raise JWTError("Token is missing issuer claim")
+        if not claims.get("aud"):
+            raise JWTError("Token is missing audience claim")
+        return claims
 
     @staticmethod
     def get_unverified_claims(token: str) -> dict[str, Any]:

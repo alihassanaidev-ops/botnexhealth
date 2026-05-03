@@ -12,10 +12,9 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import {
-    clearTokens,
+    clearAccessToken,
     getAccessToken,
-    getRefreshToken,
-    setTokens,
+    setAccessToken,
 } from "@/lib/token-manager";
 import { toast } from "sonner";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -29,7 +28,6 @@ type PasswordFlow = "invite" | "reset";
 
 interface AuthSessionResponse {
     access_token: string;
-    refresh_token: string;
     token_type: string;
 }
 
@@ -90,7 +88,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const clearSessionState = useCallback(() => {
         clearInactivityTimers();
-        clearTokens();
+        clearAccessToken();
         setUser(null);
         setIsSessionWarningOpen(false);
         setSessionSecondsRemaining(SESSION_WARNING_SECONDS);
@@ -106,10 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const applyAuthSession = useCallback(
         async (session: AuthSessionResponse): Promise<User> => {
-            setTokens({
-                accessToken: session.access_token,
-                refreshToken: session.refresh_token,
-            });
+            setAccessToken(session.access_token);
 
             try {
                 return await fetchUserProfile();
@@ -129,29 +124,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, [location.state, navigate]);
 
     const signOut = useCallback(async () => {
-        const refreshToken = getRefreshToken();
         const accessToken = getAccessToken();
         clearSessionState();
 
-        if (refreshToken) {
-            try {
-                await axios.post(
-                    `${api.defaults.baseURL}/auth/logout`,
-                    { refresh_token: refreshToken },
-                    {
-                        headers: {
-                            "Content-Type": "application/json",
-                            ...(accessToken
-                                ? { Authorization: `Bearer ${accessToken}` }
-                                : {}),
-                        },
-                        timeout: AUTH_REQUEST_TIMEOUT_MS,
+        try {
+            await axios.post(
+                `${api.defaults.baseURL}/auth/logout`,
+                {},
+                {
+                    headers: {
+                        "Content-Type": "application/json",
+                        ...(accessToken
+                            ? { Authorization: `Bearer ${accessToken}` }
+                            : {}),
                     },
-                );
-            } catch {
-                if (import.meta.env.DEV) {
-                    console.warn("Logout request failed; local session was still cleared");
-                }
+                    timeout: AUTH_REQUEST_TIMEOUT_MS,
+                    withCredentials: true,
+                },
+            );
+        } catch {
+            if (import.meta.env.DEV) {
+                console.warn("Logout request failed; local session was still cleared");
             }
         }
 
@@ -232,10 +225,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const bootstrapSession = async () => {
             try {
-                if (!getAccessToken() && !getRefreshToken()) {
-                    return;
-                }
-
+                // Refresh cookie is HttpOnly so JS cannot peek at it. Hit the
+                // profile endpoint; the response interceptor will rotate via
+                // /auth/refresh on 401 if the cookie is present and valid.
                 await fetchUserProfile();
 
                 if (!cancelled && location.pathname === "/login") {
@@ -268,6 +260,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     {
                         headers: { "Content-Type": "application/json" },
                         timeout: AUTH_REQUEST_TIMEOUT_MS,
+                        withCredentials: true,
                     },
                 );
 
@@ -316,6 +309,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     {
                         headers: { "Content-Type": "application/json" },
                         timeout: AUTH_REQUEST_TIMEOUT_MS,
+                        withCredentials: true,
                     },
                 );
 

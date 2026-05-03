@@ -594,6 +594,7 @@ class InstitutionResponse(BaseModel):
     slug: str
     is_active: bool
     location_limit: int = 1
+    jurisdiction: str
 
 
     # Credential presence indicators
@@ -613,6 +614,7 @@ class InstitutionResponse(BaseModel):
     def from_institution(cls, institution: Any, user: Any = None, has_retell_secret: bool = False) -> "InstitutionResponse":
         """Convert Institution model to response (no secrets exposed)."""
         from src.app.config import settings
+        from src.app.models.institution import DEFAULT_JURISDICTION
 
         user_resp = None
         if user:
@@ -630,6 +632,7 @@ class InstitutionResponse(BaseModel):
             slug=institution.slug,
             is_active=institution.is_active,
             location_limit=getattr(institution, "location_limit", 1),
+            jurisdiction=getattr(institution, "jurisdiction", DEFAULT_JURISDICTION.value),
             has_nexhealth_key=institution.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
             has_retell_secret=has_retell_secret,

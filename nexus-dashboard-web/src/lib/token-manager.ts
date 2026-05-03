@@ -1,27 +1,20 @@
 /**
- * In-memory auth token manager.
+ * In-memory access-token store.
  *
- * Access and refresh tokens live only in module-scoped variables and are never
- * persisted to localStorage, sessionStorage, IndexedDB, or cookies.
+ * The refresh token lives only in an HttpOnly cookie set by the backend, so it
+ * is unreachable to JavaScript. Only the short-lived access token is held here.
  */
 
 let accessToken: string | null = null;
-let refreshToken: string | null = null;
 
 export function getAccessToken(): string | null {
     return accessToken;
 }
 
-export function getRefreshToken(): string | null {
-    return refreshToken;
+export function setAccessToken(token: string | null): void {
+    accessToken = token;
 }
 
-export function setTokens(tokens: { accessToken: string; refreshToken: string }): void {
-    accessToken = tokens.accessToken;
-    refreshToken = tokens.refreshToken;
-}
-
-export function clearTokens(): void {
+export function clearAccessToken(): void {
     accessToken = null;
-    refreshToken = null;
 }

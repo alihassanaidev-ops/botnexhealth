@@ -11,6 +11,7 @@ Tests cover:
 import pytest
 import pytest_asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
@@ -416,6 +417,32 @@ class TestAuditedDecorator:
         assert len(entries) == 1
         assert entries[0].outcome == AuditOutcome.FAILURE_INTERNAL
         assert entries[0].target_resource == "static:test"
+
+    @pytest.mark.asyncio
+    async def test_decorator_writes_direct_user_and_location_ids(self):
+        """Test decorator writes direct audit columns from current_user context."""
+        from src.app.services.audit_decorator import audit
+
+        current_user = SimpleNamespace(
+            id="11111111-1111-1111-1111-111111111111",
+            role="INSTITUTION_ADMIN",
+            institution_id="22222222-2222-2222-2222-222222222222",
+            location_id="33333333-3333-3333-3333-333333333333",
+        )
+
+        @audit(AuditAction.VIEW_AUDIT_LOGS, resource="audit:logs", actor=AuditActor.ADMIN)
+        async def mock_route(current_user):
+            return {"ok": True}
+
+        await mock_route(current_user=current_user)
+
+        import asyncio
+        await asyncio.sleep(0.1)
+
+        entries = self.repo.get_all()
+        assert len(entries) == 1
+        assert entries[0].user_id == current_user.id
+        assert entries[0].location_id == current_user.location_id
 
 
 # =============================================================================

@@ -71,6 +71,10 @@ class EnvironmentConfig:
     cors_allowed_origins: list[str]
     auth_frontend_base_url: str | None
     recordings_bucket_name: str
+    # CIDRs whose direct peers are trusted to set X-Forwarded-For. Behind an
+    # ALB this should at minimum cover the ALB subnet ranges; RFC1918 is a
+    # safe default for any private VPC layout.
+    trusted_proxy_cidrs: list[str]
     database: DatabaseConfig
     redis: RedisConfig
     api: ServiceConfig
@@ -113,6 +117,12 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         cors_allowed_origins=list(raw.get("corsAllowedOrigins", [])),
         auth_frontend_base_url=raw.get("authFrontendBaseUrl"),
         recordings_bucket_name=raw["recordingsBucketName"],
+        trusted_proxy_cidrs=list(
+            raw.get(
+                "trustedProxyCidrs",
+                ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+            )
+        ),
         database=DatabaseConfig(
             name=database["name"],
             username=database.get("username", "nexhealth_admin"),

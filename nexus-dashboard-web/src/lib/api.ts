@@ -1,9 +1,8 @@
 import axios from "axios";
 import {
-    clearTokens,
+    clearAccessToken,
     getAccessToken,
-    getRefreshToken,
-    setTokens,
+    setAccessToken,
 } from "@/lib/token-manager";
 
 const api = axios.create({
@@ -12,6 +11,7 @@ const api = axios.create({
         "Content-Type": "application/json",
     },
     timeout: 30_000, // 30s default timeout to prevent hanging requests
+    withCredentials: true,
 });
 
 let refreshPromise: Promise<string> | null = null;
@@ -19,7 +19,6 @@ let signOutPromise: Promise<void> | null = null;
 
 interface AuthSessionResponse {
     access_token: string;
-    refresh_token: string;
     token_type: string;
 }
 
@@ -32,7 +31,7 @@ function redirectToLoginIfNeeded() {
 async function forceSignOut(): Promise<void> {
     if (!signOutPromise) {
         signOutPromise = (async () => {
-            clearTokens();
+            clearAccessToken();
             redirectToLoginIfNeeded();
         })().finally(() => {
             signOutPromise = null;
@@ -42,33 +41,22 @@ async function forceSignOut(): Promise<void> {
 }
 
 async function refreshBackendToken(): Promise<string> {
-    const refreshToken = getRefreshToken();
-    if (!refreshToken) {
-        const err = new Error("Refresh token is missing");
-        (err as Error & { code?: string }).code = "NO_REFRESH_TOKEN";
-        throw err;
-    }
-
     const response = await axios.post<AuthSessionResponse>(
         `${api.defaults.baseURL}/auth/refresh`,
-        { refresh_token: refreshToken },
+        {},
         {
             headers: { "Content-Type": "application/json" },
             timeout: 30_000,
+            withCredentials: true,
         },
     );
 
-    setTokens({
-        accessToken: response.data.access_token,
-        refreshToken: response.data.refresh_token,
-    });
+    setAccessToken(response.data.access_token);
     return response.data.access_token;
 }
 
 function shouldForceLogoutFromRefreshError(error: unknown): boolean {
-    const err = error as { code?: string; response?: { status?: number } };
-    if (err?.code === "NO_REFRESH_TOKEN") return true;
-
+    const err = error as { response?: { status?: number } };
     const status = err?.response?.status;
     return status === 401 || status === 403 || status === 423;
 }
