@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.models.call import Call, CallStatus, PatientStatus
 from src.app.models.contact import Contact
 from src.app.retell.models import RetellCallData
+from src.app.services.custom_field_service import CustomFieldService
 
 logger = logging.getLogger(__name__)
 
@@ -328,8 +329,6 @@ class PostCallService:
         await self.session.flush()  # ensure call.id is assigned
 
         # ── 4. Extract institution-defined custom fields from webhook data ─────
-        from src.app.services.custom_field_service import CustomFieldService
-
         cf_service = CustomFieldService(self.session)
         cf_count = await cf_service.extract_and_save_from_webhook(
             institution_id=institution_id,

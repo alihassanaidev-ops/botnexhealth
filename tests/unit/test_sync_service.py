@@ -328,7 +328,7 @@ class TestSyncLocation:
         location.slug = "main-office"
 
         with patch(
-            "src.app.pms.factory.get_adapter_for_institution_location",
+            "src.app.services.sync_service.get_adapter_for_institution_location",
             side_effect=Exception("No API key"),
         ), patch("src.app.services.sync_service.log_audit_background"):
             result = await svc.sync_location(tenant, location)
@@ -360,7 +360,7 @@ class TestSyncLocation:
         location.slug = "main"
 
         with patch(
-            "src.app.pms.factory.get_adapter_for_institution_location",
+            "src.app.services.sync_service.get_adapter_for_institution_location",
             return_value=adapter,
         ), patch("src.app.services.sync_service.log_audit_background"):
             result = await svc.sync_location(tenant, location)
@@ -394,7 +394,7 @@ class TestSyncLocation:
         location.slug = "main"
 
         with patch(
-            "src.app.pms.factory.get_adapter_for_institution_location",
+            "src.app.services.sync_service.get_adapter_for_institution_location",
             return_value=adapter,
         ), patch("src.app.services.sync_service.log_audit_background"):
             result = await svc.sync_location(tenant, location)
@@ -434,7 +434,7 @@ class TestSyncAllLocations:
         adapter = _make_base_adapter()
 
         with patch(
-            "src.app.pms.factory.get_adapter_for_institution_location",
+            "src.app.services.sync_service.get_adapter_for_institution_location",
             return_value=adapter,
         ), patch("src.app.services.sync_service.log_audit_background"):
             results = await svc.sync_all_locations(tenant, [active_loc, inactive_loc])

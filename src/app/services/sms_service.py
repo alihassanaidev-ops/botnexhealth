@@ -7,6 +7,7 @@ SOLID Principles Applied:
 - DIP: Depends on SQLAlchemy interfaces, not concrete DB instances
 """
 
+import asyncio
 import logging
 from typing import Any
 from datetime import datetime, timezone
@@ -143,7 +144,6 @@ class SmsService:
             client = self._get_twilio_client()
             
             # Using asyncio to offload the blocking Twilio client network call
-            import asyncio
             create_kwargs: dict[str, Any] = {
                 "body": prepared_body,
                 "from_": from_number,

@@ -27,6 +27,7 @@ from src.app.models.custom_field import EntityType
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit, log_audit_background
+from src.app.services.custom_field_service import CustomFieldService
 from src.app.services.event_bus import publish_event
 
 logger = logging.getLogger(__name__)
@@ -466,8 +467,6 @@ async def get_call(
         call = await _get_scoped_call(session, call_id, current_user)
 
         # Load custom field values
-        from src.app.services.custom_field_service import CustomFieldService
-
         cf_svc = CustomFieldService(session)
         cf_pairs = await cf_svc.get_values_for_entity(
             current_user.institution_id, "call", call.id,
@@ -560,6 +559,8 @@ async def reveal_recording(
     _ensure_phi_reveal_allowed(current_user)
     async with get_db_session() as session:
         call = await _get_scoped_call(session, call_id, current_user)
+        # Lazy import: boto3 is only loaded when a recording is actually revealed,
+        # keeping it out of the import graph for hot paths and unit tests.
         from src.app.tasks.recordings import generate_presigned_url
 
         signed_recording_url = generate_presigned_url(call.recording_url) if call.recording_url else None
@@ -587,8 +588,6 @@ async def reveal_custom_phi_field(
     _ensure_phi_reveal_allowed(current_user)
     async with get_db_session() as session:
         call = await _get_scoped_call(session, call_id, current_user)
-
-        from src.app.services.custom_field_service import CustomFieldService
 
         cf_svc = CustomFieldService(session)
         cf_pairs = await cf_svc.get_values_for_entity(

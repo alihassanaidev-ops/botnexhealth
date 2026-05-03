@@ -17,6 +17,7 @@ from src.app.models.institution_descriptor import InstitutionDescriptor
 from src.app.models.institution_operatory import InstitutionOperatory
 from src.app.models.institution_provider import InstitutionProvider
 from src.app.pms.base import SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
+from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.services.audit import log_audit_background
 
 if TYPE_CHECKING:
@@ -51,8 +52,6 @@ class SyncService:
 
     async def sync_location(self, institution: Institution, location: InstitutionLocation) -> SyncResult:
         """Sync all PMS data for a single location."""
-        from src.app.pms.factory import get_adapter_for_institution_location
-
         result = SyncResult(location_slug=location.slug)
         now = datetime.now(timezone.utc)
 

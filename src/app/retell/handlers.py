@@ -11,18 +11,38 @@ HIPAA Note: Only hashed identifiers appear in logs.
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass
+from datetime import date, datetime
+from itertools import groupby
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from sqlalchemy import select
+
+from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
+from src.app.models.institution_location_transfer_number import (
+    InstitutionLocationTransferNumber,
+)
+from src.app.models.institution_provider import InstitutionProvider
+from src.app.models.insurance_plan import InsurancePlan
+from src.app.models.location_break import LocationBreak
+from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.pms.base import PMSAdapter, SupportsAvailabilityLinking
 from src.app.pms.factory import get_adapter_for_institution, get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import get_institution_from_call_context, register_function
 from src.app.retell.security import hash_for_logging
 from src.app.services.audit_decorator import audit
+from src.app.services.slot_filter import (
+    apply_buffer,
+    apply_time_restriction,
+    get_local_date_string,
+    merge_buffer_minutes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -304,9 +324,6 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     if effective_detail_level == "full":
         simplified = [_to_full_patient_payload(p) for p in patients[:10]]
         if ctx.location:
-            from datetime import datetime
-            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
             tz_str = (ctx.location.timezone or "UTC").strip()
             try:
                 tz = ZoneInfo(tz_str)
@@ -477,12 +494,9 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         provider_cutoff = None
 
         if normalized_provider_id and ctx.location:
-            from sqlalchemy import select as sa_select
-            from src.app.database import get_db_session
-            from src.app.models.institution_provider import InstitutionProvider
             async with get_db_session() as session:
                 prov = (await session.execute(
-                    sa_select(
+                    select(
                         InstitutionProvider.buffer_minutes,
                         InstitutionProvider.same_day_cutoff_time,
                     ).where(
@@ -491,21 +505,15 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
                     )
                 )).one_or_none()
                 if prov:
-                    from src.app.services.slot_filter import merge_buffer_minutes
                     provider_buffer = max(0, int(prov.buffer_minutes or 0))
                     buffer_minutes = merge_buffer_minutes(buffer_minutes, provider_buffer)
                     provider_cutoff = prov.same_day_cutoff_time
 
         if buffer_minutes > 0:
-            from src.app.services.slot_filter import apply_buffer
             slots = apply_buffer(slots, buffer_minutes)
 
         # Apply same-day cutoff time restriction
         if provider_cutoff and normalized_provider_id and ctx.location:
-            from src.app.services.slot_filter import (
-                apply_time_restriction,
-                get_local_date_string,
-            )
             tz_str = ctx.location.timezone or "UTC"
             today_str = get_local_date_string(tz_str)
             has_appts = await ctx.adapter.has_provider_appointments_on_date(
@@ -519,8 +527,6 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             )
 
         # Shuffle provider group order so the AI doesn't always favour the first provider
-        import random
-        from itertools import groupby
         keyfunc = lambda s: s.provider_id
         grouped = {pid: list(group) for pid, group in groupby(sorted(slots, key=keyfunc), key=keyfunc)}
         provider_ids = list(grouped.keys())
@@ -722,8 +728,6 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
         patient_age: int | None = None
         if patient_dob and ctx.location:
             try:
-                from datetime import date
-
                 dob = date.fromisoformat(patient_dob)
                 today = date.today()
                 patient_age = (
@@ -735,15 +739,11 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
 
         if patient_age is not None and ctx.location:
             # Look up age-group rules from local cache
-            from sqlalchemy import select as sa_select
-            from src.app.database import get_db_session
-            from src.app.models.institution_provider import InstitutionProvider
-
             age_rules: dict[str, tuple[int | None, int | None]] = {}
             async with get_db_session() as session:
                 rows = (
                     await session.execute(
-                        sa_select(
+                        select(
                             InstitutionProvider.source_id,
                             InstitutionProvider.min_age,
                             InstitutionProvider.max_age,
@@ -808,10 +808,6 @@ async def list_insurance_plans_handler(args: dict[str, Any]) -> dict[str, Any]:
     if not ctx.location:
         return {"error": "No location resolved for this agent."}
 
-    from sqlalchemy import select
-    from src.app.database import get_db_session
-    from src.app.models.insurance_plan import InsurancePlan
-
     try:
         async with get_db_session() as session:
             plans = (
@@ -860,17 +856,6 @@ async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
 
     if not ctx.location:
         return {"error": "No location resolved for this agent."}
-
-    from datetime import datetime
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-    from sqlalchemy import select
-    from src.app.database import get_db_session
-    from src.app.models.institution_location_transfer_number import (
-        InstitutionLocationTransferNumber,
-    )
-    from src.app.models.location_break import LocationBreak
-    from src.app.models.location_operating_hours import LocationOperatingHours
 
     try:
         async with get_db_session() as session:
