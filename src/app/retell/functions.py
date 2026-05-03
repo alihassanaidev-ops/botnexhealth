@@ -14,6 +14,7 @@ from typing import Any, Callable, Coroutine, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from src.app.retell.idempotency import IDEMPOTENT_FUNCTIONS, run_with_idempotency
 from src.app.retell.models import FunctionCallRequest, FunctionCallResponse, FunctionError
 from src.app.retell.security import get_retell_secret, get_signature_dependency, hash_for_logging
 
@@ -153,8 +154,16 @@ async def handle_function_call(
         }
 
         try:
-            # Execute the function
-            result = await handler(request.args)
+            # Execute the function (idempotent for mutating functions)
+            if request.function_name in IDEMPOTENT_FUNCTIONS:
+                result = await run_with_idempotency(
+                    handler,
+                    function_name=request.function_name,
+                    call_id=request.call_id,
+                    args=request.args,
+                )
+            else:
+                result = await handler(request.args)
 
             # Log success (no PHI in result logging)
             logger.info(f"Function completed: call={call_id_hash}, function={request.function_name}")

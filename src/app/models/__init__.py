@@ -25,6 +25,10 @@ from src.app.models.external_notification_recipient import ExternalNotificationR
 from src.app.models.notification import Notification, NotificationType
 from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
 from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
+from src.app.models.retell_function_invocation import (
+    RetellFunctionInvocation,
+    RetellFunctionStatus,
+)
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.models.sms_consent import (
     ConsentChannel,
@@ -63,6 +67,8 @@ __all__ = [
     "LocationBreak",
     "RetellWebhookEvent",
     "RetellWebhookStatus",
+    "RetellFunctionInvocation",
+    "RetellFunctionStatus",
     "EmailTemplate",
     "EmailTemplateType",
     "ExternalNotificationRecipient",
