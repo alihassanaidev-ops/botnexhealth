@@ -21,6 +21,7 @@ from src.app.services.audit import log_audit_background
 from src.app.services.audit_decorator import audit
 from src.app.services.institution_service import InstitutionService
 from src.app.services.user_invite_service import UserInviteService
+from src.app.api.pagination import PaginationQuery, page_count, paginate
 from src.app.api.models import (
     AuditLogPaginatedResponse,
     InstitutionBasicListResponse,
@@ -206,41 +207,27 @@ async def get_all_audit_logs(
     """
     Get audit logs across all institutions (Admin only).
     """
-    from sqlalchemy import select, func
     from src.app.models.audit_log import AuditLog
 
     async with get_db_session() as session:
-        # Base queries
-        count_stmt = select(func.count()).select_from(AuditLog)
         data_stmt = select(AuditLog)
 
         # Apply institution filter if provided
         if institution_id:
-            count_stmt = count_stmt.where(AuditLog.institution_id == institution_id)
             data_stmt = data_stmt.where(AuditLog.institution_id == institution_id)
 
-        # Get total count
-        count_result = await session.execute(count_stmt)
-        total = count_result.scalar() or 0
-
-        # Get paginated data ordered newest first
-        result = await session.execute(
-            data_stmt
-            .order_by(AuditLog.timestamp.desc())
-            .offset((page - 1) * size)
-            .limit(size)
+        items, total = await paginate(
+            PaginationQuery(session, data_stmt.order_by(AuditLog.timestamp.desc())),
+            page=page,
+            size=size,
         )
-        items = result.scalars().all()
-
-        import math
-        pages = math.ceil(total / size) if size > 0 else 0
 
         return AuditLogPaginatedResponse(
             items=items,
             total=total,
             page=page,
             size=size,
-            pages=pages
+            pages=page_count(total, size),
         )
 
 @router.get("", response_model=list[InstitutionResponse])
