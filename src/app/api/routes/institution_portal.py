@@ -19,6 +19,7 @@ from src.app.api.deps import (
     get_current_institution_or_location_user,
     get_current_location_admin,
 )
+from src.app.api.deps_scope import require_location_scope
 from src.app.api.models import AuditLogPaginatedResponse, AuditLogResponse
 from src.app.database import get_db_session
 from src.app.models.user import User, UserRole
@@ -208,17 +209,6 @@ def _validate_invite_role(role: str) -> str:
     return normalized
 
 
-def _assert_location_scope(current_user: User, location_id: str) -> None:
-    if (
-        current_user.role == UserRole.LOCATION_ADMIN.value
-        and current_user.location_id != location_id
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized for this location",
-        )
-
-
 @router.get("/me", response_model=InstitutionPortalMeResponse)
 async def get_my_institution_config(
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
@@ -295,7 +285,9 @@ async def list_portal_locations(
 
 
 @router.get(
-    "/locations/{loc_slug}/operating-hours", response_model=list[OperatingHoursResponse]
+    "/locations/{loc_slug}/operating-hours",
+    response_model=list[OperatingHoursResponse],
+    dependencies=[Depends(require_location_scope())],
 )
 async def get_location_operating_hours(
     loc_slug: str,
@@ -313,8 +305,6 @@ async def get_location_operating_hours(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-        _assert_location_scope(current_user, str(location.id))
-
         result = await session.execute(
             select(LocationOperatingHours)
             .where(LocationOperatingHours.location_id == location.id)
@@ -324,7 +314,9 @@ async def get_location_operating_hours(
 
 
 @router.put(
-    "/locations/{loc_slug}/operating-hours", response_model=list[OperatingHoursResponse]
+    "/locations/{loc_slug}/operating-hours",
+    response_model=list[OperatingHoursResponse],
+    dependencies=[Depends(require_location_scope())],
 )
 async def set_location_operating_hours(
     loc_slug: str,
@@ -353,8 +345,6 @@ async def set_location_operating_hours(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-        _assert_location_scope(current_user, str(location.id))
-
         days_seen = set()
         for entry in data.hours:
             if entry.day_of_week in days_seen:
@@ -390,7 +380,9 @@ async def set_location_operating_hours(
 
 
 @router.patch(
-    "/locations/{loc_slug}/timezone", response_model=InstitutionLocationLiteResponse
+    "/locations/{loc_slug}/timezone",
+    response_model=InstitutionLocationLiteResponse,
+    dependencies=[Depends(require_location_scope())],
 )
 async def update_location_timezone(
     loc_slug: str,
@@ -428,8 +420,6 @@ async def update_location_timezone(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-        _assert_location_scope(current_user, str(location.id))
-
         location.timezone = timezone_value
         await session.flush()
 
@@ -516,6 +506,7 @@ async def list_transfer_numbers(
     "/locations/{loc_slug}/transfer-numbers",
     response_model=TransferNumberResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_location_scope())],
 )
 async def create_transfer_number(
     loc_slug: str,
@@ -546,13 +537,6 @@ async def create_transfer_number(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-
-        if current_user.role == UserRole.LOCATION_ADMIN.value:
-            if str(location.id) != str(current_user.location_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized for this location",
-                )
 
         entry = InstitutionLocationTransferNumber(
             institution_id=current_user.institution_id,
@@ -589,6 +573,7 @@ async def create_transfer_number(
 @router.patch(
     "/locations/{loc_slug}/transfer-numbers/{transfer_id}",
     response_model=TransferNumberResponse,
+    dependencies=[Depends(require_location_scope())],
 )
 async def update_transfer_number(
     loc_slug: str,
@@ -620,13 +605,6 @@ async def update_transfer_number(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-
-        if current_user.role == UserRole.LOCATION_ADMIN.value:
-            if str(location.id) != str(current_user.location_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized for this location",
-                )
 
         entry = (
             await session.execute(
@@ -672,6 +650,7 @@ async def update_transfer_number(
 @router.delete(
     "/locations/{loc_slug}/transfer-numbers/{transfer_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_location_scope())],
 )
 async def delete_transfer_number(
     loc_slug: str,
@@ -702,13 +681,6 @@ async def delete_transfer_number(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-
-        if current_user.role == UserRole.LOCATION_ADMIN.value:
-            if str(location.id) != str(current_user.location_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized for this location",
-                )
 
         entry = (
             await session.execute(
@@ -1255,7 +1227,11 @@ async def invite_location_admin(
     return {"message": f"Location admin invite sent to {email}"}
 
 
-@router.post("/locations/{loc_slug}/invite-staff", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/locations/{loc_slug}/invite-staff",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_location_scope())],
+)
 async def invite_staff(
     loc_slug: str,
     data: InviteUserRequest,
@@ -1274,12 +1250,6 @@ async def invite_staff(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-        if str(location.id) != str(current_user.location_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Can only invite staff for your location",
-            )
-
         existing = await session.execute(
             select(User).where(User.email == email)
         )
@@ -1711,7 +1681,9 @@ class InsurancePlanResponse(BaseModel):
 
 
 @router.get(
-    "/locations/{loc_slug}/insurance-plans", response_model=list[InsurancePlanResponse]
+    "/locations/{loc_slug}/insurance-plans",
+    response_model=list[InsurancePlanResponse],
+    dependencies=[Depends(require_location_scope())],
 )
 async def list_insurance_plans(
     loc_slug: str,
@@ -1738,13 +1710,6 @@ async def list_insurance_plans(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-
-        if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
-            if str(location.id) != str(current_user.location_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized for this location",
-                )
 
         plans = (
             (
@@ -1778,6 +1743,7 @@ async def list_insurance_plans(
     "/locations/{loc_slug}/insurance-plans",
     response_model=InsurancePlanResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_location_scope())],
 )
 async def create_insurance_plan(
     loc_slug: str,
@@ -1805,13 +1771,6 @@ async def create_insurance_plan(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-
-        if current_user.role == UserRole.LOCATION_ADMIN.value:
-            if str(location.id) != str(current_user.location_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized for this location",
-                )
 
         plan = InsurancePlan(
             institution_id=current_user.institution_id,
@@ -1847,6 +1806,7 @@ async def create_insurance_plan(
 @router.patch(
     "/locations/{loc_slug}/insurance-plans/{plan_id}",
     response_model=InsurancePlanResponse,
+    dependencies=[Depends(require_location_scope())],
 )
 async def update_insurance_plan(
     loc_slug: str,
@@ -1875,13 +1835,6 @@ async def update_insurance_plan(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-
-        if current_user.role == UserRole.LOCATION_ADMIN.value:
-            if str(location.id) != str(current_user.location_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized for this location",
-                )
 
         plan = (
             await session.execute(
@@ -1925,6 +1878,7 @@ async def update_insurance_plan(
 @router.delete(
     "/locations/{loc_slug}/insurance-plans/{plan_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_location_scope())],
 )
 async def delete_insurance_plan(
     loc_slug: str,
@@ -1952,13 +1906,6 @@ async def delete_insurance_plan(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-
-        if current_user.role == UserRole.LOCATION_ADMIN.value:
-            if str(location.id) != str(current_user.location_id):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized for this location",
-                )
 
         plan = (
             await session.execute(

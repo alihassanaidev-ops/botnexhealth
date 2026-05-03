@@ -6,9 +6,8 @@ user who is *role-allowed* still cannot reach a different tenant's data.
 
 Two enforcement helpers in production code:
 
-1. `institution_portal._assert_location_scope(user, location_id)` — blocks
-   only LOCATION_ADMIN with a mismatched `location_id` (used by 10 routes).
-   Notably does NOT block STAFF — see test_assert_location_scope_does_not_block_staff.
+1. `deps_scope.assert_location_scope(user, location_id)` — blocks
+   location-scoped roles with a mismatched `location_id`.
 
 2. `pms.factory.get_institution_pms` — blocks both LOCATION_ADMIN and STAFF
    when the request's location (query or path) doesn't match the token's
@@ -22,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from src.app.api.routes.institution_portal import _assert_location_scope
+from src.app.api.deps_scope import assert_location_scope
 from src.app.models.user import User, UserRole
 from src.app.pms.factory import get_institution_pms
 
@@ -45,45 +44,41 @@ def _user(role: UserRole, *, institution_id: str | None = _INST_A, location_id: 
 
 
 # =============================================================================
-# institution_portal._assert_location_scope
+# deps_scope.assert_location_scope
 # =============================================================================
 
 def test_assert_location_scope_blocks_location_admin_in_other_location():
     user = _user(UserRole.LOCATION_ADMIN, location_id=_LOC_A)
     with pytest.raises(HTTPException) as exc:
-        _assert_location_scope(user, _LOC_B)
+        assert_location_scope(user, _LOC_B)
     assert exc.value.status_code == 403
     assert exc.value.detail == "Not authorized for this location"
 
 
 def test_assert_location_scope_allows_location_admin_in_own_location():
     user = _user(UserRole.LOCATION_ADMIN, location_id=_LOC_A)
-    _assert_location_scope(user, _LOC_A)  # no raise
+    assert_location_scope(user, _LOC_A)  # no raise
 
 
 def test_assert_location_scope_allows_institution_admin_anywhere():
     """INSTITUTION_ADMIN spans all locations within their institution by design."""
     user = _user(UserRole.INSTITUTION_ADMIN)
-    _assert_location_scope(user, _LOC_A)  # no raise
-    _assert_location_scope(user, _LOC_B)  # no raise
+    assert_location_scope(user, _LOC_A)  # no raise
+    assert_location_scope(user, _LOC_B)  # no raise
 
 
-def test_assert_location_scope_does_not_block_staff() -> None:
-    """KNOWN GAP: helper only restricts LOCATION_ADMIN.
-
-    STAFF passes through, so any read endpoint that admits STAFF and uses
-    only this helper for scoping will leak across-location reads to STAFF.
-    Verify this is the actual current behavior so we know which routes need
-    a tighter check before they handle STAFF requests.
-    """
+def test_assert_location_scope_blocks_staff_in_other_location() -> None:
     user = _user(UserRole.STAFF, location_id=_LOC_A)
-    _assert_location_scope(user, _LOC_B)  # no raise — current behavior
+    with pytest.raises(HTTPException) as exc:
+        assert_location_scope(user, _LOC_B)
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Not authorized for this location"
 
 
 def test_assert_location_scope_allows_super_admin_anywhere():
     user = _user(UserRole.SUPER_ADMIN, institution_id=None)
-    _assert_location_scope(user, _LOC_A)  # no raise
-    _assert_location_scope(user, _LOC_B)  # no raise
+    assert_location_scope(user, _LOC_A)  # no raise
+    assert_location_scope(user, _LOC_B)  # no raise
 
 
 # =============================================================================
@@ -126,7 +121,7 @@ async def test_pms_factory_rejects_location_admin_path_for_other_location():
 
 @pytest.mark.asyncio
 async def test_pms_factory_rejects_staff_query_for_other_location():
-    """Unlike _assert_location_scope, the PMS factory blocks STAFF too."""
+    """The PMS factory blocks STAFF at the same location-scope boundary."""
     user = _user(UserRole.STAFF, location_id=_LOC_A)
     with pytest.raises(HTTPException) as exc:
         await get_institution_pms(
@@ -215,20 +210,26 @@ async def test_get_location_operating_hours_rejects_other_institution_slug():
 
 
 @pytest.mark.asyncio
-async def test_get_location_operating_hours_rejects_location_admin_for_other_location():
-    """A LOCATION_ADMIN of location A hitting location B's operating-hours
-    must be rejected by _assert_location_scope after the institution check passes."""
+@pytest.mark.parametrize("role", (UserRole.LOCATION_ADMIN, UserRole.STAFF))
+async def test_get_location_operating_hours_rejects_location_scoped_user_for_other_location(
+    role: UserRole,
+):
+    """A location-scoped user hitting location B's operating-hours is rejected."""
     from httpx import AsyncClient
 
     from src.app.api import deps as auth_deps
+    from src.app.api import deps_scope as scope_deps
     from src.app.main import app
 
-    user = _user(UserRole.LOCATION_ADMIN, institution_id=_INST_A, location_id=_LOC_A)
+    user = _user(role, institution_id=_INST_A, location_id=_LOC_A)
     app.dependency_overrides[auth_deps.get_current_institution_or_location_user] = lambda: user
 
     mock_session = AsyncMock()
-    # Location belongs to the same institution but is location B (not user's location_id)
     same_inst_other_location = MagicMock(id=_LOC_B, institution_id=_INST_A)
+    scope_session = AsyncMock()
+    scope_result = MagicMock()
+    scope_result.scalar_one_or_none.return_value = _LOC_B
+    scope_session.execute.return_value = scope_result
 
     from src.app.api.routes import institution_portal as portal_mod
     from unittest.mock import patch
@@ -247,8 +248,14 @@ async def test_get_location_operating_hours_rejects_location_admin_for_other_loc
                 portal_mod,
                 "ensure_invite_cooldown",
                 new=AsyncMock(return_value=user),
-            ):
+            ), patch.object(
+                scope_deps,
+                "get_db_session",
+            ) as mock_scope_db:
+                mock_scope_db.return_value.__aenter__.return_value = scope_session
+                mock_scope_db.return_value.__aexit__.return_value = None
                 mock_get_db.return_value.__aenter__.return_value = mock_session
+                mock_get_db.return_value.__aexit__.return_value = None
                 response = await client.get(
                     "/api/institution/locations/other-loc/operating-hours"
                 )
