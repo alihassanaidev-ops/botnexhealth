@@ -14,8 +14,6 @@ from sqlalchemy.pool import NullPool
 from src.app.config import settings
 from src.app.database import Base
 from src.app.models import *  # noqa: F401,F403 - populate SQLAlchemy metadata
-from src.app.models.user import User, UserRole, InviteStatus  # noqa: F401 - not re-exported from models package
-from src.app.services.password_service import PasswordService
 
 logger = logging.getLogger(__name__)
 
@@ -51,47 +49,6 @@ _AUDIT_LOG_HARDENING_SQL = (
         CHECK (actor IN ('RETELL_AGENT', 'ADMIN', 'SYSTEM', 'API_CLIENT'));
     """,
 )
-
-
-async def _create_super_admin(database_url: str) -> None:
-    from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy.orm import sessionmaker
-
-    engine = create_async_engine(database_url, echo=False, poolclass=NullPool)
-    async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    try:
-        async with async_session() as session:
-            # Set SUPER_ADMIN RLS context so this raw session can see/insert
-            # rows under FORCE ROW LEVEL SECURITY. Zero-UUID is the recognized
-            # system bootstrap identity.
-            await session.execute(
-                text(
-                    "SELECT set_config('app.context_type', 'user', false), "
-                    "set_config('app.role', 'SUPER_ADMIN', false), "
-                    "set_config('app.user_id', :uid, false)"
-                ),
-                {"uid": "00000000-0000-0000-0000-000000000000"},
-            )
-            email = "zulkhaifahmed@gmail.com"
-            result = await session.execute(
-                select(User).where(User.email == email, User.deleted_at.is_(None))
-            )
-            if not result.scalar_one_or_none():
-                user = User(
-                    email=email,
-                    role=UserRole.SUPER_ADMIN.value,
-                    password_hash=PasswordService.hash_password("LeviStrong@144"),
-                    is_active=True,
-                    invite_status=InviteStatus.ACCEPTED.value,
-                )
-                session.add(user)
-                await session.commit()
-                logger.info(f"Automatically bootstrapped SUPER_ADMIN user: {email}")
-    except Exception as e:
-        logger.error(f"Failed to bootstrap SUPER_ADMIN: {e}")
-    finally:
-        await engine.dispose()
 
 
 async def _list_tables(database_url: str) -> set[str]:

@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def main(email: str, password: str, first_name: str, last_name: str) -> None:
+async def main(email: str, password: str) -> None:
     if not settings.database_url:
         logger.error("DATABASE_URL is not set.")
         sys.exit(1)
@@ -51,8 +51,6 @@ async def main(email: str, password: str, first_name: str, last_name: str) -> No
             else:
                 user = User(
                     email=email,
-                    first_name=first_name,
-                    last_name=last_name,
                     role=UserRole.SUPER_ADMIN.value,
                     password_hash=PasswordService.hash_password(password),
                     is_active=True,
@@ -66,8 +64,8 @@ async def main(email: str, password: str, first_name: str, last_name: str) -> No
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        print("Usage: python -m src.app.scripts.create_super_admin <email> <password> <first_name> <last_name>")
+    if len(sys.argv) != 3:
+        print("Usage: python -m src.app.scripts.create_super_admin <email> <password>")
         sys.exit(1)
 
-    asyncio.run(main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]))
+    asyncio.run(main(sys.argv[1], sys.argv[2]))
