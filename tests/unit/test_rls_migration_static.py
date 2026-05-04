@@ -56,3 +56,11 @@ def test_rls_migration_references_scope_tables_and_columns() -> None:
     assert "sms_history_logs.location_id" in source
     # contact_location_accesses appears in PROTECTED_TABLES + its policy
     assert "contact_location_accesses" in source
+
+
+def test_institutions_policy_allows_audit_context_for_own_institution() -> None:
+    """Audit writes must be able to resolve jurisdiction metadata under RLS."""
+    source = MIGRATION.read_text()
+
+    assert "app_rls_context_type() = 'audit'" in source
+    assert "institutions.id = app_rls_institution_id()" in source

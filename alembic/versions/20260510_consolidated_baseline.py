@@ -446,6 +446,10 @@ def _institutions_expr() -> str:
             AND institutions.id = app_rls_institution_id()
         )
         OR (
+            app_rls_context_type() = 'audit'
+            AND institutions.id = app_rls_institution_id()
+        )
+        OR (
             app_rls_context_type() = 'middleware_lookup'
             AND institutions.slug = app_rls_external_id()
         )
