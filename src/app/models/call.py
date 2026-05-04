@@ -81,8 +81,6 @@ class Call(Base):
         Index("ix_call_institution_status", "institution_id", "call_status"),
         Index("ix_call_institution_date", "institution_id", "call_date"),
         Index("ix_call_institution_contact", "institution_id", "contact_id"),
-        # Location-scoped dashboard queries filter by institution, agent, and date.
-        Index("ix_call_institution_agent_date", "institution_id", "agent_used", "call_date"),
         # Dashboard callback queue only needs unresolved needs-callback rows.
         Index(
             "ix_call_dashboard_open_callbacks",
