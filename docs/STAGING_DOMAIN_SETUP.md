@@ -1,10 +1,10 @@
-# Staging Domain Setup — `staging.scalenexus.ai`
+# Staging Domain Setup — `sn.dev.staging.scalenexus.ai`
 
 This document captures the one-time setup to wire the staging
 environment to a real domain so that:
 
-- CloudFront serves `staging.scalenexus.ai` with a public TLS cert.
-- ALB serves `api.staging.scalenexus.ai` with its own public TLS cert.
+- CloudFront serves `sn.dev.staging.scalenexus.ai` with a public TLS cert.
+- ALB serves `api.sn.dev.staging.scalenexus.ai` with its own public TLS cert.
 - The end-to-end path becomes HIPAA-compliant for ePHI transport
   (HIPAA §164.312(e)).
 
@@ -16,18 +16,20 @@ need it after the one delegation step below.
 
 ```
 client → CloudFront (cert in us-east-1)        → frontend bucket (S3)
-       (custom domain: staging.scalenexus.ai)
+       (custom domain: sn.dev.staging.scalenexus.ai)
                      │
                      └─► /api/*  → ALB (cert in ca-central-1)  → ECS Fargate API
-                                  (custom domain: api.staging.scalenexus.ai)
+                                  (custom domain: api.sn.dev.staging.scalenexus.ai)
 ```
 
 A Route 53 public hosted zone for `staging.scalenexus.ai` lives in
 **our** AWS account (`287553036543`). The client adds 4 NS records on
 GoDaddy once, delegating only that subdomain to us. From then on, all
-DNS records under `staging.scalenexus.ai` (the apex, the `api.`
-subdomain, ACM cert validation CNAMEs, future subdomains) are managed
-by us — the client's GoDaddy account is never touched again.
+DNS records under `staging.scalenexus.ai` — including the deeper
+hostnames this app uses (`sn.dev.staging.scalenexus.ai`,
+`api.sn.dev.staging.scalenexus.ai`), ACM cert validation CNAMEs, and
+any future subdomains — are managed by us. The client's GoDaddy
+account is never touched again.
 
 ## Step 1 — Hosted zone (DONE)
 
@@ -37,23 +39,27 @@ The hosted zone exists in our account:
 |---|---|
 | Account | `287553036543` |
 | Zone ID | `Z00167603B8UEPDURH4XN` |
-| Domain | `staging.scalenexus.ai` |
+| Zone name | `staging.scalenexus.ai` |
 | Type | Public |
 
 The zone is empty apart from the SOA + NS records AWS auto-creates.
 Until the client adds the NS delegation in step 2, queries for
-`staging.scalenexus.ai` from the public internet will return NXDOMAIN.
+anything under `staging.scalenexus.ai` from the public internet will
+return NXDOMAIN.
 
 ## Step 2 — Delegation to send the client
 
 Send the client the following message + records (paste verbatim).
 **Replace nothing — these are the actual NS values for our zone.**
 
-> Hi — we're deploying our staging environment under
-> `staging.scalenexus.ai`. Could you add these four NS records on
-> GoDaddy on the `scalenexus.ai` zone?  They delegate only the
+> Hi — we're deploying our staging environment at
+> `sn.dev.staging.scalenexus.ai`. Could you add these four NS records
+> on GoDaddy on the `scalenexus.ai` zone? They delegate only the
 > `staging` subdomain to AWS Route 53; `scalenexus.ai` itself and any
-> other records you have stay untouched.
+> other records you have stay untouched. The four records cover every
+> hostname under `staging.scalenexus.ai` — we'll carve out
+> `sn.dev.staging.scalenexus.ai` and its API counterpart from our side
+> after delegation propagates, no further DNS changes from you.
 >
 > ```
 > Type: NS   Host: staging   Value: ns-1371.awsdns-43.org
@@ -75,7 +81,8 @@ GoDaddy's UI for this:
 
 ## Step 3 — Verify delegation propagated
 
-Once the client confirms, run:
+Once the client confirms, query the parent zone — only it knows
+whether the NS delegation has been put in place:
 
 ```bash
 dig +short NS staging.scalenexus.ai
@@ -99,7 +106,7 @@ use different ones):
 # Cert for CloudFront — must be in us-east-1
 aws acm request-certificate \
   --region us-east-1 \
-  --domain-name staging.scalenexus.ai \
+  --domain-name sn.dev.staging.scalenexus.ai \
   --validation-method DNS \
   --query 'CertificateArn' --output text
 # → arn:aws:acm:us-east-1:287553036543:certificate/<id>
@@ -107,7 +114,7 @@ aws acm request-certificate \
 # Cert for ALB — must be in the stack's region (ca-central-1)
 aws acm request-certificate \
   --region ca-central-1 \
-  --domain-name api.staging.scalenexus.ai \
+  --domain-name api.sn.dev.staging.scalenexus.ai \
   --validation-method DNS \
   --query 'CertificateArn' --output text
 # → arn:aws:acm:ca-central-1:287553036543:certificate/<id>
@@ -174,9 +181,9 @@ Add the domain config to both `frontend` and `api` blocks:
   "region": "ca-central-1",
   ...
   "corsAllowedOrigins": [
-    "https://staging.scalenexus.ai"
+    "https://sn.dev.staging.scalenexus.ai"
   ],
-  "authFrontendBaseUrl": "https://staging.scalenexus.ai",
+  "authFrontendBaseUrl": "https://sn.dev.staging.scalenexus.ai",
   ...
   "api": {
     "cpu": 512,
@@ -185,14 +192,14 @@ Add the domain config to both `frontend` and `api` blocks:
     "minCount": 1,
     "maxCount": 2,
     "containerPort": 8000,
-    "domainName": "api.staging.scalenexus.ai",
+    "domainName": "api.sn.dev.staging.scalenexus.ai",
     "certificateArn": "arn:aws:acm:ca-central-1:287553036543:certificate/<id>",
     "hostedZoneName": "staging.scalenexus.ai"
   },
   ...
   "frontend": {
     "enabled": true,
-    "domainName": "staging.scalenexus.ai",
+    "domainName": "sn.dev.staging.scalenexus.ai",
     "certificateArn": "arn:aws:acm:us-east-1:287553036543:certificate/<id>",
     "hostedZoneName": "staging.scalenexus.ai"
   }
@@ -213,8 +220,8 @@ PATH="$PWD/.venv/bin:$PATH" cdk deploy
 This will:
 - Attach the ALB cert to a 443 HTTPS listener (port 80 redirects to 443).
 - Attach the CloudFront cert as an alternate domain on the distribution.
-- Create A-alias records `staging.scalenexus.ai → CloudFront` and
-  `api.staging.scalenexus.ai → ALB` automatically (Route 53 alias).
+- Create A-alias records `sn.dev.staging.scalenexus.ai → CloudFront` and
+  `api.sn.dev.staging.scalenexus.ai → ALB` automatically (Route 53 alias).
 - Flip CloudFront origin protocol to HTTPS_ONLY (the gate from issue
   #1 — `_build_api_service` now provisions HTTPS, the origin matches).
 - Stop emitting the *"NOT HIPAA-compliant"* annotation warning at
@@ -224,14 +231,14 @@ This will:
 
 ```bash
 # Frontend
-curl -sI https://staging.scalenexus.ai | head -5
+curl -sI https://sn.dev.staging.scalenexus.ai | head -5
 
 # API health
-curl -sI https://staging.scalenexus.ai/api/health
-curl -sI https://api.staging.scalenexus.ai/livez
+curl -sI https://sn.dev.staging.scalenexus.ai/api/health
+curl -sI https://api.sn.dev.staging.scalenexus.ai/livez
 
 # Cert chain — should be Amazon-issued, valid, SAN matches
-openssl s_client -connect staging.scalenexus.ai:443 -servername staging.scalenexus.ai </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates
+openssl s_client -connect sn.dev.staging.scalenexus.ai:443 -servername sn.dev.staging.scalenexus.ai </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates
 ```
 
 CloudFront and ALB should both serve valid Amazon-issued certs and
@@ -239,10 +246,11 @@ redirect HTTP → HTTPS at the edge.
 
 ## Future subdomains
 
-The hosted zone is yours. Any new record under
-`staging.scalenexus.ai` (e.g., `monitoring.staging.scalenexus.ai`,
-`grafana.staging.scalenexus.ai`) is just another
-`change-resource-record-sets` call — no client involvement, ever.
+The hosted zone is yours. Any new record anywhere under
+`staging.scalenexus.ai` — for example a different app at
+`other-app.dev.staging.scalenexus.ai`, or `monitoring.staging.scalenexus.ai`
+— is just another `change-resource-record-sets` call. No client
+involvement, ever, after the one-time NS delegation.
 
 ## Cost
 
@@ -262,5 +270,5 @@ The hosted zone is yours. Any new record under
 | Zone name | `staging.scalenexus.ai` |
 | Frontend cert region | `us-east-1` |
 | ALB cert region | `ca-central-1` |
-| Frontend domain | `staging.scalenexus.ai` |
-| API domain | `api.staging.scalenexus.ai` |
+| Frontend hostname | `sn.dev.staging.scalenexus.ai` |
+| API hostname | `api.sn.dev.staging.scalenexus.ai` |
