@@ -10,6 +10,7 @@ from aws_cdk import (
     Stack,
     Tags,
     aws_certificatemanager as acm,
+    aws_applicationautoscaling as appscaling,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
     aws_cloudwatch as cloudwatch,
@@ -19,6 +20,9 @@ from aws_cdk import (
     aws_ecs as ecs,
     aws_ecs_patterns as ecs_patterns,
     aws_elasticache as elasticache,
+    aws_events as events,
+    aws_events_targets as events_targets,
+    aws_iam as iam,
     aws_logs as logs,
     aws_rds as rds,
     aws_route53 as route53,
@@ -209,6 +213,44 @@ class NexHealthPlatformStack(Stack):
             ),
         )
 
+        migration_security_group = ec2.SecurityGroup(
+            self,
+            "MigrationSecurityGroup",
+            vpc=vpc,
+            allow_all_outbound=True,
+            description="One-off ECS migration task access",
+        )
+
+        database_host_for_runtime = database.db_instance_endpoint_address
+        database_proxy: rds.DatabaseProxy | None = None
+        db_proxy_security_group: ec2.SecurityGroup | None = None
+        if config.database.proxy_enabled:
+            db_proxy_security_group = ec2.SecurityGroup(
+                self,
+                "DatabaseProxySecurityGroup",
+                vpc=vpc,
+                allow_all_outbound=True,
+                description="RDS Proxy access for API and worker tasks",
+            )
+            database_proxy = rds.DatabaseProxy(
+                self,
+                "DatabaseProxy",
+                proxy_target=rds.ProxyTarget.from_instance(database),
+                secrets=[app_role_secret],
+                vpc=vpc,
+                vpc_subnets=private_subnets,
+                security_groups=[db_proxy_security_group],
+                require_tls=True,
+                idle_client_timeout=Duration.minutes(30),
+                debug_logging=False,
+            )
+            database_host_for_runtime = database_proxy.endpoint
+            db_security_group.add_ingress_rule(
+                db_proxy_security_group,
+                ec2.Port.tcp(5432),
+                "RDS Proxy access to PostgreSQL",
+            )
+
         redis_security_group = ec2.SecurityGroup(
             self,
             "RedisSecurityGroup",
@@ -251,7 +293,8 @@ class NexHealthPlatformStack(Stack):
             frontend_bundle["url"],
             redis_url,
             recordings_bucket,
-            database,
+            database_host_for_runtime,
+            database.db_instance_endpoint_port,
         )
         runtime_secrets = self._build_app_runtime_secrets(
             jwt_secret,
@@ -266,6 +309,10 @@ class NexHealthPlatformStack(Stack):
         migration_environment = {
             **runtime_environment,
             "APP_ROLE_SECRET_ARN": app_role_secret.secret_arn,
+            # Migrations use master credentials and must connect directly to
+            # RDS. Runtime tasks connect through RDS Proxy when enabled.
+            "DATABASE_HOST": database.db_instance_endpoint_address,
+            "DATABASE_PORT": database.db_instance_endpoint_port,
         }
 
         app_image_asset = ecr_assets.DockerImageAsset(
@@ -416,6 +463,12 @@ class NexHealthPlatformStack(Stack):
         )
         api_scaling.scale_on_cpu_utilization("ApiCpuScaling", target_utilization_percent=65)
         api_scaling.scale_on_memory_utilization("ApiMemoryScaling", target_utilization_percent=75)
+        if config.api.requests_per_target:
+            api_scaling.scale_on_request_count(
+                "ApiRequestCountScaling",
+                requests_per_target=config.api.requests_per_target,
+                target_group=api_service.target_group,
+            )
 
         worker_task_definition = ecs.FargateTaskDefinition(
             self,
@@ -461,6 +514,104 @@ class NexHealthPlatformStack(Stack):
         )
         worker_scaling.scale_on_cpu_utilization("WorkerCpuScaling", target_utilization_percent=65)
         worker_scaling.scale_on_memory_utilization("WorkerMemoryScaling", target_utilization_percent=75)
+        if config.worker.queue_scale_up_depth is not None:
+            queue_metrics_security_group = ec2.SecurityGroup(
+                self,
+                "QueueMetricsSecurityGroup",
+                vpc=vpc,
+                allow_all_outbound=True,
+                description="Scheduled queue-depth metric publisher access",
+            )
+            queue_metrics_task_definition = ecs.FargateTaskDefinition(
+                self,
+                "QueueMetricsTaskDefinition",
+                cpu=256,
+                memory_limit_mib=512,
+                runtime_platform=ecs.RuntimePlatform(
+                    cpu_architecture=ecs.CpuArchitecture.X86_64,
+                    operating_system_family=ecs.OperatingSystemFamily.LINUX,
+                ),
+            )
+            queue_metrics_task_definition.add_container(
+                "QueueMetricsContainer",
+                image=app_image,
+                command=["python", "-m", "src.app.scripts.publish_queue_metrics"],
+                environment={
+                    "APP_NAME": config.app_name,
+                    "APP_ENV": config.app_env,
+                    "AWS_REGION": config.region,
+                    "REDIS_URL": redis_url,
+                    "CELERY_BROKER_URL": redis_url,
+                    "CELERY_QUEUE_DEPTH_NAMES": "notifications_default,notifications_high",
+                },
+                logging=ecs.LogDrivers.aws_logs(
+                    stream_prefix="queue-metrics",
+                    log_group=worker_log_group,
+                ),
+            )
+            queue_metrics_task_definition.task_role.add_to_principal_policy(
+                iam.PolicyStatement(
+                    actions=["cloudwatch:PutMetricData"],
+                    resources=["*"],
+                    conditions={
+                        "StringEquals": {
+                            "cloudwatch:namespace": f"{config.app_name}/{config.app_env}"
+                        }
+                    },
+                )
+            )
+            redis_security_group.add_ingress_rule(
+                queue_metrics_security_group,
+                ec2.Port.tcp(6379),
+                "Queue metric publisher access to Redis",
+            )
+            events.Rule(
+                self,
+                "QueueMetricsSchedule",
+                schedule=events.Schedule.rate(Duration.minutes(1)),
+                targets=[
+                    events_targets.EcsTask(
+                        cluster=cluster,
+                        task_definition=queue_metrics_task_definition,
+                        subnet_selection=private_subnets,
+                        security_groups=[queue_metrics_security_group],
+                    )
+                ],
+            )
+            queue_depth_metric = cloudwatch.Metric(
+                namespace=f"{config.app_name}/{config.app_env}",
+                metric_name="CeleryQueueDepth",
+                dimensions_map={"Queue": "all"},
+                statistic="Average",
+                period=Duration.minutes(1),
+            )
+            scaling_steps = []
+            if config.worker.queue_scale_down_depth is not None:
+                scaling_steps.append(
+                    appscaling.ScalingInterval(
+                        upper=config.worker.queue_scale_down_depth,
+                        change=-1,
+                    )
+                )
+            scaling_steps.extend(
+                [
+                    appscaling.ScalingInterval(
+                        lower=config.worker.queue_scale_up_depth,
+                        change=1,
+                    ),
+                    appscaling.ScalingInterval(
+                        lower=config.worker.queue_scale_up_depth * 3,
+                        change=2,
+                    ),
+                ]
+            )
+            worker_scaling.scale_on_metric(
+                "WorkerQueueDepthScaling",
+                metric=queue_depth_metric,
+                scaling_steps=scaling_steps,
+                adjustment_type=appscaling.AdjustmentType.CHANGE_IN_CAPACITY,
+                cooldown=Duration.minutes(2),
+            )
 
         migration_task_definition = ecs.FargateTaskDefinition(
             self,
@@ -493,15 +644,103 @@ class NexHealthPlatformStack(Stack):
         recordings_bucket.grant_read_write(worker_task_definition.task_role)
         recordings_bucket.grant_read_write(migration_task_definition.task_role)
 
-        db_security_group.add_ingress_rule(
-            api_service.service.connections.security_groups[0],
-            ec2.Port.tcp(5432),
-            "API access to PostgreSQL",
+        # ── Scheduled admin background jobs ─────────────────────────────
+        # Periodic ECS RunTask invocations triggered by EventBridge.
+        # Each one runs as the database master role (NOT the runtime
+        # ``nexhealth_app`` role) because they perform cross-tenant work
+        # that must bypass RLS. Same image as the migration task; only
+        # the entrypoint command differs.
+        scheduled_jobs_log_group = logs.LogGroup(
+            self,
+            "ScheduledJobsLogs",
+            log_group_name=f"/{config.app_name}/{config.environment_name}/scheduled-jobs",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.RETAIN,
         )
+
+        # Recompute the dashboard rollup every 5 minutes.
+        # ``call_metrics_daily`` is the load-bearing table behind every
+        # dashboard volume card past a few thousand calls per institution.
+        # The rollup excludes today (caller adds it live), so a 5-min
+        # cadence keeps yesterday's totals tight without expensive scans.
+        recompute_rollup_task = self._build_scheduled_admin_task(
+            id_prefix="RecomputeDashboardRollup",
+            command=[
+                "python",
+                "-m",
+                "src.app.scripts.recompute_dashboard_rollup",
+            ],
+            log_group=scheduled_jobs_log_group,
+            log_stream_prefix="rollup",
+            image=app_image,
+            environment=migration_environment,
+            secrets=migration_secrets,
+            vpc=vpc,
+            cluster=cluster,
+            db_security_group=db_security_group,
+            private_subnets=private_subnets,
+            schedule=events.Schedule.rate(Duration.minutes(5)),
+        )
+
+        # Prune idempotency tables once a day.
+        # Without this ``retell_function_invocations`` /
+        # ``retell_webhook_events`` / ``dead_letter_events`` grow
+        # unbounded — at ~36M rows/year per table for a busy tenant
+        # they'd dominate INSERT cost on the call/webhook hot path.
+        # 03:00 UTC is the canonical low-traffic window for North
+        # American clinics.
+        cleanup_idempotency_task = self._build_scheduled_admin_task(
+            id_prefix="CleanupIdempotency",
+            command=["python", "-m", "src.app.scripts.cleanup_idempotency"],
+            log_group=scheduled_jobs_log_group,
+            log_stream_prefix="cleanup-idempotency",
+            image=app_image,
+            environment=migration_environment,
+            secrets=migration_secrets,
+            vpc=vpc,
+            cluster=cluster,
+            db_security_group=db_security_group,
+            private_subnets=private_subnets,
+            schedule=events.Schedule.cron(hour="3", minute="0"),
+        )
+
+        CfnOutput(
+            self,
+            "RecomputeDashboardRollupTaskArn",
+            value=recompute_rollup_task.task_definition_arn,
+        )
+        CfnOutput(
+            self,
+            "CleanupIdempotencyTaskArn",
+            value=cleanup_idempotency_task.task_definition_arn,
+        )
+
+        if db_proxy_security_group is not None:
+            db_proxy_security_group.add_ingress_rule(
+                api_service.service.connections.security_groups[0],
+                ec2.Port.tcp(5432),
+                "API access to RDS Proxy",
+            )
+            db_proxy_security_group.add_ingress_rule(
+                worker_service.connections.security_groups[0],
+                ec2.Port.tcp(5432),
+                "Worker access to RDS Proxy",
+            )
+        else:
+            db_security_group.add_ingress_rule(
+                api_service.service.connections.security_groups[0],
+                ec2.Port.tcp(5432),
+                "API access to PostgreSQL",
+            )
+            db_security_group.add_ingress_rule(
+                worker_service.connections.security_groups[0],
+                ec2.Port.tcp(5432),
+                "Worker access to PostgreSQL",
+            )
         db_security_group.add_ingress_rule(
-            worker_service.connections.security_groups[0],
+            migration_security_group,
             ec2.Port.tcp(5432),
-            "Worker access to PostgreSQL",
+            "Migration task access to PostgreSQL",
         )
         redis_security_group.add_ingress_rule(
             api_service.service.connections.security_groups[0],
@@ -525,6 +764,7 @@ class NexHealthPlatformStack(Stack):
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)
         CfnOutput(self, "ApiBaseUrl", value=api_url)
         CfnOutput(self, "AppSecurityGroupId", value=api_service.service.connections.security_groups[0].security_group_id)
+        CfnOutput(self, "MigrationSecurityGroupId", value=migration_security_group.security_group_id)
         CfnOutput(
             self,
             "PrivateSubnetIds",
@@ -534,13 +774,15 @@ class NexHealthPlatformStack(Stack):
         CfnOutput(self, "RecordingsBucketName", value=recordings_bucket.bucket_name)
         CfnOutput(self, "RedisUrl", value=redis_url)
         CfnOutput(self, "DatabaseEndpointAddress", value=database.db_instance_endpoint_address)
+        if database_proxy is not None:
+            CfnOutput(self, "DatabaseProxyEndpoint", value=database_proxy.endpoint)
         CfnOutput(self, "DatabasePort", value=database.db_instance_endpoint_port)
         CfnOutput(
             self,
             "DatabaseConnectionTemplate",
             value=(
                 "postgresql+asyncpg://<DATABASE_USER>:<DATABASE_PASSWORD>@"
-                f"{database.db_instance_endpoint_address}:{database.db_instance_endpoint_port}/{config.database.name}"
+                f"{database_host_for_runtime}:{database.db_instance_endpoint_port}/{config.database.name}"
             ),
         )
         if database.secret is not None:
@@ -570,7 +812,8 @@ class NexHealthPlatformStack(Stack):
         frontend_bundle_url: str | None,
         redis_url: str,
         recordings_bucket: s3.Bucket,
-        database: rds.DatabaseInstance,
+        database_host: str,
+        database_port: str,
     ) -> dict[str, str]:
         cors_origins = list(self.config.cors_allowed_origins)
         if frontend_bundle_url and frontend_bundle_url not in cors_origins:
@@ -583,10 +826,20 @@ class NexHealthPlatformStack(Stack):
             "AWS_S3_BUCKET_NAME": recordings_bucket.bucket_name,
             "REDIS_URL": redis_url,
             "CELERY_BROKER_URL": redis_url,
-            "DATABASE_HOST": database.db_instance_endpoint_address,
-            "DATABASE_PORT": database.db_instance_endpoint_port,
+            "DATABASE_HOST": database_host,
+            "DATABASE_PORT": database_port,
             "DATABASE_NAME": self.config.database.name,
+            "DATABASE_POOL_SIZE": str(self.config.database.app_pool_size),
+            "DATABASE_MAX_OVERFLOW": str(self.config.database.app_max_overflow),
+            "DATABASE_POOL_TIMEOUT_SECONDS": str(
+                self.config.database.app_pool_timeout_seconds
+            ),
+            "DATABASE_POOL_RECYCLE_SECONDS": str(
+                self.config.database.app_pool_recycle_seconds
+            ),
         }
+        if self.config.api.web_concurrency:
+            environment["WEB_CONCURRENCY"] = str(self.config.api.web_concurrency)
         if cors_origins:
             environment["CORS_ALLOWED_ORIGINS"] = ",".join(cors_origins)
         if frontend_base_url:
@@ -650,6 +903,85 @@ class NexHealthPlatformStack(Stack):
             )
             secrets[env_name] = ecs.Secret.from_secrets_manager(secret)
         return secrets
+
+    def _build_scheduled_admin_task(
+        self,
+        *,
+        id_prefix: str,
+        command: list[str],
+        log_group: logs.LogGroup,
+        log_stream_prefix: str,
+        image: ecs.ContainerImage,
+        environment: dict[str, str],
+        secrets: dict[str, ecs.Secret],
+        vpc: ec2.IVpc,
+        cluster: ecs.Cluster,
+        db_security_group: ec2.SecurityGroup,
+        private_subnets: ec2.SubnetSelection,
+        schedule: events.Schedule,
+    ) -> ecs.FargateTaskDefinition:
+        """Provision an EventBridge → ECS RunTask schedule for an admin job.
+
+        Each scheduled admin job is one Fargate task definition + one
+        EventBridge rule. Tasks share the same Docker image as the API
+        and migration tasks; only the ``command`` differs. They use the
+        migration secrets (database master credentials) because they
+        operate cross-tenant and must bypass RLS.
+
+        ``id_prefix`` becomes part of every CDK construct id so a synth
+        diff makes it obvious which job changed (e.g.
+        ``RecomputeDashboardRollupTaskDefinition``).
+        """
+        security_group = ec2.SecurityGroup(
+            self,
+            f"{id_prefix}SecurityGroup",
+            vpc=vpc,
+            allow_all_outbound=True,
+            description=f"Scheduled admin job: {id_prefix}",
+        )
+        db_security_group.add_ingress_rule(
+            security_group,
+            ec2.Port.tcp(5432),
+            f"{id_prefix} access to PostgreSQL",
+        )
+
+        task_definition = ecs.FargateTaskDefinition(
+            self,
+            f"{id_prefix}TaskDefinition",
+            cpu=256,
+            memory_limit_mib=512,
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.X86_64,
+                operating_system_family=ecs.OperatingSystemFamily.LINUX,
+            ),
+        )
+        task_definition.add_container(
+            f"{id_prefix}Container",
+            image=image,
+            command=command,
+            environment=environment,
+            secrets=secrets,
+            logging=ecs.LogDrivers.aws_logs(
+                stream_prefix=log_stream_prefix,
+                log_group=log_group,
+            ),
+        )
+
+        events.Rule(
+            self,
+            f"{id_prefix}Schedule",
+            schedule=schedule,
+            targets=[
+                events_targets.EcsTask(
+                    cluster=cluster,
+                    task_definition=task_definition,
+                    subnet_selection=private_subnets,
+                    security_groups=[security_group],
+                )
+            ],
+        )
+
+        return task_definition
 
     def _build_api_service(
         self,

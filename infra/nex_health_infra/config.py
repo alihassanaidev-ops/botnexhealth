@@ -25,6 +25,11 @@ class DatabaseConfig:
     deletion_protection: bool
     engine_major_version: str
     engine_full_version: str
+    proxy_enabled: bool = False
+    app_pool_size: int = 5
+    app_max_overflow: int = 5
+    app_pool_timeout_seconds: int = 10
+    app_pool_recycle_seconds: int = 1800
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,10 @@ class ServiceConfig:
     max_count: int = 2
     container_port: int = 8000
     command: list[str] = field(default_factory=list)
+    web_concurrency: int | None = None
+    requests_per_target: int | None = None
+    queue_scale_up_depth: int | None = None
+    queue_scale_down_depth: int | None = None
     domain_name: str | None = None
     certificate_arn: str | None = None
     hosted_zone_name: str | None = None
@@ -144,6 +153,11 @@ def load_config(path: str | Path) -> EnvironmentConfig:
             deletion_protection=database.get("deletionProtection", False),
             engine_major_version=database.get("engineMajorVersion", "16"),
             engine_full_version=database.get("engineFullVersion", "16.6"),
+            proxy_enabled=database.get("proxyEnabled", False),
+            app_pool_size=int(database.get("appPoolSize", 5)),
+            app_max_overflow=int(database.get("appMaxOverflow", 5)),
+            app_pool_timeout_seconds=int(database.get("appPoolTimeoutSeconds", 10)),
+            app_pool_recycle_seconds=int(database.get("appPoolRecycleSeconds", 1800)),
         ),
         redis=RedisConfig(
             node_type=redis["nodeType"],
@@ -160,6 +174,8 @@ def load_config(path: str | Path) -> EnvironmentConfig:
             min_count=api.get("minCount", 1),
             max_count=api.get("maxCount", 2),
             container_port=api.get("containerPort", 8000),
+            web_concurrency=api.get("webConcurrency"),
+            requests_per_target=api.get("requestsPerTarget"),
             domain_name=api.get("domainName"),
             certificate_arn=api.get("certificateArn"),
             hosted_zone_name=api.get("hostedZoneName"),
@@ -171,6 +187,8 @@ def load_config(path: str | Path) -> EnvironmentConfig:
             min_count=worker.get("minCount", 1),
             max_count=worker.get("maxCount", 2),
             command=list(worker.get("command", [])),
+            queue_scale_up_depth=worker.get("queueScaleUpDepth"),
+            queue_scale_down_depth=worker.get("queueScaleDownDepth"),
         ),
         frontend=FrontendConfig(
             enabled=frontend.get("enabled", True),

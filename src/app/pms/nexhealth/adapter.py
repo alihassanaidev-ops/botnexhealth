@@ -44,11 +44,20 @@ def _strip(prefixed_id: str) -> str:
 class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking):
     source = "nexhealth"
 
-    def __init__(self, client: NexHealthClient, institution: Institution, *, subdomain: str | None = None, location_id: str | None = None) -> None:
+    def __init__(
+        self,
+        client: NexHealthClient,
+        institution: Institution,
+        *,
+        subdomain: str | None = None,
+        location_id: str | None = None,
+        owns_client: bool = False,
+    ) -> None:
         self._client = client
         self._institution = institution
         self._subdomain = subdomain
         self._location_id = location_id
+        self._owns_client = owns_client
 
     @classmethod
     async def create(cls, institution: Institution, location: InstitutionLocation) -> NexHealthAdapter:
@@ -61,8 +70,8 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         from silently routing to whichever subdomain happens to be in the
         global env.
         """
-        from src.app.config import Settings, settings as global_settings
-        from src.app.nexhealth.client import NexHealthClient
+        from src.app.config import settings as global_settings
+        from src.app.dependencies import get_nexhealth_client_dependency
 
         api_key = global_settings.nexhealth_api_key
         if not api_key:
@@ -76,17 +85,21 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
                 "nexhealth_location_id; cannot create PMS adapter"
             )
 
-        institution_settings = Settings(
-            nexhealth_api_key=api_key,
-            nexhealth_subdomain=subdomain,
-            nexhealth_location_id=location_id,
+        # Use the process-level NexHealth client so HTTP connection pooling
+        # and token caching survive across requests. Creating a fresh
+        # AsyncClient per adapter leaks sockets if a caller misses close()
+        # and collapses under concurrent Retell/function traffic.
+        client = await get_nexhealth_client_dependency()
+        return cls(
+            client,
+            institution,
+            subdomain=subdomain,
+            location_id=location_id,
+            owns_client=False,
         )
-        client = NexHealthClient(config=institution_settings)
-        await client.__aenter__()
-        return cls(client, institution, subdomain=subdomain, location_id=location_id)
 
     async def close(self) -> None:
-        if self._client:
+        if self._owns_client and self._client:
             await self._client.__aexit__(None, None, None)
 
     # ── helpers ──────────────────────────────────────────────────────────

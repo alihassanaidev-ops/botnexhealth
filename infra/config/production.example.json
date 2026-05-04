@@ -28,7 +28,12 @@
     "backupRetentionDays": 14,
     "deletionProtection": true,
     "engineMajorVersion": "16",
-    "engineFullVersion": "16.6"
+    "engineFullVersion": "16.6",
+    "proxyEnabled": true,
+    "appPoolSize": 5,
+    "appMaxOverflow": 5,
+    "appPoolTimeoutSeconds": 10,
+    "appPoolRecycleSeconds": 1800
   },
   "redis": {
     "nodeType": "cache.t4g.small",
@@ -45,6 +50,8 @@
     "minCount": 2,
     "maxCount": 6,
     "containerPort": 8000,
+    "webConcurrency": 2,
+    "requestsPerTarget": 1000,
     "domainName": "api.example.com",
     "certificateArn": "arn:aws:acm:ca-central-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "hostedZoneName": "example.com"
@@ -55,6 +62,8 @@
     "desiredCount": 2,
     "minCount": 2,
     "maxCount": 6,
+    "queueScaleUpDepth": 100,
+    "queueScaleDownDepth": 10,
     "command": [
       "celery",
       "-A",

@@ -212,13 +212,15 @@ def init_database(database_url: str) -> None:
         database_url: PostgreSQL connection string (asyncpg format)
     """
     global _engine, _session_factory
+    from src.app.config import settings
 
     _engine = create_async_engine(
         database_url,
         echo=False,
-        pool_size=20,
-        max_overflow=10,
-        pool_recycle=3600,
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+        pool_timeout=settings.database_pool_timeout_seconds,
+        pool_recycle=settings.database_pool_recycle_seconds,
         pool_pre_ping=True,
     )
 

@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     nexhealth_base_url: str = "https://nexhealth.info"
     nexhealth_api_version: str = "v2"
     nexhealth_accept: str = "application/vnd.Nexhealth+json;version=2"
+    nexhealth_max_connections: int = 20
+    nexhealth_max_keepalive_connections: int = 10
 
     # Optional NexHealth settings
     nexhealth_subdomain: str | None = None
@@ -103,6 +105,10 @@ class Settings(BaseSettings):
     database_name: str | None = None
     database_user: str | None = None
     database_password: str | None = None
+    database_pool_size: int = 5
+    database_max_overflow: int = 5
+    database_pool_timeout_seconds: int = 10
+    database_pool_recycle_seconds: int = 1800
     encryption_key: str | None = None
 
     # Account lockout (HIPAA §164.312(d))

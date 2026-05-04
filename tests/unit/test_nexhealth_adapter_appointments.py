@@ -18,6 +18,41 @@ def _make_adapter() -> NexHealthAdapter:
 
 
 @pytest.mark.asyncio
+async def test_create_reuses_shared_nexhealth_client(monkeypatch: pytest.MonkeyPatch):
+    from src.app import dependencies
+    from src.app.config import settings as global_settings
+
+    class SharedClient:
+        close_calls = 0
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            self.close_calls += 1
+
+    shared_client = SharedClient()
+
+    async def fake_dependency():
+        return shared_client
+
+    monkeypatch.setattr(global_settings, "nexhealth_api_key", "test-api-key")
+    monkeypatch.setattr(dependencies, "get_nexhealth_client_dependency", fake_dependency)
+
+    adapter = await NexHealthAdapter.create(
+        SimpleNamespace(),
+        SimpleNamespace(
+            slug="test-location",
+            nexhealth_subdomain="test-subdomain",
+            nexhealth_location_id="123",
+        ),
+    )
+
+    assert adapter._client is shared_client
+
+    await adapter.close()
+
+    assert shared_client.close_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_has_provider_appointments_scans_multiple_pages(monkeypatch: pytest.MonkeyPatch):
     adapter = _make_adapter()
     calls: list[dict] = []

@@ -15,7 +15,10 @@ stack_output() {
 
 CLUSTER_NAME="$(stack_output ClusterName)"
 TASK_DEFINITION_ARN="$(stack_output MigrationTaskDefinitionArn)"
-APP_SECURITY_GROUP_ID="$(stack_output AppSecurityGroupId)"
+MIGRATION_SECURITY_GROUP_ID="$(stack_output MigrationSecurityGroupId)"
+if [[ "${MIGRATION_SECURITY_GROUP_ID}" == "None" || -z "${MIGRATION_SECURITY_GROUP_ID}" ]]; then
+  MIGRATION_SECURITY_GROUP_ID="$(stack_output AppSecurityGroupId)"
+fi
 PRIVATE_SUBNET_IDS="$(stack_output PrivateSubnetIds)"
 
 IFS=',' read -r -a SUBNET_ARRAY <<< "${PRIVATE_SUBNET_IDS}"
@@ -27,7 +30,7 @@ for subnet_id in "${SUBNET_ARRAY[@]}"; do
   SUBNETS_JSON+="\"${subnet_id}\""
 done
 
-NETWORK_CONFIGURATION="awsvpcConfiguration={subnets=[${SUBNETS_JSON}],securityGroups=[\"${APP_SECURITY_GROUP_ID}\"],assignPublicIp=\"DISABLED\"}"
+NETWORK_CONFIGURATION="awsvpcConfiguration={subnets=[${SUBNETS_JSON}],securityGroups=[\"${MIGRATION_SECURITY_GROUP_ID}\"],assignPublicIp=\"DISABLED\"}"
 
 echo "Running migration task on cluster ${CLUSTER_NAME}..."
 TASK_ARN="$(

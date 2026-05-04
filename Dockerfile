@@ -81,19 +81,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl --fail http://localhost:8000/livez || exit 1
 
-# Default command: Gunicorn with Uvicorn workers for production
-# Run migrations then start the app
+# Default command: Gunicorn with Uvicorn workers for production.
+# Worker count is read from WEB_CONCURRENCY in src.app.gunicorn_conf so
+# deployments can scale horizontally without silently multiplying DB pools.
 ENTRYPOINT ["./entrypoint.sh"]
 CMD ["gunicorn", "src.app.main:app", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--workers", "4", \
-     "--bind", "0.0.0.0:8000", \
-     "--timeout", "120", \
-     "--graceful-timeout", "30", \
-     "--keep-alive", "5", \
-     "--max-requests", "10000", \
-     "--max-requests-jitter", "1000", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "--capture-output", \
-     "--enable-stdio-inheritance"]
+     "--config", "python:src.app.gunicorn_conf"]

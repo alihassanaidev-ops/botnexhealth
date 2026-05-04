@@ -28,7 +28,12 @@
     "backupRetentionDays": 7,
     "deletionProtection": false,
     "engineMajorVersion": "16",
-    "engineFullVersion": "16.6"
+    "engineFullVersion": "16.6",
+    "proxyEnabled": false,
+    "appPoolSize": 3,
+    "appMaxOverflow": 2,
+    "appPoolTimeoutSeconds": 10,
+    "appPoolRecycleSeconds": 1800
   },
   "redis": {
     "nodeType": "cache.t3.micro",
@@ -44,7 +49,9 @@
     "desiredCount": 1,
     "minCount": 1,
     "maxCount": 2,
-    "containerPort": 8000
+    "containerPort": 8000,
+    "webConcurrency": 2,
+    "requestsPerTarget": 800
   },
   "worker": {
     "cpu": 512,
@@ -52,6 +59,8 @@
     "desiredCount": 1,
     "minCount": 1,
     "maxCount": 2,
+    "queueScaleUpDepth": 25,
+    "queueScaleDownDepth": 2,
     "command": [
       "celery",
       "-A",
