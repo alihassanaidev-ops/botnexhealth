@@ -221,45 +221,108 @@ async def _finish_webhook_processing(
 async def handle_retell_webhook(
     body: bytes = Depends(verify_webhook_signature),
 ) -> dict[str, str]:
-    """
-    Handle Retell webhook events (call_analyzed, call_ended).
+    """Async-handoff Retell webhook endpoint.
 
-    This endpoint receives call data from Retell and records webhook events
-    for idempotency tracking.
+    The hot path here is intentionally tiny — verify, parse, claim
+    idempotency, enqueue, return. The actual call-analysis pipeline
+    (institution resolution, ``PostCallService`` writes, downstream
+    notifications, audit row) lives in
+    :func:`process_retell_call_analyzed_event` and runs on a Celery
+    worker via ``src.app.tasks.webhooks.process_retell_call_analyzed``.
 
-    Security: Requires valid Retell signature (x-retell-signature header).
+    Why: a slow DB write or a NexHealth lookup hiccup must not back
+    up the ALB request queue. Vendor retries are bounded; ours
+    aren't. The async handoff keeps the handler p95 well under
+    100ms regardless of downstream latency.
+
+    Security: requires a valid Retell signature
+    (``x-retell-signature`` header) — verified by the route dependency.
     """
-    processing_started = False
+    try:
+        payload = json.loads(body)
+        event = RetellWebhookEvent.model_validate(payload)
+    except Exception as parse_err:
+        logger.exception("Retell webhook parse error: %s", sanitize_provider_error(parse_err))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Retell webhook payload",
+        )
+
+    logger.info(
+        "Received Retell webhook: event=%s call_id=%s",
+        event.event,
+        hash_for_logging(event.call.call_id),
+    )
+
+    # Drop event types we don't process before they take a queue slot.
+    if event.event != "call_analyzed":
+        logger.info("Ignoring event type: %s", event.event)
+        return {"status": "ignored", "reason": f"Event type {event.event} not processed"}
+
+    # Idempotency claim happens HERE in the request thread so the
+    # handler can return a deterministic ``duplicate`` response without
+    # spending a worker round-trip. The claim is committed before this
+    # call returns; if the task crashes mid-processing the row stays
+    # PROCESSING and Celery's autoretry picks it back up.
+    can_process, reason = await _begin_webhook_processing(event.call.call_id, event.event)
+    if not can_process:
+        logger.info(
+            "Skipping duplicate Retell webhook: call_id=%s event=%s reason=%s",
+            event.call.call_id,
+            event.event,
+            reason,
+        )
+        return {"status": "duplicate", "reason": reason}
+
+    # Hand off to the worker. The task runs on the dedicated ``webhooks``
+    # queue so a backlog of call-analyzed events doesn't starve the
+    # notifications/SMS queues for worker capacity.
+    from src.app.tasks.webhooks import process_retell_call_analyzed
+
+    process_retell_call_analyzed.delay(payload)
+
+    return {
+        "status": "queued",
+        "event": event.event,
+        "call_id": hash_for_logging(event.call.call_id),
+    }
+
+
+async def process_retell_call_analyzed_event(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Run the post-claim processing pipeline for a ``call_analyzed`` event.
+
+    Designed to be called from the Celery task wrapper (which wraps it in
+    ``asyncio.run``) AND directly from tests. Mirrors the legacy inline
+    behaviour exactly:
+
+      1. Resolve institution + location from ``agent_id``.
+      2. ``PostCallService`` writes the contact + call rows.
+      3. Enqueue downstream tasks (recording upload, notification email,
+         in-app notification, auto-SMS) — same pattern as before, the
+         only change is that those enqueues now happen from a worker
+         instead of a request handler.
+      4. Mark the idempotency row COMPLETED and write the SUCCESS audit.
+
+    On any exception: mark the idempotency row FAILED, write a FAILURE
+    audit, capture in dead_letter_events, and re-raise so Celery's
+    autoretry takes over (with backoff). After ``max_retries`` the task
+    is dropped — the dead-letter row + FAILED idempotency status are
+    the operator signal.
+
+    Returns a small status dict suitable for the Celery task return
+    value (visible in worker logs).
+    """
     processing_call_id: str | None = None
     processing_event_type: str | None = None
-    payload: dict[str, Any] | None = None
     institution = None
     location = None
 
     try:
-        # Parse the verified body (bytes -> dict)
-        payload = json.loads(body)
-
         event = RetellWebhookEvent.model_validate(payload)
-
-        logger.info(f"Received Retell webhook: event={event.event}, call_id={hash_for_logging(event.call.call_id)}")
-
-        # Only process call_analyzed events (has full analysis data)
-        if event.event != "call_analyzed":
-            logger.info(f"Ignoring event type: {event.event}")
-            return {"status": "ignored", "reason": f"Event type {event.event} not processed"}
-
-        # Idempotency guard for retried webhooks
         processing_call_id = event.call.call_id
         processing_event_type = event.event
-        can_process, reason = await _begin_webhook_processing(processing_call_id, processing_event_type)
-        if not can_process:
-            logger.info(
-                f"Skipping duplicate Retell webhook: call_id={processing_call_id}, "
-                f"event={processing_event_type}, reason={reason}"
-            )
-            return {"status": "duplicate", "reason": reason}
-        processing_started = True
 
         # Resolve institution + location from agent_id. A no-match is a
         # configuration no-op; lookup exceptions are retryable and must not be
@@ -498,13 +561,19 @@ async def handle_retell_webhook(
 
     except Exception as e:
         safe_error = sanitize_provider_error(e)
-        logger.exception("Webhook processing error: %s", safe_error)
+        logger.exception("Retell call_analyzed processing error: %s", safe_error)
 
         # Audit webhook failure — include the institution_id (and call_id
         # hash) when we resolved them before the crash, so the failure row
         # is properly tenant-scoped for compliance reports.
         try:
-            from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
+            from src.app.services.audit import (
+                AuditAction,
+                AuditActor,
+                AuditOutcome,
+                log_audit_background,
+            )
+
             failure_target = (
                 f"call:{hash_for_logging(processing_call_id)}"
                 if processing_call_id
@@ -525,7 +594,9 @@ async def handle_retell_webhook(
                 location_id=str(location.id) if location else None,
             )
         except Exception:
-            pass  # Failsafe
+            # Audit-write failure must not mask the original exception —
+            # Celery's autoretry needs to see it.
+            logger.warning("Failed to write FAILURE_INTERNAL audit", exc_info=True)
 
         try:
             from src.app.services.dead_letter import capture_dead_letter
@@ -534,14 +605,14 @@ async def handle_retell_webhook(
                 source="retell_webhook",
                 event_type=processing_event_type or "retell_webhook",
                 error=safe_error,
-                payload=payload or {"raw_body_present": bool(body)},
-                raw_payload=body.decode("utf-8", errors="replace") if body else None,
+                payload=payload,
+                raw_payload=None,
                 attempts=1,
             )
         except Exception:
             logger.warning("Failed to capture Retell webhook DLQ event", exc_info=True)
 
-        if processing_started and processing_call_id and processing_event_type:
+        if processing_call_id and processing_event_type:
             try:
                 await _finish_webhook_processing(
                     processing_call_id,
@@ -552,9 +623,9 @@ async def handle_retell_webhook(
             except Exception:
                 logger.warning("Failed to mark webhook event as FAILED")
 
-        status_code = (
-            status.HTTP_503_SERVICE_UNAVAILABLE
-            if isinstance(e, RetellAgentLookupError)
-            else status.HTTP_400_BAD_REQUEST
-        )
-        raise HTTPException(status_code=status_code, detail=safe_error)
+        # Re-raise the original exception so Celery's autoretry takes
+        # over with backoff. The handler that delayed this task already
+        # returned 200 to the vendor; surfacing an HTTP error here would
+        # be both useless (no client to receive it) and wrong (the task
+        # framework wouldn't see a real failure).
+        raise

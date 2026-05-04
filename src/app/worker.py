@@ -19,6 +19,7 @@ def _build_celery_app() -> Celery:
             "src.app.tasks.in_app_notifications",
             "src.app.tasks.sms",
             "src.app.tasks.recordings",
+            "src.app.tasks.webhooks",
         ],
     )
 
@@ -32,7 +33,17 @@ def _build_celery_app() -> Celery:
         task_queues=(
             Queue("notifications_default"),
             Queue("notifications_high"),
+            # Dedicated queue so a backlog of webhook-processing tasks
+            # (e.g., during a Retell retry storm) doesn't starve the
+            # notification/SMS queues for worker capacity.
+            Queue("webhooks"),
         ),
+        # Per-task names use dotted prefixes (``webhooks.*``,
+        # ``notifications.*``) so Celery routes them to the right
+        # queue without each task having to specify ``queue=`` itself.
+        task_routes={
+            "webhooks.*": {"queue": "webhooks"},
+        },
         task_acks_late=True,
         worker_prefetch_multiplier=1,
     )
