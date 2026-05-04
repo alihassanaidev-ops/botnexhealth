@@ -21,6 +21,7 @@ production CFN template contains the EventBridge rule we expect."
 | Script | Schedule | Why | Runs as |
 |---|---|---|---|
 | `recompute_dashboard_rollup` | every 5 min | Rebuilds `call_metrics_daily` rollup so dashboard volume cards stay sub-millisecond as `calls` grows. Excludes today (live) so the lag is bounded to one window. | DB master role |
+| `ensure_audit_partitions` | daily at 02:30 UTC | Pre-creates the next 6 monthly partitions on `audit_logs`. Without this, INSERTs whose timestamps fall outside any explicit partition land in the DEFAULT partition where queries lose pruning and INSERT throughput degrades. | DB master role |
 | `cleanup_idempotency` | daily at 03:00 UTC | Prunes `retell_function_invocations`, `retell_webhook_events`, `dead_letter_events` past their retention windows (30/30/90 days). Without it these grow unbounded and INSERT performance degrades. | DB master role |
 
 Both run as the database master role (`nexhealth_admin`), not the

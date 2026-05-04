@@ -74,6 +74,7 @@ fi
 SCRIPTS=(
     "src.app.scripts.recompute_dashboard_rollup"
     "src.app.scripts.cleanup_idempotency"
+    "src.app.scripts.ensure_audit_partitions"
 )
 
 # ─── Layer 1: module imports cleanly ─────────────────────────────────────
@@ -151,8 +152,10 @@ CFN=$(cd infra && PATH="$PWD/.venv/bin:$PATH" cdk synth 2>/dev/null)
 REQUIRED_PATTERNS=(
     "RecomputeDashboardRollupSchedule"
     "CleanupIdempotencySchedule"
+    "EnsureAuditPartitionsSchedule"
     "RecomputeDashboardRollupTaskDefinition"
     "CleanupIdempotencyTaskDefinition"
+    "EnsureAuditPartitionsTaskDefinition"
 )
 
 for pattern in "${REQUIRED_PATTERNS[@]}"; do

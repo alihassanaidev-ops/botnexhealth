@@ -682,6 +682,29 @@ class NexHealthPlatformStack(Stack):
             schedule=events.Schedule.rate(Duration.minutes(5)),
         )
 
+        # Ensure audit_logs has the next N monthly partitions pre-created
+        # so any INSERT lands in a real partition instead of the DEFAULT
+        # catch-all (where queries lose partition pruning). Daily at
+        # 02:30 UTC — comfortably ahead of the cleanup task at 03:00.
+        ensure_audit_partitions_task = self._build_scheduled_admin_task(
+            id_prefix="EnsureAuditPartitions",
+            command=[
+                "python",
+                "-m",
+                "src.app.scripts.ensure_audit_partitions",
+            ],
+            log_group=scheduled_jobs_log_group,
+            log_stream_prefix="audit-partitions",
+            image=app_image,
+            environment=migration_environment,
+            secrets=migration_secrets,
+            vpc=vpc,
+            cluster=cluster,
+            db_security_group=db_security_group,
+            private_subnets=private_subnets,
+            schedule=events.Schedule.cron(hour="2", minute="30"),
+        )
+
         # Prune idempotency tables once a day.
         # Without this ``retell_function_invocations`` /
         # ``retell_webhook_events`` / ``dead_letter_events`` grow
@@ -708,6 +731,11 @@ class NexHealthPlatformStack(Stack):
             self,
             "RecomputeDashboardRollupTaskArn",
             value=recompute_rollup_task.task_definition_arn,
+        )
+        CfnOutput(
+            self,
+            "EnsureAuditPartitionsTaskArn",
+            value=ensure_audit_partitions_task.task_definition_arn,
         )
         CfnOutput(
             self,
