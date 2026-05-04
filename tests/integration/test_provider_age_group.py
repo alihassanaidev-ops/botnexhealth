@@ -72,7 +72,10 @@ def _monkeypatch_session(monkeypatch, provider):
         yield fake_session
 
     async def fake_resolve(_current_user, _session, _location_id):
-        return SimpleNamespace(id="inst-1"), SimpleNamespace(id="loc-1")
+        return (
+            SimpleNamespace(id="inst-1"),
+            SimpleNamespace(id="loc-1", slug="loc-1"),
+        )
 
     monkeypatch.setattr(route, "get_db_session", lambda: fake_db_session())
     monkeypatch.setattr(route, "_resolve_institution_location", fake_resolve)
@@ -93,7 +96,7 @@ async def test_update_provider_set_age_range(monkeypatch):
     result = await route.update_provider(
         provider_id=provider.id,
         req=req,
-        current_user=SimpleNamespace(),
+        current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
         location_id=None,
     )
 
@@ -113,7 +116,7 @@ async def test_update_provider_clear_age_range(monkeypatch):
     result = await route.update_provider(
         provider_id=provider.id,
         req=req,
-        current_user=SimpleNamespace(),
+        current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
         location_id=None,
     )
 
@@ -133,7 +136,7 @@ async def test_update_provider_min_age_only(monkeypatch):
     result = await route.update_provider(
         provider_id=provider.id,
         req=req,
-        current_user=SimpleNamespace(),
+        current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
         location_id=None,
     )
 
@@ -152,7 +155,7 @@ async def test_update_provider_max_age_only(monkeypatch):
     result = await route.update_provider(
         provider_id=provider.id,
         req=req,
-        current_user=SimpleNamespace(),
+        current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
         location_id=None,
     )
 
@@ -172,7 +175,7 @@ async def test_update_provider_rejects_min_greater_than_max(monkeypatch):
         await route.update_provider(
             provider_id=provider.id,
             req=req,
-            current_user=SimpleNamespace(),
+            current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
             location_id=None,
         )
 
@@ -191,7 +194,7 @@ async def test_update_provider_rejects_negative_age(monkeypatch):
         await route.update_provider(
             provider_id=provider.id,
             req=req,
-            current_user=SimpleNamespace(),
+            current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
             location_id=None,
         )
 
@@ -210,7 +213,7 @@ async def test_update_provider_rejects_age_over_150(monkeypatch):
         await route.update_provider(
             provider_id=provider.id,
             req=req,
-            current_user=SimpleNamespace(),
+            current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
             location_id=None,
         )
 
@@ -229,7 +232,7 @@ async def test_update_provider_cross_validate_existing_max(monkeypatch):
         await route.update_provider(
             provider_id=provider.id,
             req=req,
-            current_user=SimpleNamespace(),
+            current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
             location_id=None,
         )
 
@@ -321,13 +324,14 @@ async def test_list_providers_filters_by_age(monkeypatch):
     ]
 
     @asynccontextmanager
-    async def fake_db():
+    async def fake_db(*_args, **_kwargs):
         yield _FakeDBSession(age_rows)
 
     # Patch the binding inside the handlers module — handlers.py imports
-    # get_db_session via `from … import …`, which creates a local name. The
-    # database module's attribute is no longer reached at call time.
-    monkeypatch.setattr(handlers, "get_db_session", fake_db)
+    # get_system_db_session via `from … import …`, which creates a local
+    # name. The database module's attribute is no longer reached at call
+    # time.
+    monkeypatch.setattr(handlers, "get_system_db_session", fake_db)
 
     # Patient is 10 years old — should match Dr Pediatric + Dr Everyone
     dob_child = (date.today().replace(year=date.today().year - 10)).isoformat()
@@ -372,10 +376,10 @@ async def test_list_providers_adult_patient(monkeypatch):
     ]
 
     @asynccontextmanager
-    async def fake_db():
+    async def fake_db(*_args, **_kwargs):
         yield _FakeDBSession(age_rows)
 
-    monkeypatch.setattr(handlers, "get_db_session", fake_db)
+    monkeypatch.setattr(handlers, "get_system_db_session", fake_db)
 
     # Patient is 30 years old
     dob_adult = (date.today().replace(year=date.today().year - 30)).isoformat()

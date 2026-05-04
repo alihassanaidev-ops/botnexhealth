@@ -74,7 +74,7 @@ def _monkeypatch_session(monkeypatch, cached):
 
     async def fake_resolve(_current_user, _session, _location_id):
         inst = SimpleNamespace(id="inst-1")
-        loc = SimpleNamespace(id="loc-1")
+        loc = SimpleNamespace(id="loc-1", slug="loc-1")
         return inst, loc
 
     monkeypatch.setattr(route, "get_db_session", lambda: fake_db_session())
@@ -107,7 +107,7 @@ async def test_update_appointment_type_success(monkeypatch):
     result = await route.update_appointment_type(
         source_id="nh-100",
         req=req,
-        current_user=SimpleNamespace(),
+        current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
         location_id=None,
     )
 
@@ -122,7 +122,7 @@ async def test_update_appointment_type_requires_fields():
         await route.update_appointment_type(
             source_id="nh-100",
             req=req,
-            current_user=SimpleNamespace(),
+            current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
             location_id=None,
         )
     assert exc.value.status_code == 400
@@ -150,7 +150,7 @@ async def test_update_appointment_type_requires_capability(monkeypatch):
         await route.update_appointment_type(
             source_id="nh-100",
             req=req,
-            current_user=SimpleNamespace(),
+            current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
             location_id=None,
         )
     assert exc.value.status_code == 400

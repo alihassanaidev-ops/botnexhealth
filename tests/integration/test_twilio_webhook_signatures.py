@@ -125,7 +125,7 @@ async def test_inbound_sms_accepts_valid_signature(
     mock_session.execute.return_value = location_query
 
     with patch(
-        "src.app.api.routes.twilio_webhooks.get_db_session"
+        "src.app.api.routes.twilio_webhooks.get_system_db_session"
     ) as mock_get_db, patch(
         "src.app.api.routes.twilio_webhooks.capture_dead_letter",
         new=AsyncMock(),
@@ -179,7 +179,7 @@ async def test_sms_status_accepts_valid_signature(
     sms_service.update_delivery_status = AsyncMock(return_value=MagicMock())
 
     with patch(
-        "src.app.api.routes.twilio_webhooks.get_db_session"
+        "src.app.api.routes.twilio_webhooks.get_system_db_session"
     ) as mock_get_db, patch(
         "src.app.api.routes.twilio_webhooks.SmsService", return_value=sms_service
     ):
