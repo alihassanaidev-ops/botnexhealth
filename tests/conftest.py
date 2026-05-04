@@ -9,9 +9,10 @@ import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 
 from src.app.config import Settings, settings
-from src.app.retell.security import RetellSignatureVerifier
-from src.app.nexhealth.client import NexHealthClient
+from src.app.dependencies import cleanup_nexhealth_client, init_nexhealth_client
 from src.app.main import app
+from src.app.nexhealth.client import NexHealthClient
+from src.app.retell.security import RetellSignatureVerifier
 
 @pytest.fixture
 def mock_settings():
@@ -35,8 +36,6 @@ async def nh_client():
     """Real NexHealth client for integration tests."""
     async with NexHealthClient(settings) as client:
         yield client
-
-from src.app.dependencies import get_nexhealth_client_dependency, init_nexhealth_client, cleanup_nexhealth_client
 
 @pytest_asyncio.fixture
 async def async_client():

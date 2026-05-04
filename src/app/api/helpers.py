@@ -1,7 +1,6 @@
 """Helper functions for API routes."""
 
 import logging
-import math
 import uuid
 from typing import Any, Callable, Awaitable
 

@@ -2,12 +2,11 @@
 import os
 import sys
 import logging
-from pyngrok import ngrok, conf
+from pyngrok import ngrok
 
 # Add the project root to the path
 sys.path.append(os.getcwd())
 
-from src.app.config import settings
 
 def start_ngrok():
     """Start ngrok tunnel to localhost:8000."""

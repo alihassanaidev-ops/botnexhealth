@@ -6,7 +6,6 @@ Each adapter translates PMS-specific responses into these models.
 
 from __future__ import annotations
 
-from datetime import date, datetime
 
 from pydantic import BaseModel
 

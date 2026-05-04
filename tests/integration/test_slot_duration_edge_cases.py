@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import time, date, datetime, timedelta
+from datetime import time, date, datetime
 
 import pytest
 import pytest_asyncio
@@ -28,12 +28,12 @@ if os.getenv("RUN_LIVE_NEXHEALTH") != "1":
         allow_module_level=True,
     )
 
-from src.app.config import settings
-from src.app.nexhealth.client import NexHealthClient
-from src.app.api.helpers import handle_nexhealth_request
-from src.app.pms.nexhealth.mappers import to_slot
-from src.app.pms.models import UniversalSlot
-from src.app.services.slot_filter import filter_slots
+from src.app.config import settings  # noqa: E402
+from src.app.nexhealth.client import NexHealthClient  # noqa: E402
+from src.app.api.helpers import handle_nexhealth_request  # noqa: E402
+from src.app.pms.nexhealth.mappers import to_slot  # noqa: E402
+from src.app.pms.models import UniversalSlot  # noqa: E402
+from src.app.services.slot_filter import filter_slots  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ class TestNexHealthSlotDurationBehavior:
             dur = (end - start).total_seconds() / 60
             durations.append(dur)
 
-        print(f"\n✓ Default slots (no appointment type):")
+        print("\n✓ Default slots (no appointment type):")
         print(f"  Total: {len(slots)} slots")
         print(f"  Duration of first 20 slots (mins): {durations}")
         print(f"  Min/Max duration: {min(durations):.0f}/{max(durations):.0f} mins")
@@ -265,7 +265,7 @@ class TestNexHealthSlotDurationBehavior:
             dur = (end - start).total_seconds() / 60
             long_durations.append(dur)
 
-        print(f"\n✓ Comparison:")
+        print("\n✓ Comparison:")
         print(f"  Default (15-min): {len(default_slots)} slots")
         print(f"  60-min length:    {len(long_slots)} slots")
         print(f"  60-min actual durations (first 10): {long_durations}")
@@ -326,7 +326,7 @@ class TestDurationFilterNearBreak:
                 else:
                     removed_near_break.append(f"  REMOVED: {start_t}→{end_t}")
 
-        print(f"\n✓ 60-min slots near lunch break (12:00-13:00):")
+        print("\n✓ 60-min slots near lunch break (12:00-13:00):")
         print(f"  Total slots: {len(slots)}, Filtered: {len(filtered)}")
         for line in removed_near_break[:10]:
             print(line)
@@ -381,7 +381,7 @@ class TestDurationFilterNearBreak:
                 else:
                     late_slots_removed.append(f"  REMOVED: {start_t}→{end_t}")
 
-        print(f"\n✓ 60-min slots near close (17:00):")
+        print("\n✓ 60-min slots near close (17:00):")
         print(f"  Total: {len(slots)}, Filtered: {len(filtered)}")
         for line in late_slots_removed[:10]:
             print(line)
@@ -397,7 +397,7 @@ class TestDurationFilterNearBreak:
                     f"60-min slot {local_start.time()}→{local_end.time()} extends past 17:00 close"
                 )
 
-        print(f"  ✓ All filtered slots end on or before 17:00")
+        print("  ✓ All filtered slots end on or before 17:00")
 
 
 class TestDurationFilterWithRealAppointmentTypes:
@@ -521,7 +521,7 @@ class TestDurationComparisonShortVsLong:
             results[length] = {"raw": len(slots), "filtered": len(filtered)}
             print(f"  slot_length={length}: raw={len(slots)}, filtered={len(filtered)}")
 
-        print(f"\n✓ Duration comparison (8-5 + lunch):")
+        print("\n✓ Duration comparison (8-5 + lunch):")
         for k, v in results.items():
             print(f"  {k}-min: {v['raw']} raw → {v['filtered']} filtered")
 
@@ -530,7 +530,7 @@ class TestDurationComparisonShortVsLong:
             assert results[60]["filtered"] <= results[15]["filtered"], (
                 f"60-min ({results[60]['filtered']}) should have ≤ slots than 15-min ({results[15]['filtered']})"
             )
-            print(f"  ✓ Confirmed: 60-min has fewer or equal filtered slots than 15-min")
+            print("  ✓ Confirmed: 60-min has fewer or equal filtered slots than 15-min")
 
     @pytest.mark.asyncio
     async def test_very_long_appointment_near_break_and_close(self, clinic_info):
@@ -559,7 +559,7 @@ class TestDurationComparisonShortVsLong:
         from zoneinfo import ZoneInfo
         local_tz = ZoneInfo(info["timezone"])
 
-        print(f"\n✓ 90-min slots with tight schedule:")
+        print("\n✓ 90-min slots with tight schedule:")
         print(f"  Raw: {len(slots)}, Filtered: {len(filtered)}")
 
         for s in filtered:
@@ -582,7 +582,7 @@ class TestDurationComparisonShortVsLong:
         # Print examples of removed slots for visibility
         removed = [s for s in slots if s not in filtered][:5]
         if removed:
-            print(f"  Examples of removed slots:")
+            print("  Examples of removed slots:")
             for s in removed:
                 local_s = datetime.fromisoformat(s.start).astimezone(local_tz)
                 local_e = datetime.fromisoformat(s.end).astimezone(local_tz)

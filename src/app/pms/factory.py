@@ -81,7 +81,7 @@ async def get_institution_pms(
             await session.execute(
                 select(Institution).where(
                     Institution.id == current_user.institution_id,
-                    Institution.is_active == True,
+                    Institution.is_active.is_(True),
                 )
             )
         ).scalar_one_or_none()
@@ -103,7 +103,7 @@ async def get_institution_pms(
                 select(InstitutionLocation).where(
                     InstitutionLocation.id == scoped_location_id,
                     InstitutionLocation.institution_id == institution.id,
-                    InstitutionLocation.is_active == True,
+                    InstitutionLocation.is_active.is_(True),
                 )
             )
         ).scalar_one_or_none()

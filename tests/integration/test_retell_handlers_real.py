@@ -19,7 +19,6 @@ from src.app.retell.handlers import (
     book_appointment,
     cancel_appointment,
     get_location_details,
-    reschedule_appointment,
 )
 
 # Mark as integration test
@@ -174,10 +173,8 @@ async def test_lookup_patient(test_context, retell_context):
     assert result.get("count") is not None
     assert result.get("count") > 0
     assert "patients" in result
-    found = False
     for p in result["patients"]:
         if str(p["id"]) == str(test_context["patient_id"]):
-            found = True
             break
     # Note: Name search might be fuzzy or return multiple, so strict ID match might fail if name is common
     # But we expect at least some results.

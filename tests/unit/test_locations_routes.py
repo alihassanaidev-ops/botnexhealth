@@ -4,7 +4,7 @@ import respx
 from fastapi.testclient import TestClient
 from httpx import Response
 from src.app.main import app
-from src.app.config import Settings, get_settings, settings as global_settings
+from src.app.config import get_settings, settings as global_settings
 from src.app.api.deps import get_current_admin
 from src.app.models.user import User, UserRole, InviteStatus
 

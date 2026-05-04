@@ -103,7 +103,6 @@ async def test_reschedule_does_not_cancel_when_new_booking_fails(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_reschedule_books_new_then_cancels_old_on_success(monkeypatch: pytest.MonkeyPatch):
-    from unittest.mock import AsyncMock
     from src.app.pms.models import BookingResult
 
     adapter = _make_adapter()

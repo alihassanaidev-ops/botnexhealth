@@ -23,7 +23,10 @@ class InstitutionService:
     async def get_by_id(self, institution_id: str) -> Institution | None:
         """Get institution by ID."""
         result = await self.session.execute(
-            select(Institution).where(Institution.id == institution_id, Institution.is_active == True)
+            select(Institution).where(
+                Institution.id == institution_id,
+                Institution.is_active.is_(True),
+            )
         )
         return result.scalar_one_or_none()
 
@@ -31,7 +34,7 @@ class InstitutionService:
         """Get institution by slug."""
         query = select(Institution).where(Institution.slug == slug)
         if not include_inactive:
-            query = query.where(Institution.is_active == True)
+            query = query.where(Institution.is_active.is_(True))
 
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
@@ -40,7 +43,7 @@ class InstitutionService:
         """List all institutions."""
         query = select(Institution)
         if not include_inactive:
-            query = query.where(Institution.is_active == True)
+            query = query.where(Institution.is_active.is_(True))
         query = query.order_by(Institution.name)
 
         result = await self.session.execute(query)
@@ -142,7 +145,7 @@ class InstitutionService:
         """List locations for an institution."""
         query = select(InstitutionLocation).where(InstitutionLocation.institution_id == institution_id)
         if not include_inactive:
-            query = query.where(InstitutionLocation.is_active == True)
+            query = query.where(InstitutionLocation.is_active.is_(True))
         query = query.order_by(InstitutionLocation.name)
 
         result = await self.session.execute(query)
@@ -187,8 +190,8 @@ class InstitutionService:
             .join(Institution, InstitutionLocation.institution_id == Institution.id)
             .where(
                 InstitutionLocation.retell_agent_id == agent_id,
-                InstitutionLocation.is_active == True,
-                Institution.is_active == True,
+                InstitutionLocation.is_active.is_(True),
+                Institution.is_active.is_(True),
             )
         )
         row = result.first()

@@ -26,12 +26,12 @@ if os.getenv("RUN_LIVE_NEXHEALTH") != "1":
         allow_module_level=True,
     )
 
-from src.app.config import Settings, settings
-from src.app.nexhealth.client import NexHealthClient
-from src.app.api.helpers import handle_nexhealth_request, fetch_all_pages
-from src.app.pms.nexhealth.mappers import to_slot, to_location, to_provider
-from src.app.pms.models import UniversalSlot
-from src.app.services.slot_filter import filter_slots
+from src.app.config import settings  # noqa: E402
+from src.app.nexhealth.client import NexHealthClient  # noqa: E402
+from src.app.api.helpers import handle_nexhealth_request  # noqa: E402
+from src.app.pms.nexhealth.mappers import to_slot, to_location  # noqa: E402
+from src.app.pms.models import UniversalSlot  # noqa: E402
+from src.app.services.slot_filter import filter_slots  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +287,7 @@ class TestRealSlotsFiltering:
         filtered = filter_slots(slots, operating_hours=hours, breaks=[], timezone=tz)
         removed = len(slots) - len(filtered)
 
-        print(f"\n✓ Standard hours filter (9-5 Mon-Fri):")
+        print("\n✓ Standard hours filter (9-5 Mon-Fri):")
         print(f"  Input:   {len(slots)} slots")
         print(f"  Output:  {len(filtered)} slots")
         print(f"  Removed: {removed} slots")
@@ -321,7 +321,7 @@ class TestRealSlotsFiltering:
         filtered = filter_slots(slots, operating_hours=hours, breaks=breaks, timezone=tz)
         removed = len(slots) - len(filtered)
 
-        print(f"\n✓ Lunch break filter (12:00-13:00):")
+        print("\n✓ Lunch break filter (12:00-13:00):")
         print(f"  Input:   {len(slots)} slots")
         print(f"  Output:  {len(filtered)} slots")
         print(f"  Removed: {removed} slots (lunch overlap)")
@@ -362,7 +362,7 @@ class TestRealSlotsFiltering:
         filtered = filter_slots(slots, operating_hours=hours, breaks=[], timezone=tz)
         removed = len(slots) - len(filtered)
 
-        print(f"\n✓ Narrow window filter (10-11 AM Mon-Fri):")
+        print("\n✓ Narrow window filter (10-11 AM Mon-Fri):")
         print(f"  Input:   {len(slots)}")
         print(f"  Output:  {len(filtered)}")
         print(f"  Removed: {removed}")
@@ -400,7 +400,7 @@ class TestRealSlotsFiltering:
         filtered = filter_slots(slots, operating_hours=hours, breaks=breaks, timezone=tz)
         removed = len(slots) - len(filtered)
 
-        print(f"\n✓ Realistic dental schedule:")
+        print("\n✓ Realistic dental schedule:")
         print(f"  Input:   {len(slots)}")
         print(f"  Output:  {len(filtered)}")
         print(f"  Removed: {removed}")
@@ -495,7 +495,7 @@ class TestRealSlotsEdgeCases:
         filtered = filter_slots(slots, hours, breaks, tz)
         removed = len(slots) - len(filtered)
 
-        print(f"\n✓ Multiple breaks (morning tea, lunch, afternoon tea):")
+        print("\n✓ Multiple breaks (morning tea, lunch, afternoon tea):")
         print(f"  Input: {len(slots)}, Output: {len(filtered)}, Removed: {removed}")
 
         # Verify none of the remaining slots overlap any break

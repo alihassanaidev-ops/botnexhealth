@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.app.retell import functions, idempotency
+from src.app.retell import functions
 from src.app.retell.idempotency import (
     IDEMPOTENT_FUNCTIONS,
     canonical_args_hash,

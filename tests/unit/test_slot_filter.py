@@ -3,7 +3,6 @@
 from datetime import time
 from dataclasses import dataclass
 
-import pytest
 
 from src.app.pms.models import UniversalSlot
 from src.app.services.slot_filter import filter_slots

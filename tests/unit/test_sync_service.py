@@ -5,9 +5,8 @@ Uses mocked adapter + mocked DB session to test sync logic without a database.
 """
 
 import pytest
-import pytest_asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
 from src.app.pms.models import (

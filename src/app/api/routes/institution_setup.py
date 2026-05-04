@@ -51,7 +51,10 @@ async def _resolve_institution_location(
 
     institution = (
         await session.execute(
-            select(Institution).where(Institution.id == user.institution_id, Institution.is_active == True)
+            select(Institution).where(
+                Institution.id == user.institution_id,
+                Institution.is_active.is_(True),
+            )
         )
     ).scalar_one_or_none()
     if not institution:
@@ -71,7 +74,7 @@ async def _resolve_institution_location(
                 select(InstitutionLocation).where(
                     InstitutionLocation.id == location_id,
                     InstitutionLocation.institution_id == institution.id,
-                    InstitutionLocation.is_active == True,
+                    InstitutionLocation.is_active.is_(True),
                 )
             )
         ).scalar_one_or_none()
@@ -80,7 +83,10 @@ async def _resolve_institution_location(
         location = (
             await session.execute(
                 select(InstitutionLocation)
-                .where(InstitutionLocation.institution_id == institution.id, InstitutionLocation.is_active == True)
+                .where(
+                    InstitutionLocation.institution_id == institution.id,
+                    InstitutionLocation.is_active.is_(True),
+                )
                 .order_by(InstitutionLocation.created_at)
                 .limit(1)
             )
@@ -288,13 +294,16 @@ async def list_institution_locations(
                 select(InstitutionLocation).where(
                     InstitutionLocation.id == current_user.location_id,
                     InstitutionLocation.institution_id == current_user.institution_id,
-                    InstitutionLocation.is_active == True,
+                    InstitutionLocation.is_active.is_(True),
                 )
             )
         else:
             result = await session.execute(
                 select(InstitutionLocation)
-                .where(InstitutionLocation.institution_id == current_user.institution_id, InstitutionLocation.is_active == True)
+                .where(
+                    InstitutionLocation.institution_id == current_user.institution_id,
+                    InstitutionLocation.is_active.is_(True),
+                )
                 .order_by(InstitutionLocation.name)
             )
         return [LocationInfoResponse.model_validate(loc) for loc in result.scalars().all()]
@@ -316,7 +325,7 @@ async def list_providers(
             .where(
                 InstitutionProvider.institution_id == institution.id,
                 InstitutionProvider.location_id == location.id,
-                InstitutionProvider.is_active == True,
+                InstitutionProvider.is_active.is_(True),
             )
             .order_by(InstitutionProvider.name)
         )
@@ -408,7 +417,7 @@ async def list_appointment_types(
             .where(
                 InstitutionAppointmentType.institution_id == institution.id,
                 InstitutionAppointmentType.location_id == location.id,
-                InstitutionAppointmentType.is_active == True,
+                InstitutionAppointmentType.is_active.is_(True),
             )
             .order_by(InstitutionAppointmentType.name)
         )
@@ -587,7 +596,7 @@ async def list_descriptors(
             .where(
                 InstitutionDescriptor.institution_id == institution.id,
                 InstitutionDescriptor.location_id == location.id,
-                InstitutionDescriptor.is_active == True,
+                InstitutionDescriptor.is_active.is_(True),
             )
             .order_by(InstitutionDescriptor.name)
         )

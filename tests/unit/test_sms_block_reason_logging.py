@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from src.app.services.sms_compliance import SmsBlockedReason, SmsSendBlockedError
 

@@ -452,7 +452,6 @@ async def test_list_providers_invalid_dob_returns_all(monkeypatch):
 
 def _async_wrap(fn):
     """Wrap a sync callable as an async one."""
-    import asyncio
 
     async def wrapper(*args, **kwargs):
         return fn(*args, **kwargs)

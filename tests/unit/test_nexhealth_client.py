@@ -2,9 +2,9 @@
 
 import pytest
 import respx
+import httpx
 from httpx import Response
 from src.app.nexhealth.client import NexHealthClient
-from src.app.nexhealth.exceptions import NexHealthAuthenticationError, NexHealthRateLimitError
 
 @pytest.fixture
 def client(mock_settings):
@@ -31,8 +31,6 @@ async def test_authentication_success(client, mock_settings):
              token = await client._get_token()
              
         assert token == "valid-token"
-
-import httpx
 
 @pytest.mark.asyncio
 async def test_authentication_failure(client, mock_settings):

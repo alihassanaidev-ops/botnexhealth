@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +16,7 @@ from src.app.models.institution_appointment_type import InstitutionAppointmentTy
 from src.app.models.institution_descriptor import InstitutionDescriptor
 from src.app.models.institution_operatory import InstitutionOperatory
 from src.app.models.institution_provider import InstitutionProvider
-from src.app.pms.base import SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
+from src.app.pms.base import SupportsAppointmentTypeCreation
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.services.audit import log_audit_background
 

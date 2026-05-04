@@ -8,7 +8,6 @@ that adapters can opt into.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import date
 from typing import Any
 
 from src.app.pms.models import (

@@ -6,7 +6,6 @@ This is defense-in-depth on top of SameSite=strict on the refresh cookie.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException

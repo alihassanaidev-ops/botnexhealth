@@ -298,7 +298,7 @@ async def get_location_operating_hours(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
         )
     async with get_db_session() as session:
-        actor = await ensure_invite_cooldown(session, current_user)
+        await ensure_invite_cooldown(session, current_user)
         svc = InstitutionService(session)
         location = await svc.get_location_by_slug(loc_slug, current_user.institution_id)
         if not location:
@@ -1734,7 +1734,7 @@ async def list_insurance_plans(
                     .where(
                         InsurancePlan.location_id == str(location.id),
                         InsurancePlan.institution_id == current_user.institution_id,
-                        InsurancePlan.is_active == True,
+                        InsurancePlan.is_active.is_(True),
                     )
                     .order_by(InsurancePlan.name)
                 )
