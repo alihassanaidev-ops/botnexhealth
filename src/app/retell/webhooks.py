@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -73,6 +73,48 @@ class RetellWebhookEvent(BaseModel):
     """Retell webhook event envelope."""
     event: str
     call: RetellCallWebhook
+
+
+class RetellAgentLookupError(RuntimeError):
+    """Raised when a Retell agent lookup fails for retryable infrastructure reasons."""
+
+
+async def _resolve_institution_location_from_agent(agent_id: str | None):
+    """Resolve the active location/institution pair for a Retell agent.
+
+    A missing or unmapped agent is treated as a configuration no-match. Lookup
+    exceptions are different: those indicate DB/RLS/infrastructure failure and
+    must be allowed to fail the webhook so idempotency stays retryable.
+    """
+    if not agent_id:
+        logger.warning("Retell webhook missing agent_id; call will not be persisted")
+        return None, None
+
+    try:
+        from src.app.database import get_system_db_session
+        from src.app.services.institution_service import InstitutionService
+
+        async with get_system_db_session(
+            "retell_lookup",
+            external_id=agent_id,
+        ) as session:
+            institution_service = InstitutionService(session)
+            result = await institution_service.get_location_by_retell_agent_id(agent_id)
+            if result:
+                location, institution = result
+                return location, institution
+    except Exception as exc:
+        logger.exception(
+            "Retell agent lookup failed; webhook will be marked retryable: agent=%s",
+            hash_for_logging(agent_id),
+        )
+        raise RetellAgentLookupError("Retell agent lookup failed; retry webhook") from exc
+
+    logger.warning(
+        "Retell webhook agent has no active location mapping; call will not be persisted: agent=%s",
+        hash_for_logging(agent_id),
+    )
+    return None, None
 
 
 async def _begin_webhook_processing(call_id: str, event_type: str) -> tuple[bool, str]:
@@ -191,6 +233,8 @@ async def handle_retell_webhook(
     processing_call_id: str | None = None
     processing_event_type: str | None = None
     payload: dict[str, Any] | None = None
+    institution = None
+    location = None
 
     try:
         # Parse the verified body (bytes -> dict)
@@ -217,24 +261,10 @@ async def handle_retell_webhook(
             return {"status": "duplicate", "reason": reason}
         processing_started = True
 
-        # Resolve institution + location from agent_id
-        institution = None
-        location = None
-        if event.call.agent_id:
-            try:
-                from src.app.database import get_system_db_session
-                from src.app.services.institution_service import InstitutionService
-
-                async with get_system_db_session(
-                    "retell_lookup",
-                    external_id=event.call.agent_id,
-                ) as session:
-                    institution_service = InstitutionService(session)
-                    result = await institution_service.get_location_by_retell_agent_id(event.call.agent_id)
-                    if result:
-                        location, institution = result
-            except Exception as e:
-                logger.warning(f"Failed to lookup institution by agent_id {event.call.agent_id}: {e}")
+        # Resolve institution + location from agent_id. A no-match is a
+        # configuration no-op; lookup exceptions are retryable and must not be
+        # converted into a COMPLETED idempotency row.
+        location, institution = await _resolve_institution_location_from_agent(event.call.agent_id)
 
         # NOTE: the audit row for this webhook is written ONCE at the bottom
         # of this function — either the success path (after processing
@@ -522,4 +552,9 @@ async def handle_retell_webhook(
             except Exception:
                 logger.warning("Failed to mark webhook event as FAILED")
             
-        raise HTTPException(status_code=400, detail=safe_error)
+        status_code = (
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if isinstance(e, RetellAgentLookupError)
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=safe_error)

@@ -6,8 +6,11 @@ import asyncio
 import logging
 from typing import Any
 
+from sqlalchemy import select
+
 from src.app.config import settings
 from src.app.database import get_system_db_session, init_database, is_database_initialized
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_history_log import SmsStatus
 from src.app.services.dead_letter import capture_dead_letter, should_retry_vendor_error
 from src.app.services.sms_service import SmsService
@@ -30,8 +33,10 @@ async def _send_sms_async(
     if not is_database_initialized():
         init_database(settings.database_url)
 
+    institution_id = await _resolve_institution_id_for_location(institution_location_id)
     async with get_system_db_session(
         "celery",
+        institution_id=institution_id,
         location_id=institution_location_id,
         external_id=institution_location_id,
     ) as session:
@@ -51,6 +56,7 @@ async def _send_sms_async(
             "provider_status": log_record.provider_status,
             "error_message": log_record.error_message,
             "message_sid": log_record.message_sid,
+            "institution_id": institution_id,
             "location_id": institution_location_id,
             "call_id": call_id,
         }
@@ -65,6 +71,26 @@ async def _send_sms_async(
         elif log_record.status == SmsStatus.SUPPRESSED.value:
             logger.info("SMS task suppressed: location=%s call=%s", institution_location_id, call_id)
         return result
+
+
+async def _resolve_institution_id_for_location(institution_location_id: str) -> str:
+    """Resolve the location's institution before opening the PHI send session."""
+    async with get_system_db_session(
+        "celery",
+        location_id=institution_location_id,
+        external_id=institution_location_id,
+    ) as session:
+        institution_id = (
+            await session.execute(
+                select(InstitutionLocation.institution_id).where(
+                    InstitutionLocation.id == institution_location_id
+                )
+            )
+        ).scalar_one_or_none()
+
+    if not institution_id:
+        raise ValueError("Institution location not found for SMS send")
+    return str(institution_id)
 
 
 @celery_app.task(
