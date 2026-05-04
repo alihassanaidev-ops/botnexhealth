@@ -23,8 +23,23 @@ def _row_result(**kwargs):
 
 
 @pytest.mark.asyncio
-async def test_get_aggregate_dashboard_success(async_client: AsyncClient):
-    """Institution admin receives aggregate summary + clinic comparison rows."""
+async def test_get_aggregate_dashboard_combines_rollup_and_live(async_client: AsyncClient):
+    """Institution admin aggregate dashboard pulls historical metrics from
+    ``call_metrics_daily`` (date < today) and overlays today's live counts.
+
+    The query sequence is:
+
+      1. locations
+      2. institution-wide rollup summary (date < today)
+      3. institution-wide live today + open_callbacks
+      4. rollup tag distribution (jsonb_each_text)
+      5. live today tag distribution
+      6. per-location rollup (date < today, GROUP BY location_id)
+      7. per-location live today + open_callbacks (GROUP BY location_id)
+
+    All seven mocks are set up so the totals exactly match the legacy
+    test's payload, proving the refactor is response-compatible.
+    """
     mock_user = User(
         id="11111111-1111-1111-1111-111111111111",
         email="admin@clinic.com",
@@ -56,41 +71,72 @@ async def test_get_aggregate_dashboard_success(async_client: AsyncClient):
         locations_result = MagicMock()
         locations_result.scalars.return_value.all.return_value = [loc_1, loc_2]
 
-        tag_rows_result = MagicMock()
-        tag_rows_result.all.return_value = [
-            SimpleNamespace(call_status="appointment_booked", cnt=6),
-            SimpleNamespace(call_status="needs_callback", cnt=2),
-        ]
-
-        summary_result = _row_result(
-            total_calls_today=4,
-            total_calls_week=12,
-            total_calls_month=20,
-            total_calls_all_time=100,
-            appointments_booked_month=8,
-            new_patients_month=3,
-            open_callbacks=2,
-            avg_call_duration_seconds=95.0,
+        # Rollup summary (date < today): 16 calls this month (today adds 4
+        # → 20), 7 appointments booked (today adds 1 → 8), 2 new patients
+        # (today adds 1 → 3), 96 calls all-time (today adds 4 → 100).
+        rollup_summary_result = _row_result(
+            week_total=8,
+            month_total=16,
+            all_time_total=96,
+            new_patients_month=2,
+            appointments_booked_month=7,
+            all_time_duration=9120,  # 95s avg × 96 calls
         )
 
-        metrics_rows_result = MagicMock()
-        metrics_rows_result.all.return_value = [
+        # Live today + open_callbacks.
+        live_summary_result = _row_result(
+            today_count=4,
+            today_appointments_booked=1,
+            today_new_patients=1,
+            today_duration=380,  # 95s avg × 4 calls
+            open_callbacks=2,
+        )
+
+        # Rollup tag distribution.
+        rollup_tags_result = MagicMock()
+        rollup_tags_result.all.return_value = [
+            SimpleNamespace(tag="appointment_booked", cnt=5),
+            SimpleNamespace(tag="needs_callback", cnt=2),
+        ]
+        # Live today tag distribution.
+        live_tags_result = MagicMock()
+        live_tags_result.all.return_value = [
+            SimpleNamespace(call_status="appointment_booked", cnt=1),
+        ]
+
+        # Per-location rollup (only loc_1 has historical data).
+        per_location_rollup_result = MagicMock()
+        per_location_rollup_result.all.return_value = [
+            SimpleNamespace(
+                location_id=loc_1.id,
+                total_calls=80,
+                calls_this_month=7,
+                new_patients_month=2,
+                appointments_booked_month=4,
+                total_duration_seconds=7600,
+            ),
+        ]
+        # Per-location live today (only loc_1 has activity today).
+        per_location_live_result = MagicMock()
+        per_location_live_result.all.return_value = [
             SimpleNamespace(
                 location_id=loc_1.id,
                 calls_today=3,
-                calls_this_month=10,
-                appointments_booked_month=5,
-                new_patients_month=2,
+                today_appointments_booked=1,
+                today_new_patients=0,
+                today_duration=285,
                 open_callbacks=1,
-                avg_duration=95.5,
             ),
         ]
 
         mock_session.execute.side_effect = [
             locations_result,
-            summary_result,
-            tag_rows_result,
-            metrics_rows_result,
+            rollup_summary_result,
+            live_summary_result,
+            rollup_tags_result,
+            live_tags_result,
+            per_location_rollup_result,
+            per_location_live_result,
         ]
 
         try:
@@ -98,28 +144,44 @@ async def test_get_aggregate_dashboard_success(async_client: AsyncClient):
         finally:
             app.dependency_overrides = {}
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     payload = response.json()
 
-    assert payload["summary"]["total_calls_month"] == 20
-    assert payload["summary"]["appointments_booked_month"] == 8
-    assert payload["summary"]["booking_rate_month"] == 40.0
+    # Aggregate summary: rollup + today.
+    assert payload["summary"]["total_calls_today"] == 4
+    assert payload["summary"]["total_calls_month"] == 20  # 16 + 4
+    assert payload["summary"]["total_calls_all_time"] == 100  # 96 + 4
+    assert payload["summary"]["appointments_booked_month"] == 8  # 7 + 1
+    assert payload["summary"]["new_patients_month"] == 3  # 2 + 1
+    assert payload["summary"]["booking_rate_month"] == 40.0  # 8/20
     assert payload["summary"]["open_callbacks"] == 2
 
+    # Tag distribution combines rollup + live and re-sorts.
     assert len(payload["tag_distribution"]) == 2
     assert payload["tag_distribution"][0]["tag"] == "appointment_booked"
+    assert payload["tag_distribution"][0]["count"] == 6  # 5 rollup + 1 today
+    assert payload["tag_distribution"][1]["tag"] == "needs_callback"
+    assert payload["tag_distribution"][1]["count"] == 2
 
+    # Clinic comparison: loc_1 has data, loc_2 has zeroes.
     assert len(payload["clinic_comparison"]) == 2
     first = payload["clinic_comparison"][0]
     assert first["location_slug"] == "downtown"
-    assert first["calls_this_month"] == 10
-    assert first["booking_rate_month"] == 50.0
+    assert first["calls_today"] == 3
+    assert first["calls_this_month"] == 10  # 7 rollup + 3 today
+    assert first["appointments_booked_month"] == 5  # 4 rollup + 1 today
+    assert first["new_patients_month"] == 2  # 2 + 0
+    assert first["booking_rate_month"] == 50.0  # 5/10
+    assert first["open_callbacks"] == 1
 
     second = payload["clinic_comparison"][1]
     assert second["location_slug"] == "uptown"
     assert second["calls_this_month"] == 0
     assert second["booking_rate_month"] == 0.0
-    assert mock_session.execute.await_count == 4
+    assert second["open_callbacks"] == 0
+
+    # 7 queries total — see docstring at the top of this test.
+    assert mock_session.execute.await_count == 7
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import Integer, and_, case, func, select
 
 from src.app.api.deps import get_current_active_user, get_current_institution_admin
 from src.app.api.rate_limit import RATE_READ, limiter
@@ -191,6 +191,342 @@ async def _load_rollup_volume_metrics(
             ).where(*rollup_filters)
         )
     ).one()
+
+
+# ── Aggregate dashboard helpers ──────────────────────────────────────
+#
+# The aggregate dashboard endpoint uses these to keep its body short
+# and to make the rollup-vs-live split explicit at the call site.
+# Each helper issues exactly one query; the endpoint stitches their
+# results together.
+
+async def _load_aggregate_summary_from_rollup(
+    session,
+    *,
+    institution_id: str,
+    today,
+    week_start,
+    month_start,
+):
+    """Institution-wide aggregate metrics from ``call_metrics_daily``.
+
+    Bracketed by ``call_date < today`` — today's contribution comes from
+    :func:`_load_today_and_open_callbacks_live`. ``appointments_booked``
+    is read from the JSONB ``tag_counts`` column rather than a dedicated
+    column, so adding new ``CallStatus`` values doesn't require a
+    schema migration; the cost is one ``->>`` lookup per row, which the
+    planner handles cheaply since the rollup is tiny.
+    """
+    return (
+        await session.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (CallMetricsDaily.call_date >= week_start, CallMetricsDaily.total_calls),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("week_total"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (CallMetricsDaily.call_date >= month_start, CallMetricsDaily.total_calls),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("month_total"),
+                func.coalesce(func.sum(CallMetricsDaily.total_calls), 0).label("all_time_total"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                CallMetricsDaily.call_date >= month_start,
+                                CallMetricsDaily.new_patient_calls,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("new_patients_month"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                CallMetricsDaily.call_date >= month_start,
+                                func.coalesce(
+                                    func.cast(
+                                        CallMetricsDaily.tag_counts.op("->>")(
+                                            CallStatus.APPOINTMENT_BOOKED.value
+                                        ),
+                                        Integer,
+                                    ),
+                                    0,
+                                ),
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("appointments_booked_month"),
+                func.coalesce(
+                    func.sum(CallMetricsDaily.total_duration_seconds), 0
+                ).label("all_time_duration"),
+            ).where(
+                CallMetricsDaily.institution_id == institution_id,
+                CallMetricsDaily.call_date < today,
+            )
+        )
+    ).one()
+
+
+async def _load_today_and_open_callbacks_live(
+    session,
+    *,
+    institution_id: str,
+    today,
+    month_start,  # noqa: ARG001 — kept for symmetric signature; predicate is on today only
+):
+    """Today's live counts + open-callbacks count.
+
+    Three predicates collapsed into one query against ``calls`` so we
+    pay the round-trip cost once. ``open_callbacks`` is unbracketed by
+    date — it's the count of unresolved needs-callback rows regardless
+    of how old they are, since callbacks can stay open across many
+    days. The partial index ``ix_call_dashboard_open_callbacks`` makes
+    this branch a single index-only scan.
+    """
+    return (
+        await session.execute(
+            select(
+                _count_calls(Call.call_date == today).label("today_count"),
+                _count_calls(
+                    and_(
+                        Call.call_date == today,
+                        Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
+                    )
+                ).label("today_appointments_booked"),
+                _count_calls(
+                    and_(
+                        Call.call_date == today,
+                        Call.is_new_patient.is_(True),
+                    )
+                ).label("today_new_patients"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (Call.call_date == today, Call.call_duration_seconds),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("today_duration"),
+                _count_calls(
+                    and_(
+                        Call.call_status == CallStatus.NEEDS_CALLBACK.value,
+                        Call.callback_resolved.is_(False),
+                    )
+                ).label("open_callbacks"),
+            ).where(Call.institution_id == institution_id)
+        )
+    ).one()
+
+
+async def _load_aggregate_tag_distribution(
+    session,
+    *,
+    institution_id: str,
+    today,
+) -> list["TagCount"]:
+    """Tag distribution across rollup-historical + today-live.
+
+    Two small queries: a SUM-by-key over the rollup's JSONB column for
+    everything before today, plus a live ``GROUP BY call_status`` for
+    today. Merged in Python and re-sorted descending. The merge keeps
+    today's data fresh without polluting the rollup with a
+    same-second-recompute-on-every-write pattern.
+
+    SQLAlchemy's table-valued helpers don't compose with ``func.sum``
+    cleanly here; the lateral cross join with ``jsonb_each_text`` reads
+    naturally as raw SQL and stays one statement.
+    """
+    from sqlalchemy import text
+
+    rollup_rows = (
+        await session.execute(
+            text(
+                """
+                SELECT t.key AS tag, SUM(t.value::int) AS cnt
+                FROM call_metrics_daily,
+                     jsonb_each_text(call_metrics_daily.tag_counts) AS t(key, value)
+                WHERE call_metrics_daily.institution_id = :institution_id
+                  AND call_metrics_daily.call_date < :today
+                GROUP BY t.key
+                """
+            ),
+            {"institution_id": institution_id, "today": today},
+        )
+    ).all()
+
+    live_rows = (
+        await session.execute(
+            select(Call.call_status, func.count(Call.id).label("cnt"))
+            .where(
+                Call.institution_id == institution_id,
+                Call.call_date == today,
+                Call.call_status.isnot(None),
+            )
+            .group_by(Call.call_status)
+        )
+    ).all()
+
+    totals: dict[str, int] = {}
+    for row in rollup_rows:
+        if row.tag is None:
+            continue
+        totals[row.tag] = totals.get(row.tag, 0) + int(row.cnt or 0)
+    for row in live_rows:
+        if row.call_status is None:
+            continue
+        totals[row.call_status] = totals.get(row.call_status, 0) + int(row.cnt or 0)
+
+    return [
+        TagCount(
+            tag=tag,
+            label=TAG_LABELS.get(tag, tag.replace("_", " ").title()),
+            count=count,
+        )
+        for tag, count in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+
+async def _load_per_location_metrics_from_rollup(
+    session,
+    *,
+    institution_id: str,
+    today,
+    month_start,
+):
+    """Per-location aggregates from the rollup, indexed by location_id.
+
+    The single query that replaces the legacy ``GROUP BY
+    Call.location_id`` over the entire ``calls`` table. The rollup PK is
+    ``(institution_id, location_id, call_date)`` so this is an index
+    scan over a tiny number of rows (<= one row per location-day in the
+    history window).
+    """
+    rows = (
+        await session.execute(
+            select(
+                CallMetricsDaily.location_id.label("location_id"),
+                func.coalesce(func.sum(CallMetricsDaily.total_calls), 0).label("total_calls"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (CallMetricsDaily.call_date >= month_start, CallMetricsDaily.total_calls),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("calls_this_month"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                CallMetricsDaily.call_date >= month_start,
+                                CallMetricsDaily.new_patient_calls,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("new_patients_month"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                CallMetricsDaily.call_date >= month_start,
+                                func.coalesce(
+                                    func.cast(
+                                        CallMetricsDaily.tag_counts.op("->>")(
+                                            CallStatus.APPOINTMENT_BOOKED.value
+                                        ),
+                                        Integer,
+                                    ),
+                                    0,
+                                ),
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("appointments_booked_month"),
+                func.coalesce(
+                    func.sum(CallMetricsDaily.total_duration_seconds), 0
+                ).label("total_duration_seconds"),
+            )
+            .where(
+                CallMetricsDaily.institution_id == institution_id,
+                CallMetricsDaily.call_date < today,
+            )
+            .group_by(CallMetricsDaily.location_id)
+        )
+    ).all()
+    return {row.location_id: row for row in rows}
+
+
+async def _load_per_location_today_and_open_live(
+    session,
+    *,
+    institution_id: str,
+    today,
+):
+    """Today + open_callbacks per location, in one live GROUP BY.
+
+    Open callbacks are unbracketed by date (an unresolved row from
+    six months ago still belongs in the queue). The partial index
+    ``ix_call_dashboard_open_callbacks`` keeps this fast.
+    """
+    rows = (
+        await session.execute(
+            select(
+                Call.location_id.label("location_id"),
+                _count_calls(Call.call_date == today).label("calls_today"),
+                _count_calls(
+                    and_(
+                        Call.call_date == today,
+                        Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
+                    )
+                ).label("today_appointments_booked"),
+                _count_calls(
+                    and_(
+                        Call.call_date == today,
+                        Call.is_new_patient.is_(True),
+                    )
+                ).label("today_new_patients"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (Call.call_date == today, Call.call_duration_seconds),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("today_duration"),
+                _count_calls(
+                    and_(
+                        Call.call_status == CallStatus.NEEDS_CALLBACK.value,
+                        Call.callback_resolved.is_(False),
+                    )
+                ).label("open_callbacks"),
+            )
+            .where(Call.institution_id == institution_id)
+            .group_by(Call.location_id)
+        )
+    ).all()
+    return {row.location_id: row for row in rows}
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -395,141 +731,129 @@ async def get_aggregate_dashboard(
             )
         ).scalars().all()
 
-        # Institution-wide summary cards
-        summary_row = (
-            await session.execute(
-                select(
-                    _count_calls(Call.call_date == today).label("total_calls_today"),
-                    _count_calls(Call.call_date >= week_start).label("total_calls_week"),
-                    _count_calls(Call.call_date >= month_start).label("total_calls_month"),
-                    _count_calls().label("total_calls_all_time"),
-                    _count_calls(
-                        and_(
-                            Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
-                            Call.call_date >= month_start,
-                        )
-                    ).label("appointments_booked_month"),
-                    _count_calls(
-                        and_(
-                            Call.is_new_patient.is_(True),
-                            Call.call_date >= month_start,
-                        )
-                    ).label("new_patients_month"),
-                    _count_calls(
-                        and_(
-                            Call.call_status == CallStatus.NEEDS_CALLBACK.value,
-                            Call.callback_resolved.is_(False),
-                        )
-                    ).label("open_callbacks"),
-                    func.coalesce(func.avg(Call.call_duration_seconds), 0.0).label("avg_call_duration_seconds"),
-                ).where(Call.institution_id == institution_id)
-            )
-        ).one()
-        total_calls_today = int(summary_row.total_calls_today or 0)
-        total_calls_week = int(summary_row.total_calls_week or 0)
-        total_calls_month = int(summary_row.total_calls_month or 0)
-        total_calls_all_time = int(summary_row.total_calls_all_time or 0)
-        appointments_booked_month = int(summary_row.appointments_booked_month or 0)
-        new_patients_month = int(summary_row.new_patients_month or 0)
-        open_callbacks = int(summary_row.open_callbacks or 0)
+        # ── Institution-wide summary ────────────────────────────────────
+        # Rollup covers everything BEFORE today; today + open_callbacks
+        # come from a single live query against ``calls``. Mirrors the
+        # split used by ``get_dashboard_summary`` so reasoning about
+        # staleness is identical across both endpoints.
+        rollup_summary = await _load_aggregate_summary_from_rollup(
+            session,
+            institution_id=institution_id,
+            today=today,
+            week_start=week_start,
+            month_start=month_start,
+        )
+        live_summary = await _load_today_and_open_callbacks_live(
+            session,
+            institution_id=institution_id,
+            today=today,
+            month_start=month_start,
+        )
+
+        total_calls_today = int(live_summary.today_count or 0)
+        total_calls_week = int(rollup_summary.week_total or 0) + total_calls_today
+        total_calls_month = int(rollup_summary.month_total or 0) + total_calls_today
+        total_calls_all_time = int(rollup_summary.all_time_total or 0) + total_calls_today
+        appointments_booked_month = (
+            int(rollup_summary.appointments_booked_month or 0)
+            + int(live_summary.today_appointments_booked or 0)
+        )
+        new_patients_month = (
+            int(rollup_summary.new_patients_month or 0)
+            + int(live_summary.today_new_patients or 0)
+        )
+        open_callbacks = int(live_summary.open_callbacks or 0)
         booking_rate_month = (
             round((appointments_booked_month / total_calls_month) * 100, 2)
             if total_calls_month
             else 0.0
         )
-        avg_call_duration_seconds = float(summary_row.avg_call_duration_seconds or 0.0)
 
-        # Institution-wide tag distribution
-        tag_rows = (
-            await session.execute(
-                select(Call.call_status, func.count(Call.id).label("cnt"))
-                .where(
-                    Call.institution_id == institution_id,
-                    Call.call_status.isnot(None),
-                )
-                .group_by(Call.call_status)
-                .order_by(func.count(Call.id).desc())
-            )
-        ).all()
-        tag_distribution = [
-            TagCount(
-                tag=row.call_status,
-                label=TAG_LABELS.get(row.call_status, row.call_status.replace("_", " ").title()),
-                count=row.cnt,
-            )
-            for row in tag_rows
-        ]
+        # AVG = SUM / COUNT, computed across rollup-historical + today-live.
+        # Avoids the precision drift of averaging two AVGs.
+        total_duration_seconds = (
+            int(rollup_summary.all_time_duration or 0)
+            + int(live_summary.today_duration or 0)
+        )
+        avg_call_duration_seconds = (
+            total_duration_seconds / total_calls_all_time
+            if total_calls_all_time
+            else 0.0
+        )
 
-        # Per-location metrics grouped by Call.location_id (the authoritative
-        # scope; agent_used is Retell metadata only and may be stale).
-        metrics_rows = (
-            await session.execute(
-                select(
-                    Call.location_id.label("location_id"),
-                    func.sum(case((Call.call_date == today, 1), else_=0)).label("calls_today"),
-                    func.sum(case((Call.call_date >= month_start, 1), else_=0)).label("calls_this_month"),
-                    func.sum(
-                        case(
-                            (
-                                and_(
-                                    Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
-                                    Call.call_date >= month_start,
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ).label("appointments_booked_month"),
-                    func.sum(
-                        case(
-                            (
-                                and_(
-                                    Call.is_new_patient.is_(True),
-                                    Call.call_date >= month_start,
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ).label("new_patients_month"),
-                    func.sum(
-                        case(
-                            (
-                                and_(
-                                    Call.call_status == CallStatus.NEEDS_CALLBACK.value,
-                                    Call.callback_resolved.is_(False),
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ).label("open_callbacks"),
-                    func.avg(Call.call_duration_seconds).label("avg_duration"),
-                )
-                .where(Call.institution_id == institution_id)
-                .group_by(Call.location_id)
-            )
-        ).all()
-        metrics_by_location = {row.location_id: row for row in metrics_rows}
+        # ── Institution-wide tag distribution ───────────────────────────
+        # Rollup historical tag_counts (jsonb) + today's live status
+        # group-by, merged in Python. Both queries are tiny: rollup is
+        # O(days × locations); the live query is bounded by today's call
+        # count (<=hundreds for any one institution).
+        tag_distribution = await _load_aggregate_tag_distribution(
+            session,
+            institution_id=institution_id,
+            today=today,
+        )
+
+        # ── Per-location comparison ─────────────────────────────────────
+        # The slowest single query in the legacy code: a full GROUP BY
+        # on ``calls.location_id`` over the entire institution. Now:
+        # rollup GROUP BY (small) + live today GROUP BY (small) + live
+        # open_callbacks GROUP BY (partial-indexed). All three scale
+        # with location count, not with calls volume.
+        per_location_rollup = await _load_per_location_metrics_from_rollup(
+            session,
+            institution_id=institution_id,
+            today=today,
+            month_start=month_start,
+        )
+        per_location_live = await _load_per_location_today_and_open_live(
+            session,
+            institution_id=institution_id,
+            today=today,
+        )
 
         clinic_comparison: list[LocationComparisonRow] = []
         for loc in locations:
-            loc_metrics = metrics_by_location.get(loc.id)
-            calls_month = int(loc_metrics.calls_this_month or 0) if loc_metrics else 0
-            bookings_month = int(loc_metrics.appointments_booked_month or 0) if loc_metrics else 0
+            rollup_row = per_location_rollup.get(loc.id)
+            live_row = per_location_live.get(loc.id)
+            calls_today_loc = int(live_row.calls_today) if live_row else 0
+            calls_month_loc = (
+                (int(rollup_row.calls_this_month or 0) if rollup_row else 0)
+                + calls_today_loc
+            )
+            bookings_month_loc = (
+                (int(rollup_row.appointments_booked_month or 0) if rollup_row else 0)
+                + (int(live_row.today_appointments_booked) if live_row else 0)
+            )
+            duration_total = (
+                (int(rollup_row.total_duration_seconds or 0) if rollup_row else 0)
+                + (int(live_row.today_duration or 0) if live_row else 0)
+            )
+            calls_total_for_avg = (
+                (int(rollup_row.total_calls or 0) if rollup_row else 0)
+                + calls_today_loc
+            )
+            avg_duration = (
+                duration_total / calls_total_for_avg if calls_total_for_avg else 0.0
+            )
             clinic_comparison.append(
                 LocationComparisonRow(
                     location_id=str(loc.id),
                     location_name=loc.name,
                     location_slug=loc.slug,
                     status="Active" if loc.is_active else "Inactive",
-                    calls_today=int(loc_metrics.calls_today or 0) if loc_metrics else 0,
-                    calls_this_month=calls_month,
-                    appointments_booked_month=bookings_month,
-                    new_patients_month=int(loc_metrics.new_patients_month or 0) if loc_metrics else 0,
-                    booking_rate_month=round((bookings_month / calls_month) * 100, 2) if calls_month else 0.0,
-                    avg_call_duration_seconds=round(float(loc_metrics.avg_duration or 0), 2) if loc_metrics else 0.0,
-                    open_callbacks=int(loc_metrics.open_callbacks or 0) if loc_metrics else 0,
+                    calls_today=calls_today_loc,
+                    calls_this_month=calls_month_loc,
+                    appointments_booked_month=bookings_month_loc,
+                    new_patients_month=(
+                        (int(rollup_row.new_patients_month or 0) if rollup_row else 0)
+                        + (int(live_row.today_new_patients) if live_row else 0)
+                    ),
+                    booking_rate_month=(
+                        round((bookings_month_loc / calls_month_loc) * 100, 2)
+                        if calls_month_loc
+                        else 0.0
+                    ),
+                    avg_call_duration_seconds=round(avg_duration, 2),
+                    open_callbacks=int(live_row.open_callbacks) if live_row else 0,
                 )
             )
 
