@@ -21,6 +21,7 @@ from src.app.api.deps import (
     get_current_institution_or_location_admin,
 )
 from src.app.database import get_db_session
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution import Institution
 from src.app.models.institution_appointment_type import InstitutionAppointmentType
 from src.app.models.institution_descriptor import InstitutionDescriptor
@@ -30,6 +31,7 @@ from src.app.models.institution_provider import InstitutionProvider
 from src.app.models.user import User, UserRole
 from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
 from src.app.pms.factory import get_adapter_for_institution_location
+from src.app.services.audit import log_audit_background
 from src.app.services.sync_service import SyncService
 
 logger = logging.getLogger(__name__)
@@ -398,7 +400,24 @@ async def update_provider(
 
         await session.flush()
         await session.refresh(provider)
-        return CachedProviderResponse.from_provider(provider)
+        response = CachedProviderResponse.from_provider(provider)
+        loc_slug = location.slug
+        institution_id = institution.id
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/provider:{provider_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "update_provider",
+            "fields_changed": sorted(req.model_fields_set),
+        },
+        institution_id=institution_id,
+    )
+    return response
 
 
 # ── Appointment Types (cached + CRUD via PMS) ────────────────────────────
@@ -470,7 +489,28 @@ async def create_appointment_type(
         if not cached:
             raise HTTPException(500, "Failed to cache appointment type")
 
-        return CachedAppointmentTypeResponse.model_validate(cached)
+        response = CachedAppointmentTypeResponse.model_validate(cached)
+        loc_slug = location.slug
+        institution_id = institution.id
+        created_source_id = result.id
+        created_name = result.name
+        created_duration = result.duration_minutes
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/appointment_type:{created_source_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "create_appointment_type",
+            "name": created_name,
+            "duration_minutes": created_duration,
+        },
+        institution_id=institution_id,
+    )
+    return response
 
 
 @router.patch("/appointment-types/{source_id}", response_model=CachedAppointmentTypeResponse)
@@ -523,7 +563,26 @@ async def update_appointment_type(
         if not cached:
             raise HTTPException(500, "Failed to cache appointment type")
 
-        return CachedAppointmentTypeResponse.model_validate(cached)
+        response = CachedAppointmentTypeResponse.model_validate(cached)
+        loc_slug = location.slug
+        institution_id = institution.id
+        updated_source_id = result.id
+        fields_changed = sorted(req.model_fields_set)
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/appointment_type:{updated_source_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "update_appointment_type",
+            "fields_changed": fields_changed,
+        },
+        institution_id=institution_id,
+    )
+    return response
 
 
 @router.delete("/appointment-types/{source_id}", status_code=204)
@@ -556,6 +615,23 @@ async def delete_appointment_type(
         cached = (await session.execute(stmt)).scalar_one_or_none()
         if cached:
             await session.delete(cached)
+        loc_slug = location.slug
+        institution_id = institution.id
+        cache_existed = cached is not None
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/appointment_type:{source_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "delete_appointment_type",
+            "cache_existed": cache_existed,
+        },
+        institution_id=institution_id,
+    )
 
 
 # ── Operatories (cached, read-only) ─────────────────────────────────────
@@ -684,7 +760,7 @@ async def update_availability(
 
         # Return the PMS response directly
         appt_types = updated.get("appointment_types") or []
-        return CachedAvailabilityResponse(
+        response = CachedAvailabilityResponse(
             id=str(updated.get("id", source_id)),
             source_id=f"nh-{updated.get('id', source_id)}",
             provider_source_id=f"nh-{updated['provider_id']}" if updated.get("provider_id") else None,
@@ -704,6 +780,24 @@ async def update_availability(
                 "custom_recurrence": updated.get("custom_recurrence"),
             },
         )
+        loc_slug = location.slug
+        institution_id = institution.id
+        fields_changed = sorted(req.model_fields_set)
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/availability:{source_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "update_availability",
+            "fields_changed": fields_changed,
+        },
+        institution_id=institution_id,
+    )
+    return response
 
 
 # ── Sync (trigger fresh sync from PMS) ───────────────────────────────────
@@ -719,16 +813,35 @@ async def trigger_sync(
         institution, location = await _resolve_institution_location(current_user, session, location_id)
         sync_svc = SyncService(session)
         result = await sync_svc.sync_location(institution, location)
-        return {
-            "success": result.success,
-            "location": result.location_slug,
+        loc_slug = location.slug
+        institution_id = institution.id
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_SYNC,
+        target_resource=f"location:{loc_slug}/sync",
+        outcome=AuditOutcome.SUCCESS if result.success else AuditOutcome.FAILURE_INTERNAL,
+        metadata={
+            "actor_role": current_user.role,
             "providers_synced": result.providers_synced,
             "appointment_types_synced": result.appointment_types_synced,
             "operatories_synced": result.operatories_synced,
             "descriptors_synced": result.descriptors_synced,
-
             "errors": result.errors,
-        }
+        },
+        institution_id=institution_id,
+    )
+    return {
+        "success": result.success,
+        "location": result.location_slug,
+        "providers_synced": result.providers_synced,
+        "appointment_types_synced": result.appointment_types_synced,
+        "operatories_synced": result.operatories_synced,
+        "descriptors_synced": result.descriptors_synced,
+
+        "errors": result.errors,
+    }
 
 
 # ── Operating Hours (institution-facing) ─────────────────────────────────
@@ -855,7 +968,23 @@ async def set_operating_hours(
             new_rows.append(row)
 
         await session.flush()
-        return [OperatingHoursResponse.from_model(r) for r in new_rows]
+        response = [OperatingHoursResponse.from_model(r) for r in new_rows]
+        loc_slug = location.slug
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/operating_hours",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "set_operating_hours",
+            "entries_count": len(data.hours),
+        },
+        institution_id=current_user.institution_id,
+    )
+    return response
 
 
 # ── Breaks (institution-facing) ──────────────────────────────────────────
@@ -900,7 +1029,27 @@ async def create_break(
         )
         session.add(brk)
         await session.flush()
-        return BreakResponse.from_model(brk)
+        response = BreakResponse.from_model(brk)
+        loc_slug = location.slug
+        new_break_id = str(brk.id)
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/break:{new_break_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "create_break",
+            "name": data.name,
+            "day_of_week": data.day_of_week,
+            "start_time": data.start_time,
+            "end_time": data.end_time,
+        },
+        institution_id=current_user.institution_id,
+    )
+    return response
 
 
 @router.delete("/breaks/{break_id}", status_code=204)
@@ -924,3 +1073,17 @@ async def delete_break(
         if not brk:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Break not found")
         await session.delete(brk)
+        loc_slug = location.slug
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/break:{break_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "delete_break",
+        },
+        institution_id=current_user.institution_id,
+    )

@@ -61,7 +61,10 @@ async def test_update_provider_null_clears_cutoff(monkeypatch: pytest.MonkeyPatc
         yield fake_session
 
     async def fake_resolve(_current_user, _session, _location_id):
-        return SimpleNamespace(id="inst-1"), SimpleNamespace(id="loc-1")
+        return (
+            SimpleNamespace(id="inst-1"),
+            SimpleNamespace(id="loc-1", slug="main"),
+        )
 
     monkeypatch.setattr(route, "get_db_session", lambda: fake_db_session())
     monkeypatch.setattr(route, "_resolve_institution_location", fake_resolve)
@@ -72,7 +75,9 @@ async def test_update_provider_null_clears_cutoff(monkeypatch: pytest.MonkeyPatc
     result = await route.update_provider(
         provider_id=provider.id,
         req=req,
-        current_user=SimpleNamespace(),
+        current_user=SimpleNamespace(
+            id="user-1", role="INSTITUTION_ADMIN", institution_id="inst-1"
+        ),
         location_id=None,
     )
 
@@ -90,7 +95,10 @@ async def test_update_provider_rejects_seconds_in_cutoff(monkeypatch: pytest.Mon
         yield fake_session
 
     async def fake_resolve(_current_user, _session, _location_id):
-        return SimpleNamespace(id="inst-1"), SimpleNamespace(id="loc-1")
+        return (
+            SimpleNamespace(id="inst-1"),
+            SimpleNamespace(id="loc-1", slug="main"),
+        )
 
     monkeypatch.setattr(route, "get_db_session", lambda: fake_db_session())
     monkeypatch.setattr(route, "_resolve_institution_location", fake_resolve)
