@@ -37,23 +37,40 @@ def _validate_patient_search(
     phone_number: str | None,
     date_of_birth: str | None,
 ) -> str:
-    """Prevent broad patient enumeration from an empty typeahead request."""
+    """Prevent broad patient enumeration.
+
+    Email and phone are unique identifiers — either alone is sufficient.
+    Date of birth is a supporting identifier only: hundreds of patients
+    share any given DOB, so DOB-only would enable enumeration of full
+    PHI by date. DOB must be combined with a name (q >= 2 chars) or a
+    unique identifier.
+    """
     search_text = q.strip()
-    has_exact_identifier = any(
-        value and value.strip()
-        for value in (email, phone_number, date_of_birth)
+    has_unique_identifier = any(
+        value and value.strip() for value in (email, phone_number)
     )
-    if search_text and len(search_text) < 2 and not has_exact_identifier:
+    has_name = len(search_text) >= 2
+    has_dob = bool(date_of_birth and date_of_birth.strip())
+
+    if has_unique_identifier or has_name:
+        return search_text
+    if has_dob:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Patient search requires at least 2 characters or an exact identifier.",
+            detail=(
+                "Date of birth alone is not sufficient. Combine with a name "
+                "(at least 2 characters) or an email/phone number."
+            ),
         )
-    if not search_text and not has_exact_identifier:
+    if search_text:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Patient search requires a name, email, phone number, or date of birth.",
+            detail="Patient search requires at least 2 characters or an email/phone number.",
         )
-    return search_text
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Patient search requires a name, email, or phone number.",
+    )
 
 
 @router.get("", response_model=list[UniversalPatient])

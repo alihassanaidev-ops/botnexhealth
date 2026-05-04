@@ -107,3 +107,99 @@ async def test_patient_search_allows_exact_identifier_with_short_query() -> None
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_patient_search_rejects_date_of_birth_only() -> None:
+    """DOB alone enables broad PHI enumeration — must be paired with a name or email/phone."""
+    pms = _FakePMS()
+
+    with pytest.raises(HTTPException) as exc:
+        await _unwrap(patient_routes.search_patients)(
+            request=object(),
+            current_user=_user(),
+            q="",
+            email=None,
+            phone_number=None,
+            date_of_birth="1980-04-01",
+            pms=pms,
+        )
+
+    assert exc.value.status_code == 400
+    assert "Date of birth alone is not sufficient" in exc.value.detail
+    assert pms.calls == []
+
+
+@pytest.mark.asyncio
+async def test_patient_search_rejects_short_query_with_date_of_birth() -> None:
+    """1-character name + DOB is still under the typeahead minimum and must be rejected."""
+    pms = _FakePMS()
+
+    with pytest.raises(HTTPException) as exc:
+        await _unwrap(patient_routes.search_patients)(
+            request=object(),
+            current_user=_user(),
+            q="j",
+            email=None,
+            phone_number=None,
+            date_of_birth="1980-04-01",
+            pms=pms,
+        )
+
+    assert exc.value.status_code == 400
+    assert pms.calls == []
+
+
+@pytest.mark.asyncio
+async def test_patient_search_allows_name_plus_date_of_birth() -> None:
+    pms = _FakePMS()
+
+    patients = await _unwrap(patient_routes.search_patients)(
+        request=object(),
+        current_user=_user(),
+        q="Jane",
+        email=None,
+        phone_number=None,
+        date_of_birth="1985-01-02",
+        pms=pms,
+    )
+
+    assert len(patients) == 1
+    assert pms.calls == [
+        (
+            "Jane",
+            {
+                "email": None,
+                "phone_number": None,
+                "date_of_birth": "1985-01-02",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_patient_search_allows_phone_plus_date_of_birth() -> None:
+    """Unique identifier (phone) is sufficient on its own; DOB rides along."""
+    pms = _FakePMS()
+
+    patients = await _unwrap(patient_routes.search_patients)(
+        request=object(),
+        current_user=_user(),
+        q="",
+        email=None,
+        phone_number="+15551234567",
+        date_of_birth="1985-01-02",
+        pms=pms,
+    )
+
+    assert len(patients) == 1
+    assert pms.calls == [
+        (
+            "",
+            {
+                "email": None,
+                "phone_number": "+15551234567",
+                "date_of_birth": "1985-01-02",
+            },
+        )
+    ]
