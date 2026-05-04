@@ -79,6 +79,11 @@ PROTECTED_TABLES: tuple[str, ...] = (
     "dead_letter_events",
     "retell_webhook_events",
     "retell_function_invocations",
+    # call_metrics_daily is added in migration 20260513_metrics; it is
+    # institution-scoped and RLS-enabled at table-creation time. Listing
+    # it here satisfies the
+    # tests/unit/test_rls_protected_tables_coverage.py invariant.
+    "call_metrics_daily",
 )
 
 

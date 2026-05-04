@@ -123,8 +123,14 @@ async def test_get_aggregate_dashboard_success(async_client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_get_dashboard_summary_success_uses_collapsed_volume_query(async_client: AsyncClient):
-    """Dashboard summary keeps the same payload while reducing count queries to one DB call."""
+async def test_get_dashboard_summary_combines_rollup_and_today_live(async_client: AsyncClient):
+    """Volume cards stitch rollup totals (date < today) with live today count.
+
+    The dashboard issues a tight live ``COUNT(*)`` for today's calls and
+    pulls week/month/all-time SUMs from ``call_metrics_daily``. Today is
+    bracketed in [week_start, today] and [month_start, today], so it
+    must always be added to the bucketed sums.
+    """
     mock_user = User(
         id="11111111-1111-1111-1111-111111111111",
         email="admin@clinic.com",
@@ -138,11 +144,15 @@ async def test_get_dashboard_summary_success_uses_collapsed_volume_query(async_c
         mock_session = AsyncMock()
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
-        summary_result = _row_result(
-            today_count=3,
-            week_count=9,
-            month_count=14,
-            all_time_count=44,
+        # Today: 3 live calls.
+        today_count_result = MagicMock()
+        today_count_result.scalar_one.return_value = 3
+
+        # Rollup (date < today): 6 this week so far, 11 this month, 41 all-time.
+        rollup_row_result = _row_result(
+            week_total=6,
+            month_total=11,
+            all_time_total=41,
         )
 
         tag_rows_result = MagicMock()
@@ -167,7 +177,8 @@ async def test_get_dashboard_summary_success_uses_collapsed_volume_query(async_c
         ]
 
         mock_session.execute.side_effect = [
-            summary_result,
+            today_count_result,
+            rollup_row_result,
             tag_rows_result,
             callback_rows_result,
         ]
@@ -180,11 +191,12 @@ async def test_get_dashboard_summary_success_uses_collapsed_volume_query(async_c
     assert response.status_code == 200
     payload = response.json()
 
+    # Each bucketed sum = rollup + today.
     assert payload["call_volume"] == {
         "today": 3,
-        "this_week": 9,
-        "this_month": 14,
-        "all_time": 44,
+        "this_week": 9,    # 6 (rollup, date<today) + 3 (today)
+        "this_month": 14,  # 11 + 3
+        "all_time": 44,    # 41 + 3
     }
     assert payload["tag_counts"][0]["tag"] == "appointment_booked"
     assert payload["callback_queue"] == [
@@ -198,7 +210,7 @@ async def test_get_dashboard_summary_success_uses_collapsed_volume_query(async_c
             "next_action": "Call back this afternoon",
         }
     ]
-    assert mock_session.execute.await_count == 3
+    assert mock_session.execute.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -245,11 +257,12 @@ async def test_summary_scopes_staff_by_call_location_id_not_agent_used(
             institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         )
 
-        summary_result = _row_result(
-            today_count=1,
-            week_count=2,
-            month_count=3,
-            all_time_count=10,
+        today_count_result = MagicMock()
+        today_count_result.scalar_one.return_value = 1
+        rollup_row_result = _row_result(
+            week_total=1,
+            month_total=2,
+            all_time_total=9,
         )
         tag_rows_result = MagicMock()
         tag_rows_result.all.return_value = []
@@ -268,7 +281,8 @@ async def test_summary_scopes_staff_by_call_location_id_not_agent_used(
 
         mock_session.execute.side_effect_results = [
             location_result,
-            summary_result,
+            today_count_result,
+            rollup_row_result,
             tag_rows_result,
             callback_rows_result,
         ]

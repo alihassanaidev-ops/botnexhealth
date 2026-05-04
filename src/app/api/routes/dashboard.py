@@ -20,6 +20,7 @@ from src.app.api.rate_limit import RATE_READ, limiter
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call import Call, CallStatus
+from src.app.models.call_metrics_daily import CallMetricsDaily
 from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import User, UserRole
@@ -115,11 +116,81 @@ TAG_LABELS: dict[str, str] = {
 
 
 def _count_calls(*conditions):
-    """Return a COUNT(calls.id) expression with optional filtered conditions."""
+    """Return a COUNT(calls.id) expression with optional filtered conditions.
+
+    Used only for "today"-scoped + open-callback live queries. Historical
+    aggregates (week / month / all-time / per-location grouping) flow
+    through ``call_metrics_daily`` via :func:`_load_rollup_volume_metrics`
+    — it issues a tiny SUM over a few hundred rollup rows instead of
+    scanning the full ``calls`` table.
+    """
     count_expr = func.count(Call.id)
     if conditions:
         return count_expr.filter(*conditions)
     return count_expr
+
+
+def _rollup_location_filter(location_id: str | None):
+    """Map a ``calls.location_id`` filter to the rollup's NOT-NULL column.
+
+    ``calls.location_id IS NULL`` rows are recomputed under the all-zero
+    sentinel, so a None filter means "any location" (no predicate); a
+    real location id matches that location's rollup rows; the sentinel
+    is exposed as well for super-admin-style "uncategorised" queries.
+    """
+    if location_id is None:
+        return None
+    return CallMetricsDaily.location_id == location_id
+
+
+async def _load_rollup_volume_metrics(
+    session,
+    *,
+    institution_id: str,
+    today,
+    week_start,
+    month_start,
+    location_filter,
+):
+    """Pull (week, month, all_time) totals from ``call_metrics_daily``.
+
+    Excludes today (rollup lags ~5 minutes; the live ``calls`` query
+    handles today). Returns a single row of three integers — one DB
+    round-trip per dashboard load, regardless of the underlying ``calls``
+    table size.
+    """
+    rollup_filters = [
+        CallMetricsDaily.institution_id == institution_id,
+        CallMetricsDaily.call_date < today,
+    ]
+    if location_filter is not None:
+        rollup_filters.append(location_filter)
+
+    return (
+        await session.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (CallMetricsDaily.call_date >= week_start, CallMetricsDaily.total_calls),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("week_total"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (CallMetricsDaily.call_date >= month_start, CallMetricsDaily.total_calls),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("month_total"),
+                func.coalesce(func.sum(CallMetricsDaily.total_calls), 0).label("all_time_total"),
+            ).where(*rollup_filters)
+        )
+    ).one()
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -152,6 +223,9 @@ async def get_dashboard_summary(
 
     async with get_db_session() as session:
         extra_conditions = []
+        # Resolved location id for the rollup-side queries — None means
+        # "no per-location filter" (institution-wide view).
+        rollup_location_id: str | None = None
         if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
             if not current_user.location_id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No location assignment")
@@ -165,6 +239,7 @@ async def get_dashboard_summary(
             if not location:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid location scope")
             extra_conditions.append(Call.location_id == location.id)
+            rollup_location_id = str(location.id)
         elif current_user.role == UserRole.INSTITUTION_ADMIN.value and location_slug:
             location_result = await session.execute(
                 select(InstitutionLocation).where(
@@ -176,18 +251,34 @@ async def get_dashboard_summary(
             if not scoped_location:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
             extra_conditions.append(Call.location_id == scoped_location.id)
+            rollup_location_id = str(scoped_location.id)
 
         # ── Volume counts ─────────────────────────────────────────────────
-        volume_row = (
+        # Today: live count from ``calls`` (one tight index range scan
+        # under the (institution_id, call_date) covering index — small
+        # subset, zero growth concern).
+        today_count = (
             await session.execute(
-                select(
-                    _count_calls(Call.call_date == today).label("today_count"),
-                    _count_calls(Call.call_date >= week_start).label("week_count"),
-                    _count_calls(Call.call_date >= month_start).label("month_count"),
-                    _count_calls().label("all_time_count"),
-                ).where(Call.institution_id == institution_id, *extra_conditions)
+                select(func.count(Call.id)).where(
+                    Call.institution_id == institution_id,
+                    Call.call_date == today,
+                    *extra_conditions,
+                )
             )
-        ).one()
+        ).scalar_one() or 0
+
+        # Week / month / all-time: SUM from the rollup. Excludes today;
+        # the rollup recompute lags ~5 min so today is added live above.
+        # Without the rollup these would be aggregate scans growing with
+        # the ``calls`` table — the dashboard's worst-scaling query.
+        rollup_row = await _load_rollup_volume_metrics(
+            session,
+            institution_id=institution_id,
+            today=today,
+            week_start=week_start,
+            month_start=month_start,
+            location_filter=_rollup_location_filter(rollup_location_id),
+        )
 
         # ── Tag counts (by primary call_status) ───────────────────────────
         tag_rows = (
@@ -239,12 +330,19 @@ async def get_dashboard_summary(
             for call, contact in callback_rows
         ]
 
+        # Stitch rollup totals (date < today) with the live ``today_count``.
+        # Today is bracketed in [week_start, today] and [month_start, today]
+        # so it must always be added to the bucketed sums.
+        week_total = int(rollup_row.week_total or 0) + today_count
+        month_total = int(rollup_row.month_total or 0) + today_count
+        all_time_total = int(rollup_row.all_time_total or 0) + today_count
+
         response = DashboardSummary(
             call_volume=CallVolume(
-                today=int(volume_row.today_count or 0),
-                this_week=int(volume_row.week_count or 0),
-                this_month=int(volume_row.month_count or 0),
-                all_time=int(volume_row.all_time_count or 0),
+                today=today_count,
+                this_week=week_total,
+                this_month=month_total,
+                all_time=all_time_total,
             ),
             tag_counts=tag_counts,
             callback_queue=callback_queue,

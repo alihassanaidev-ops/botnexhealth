@@ -2,6 +2,10 @@
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
 from src.app.models.call import Call, CallDirection, CallStatus, PatientStatus
+from src.app.models.call_metrics_daily import (  # noqa: F401 — model registration
+    CallMetricsDaily,
+    NULL_LOCATION_SENTINEL,
+)
 from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.models.custom_field import (
