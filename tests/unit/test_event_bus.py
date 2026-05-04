@@ -69,3 +69,37 @@ def test_publish_event_notification_rejects_unknown_field() -> None:
             "notification",
             {"notification_id": "n-1", "patient_phone": "+15551234567"},
         )
+
+
+def test_publish_event_notification_accepts_batch_refetch_hint() -> None:
+    """Bulk-create publishers send ``created_count`` + ``notification_type``.
+
+    These fields must validate so the SSE channel actually fires; without
+    them the frontend never gets the refetch hint and only updates on full
+    page reload.
+    """
+    import json as _json
+
+    client = MagicMock()
+    with patch.object(event_bus, "_get_sync_client", return_value=client):
+        publish_event(
+            "inst-uuid",
+            "notification",
+            {"created_count": 3, "notification_type": "new_call"},
+        )
+
+    client.publish.assert_called_once()
+    _channel, payload_json = client.publish.call_args.args
+    data = _json.loads(payload_json)["data"]
+    assert data["created_count"] == 3
+    assert data["notification_type"] == "new_call"
+
+
+def test_publish_event_notification_rejects_random_extra_field() -> None:
+    """Pin the anti-PHI ``extra='forbid'`` guarantee on _NotificationEvent."""
+    with pytest.raises(ValueError, match="Invalid SSE event payload"):
+        publish_event(
+            "inst-uuid",
+            "notification",
+            {"random_field_not_in_schema": "x"},
+        )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,6 +10,7 @@ import pytest
 
 from src.app.models.call import CallStatus
 from src.app.models.notification import NotificationType
+from src.app.services import event_bus
 from src.app.tasks import in_app_notifications
 
 
@@ -34,7 +36,13 @@ def test_resolve_notification_type_respects_urgent_tags() -> None:
 
 @pytest.mark.asyncio
 async def test_publish_event_uses_created_count_key() -> None:
-    """The SSE payload must use `created_count`, not the misleading `unread_count`."""
+    """The SSE payload must use `created_count`, not the misleading `unread_count`.
+
+    This patches ``event_bus._get_sync_client`` (one level deeper than
+    ``publish_event`` itself) so that the real schema validation runs. If the
+    publisher and ``_NotificationEvent`` schema drift apart again, this test
+    breaks instead of silently passing.
+    """
 
     svc_instance = MagicMock()
     svc_instance.create_notifications_for_call = AsyncMock(return_value=3)
@@ -55,17 +63,12 @@ async def test_publish_event_uses_created_count_key() -> None:
         async def __aexit__(self, *_: Any) -> None:
             return None
 
-    published: list[tuple[str, str, dict[str, Any] | None]] = []
-
-    def capture_publish(
-        institution_id: str, event_type: str, data: dict[str, Any] | None = None
-    ) -> None:
-        published.append((institution_id, event_type, data))
+    redis_client = MagicMock()
 
     with patch.object(in_app_notifications, "get_db_session", return_value=_SessionCM()), \
         patch.object(in_app_notifications, "is_database_initialized", return_value=True), \
         patch.object(in_app_notifications, "NotificationService", return_value=svc_instance), \
-        patch.object(in_app_notifications, "publish_event", side_effect=capture_publish), \
+        patch.object(event_bus, "_get_sync_client", return_value=redis_client), \
         patch.object(in_app_notifications.settings, "database_url", "postgres://test"):
         await in_app_notifications._send_in_app_notifications_async(
             call_id="call-1",
@@ -79,13 +82,14 @@ async def test_publish_event_uses_created_count_key() -> None:
             data=None,
         )
 
-    assert len(published) == 1
-    inst, evt, data = published[0]
-    assert inst == "inst-1"
-    assert evt == "notification"
-    assert data is not None
-    assert "created_count" in data
+    redis_client.publish.assert_called_once()
+    channel, payload_json = redis_client.publish.call_args.args
+    assert channel == "sse:institution:inst-1"
+    payload = json.loads(payload_json)
+    assert payload["type"] == "notification"
+    data = payload["data"]
     assert data["created_count"] == 3
+    assert data["notification_type"] == NotificationType.APPOINTMENT_BOOKED.value
     # Guard against regression — old field name must not come back.
     assert "unread_count" not in data
 
@@ -112,17 +116,12 @@ async def test_no_publish_when_nothing_created() -> None:
         async def __aexit__(self, *_: Any) -> None:
             return None
 
-    published: list[tuple[str, str, dict[str, Any] | None]] = []
-
-    def capture_publish(
-        institution_id: str, event_type: str, data: dict[str, Any] | None = None
-    ) -> None:
-        published.append((institution_id, event_type, data))
+    redis_client = MagicMock()
 
     with patch.object(in_app_notifications, "get_db_session", return_value=_SessionCM()), \
         patch.object(in_app_notifications, "is_database_initialized", return_value=True), \
         patch.object(in_app_notifications, "NotificationService", return_value=svc_instance), \
-        patch.object(in_app_notifications, "publish_event", side_effect=capture_publish), \
+        patch.object(event_bus, "_get_sync_client", return_value=redis_client), \
         patch.object(in_app_notifications.settings, "database_url", "postgres://test"):
         await in_app_notifications._send_in_app_notifications_async(
             call_id="call-2",
@@ -136,4 +135,4 @@ async def test_no_publish_when_nothing_created() -> None:
             data=None,
         )
 
-    assert published == []
+    redis_client.publish.assert_not_called()

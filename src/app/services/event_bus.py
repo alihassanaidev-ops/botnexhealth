@@ -34,12 +34,20 @@ class _EmptyEvent(BaseModel):
 
 
 class _NotificationEvent(BaseModel):
-    """Toast-style notification data."""
+    """Notification SSE hint payload.
+
+    Covers both single-toast hints (``notification_id``/``title``/``severity``)
+    AND batch refetch hints (``created_count``/``notification_type``) emitted
+    after bulk creation. All fields are PHI-free metadata; ``extra="forbid"``
+    continues to block accidental PHI leakage.
+    """
 
     model_config = ConfigDict(extra="forbid")
     notification_id: str | None = None
     title: str | None = None
     severity: str | None = None  # "info" | "warning" | "error"
+    created_count: int | None = None
+    notification_type: str | None = None
 
 
 _EVENT_SCHEMAS: dict[str, type[BaseModel]] = {
