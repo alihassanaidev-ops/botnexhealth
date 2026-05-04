@@ -423,6 +423,14 @@ def _location_only_expr(table: str) -> str:
 
 
 def _institutions_expr() -> str:
+    # retell_lookup / twilio_lookup are used by webhooks BEFORE tenant
+    # resolution. NOT a blanket allow on institutions — narrow via the
+    # SECURITY DEFINER helpers app_rls_inst_for_retell_agent /
+    # app_rls_inst_for_twilio_number (see migration
+    # 20260508_narrow_institutions_lookup_rls). The naive EXISTS-against-
+    # institution_locations pattern deadlocks because that table's own
+    # policy already EXISTS against institutions for middleware_lookup,
+    # so Postgres detects infinite recursion in row-security policies.
     return """
         app_rls_is_super_admin()
         OR (
@@ -433,7 +441,14 @@ def _institutions_expr() -> str:
             app_rls_context_type() = 'middleware_lookup'
             AND institutions.slug = app_rls_external_id()
         )
-        OR app_rls_context_type() IN ('retell_lookup', 'twilio_lookup')
+        OR (
+            app_rls_context_type() = 'retell_lookup'
+            AND institutions.id = app_rls_inst_for_retell_agent(app_rls_external_id())
+        )
+        OR (
+            app_rls_context_type() = 'twilio_lookup'
+            AND institutions.id = app_rls_inst_for_twilio_number(app_rls_external_id())
+        )
         OR (
             app_rls_context_type() = 'user'
             AND institutions.id = app_rls_institution_id()
