@@ -93,8 +93,21 @@ class UserInviteService:
         user.locked_until = None
 
         await self.session.flush()
-        await self.email_service.send_invite_email(
-            email=user.email,
-            token=token,
-            redirect_url=redirect_url,
-        )
+        # Best-effort email send. The invite token is the durable artifact —
+        # if the email provider is misconfigured (RESEND_API_KEY missing) or
+        # transiently down, the user record + token are still persisted, and
+        # an admin can trigger /reinvite to retry. Failing the entire
+        # transaction here would block onboarding on a non-security boundary
+        # and previously caused HTTP 500 leaks for valid recipients.
+        try:
+            await self.email_service.send_invite_email(
+                email=user.email,
+                token=token,
+                redirect_url=redirect_url,
+            )
+        except Exception as e:
+            logger.error(
+                "send_invite_email failed for user_id=%s email=%s — invite "
+                "token persisted, admin should /reinvite. error=%s",
+                user.id, user.email, e, exc_info=True,
+            )

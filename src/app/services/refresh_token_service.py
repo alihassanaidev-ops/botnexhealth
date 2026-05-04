@@ -105,9 +105,29 @@ class RefreshTokenService:
         return token
 
     @classmethod
+    async def _detect_replay_or_none(cls, client: Redis, token_hash: str) -> None:
+        """Raise RefreshTokenReplayError if token_hash is in the rotated set.
+
+        Replay must be checked at the *first* lookup, not just inside
+        rotate_token — get_user_id_for_token is called by every refresh /
+        revoke / inspection path and a stolen rotated token must trip
+        detection there too.
+        """
+        rotated_user_id = await client.get(cls._rotated_key(token_hash))
+        if rotated_user_id:
+            await cls.revoke_all_for_user(rotated_user_id)
+            await cls.revoke_all_access_tokens_for_user(rotated_user_id)
+            raise RefreshTokenReplayError(rotated_user_id)
+
+    @classmethod
     async def get_user_id_for_token(cls, token: str) -> str | None:
         token_hash = cls._token_hash(token)
         client = await cls.get_client()
+
+        # Replay detection runs BEFORE lookup so a presented-but-rotated
+        # token trips it instead of returning a generic "expired" 401.
+        await cls._detect_replay_or_none(client, token_hash)
+
         user_id = await client.get(cls._lookup_key(token_hash))
         if not user_id:
             return None
@@ -125,13 +145,10 @@ class RefreshTokenService:
         old_hash = cls._token_hash(token)
         client = await cls.get_client()
 
-        # Replay detection: if the presented token's hash is already in the
-        # rotated set, the legitimate client cannot be the caller — revoke
-        # everything and surface the event.
-        if await client.exists(cls._rotated_key(old_hash)):
-            await cls.revoke_all_for_user(user_id)
-            await cls.revoke_all_access_tokens_for_user(user_id)
-            raise RefreshTokenReplayError(user_id)
+        # Defense in depth: replay was already caught upstream by
+        # get_user_id_for_token, but check again here for any caller that
+        # invokes rotate_token directly.
+        await cls._detect_replay_or_none(client, old_hash)
 
         if not await client.exists(cls._session_key(user_id, old_hash)):
             return None

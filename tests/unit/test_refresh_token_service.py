@@ -1,7 +1,10 @@
 import pytest
 
 from src.app.config import build_database_url, normalize_redis_url, settings
-from src.app.services.refresh_token_service import RefreshTokenService
+from src.app.services.refresh_token_service import (
+    RefreshTokenReplayError,
+    RefreshTokenService,
+)
 
 
 class FakeRedis:
@@ -86,8 +89,13 @@ async def test_rotate_token_invalidates_old_token(fake_redis: FakeRedis) -> None
     rotated = await RefreshTokenService.rotate_token("user-2", token)
 
     assert rotated
-    assert await RefreshTokenService.get_user_id_for_token(token) is None
-    assert await RefreshTokenService.get_user_id_for_token(rotated) == "user-2"
+    # Presenting the rotated token must trip replay detection — the legitimate
+    # client never replays a rotated token, so this signals theft. The service
+    # revokes everything and raises so the caller can audit + 401.
+    with pytest.raises(RefreshTokenReplayError):
+        await RefreshTokenService.get_user_id_for_token(token)
+    # The new token is invalid too because replay detection revoked the user.
+    assert await RefreshTokenService.get_user_id_for_token(rotated) is None
 
 
 @pytest.mark.asyncio

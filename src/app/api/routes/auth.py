@@ -1,6 +1,7 @@
 """Authentication routes."""
 
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from uuid import uuid4
@@ -13,7 +14,7 @@ from sqlalchemy import select
 
 from src.app.api.deps import get_current_active_user, get_current_admin
 from src.app.config import settings
-from src.app.database import get_db_session
+from src.app.database import RlsContext, get_db_session, use_rls_context
 from src.app.models.user import User, InviteStatus
 from src.app.services.auth import AuthService
 from src.app.services.auth_email_service import AuthEmailService
@@ -243,14 +244,45 @@ async def _revoke_access_token_from_request(request: Request) -> None:
     )
 
 
-def _register_failed_login_attempt(user: User) -> bool:
-    user.failed_login_attempts += 1
-    if user.failed_login_attempts >= settings.max_failed_login_attempts:
-        user.locked_until = datetime.now(timezone.utc) + timedelta(
-            minutes=settings.account_lockout_minutes
+async def _register_failed_login_attempt(session, user: User) -> bool:  # noqa: ANN001
+    """Atomically increment failed_login_attempts; set locked_until on threshold.
+
+    Uses an atomic UPDATE ... RETURNING so two concurrent failed logins
+    cannot both read attempts=N and both write N+1 (lost update). Without
+    this, an attacker could race past the lockout threshold by issuing
+    requests faster than each transaction's read+write cycle.
+    """
+    from sqlalchemy import text
+
+    row = (
+        await session.execute(
+            text(
+                """
+                UPDATE users
+                SET
+                    failed_login_attempts = failed_login_attempts + 1,
+                    locked_until = CASE
+                        WHEN failed_login_attempts + 1 >= :threshold
+                        THEN NOW() + make_interval(mins => :lockout_min)
+                        ELSE locked_until
+                    END
+                WHERE id = :uid
+                RETURNING failed_login_attempts, locked_until
+                """
+            ),
+            {
+                "threshold": settings.max_failed_login_attempts,
+                "lockout_min": settings.account_lockout_minutes,
+                "uid": user.id,
+            },
         )
-        return True
-    return False
+    ).one()
+
+    # Reflect canonical DB state back onto the in-memory User instance so
+    # the caller sees consistent values for any downstream metadata.
+    user.failed_login_attempts = row[0]
+    user.locked_until = row[1]
+    return row[0] >= settings.max_failed_login_attempts
 
 
 def _clear_password_reset_state(user: User) -> None:
@@ -270,6 +302,14 @@ def _set_password_on_user(user: User, password: str) -> None:
     user.locked_until = None
 
 
+@asynccontextmanager
+async def _auth_db_session():
+    """Open an RLS-authenticated DB session for unauthenticated auth flows."""
+    with use_rls_context(RlsContext.system("auth")):
+        async with get_db_session() as session:
+            yield session
+
+
 @router.post("/login", response_model=AuthSession)
 @limiter.limit(RATE_AUTH)
 async def login(request: Request, response: Response, data: LoginRequest) -> AuthSession:
@@ -280,7 +320,7 @@ async def login(request: Request, response: Response, data: LoginRequest) -> Aut
     if client_ip:
         audit_meta["ip_address"] = client_ip
 
-    async with get_db_session() as session:
+    async with _auth_db_session() as session:
         result = await session.execute(
             select(User).where(
                 User.email == email,
@@ -327,7 +367,11 @@ async def login(request: Request, response: Response, data: LoginRequest) -> Aut
             )
 
         if not user.is_active:
-            _register_failed_login_attempt(user)
+            await _register_failed_login_attempt(session, user)
+            # Persist the increment BEFORE raising — otherwise get_db_session's
+            # rollback-on-exception path undoes it and HIPAA §164.312(d)
+            # account lockout never triggers.
+            await session.commit()
             log_audit_background(
                 actor=AuditActor.API_CLIENT,
                 action=AuditAction.LOGIN,
@@ -344,7 +388,10 @@ async def login(request: Request, response: Response, data: LoginRequest) -> Aut
             )
 
         if not PasswordService.verify_password(data.password, user.password_hash):
-            is_now_locked = _register_failed_login_attempt(user)
+            is_now_locked = await _register_failed_login_attempt(session, user)
+            # Persist the increment + locked_until before raising — see
+            # account-inactive branch above.
+            await session.commit()
             outcome = (
                 AuditOutcome.FAILURE_ACCOUNT_LOCKED
                 if is_now_locked
@@ -442,7 +489,10 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest) -> Mess
                 detail=str(exc),
             ) from exc
 
-    async with get_db_session() as session:
+    user_for_email: User | None = None
+    raw_token: str | None = None
+
+    async with _auth_db_session() as session:
         result = await session.execute(
             select(User).where(
                 User.email == email,
@@ -452,30 +502,48 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest) -> Mess
         user = result.scalar_one_or_none()
 
         if user and user.is_active:
-            token = PasswordService.generate_one_time_token()
-            user.password_reset_token_hash = PasswordService.hash_token(token)
+            raw_token = PasswordService.generate_one_time_token()
+            user.password_reset_token_hash = PasswordService.hash_token(raw_token)
             user.password_reset_expires_at = datetime.now(timezone.utc) + timedelta(
                 minutes=settings.password_reset_token_ttl_minutes
             )
+            # Persist BEFORE attempting email send. If we awaited the email
+            # send inside this context and it raised, get_db_session would
+            # rollback and the user would lose the token they were issued.
+            await session.commit()
+            user_for_email = user
+
+    # Send email outside the DB session. Failures (e.g.
+    # AUTH_FRONTEND_BASE_URL missing, Resend down) must NOT propagate as
+    # 500 — that would let an attacker enumerate valid emails by checking
+    # which inputs cause 500 vs 200. The token is already persisted, so a
+    # client retry simply re-issues a fresh token.
+    if user_for_email is not None and raw_token is not None:
+        try:
             await email_service.send_password_reset_email(
-                email=user.email,
-                token=token,
+                email=user_for_email.email,
+                token=raw_token,
                 redirect_url=data.redirect_url,
             )
-
-            log_audit_background(
-                actor=AuditActor.API_CLIENT,
-                action=AuditAction.PASSWORD_RESET_REQUEST,
-                target_resource=f"user:{user.id}",
-                outcome=AuditOutcome.SUCCESS,
-                metadata={
-                    "action": "forgot_password",
-                    "ip_address": client_ip,
-                },
-                institution_id=user.institution_id,
-                user_id=_audit_user_id(user),
-                location_id=_audit_location_id(user),
+        except Exception as exc:
+            logger.error(
+                "Failed to send password reset email for user_id=%s: %s",
+                user_for_email.id, exc, exc_info=True,
             )
+
+        log_audit_background(
+            actor=AuditActor.API_CLIENT,
+            action=AuditAction.PASSWORD_RESET_REQUEST,
+            target_resource=f"user:{user_for_email.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "action": "forgot_password",
+                "ip_address": client_ip,
+            },
+            institution_id=user_for_email.institution_id,
+            user_id=_audit_user_id(user_for_email),
+            location_id=_audit_location_id(user_for_email),
+        )
 
     return MessageResponse(
         message="If an account exists for that email, a password reset email has been sent."
@@ -493,7 +561,7 @@ async def reset_password(
     token_hash = PasswordService.hash_token(data.token)
     client_ip = _client_ip(request)
 
-    async with get_db_session() as session:
+    async with _auth_db_session() as session:
         result = await session.execute(
             select(User).where(
                 User.password_reset_token_hash == token_hash,
@@ -542,7 +610,7 @@ async def set_password(
     token_hash = PasswordService.hash_token(data.token)
     client_ip = _client_ip(request)
 
-    async with get_db_session() as session:
+    async with _auth_db_session() as session:
         result = await session.execute(
             select(User).where(
                 User.invite_token_hash == token_hash,
@@ -603,6 +671,27 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
 
     try:
         user_id = await RefreshTokenService.get_user_id_for_token(refresh_token)
+    except RefreshTokenReplayError as replay_err:
+        # Replay can be detected at first lookup (rotated set hit) — handle
+        # the same way as rotate_token's replay branch: audit + 401.
+        replay_user_id = str(replay_err) if str(replay_err) else None
+        await log_audit(
+            actor=AuditActor.API_CLIENT,
+            action=AuditAction.LOGIN,
+            target_resource=f"user:{replay_user_id}" if replay_user_id else "auth:refresh",
+            outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
+            metadata={
+                "action": "refresh_token_replay_detected",
+                "ip_address": client_ip,
+                "stage": "lookup",
+            },
+            user_id=replay_user_id,
+        )
+        _clear_refresh_cookie(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token replay detected. Please sign in again.",
+        )
     except Exception as e:
         logger.error("Failed to validate refresh token: %s", e, exc_info=True)
         raise HTTPException(
@@ -617,7 +706,7 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
             detail="Invalid or expired refresh token",
         )
 
-    async with get_db_session() as session:
+    async with _auth_db_session() as session:
         result = await session.execute(
             select(User).where(
                 User.id == user_id,
