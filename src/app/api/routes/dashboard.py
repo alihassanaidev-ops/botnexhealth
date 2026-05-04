@@ -162,9 +162,9 @@ async def get_dashboard_summary(
                 )
             )
             location = location_result.scalar_one_or_none()
-            if not location or not location.retell_agent_id:
+            if not location:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid location scope")
-            extra_conditions.append(Call.agent_used == location.retell_agent_id)
+            extra_conditions.append(Call.location_id == location.id)
         elif current_user.role == UserRole.INSTITUTION_ADMIN.value and location_slug:
             location_result = await session.execute(
                 select(InstitutionLocation).where(
@@ -175,9 +175,7 @@ async def get_dashboard_summary(
             scoped_location = location_result.scalar_one_or_none()
             if not scoped_location:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
-            if not scoped_location.retell_agent_id:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Location has no agent mapping")
-            extra_conditions.append(Call.agent_used == scoped_location.retell_agent_id)
+            extra_conditions.append(Call.location_id == scoped_location.id)
 
         # ── Volume counts ─────────────────────────────────────────────────
         volume_row = (
@@ -364,11 +362,12 @@ async def get_aggregate_dashboard(
             for row in tag_rows
         ]
 
-        # Per-location metrics grouped by agent_used
+        # Per-location metrics grouped by Call.location_id (the authoritative
+        # scope; agent_used is Retell metadata only and may be stale).
         metrics_rows = (
             await session.execute(
                 select(
-                    Call.agent_used.label("agent_used"),
+                    Call.location_id.label("location_id"),
                     func.sum(case((Call.call_date == today, 1), else_=0)).label("calls_today"),
                     func.sum(case((Call.call_date >= month_start, 1), else_=0)).label("calls_this_month"),
                     func.sum(
@@ -410,14 +409,14 @@ async def get_aggregate_dashboard(
                     func.avg(Call.call_duration_seconds).label("avg_duration"),
                 )
                 .where(Call.institution_id == institution_id)
-                .group_by(Call.agent_used)
+                .group_by(Call.location_id)
             )
         ).all()
-        metrics_by_agent = {row.agent_used: row for row in metrics_rows}
+        metrics_by_location = {row.location_id: row for row in metrics_rows}
 
         clinic_comparison: list[LocationComparisonRow] = []
         for loc in locations:
-            loc_metrics = metrics_by_agent.get(loc.retell_agent_id)
+            loc_metrics = metrics_by_location.get(loc.id)
             calls_month = int(loc_metrics.calls_this_month or 0) if loc_metrics else 0
             bookings_month = int(loc_metrics.appointments_booked_month or 0) if loc_metrics else 0
             clinic_comparison.append(

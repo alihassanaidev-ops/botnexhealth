@@ -76,7 +76,7 @@ async def test_get_aggregate_dashboard_success(async_client: AsyncClient):
         metrics_rows_result = MagicMock()
         metrics_rows_result.all.return_value = [
             SimpleNamespace(
-                agent_used="agent-1",
+                location_id=loc_1.id,
                 calls_today=3,
                 calls_this_month=10,
                 appointments_booked_month=5,
@@ -199,6 +199,102 @@ async def test_get_dashboard_summary_success_uses_collapsed_volume_query(async_c
         }
     ]
     assert mock_session.execute.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_summary_scopes_staff_by_call_location_id_not_agent_used(
+    async_client: AsyncClient,
+):
+    """Staff dashboard must scope by Call.location_id (authoritative) and not
+    by Call.agent_used (stale Retell metadata).
+
+    Regression: a call with the right location_id but a stale or unknown
+    agent_used was being dropped from the dashboard while still appearing
+    in /api/institution/calls — operationally dangerous because callback
+    queue items would silently disappear.
+
+    Locations without a retell_agent_id mapping must also still produce a
+    dashboard (under the old code they 403'd with "Invalid location
+    scope"), since location_id no longer depends on the agent mapping.
+    """
+    location_id = "22222222-2222-4222-8222-222222222222"
+    mock_user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="staff@clinic.com",
+        role=UserRole.STAFF.value,
+        institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        location_id=location_id,
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_active_user] = lambda: mock_user
+
+    captured_queries: list[str] = []
+
+    with patch("src.app.api.routes.dashboard.get_db_session") as mock_get_db:
+        mock_session = AsyncMock()
+        mock_get_db.return_value.__aenter__.return_value = mock_session
+
+        # Location has NO retell_agent_id — under the old code this 403'd.
+        location_result = MagicMock()
+        location_result.scalar_one_or_none.return_value = SimpleNamespace(
+            id=location_id,
+            name="Main",
+            slug="main",
+            is_active=True,
+            retell_agent_id=None,
+            institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+
+        summary_result = _row_result(
+            today_count=1,
+            week_count=2,
+            month_count=3,
+            all_time_count=10,
+        )
+        tag_rows_result = MagicMock()
+        tag_rows_result.all.return_value = []
+        callback_rows_result = MagicMock()
+        callback_rows_result.all.return_value = []
+
+        async def capture(stmt, *args, **kwargs):
+            try:
+                compiled = str(
+                    stmt.compile(compile_kwargs={"literal_binds": False})
+                )
+                captured_queries.append(compiled)
+            except Exception:
+                pass
+            return mock_session.execute.side_effect_results.pop(0)
+
+        mock_session.execute.side_effect_results = [
+            location_result,
+            summary_result,
+            tag_rows_result,
+            callback_rows_result,
+        ]
+        mock_session.execute.side_effect = capture
+
+        try:
+            response = await async_client.get("/api/institution/dashboard/summary")
+        finally:
+            app.dependency_overrides = {}
+
+    assert response.status_code == 200, response.text
+
+    # Three filtered queries (volume, tags, callback queue) must scope by
+    # calls.location_id — the authoritative scope — not calls.agent_used.
+    # Look at the WHERE clause only (agent_used legitimately appears in the
+    # callback-queue SELECT list because it joins Call.* + Contact.*).
+    filtered_queries = [q for q in captured_queries if "FROM calls" in q]
+    assert len(filtered_queries) >= 3, captured_queries
+    for q in filtered_queries:
+        where_clause = q.split("WHERE", 1)[1] if "WHERE" in q else ""
+        assert "calls.location_id" in where_clause, (
+            f"Dashboard query WHERE did not scope by Call.location_id:\n{q}"
+        )
+        assert "calls.agent_used" not in where_clause, (
+            f"Dashboard query WHERE still scopes by stale Call.agent_used:\n{q}"
+        )
 
 
 @pytest.mark.asyncio
