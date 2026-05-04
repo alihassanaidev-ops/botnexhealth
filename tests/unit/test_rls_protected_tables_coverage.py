@@ -24,15 +24,20 @@ def test_all_institution_scoped_models_are_in_protected_tables() -> None:
         if "institution_id" in table.columns:
             institution_scoped_tables.add(table.name)
 
-    namespace: dict[str, object] = {}
-    exec(
-        (ROOT / "alembic" / "versions" / "20260506_rls_full_staged.py").read_text(),
-        namespace,
+    # Import the consolidated baseline migration to read PROTECTED_TABLES
+    # via importlib (so its top-level imports — Base, models — resolve
+    # without re-defining mappers in a stray globals dict).
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_baseline_migration",
+        ROOT / "alembic" / "versions" / "20260510_consolidated_baseline.py",
     )
-    protected = set(namespace["PROTECTED_TABLES"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    protected = set(mod.PROTECTED_TABLES)
 
     missing = institution_scoped_tables - protected
     assert not missing, (
         f"Models with institution_id not in PROTECTED_TABLES: {missing}. "
-        f"Add them to alembic/versions/20260506_rls_full_staged.py PROTECTED_TABLES."
+        f"Add them to alembic/versions/20260510_consolidated_baseline.py."
     )

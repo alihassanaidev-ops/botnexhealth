@@ -1,11 +1,18 @@
 """
 Alembic environment configuration for async SQLAlchemy.
 
-Reads DATABASE_URL from the application Settings (which reads .env / env vars).
+DSN resolution order:
+  1. ``sqlalchemy.url`` already set on the alembic Config (e.g. from
+     bootstrap_database.upgrade_to_head() which forces the admin URL)
+  2. ``DATABASE_ADMIN_URL`` env var (privileged migrations connection,
+     needs CREATEROLE + ability to grant BYPASSRLS)
+  3. ``DATABASE_URL`` from settings (runtime / fallback)
+
 Imports all models so Alembic's autogenerate can detect schema changes.
 """
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -13,7 +20,6 @@ from sqlalchemy import pool, text
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # -- App imports ---------------------------------------------------------------
-# Import Settings to get DATABASE_URL from .env / env vars
 from src.app.config import settings
 
 # Import Base and ALL models so metadata is populated for autogenerate
@@ -52,14 +58,22 @@ target_metadata = Base.metadata
 
 
 def get_database_url() -> str:
-    """Get the async database URL from application settings."""
-    url = settings.database_url
-    if not url:
+    """Resolve the migration DSN.
+
+    Order: alembic-config override → DATABASE_ADMIN_URL → DATABASE_URL.
+    """
+    cfg_url = config.get_main_option("sqlalchemy.url")
+    if cfg_url:
+        return cfg_url
+    admin_url = os.environ.get("DATABASE_ADMIN_URL")
+    if admin_url:
+        return admin_url
+    if not settings.database_url:
         raise RuntimeError(
-            "DATABASE_URL is not set. Alembic needs it to run migrations. "
-            "Set it in .env or as an environment variable."
+            "DATABASE_URL (or DATABASE_ADMIN_URL) is not set. Alembic needs "
+            "it to run migrations."
         )
-    return url
+    return settings.database_url
 
 
 def run_migrations_offline() -> None:
@@ -113,7 +127,11 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
     )
 
-    async with connectable.connect() as connection:
+    # Use .begin() (not .connect()) so the outer transaction commits when
+    # the context exits. With .connect() the alembic_version writes
+    # silently roll back on connection close — stamp_revision logs
+    # "Running stamp_revision" but the table is never persisted.
+    async with connectable.begin() as connection:
         await connection.run_sync(do_run_migrations)
 
     await connectable.dispose()
