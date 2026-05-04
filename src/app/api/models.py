@@ -88,7 +88,7 @@ class Operatory(BaseModel):
     appointment_types: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
-    
+
     model_config = {"extra": "allow"}
 
 
@@ -443,11 +443,11 @@ class Patient(BaseModel):
     # patient_alerts: list[PatientAlert] = Field(default_factory=list)
     address: PatientAddress | None = None
     provider: Provider | None = None
-    # Use generic list for children/guarantor to avoid complex recursive typing issues in this snippet 
+    # Use generic list for children/guarantor to avoid complex recursive typing issues in this snippet
     # if not using 'from __future__ import annotations' properly or if pydantic version issues arise.
     # But since we have annotations import, we can try using Patient string forward ref or just Patient.
     # However, to be safe and simple:
-    # children: list[dict[str, Any]] = Field(default_factory=list) 
+    # children: list[dict[str, Any]] = Field(default_factory=list)
     guarantor: dict[str, Any] | None = None
 
     model_config = {"extra": "allow"}
@@ -653,7 +653,7 @@ class AuditLogResponse(BaseModel):
     target_resource: str
     outcome: str
     audit_metadata: dict[str, Any] | None = None
-    
+
     model_config = {"from_attributes": True}
 
 

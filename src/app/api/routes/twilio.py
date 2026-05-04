@@ -132,7 +132,7 @@ async def send_sms(
     from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
     from src.app.services.audit import log_audit
     from src.app.services.sms_privacy import hash_for_logging
-    
+
     try:
         async with get_db_session() as session:
             sms_service = SmsService(session)
@@ -142,10 +142,10 @@ async def send_sms(
                 body=body.body,
                 institution_location_id=body.institution_location_id
             )
-            
+
             # Commit the SMS history log regardless of Twilio success/failure
             await session.commit()
-            
+
             if log_record.status == SmsStatus.FAILED.value:
                 # If it's a configuration error throw 503, otherwise 502
                 code = status.HTTP_503_SERVICE_UNAVAILABLE if "credentials" in str(log_record.error_message) else status.HTTP_502_BAD_GATEWAY

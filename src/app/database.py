@@ -207,12 +207,12 @@ class RlsAsyncSession(AsyncSession):
 def init_database(database_url: str) -> None:
     """
     Initialize the database engine and session factory.
-    
+
     Args:
         database_url: PostgreSQL connection string (asyncpg format)
     """
     global _engine, _session_factory
-    
+
     _engine = create_async_engine(
         database_url,
         echo=False,
@@ -221,7 +221,7 @@ def init_database(database_url: str) -> None:
         pool_recycle=3600,
         pool_pre_ping=True,
     )
-    
+
     _session_factory = async_sessionmaker(
         bind=_engine,
         class_=RlsAsyncSession,
@@ -242,14 +242,14 @@ async def close_database() -> None:
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """
     Get an async database session.
-    
+
     Usage:
         async with get_db_session() as session:
             result = await session.execute(...)
     """
     if not _session_factory:
         raise RuntimeError("Database not initialized. Call init_database() first.")
-    
+
     session = _session_factory()
     try:
         await apply_rls_context(session, current_rls_context())
@@ -324,6 +324,6 @@ async def create_tables() -> None:
     """Create all tables in the database if they don't exist."""
     if not _engine:
         raise RuntimeError("Database not initialized. Call init_database() first.")
-    
+
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, checkfirst=True)

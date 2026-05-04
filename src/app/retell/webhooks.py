@@ -551,7 +551,7 @@ async def handle_retell_webhook(
                 )
             except Exception:
                 logger.warning("Failed to mark webhook event as FAILED")
-            
+
         status_code = (
             status.HTTP_503_SERVICE_UNAVAILABLE
             if isinstance(e, RetellAgentLookupError)

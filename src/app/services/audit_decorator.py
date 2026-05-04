@@ -63,11 +63,11 @@ def audit(
                   resource identifier from the decorated function's arguments.
                   The callable receives the same *args and **kwargs as the function.
         actor: Who is performing the action.
-    
+
     Example:
         @audit(AuditAction.READ_PATIENT, resource=lambda args: f"patient:{args.get('patient_id')}")
     """
-    
+
     action_value = action.value if isinstance(action, AuditAction) else str(action)
     is_durable = action_value in DURABLE_AUDIT_ACTIONS
 

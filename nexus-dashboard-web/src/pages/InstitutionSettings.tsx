@@ -216,21 +216,21 @@ export default function InstitutionSettings() {
 
     function handleLocationChange(rowId: string, locationId: string) {
         const location = locations.find((loc) => loc.id === locationId)
-        setTransferRows(transferRows.map((row) => 
-            row.id === rowId 
+        setTransferRows(transferRows.map((row) =>
+            row.id === rowId
                 ? { ...row, locationId, locationName: location?.name || "" }
                 : row
         ))
     }
 
     function handleTransferNumberChange(rowId: string, value: string) {
-        setTransferRows(transferRows.map((row) => 
+        setTransferRows(transferRows.map((row) =>
             row.id === rowId ? { ...row, transferNumber: value } : row
         ))
     }
 
     function handleDepartmentChange(rowId: string, value: string) {
-        setTransferRows(transferRows.map((row) => 
+        setTransferRows(transferRows.map((row) =>
             row.id === rowId ? { ...row, department: value } : row
         ))
     }
@@ -242,7 +242,7 @@ export default function InstitutionSettings() {
         const validRows = transferRows.filter(
             (row) => row.locationId && row.transferNumber && row.department.trim()
         )
-        
+
         if (validRows.length === 0) {
             toast.error("Please add at least one valid entry (location, number, and department required)")
             return
@@ -275,7 +275,7 @@ export default function InstitutionSettings() {
                     department: row.department.trim(),
                 })
             }
-            
+
             toast.success(`${validRows.length} transfer number(s) saved`)
             setTransferRows([{ id: generateId(), locationId: "", locationName: "", transferNumber: "", department: "" }])
             void loadTransferNumbers()

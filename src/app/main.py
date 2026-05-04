@@ -40,12 +40,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Application lifespan manager.
-    
+
     Handles startup and shutdown events.
     """
     # === STARTUP ===
     logger.info(f"Starting application in {settings.app_env} environment")
-    
+
     # Initialize database if configured
     if settings.database_url:
         from src.app.database import init_database, create_tables
@@ -113,7 +113,7 @@ async def lifespan(app: FastAPI):
     # Initialize API clients
     from src.app.dependencies import init_nexhealth_client
     await init_nexhealth_client()
-    
+
     yield  # Application runs here
 
     # === SHUTDOWN ===
@@ -233,7 +233,7 @@ def create_app() -> FastAPI:
     app.include_router(retell_router, prefix="/api/v1")
     app.include_router(retell_webhook_router, prefix="/api/v1")
     app.include_router(twilio_webhooks_router, prefix="/api/v1")
-    
+
     # Admin routes
     app.include_router(auth_router, prefix="/api")
     app.include_router(institutions_router, prefix="/api")

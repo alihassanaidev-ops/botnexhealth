@@ -42,7 +42,7 @@ class _SignalingAuditRepository(InMemoryAuditRepository):
 
 class TestAuditLogModel:
     """Test AuditLog SQLAlchemy model."""
-    
+
     def test_audit_log_create_with_enums(self):
         """Test creating AuditLog with enum values."""
         log = AuditLog.create(
@@ -55,7 +55,7 @@ class TestAuditLogModel:
             user_id="11111111-1111-1111-1111-111111111111",
             location_id="22222222-2222-2222-2222-222222222222",
         )
-        
+
         assert log.actor == "RETELL_AGENT"
         assert log.action == "READ_PATIENT"
         assert log.target_resource == "patient:123"
@@ -64,7 +64,7 @@ class TestAuditLogModel:
         assert log.institution_id == "institution-uuid"
         assert log.user_id == "11111111-1111-1111-1111-111111111111"
         assert log.location_id == "22222222-2222-2222-2222-222222222222"
-    
+
     def test_audit_log_create_with_strings(self):
         """Test creating AuditLog with string values."""
         log = AuditLog.create(
@@ -73,10 +73,10 @@ class TestAuditLogModel:
             target_resource="resource:456",
             outcome="CUSTOM_OUTCOME",
         )
-        
+
         assert log.actor == "CUSTOM_ACTOR"
         assert log.action == "CUSTOM_ACTION"
-    
+
     def test_audit_log_has_id_generated_on_create(self):
         """Test that AuditLog id default factory generates UUID."""
         log = AuditLog.create(
@@ -85,26 +85,26 @@ class TestAuditLogModel:
             target_resource="institution:xyz",
             outcome=AuditOutcome.SUCCESS,
         )
-        
+
         # Note: id is set by SQLAlchemy default on INSERT, not on object creation
         # When testing without DB, we check the default factory works
         # The default is a callable, so id will be None until INSERT
         # This is expected SQLAlchemy behavior
         assert log.actor == "ADMIN"  # Verify object created correctly
-    
+
     def test_audit_log_timestamp_default(self):
         """Test that timestamp defaults to UTC now."""
         before = datetime.now(timezone.utc)
-        
+
         log = AuditLog.create(
             actor=AuditActor.SYSTEM,
             action=AuditAction.READ_LOCATIONS,
             target_resource="locations",
             outcome=AuditOutcome.SUCCESS,
         )
-        
+
         after = datetime.now(timezone.utc)
-        
+
         # Timestamp should be between before and after
         # Note: The default uses lambda, so it's set at instantiation
         assert log.timestamp is None or (before <= log.timestamp <= after)
@@ -116,7 +116,7 @@ class TestAuditLogModel:
 
 class TestAuditEntry:
     """Test AuditEntry data transfer object."""
-    
+
     def test_audit_entry_immutable(self):
         """Test that AuditEntry is frozen (immutable)."""
         entry = AuditEntry(
@@ -125,10 +125,10 @@ class TestAuditEntry:
             target_resource="appointment:789",
             outcome=AuditOutcome.SUCCESS,
         )
-        
+
         with pytest.raises(AttributeError):
             entry.actor = AuditActor.ADMIN  # Should fail
-    
+
     def test_audit_entry_defaults(self):
         """Test AuditEntry default values."""
         entry = AuditEntry(
@@ -137,7 +137,7 @@ class TestAuditEntry:
             target_resource="patient:test",
             outcome=AuditOutcome.SUCCESS,
         )
-        
+
         assert entry.metadata == {}
         assert entry.institution_id is None
         assert entry.timestamp is not None
@@ -150,11 +150,11 @@ class TestAuditEntry:
 
 class TestInMemoryAuditRepository:
     """Test InMemoryAuditRepository (used for testing)."""
-    
+
     @pytest.fixture
     def repo(self):
         return InMemoryAuditRepository()
-    
+
     @pytest.mark.asyncio
     async def test_save_entry(self, repo):
         """Test saving a single entry."""
@@ -164,12 +164,12 @@ class TestInMemoryAuditRepository:
             target_resource="patient:123",
             outcome=AuditOutcome.SUCCESS,
         )
-        
+
         await repo.save(entry)
-        
+
         assert len(repo.get_all()) == 1
         assert repo.get_all()[0] == entry
-    
+
     @pytest.mark.asyncio
     async def test_save_batch(self, repo):
         """Test saving multiple entries."""
@@ -182,11 +182,11 @@ class TestInMemoryAuditRepository:
             )
             for i in range(5)
         ]
-        
+
         await repo.save_batch(entries)
-        
+
         assert len(repo.get_all()) == 5
-    
+
     @pytest.mark.asyncio
     async def test_clear(self, repo):
         """Test clearing all entries."""
@@ -196,10 +196,10 @@ class TestInMemoryAuditRepository:
             target_resource="institution:abc",
             outcome=AuditOutcome.SUCCESS,
         )
-        
+
         await repo.save(entry)
         assert len(repo.get_all()) == 1
-        
+
         repo.clear()
         assert len(repo.get_all()) == 0
 
@@ -210,17 +210,17 @@ class TestInMemoryAuditRepository:
 
 class TestAuditService:
     """Test AuditService with InMemoryRepository."""
-    
+
     @pytest.fixture
     def service(self):
         repo = InMemoryAuditRepository()
         return AuditService(repo), repo
-    
+
     @pytest.mark.asyncio
     async def test_log_success(self, service):
         """Test logging a successful action."""
         audit_service, repo = service
-        
+
         await audit_service.log(
             actor=AuditActor.RETELL_AGENT,
             action=AuditAction.READ_PATIENT,
@@ -230,29 +230,29 @@ class TestAuditService:
             institution_id="institution-1",
             request_id="req-123",
         )
-        
+
         entries = repo.get_all()
         assert len(entries) == 1
-        
+
         entry = entries[0]
         assert entry.actor == AuditActor.RETELL_AGENT
         assert entry.action == AuditAction.READ_PATIENT
         assert entry.outcome == AuditOutcome.SUCCESS
         assert entry.metadata["ip"] == "127.0.0.1"
         assert entry.institution_id == "institution-1"
-    
+
     @pytest.mark.asyncio
     async def test_log_failure(self, service):
         """Test logging a failed action."""
         audit_service, repo = service
-        
+
         await audit_service.log(
             actor=AuditActor.API_CLIENT,
             action=AuditAction.BOOK_APPOINTMENT,
             target_resource="appointment:new",
             outcome=AuditOutcome.FAILURE_VALIDATION,
         )
-        
+
         entries = repo.get_all()
         assert len(entries) == 1
         assert entries[0].outcome == AuditOutcome.FAILURE_VALIDATION
@@ -276,7 +276,7 @@ class TestAuditService:
         entry = repo.get_all()[0]
         assert entry.user_id == "11111111-1111-1111-1111-111111111111"
         assert entry.location_id == "22222222-2222-2222-2222-222222222222"
-    
+
     @pytest.mark.asyncio
     async def test_log_raises_on_repository_error(self, service):
         """log() must propagate persistence errors as AuditPersistenceError.
@@ -332,17 +332,17 @@ class TestAuditService:
 
 class TestAuditContext:
     """Test audit_context async context manager."""
-    
+
     @pytest.fixture
     def service(self):
         repo = InMemoryAuditRepository()
         return AuditService(repo), repo
-    
+
     @pytest.mark.asyncio
     async def test_success_context(self, service):
         """Test that context logs SUCCESS on normal exit."""
         audit_service, repo = service
-        
+
         async with audit_context(
             service=audit_service,
             actor=AuditActor.RETELL_AGENT,
@@ -350,17 +350,17 @@ class TestAuditContext:
             target_resource="patient:123",
         ) as ctx:
             ctx["extra_info"] = "test"
-        
+
         entries = repo.get_all()
         assert len(entries) == 1
         assert entries[0].outcome == AuditOutcome.SUCCESS
         assert entries[0].metadata["extra_info"] == "test"
-    
+
     @pytest.mark.asyncio
     async def test_failure_context(self, service):
         """Test that context logs FAILURE on exception."""
         audit_service, repo = service
-        
+
         with pytest.raises(ValueError):
             async with audit_context(
                 service=audit_service,
@@ -369,7 +369,7 @@ class TestAuditContext:
                 target_resource="appointment:new",
             ):
                 raise ValueError("Invalid data")
-        
+
         entries = repo.get_all()
         assert len(entries) == 1
         assert entries[0].outcome == AuditOutcome.FAILURE_INTERNAL
@@ -386,7 +386,7 @@ class TestAuditContext:
 
 class TestAuditedDecorator:
     """Test @audit decorator with explicit extractors."""
-    
+
     @pytest.fixture(autouse=True)
     def setup_service(self):
         """Set up in-memory audit service for tests."""
@@ -397,20 +397,20 @@ class TestAuditedDecorator:
 
     async def _wait_for_audit(self) -> None:
         await asyncio.wait_for(self.audit_saved.wait(), timeout=2.0)
-    
+
     @pytest.mark.asyncio
     async def test_decorator_logs_success_explicit(self):
         """Test that decorator logs with explicit resource lambda."""
         from src.app.services.audit_decorator import audit
-        
+
         @audit(AuditAction.READ_PATIENT, resource=lambda args: f"patient:{args['id']}")
         async def mock_lookup(args):
             return {"count": 1}
-        
+
         await mock_lookup({"id": "123"})
-        
+
         await self._wait_for_audit()
-        
+
         entries = self.repo.get_all()
         assert len(entries) == 1
         assert entries[0].target_resource == "patient:123"
@@ -420,23 +420,23 @@ class TestAuditedDecorator:
     async def test_decorator_config_error(self):
         """Test that extractor failure logs CRITICAL config error."""
         from src.app.services.audit_decorator import audit
-        
+
         # BROKEN EXTRACTOR: tries to access 'id' but input doesn't have it
         @audit(AuditAction.READ_PATIENT, resource=lambda args: f"patient:{args['id']}")
         async def mock_broken(args):
             return "ok"
-        
+
         # Call with missing key
         await mock_broken({"name": "john"})
-        
+
         await self._wait_for_audit()
-        
+
         entries = self.repo.get_all()
         assert len(entries) == 1
         # Should flag as CONFIGURATION_ERROR
         assert "CONFIGURATION_ERROR" in entries[0].target_resource
         assert "config_error" in entries[0].metadata
-    
+
     @pytest.mark.asyncio
     async def test_decorator_logs_exception(self):
         """Durable actions write a pre-action INITIATED row plus a
@@ -694,14 +694,14 @@ class TestClassifySoftError:
 
 class TestAuditEnums:
     """Test audit logging enums."""
-    
+
     def test_actor_enum_values(self):
         """Test AuditActor enum has expected values."""
         assert AuditActor.RETELL_AGENT.value == "RETELL_AGENT"
         assert AuditActor.ADMIN.value == "ADMIN"
         assert AuditActor.SYSTEM.value == "SYSTEM"
         assert AuditActor.API_CLIENT.value == "API_CLIENT"
-    
+
     def test_action_enum_values(self):
         """Test AuditAction enum has expected values."""
         assert AuditAction.READ_PATIENT.value == "READ_PATIENT"
@@ -709,7 +709,7 @@ class TestAuditEnums:
         assert AuditAction.BOOK_APPOINTMENT.value == "BOOK_APPOINTMENT"
         assert AuditAction.CANCEL_APPOINTMENT.value == "CANCEL_APPOINTMENT"
         assert AuditAction.RESCHEDULE_APPOINTMENT.value == "RESCHEDULE_APPOINTMENT"
-    
+
     def test_outcome_enum_values(self):
         """Test AuditOutcome enum has expected values."""
         assert AuditOutcome.SUCCESS.value == "SUCCESS"

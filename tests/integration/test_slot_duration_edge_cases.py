@@ -538,7 +538,7 @@ class TestDurationComparisonShortVsLong:
         Simulate a 90-min appointment with tight schedule:
         - Opens 8:00, closes 17:00
         - Break 12:00-13:00
-        
+
         The last valid start for 90-min before break = 10:30 (ends 12:00)
         The last valid start before close = 15:30 (ends 17:00)
         Slots starting at 11:00 (would end 12:30, overlapping break) → removed

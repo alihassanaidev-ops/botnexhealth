@@ -58,7 +58,7 @@ class SmsService:
     ) -> SmsHistoryLog:
         """
         Send an SMS via Twilio and log the history in the database.
-        
+
         Args:
             from_number: The Twilio phone number sending the message.
             to_number: The recipient's phone number.
@@ -66,7 +66,7 @@ class SmsService:
             institution_location_id: The location associated with this message.
             patient_contact_id: Optional ID of the Contact receiving this message.
             call_id: Optional associated Retell Call ID.
-            
+
         Returns:
             The SmsHistoryLog database record.
         """
@@ -148,19 +148,19 @@ class SmsService:
             to_number_hash=identity.phone_hash,
             to_number_masked=identity.phone_masked,
         )
-        
+
         # Set PHI fields using properties to trigger encryption
         sms_log.to_number = to_number
         sms_log.body = prepared_body
-        
+
         self.session.add(sms_log)
-        
+
         # Flush to get the ID and have it tracked in this transaction
         await self.session.flush()
-        
+
         try:
             client = self._get_twilio_client()
-            
+
             # Using asyncio to offload the blocking Twilio client network call
             create_kwargs: dict[str, Any] = {
                 "body": prepared_body,
@@ -174,7 +174,7 @@ class SmsService:
                 client.messages.create,
                 **create_kwargs,
             )
-            
+
             # Update log on success
             sms_log.status = SmsStatus.SENT.value
             sms_log.message_sid = message.sid
@@ -187,7 +187,7 @@ class SmsService:
                 to_hash,
                 hash_for_logging(str(location.id)),
             )
-            
+
         except RuntimeError as cred_err:
              # Configuration issue
             sms_log.status = SmsStatus.FAILED.value
@@ -222,7 +222,7 @@ class SmsService:
                 to_hash,
                 sanitize_provider_error(e),
             )
-            
+
         return sms_log
 
     async def update_delivery_status(

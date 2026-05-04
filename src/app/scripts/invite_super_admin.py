@@ -24,7 +24,7 @@ async def main(email: str, frontend_base_url: str) -> None:
 
     engine = create_async_engine(settings.database_url, echo=False)
     async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    
+
     # Normalize email
     email = email.strip().lower()
 
@@ -49,7 +49,7 @@ async def main(email: str, frontend_base_url: str) -> None:
                 select(User).where(User.email == email, User.deleted_at.is_(None))
             )
             existing_user = result.scalar_one_or_none()
-            
+
             if existing_user:
                 logger.error(f"User {email} already exists in the database.")
                 sys.exit(1)
@@ -57,7 +57,7 @@ async def main(email: str, frontend_base_url: str) -> None:
             # 2. Generate secure one-time invite token
             token = PasswordService.generate_one_time_token()
             now = datetime.now(timezone.utc)
-            
+
             # 3. Create the SUPER_ADMIN user in PENDING state
             user = User(
                 id=str(uuid4()),
@@ -72,7 +72,7 @@ async def main(email: str, frontend_base_url: str) -> None:
             )
             session.add(user)
             await session.commit()
-            
+
             # 4. Generate the invite URL
             redirect_url = f"{frontend_base_url.rstrip('/')}/set-password"
             email_service = AuthEmailService()
@@ -82,7 +82,7 @@ async def main(email: str, frontend_base_url: str) -> None:
                 redirect_url=redirect_url,
                 default_path="/set-password"
             )
-            
+
             print("\n" + "="*80)
             print(f"✅ SUPER ADMIN INVITE CREATED FOR: {email}")
             print("="*80)
@@ -90,7 +90,7 @@ async def main(email: str, frontend_base_url: str) -> None:
             print("\nOtherwise, copy and paste this secure, one-time link into your browser:")
             print(f"\n🔗  {action_url}\n")
             print("="*80 + "\n")
-            
+
             # 5. Attempt to send the email
             try:
                 await email_service.send_invite_email(

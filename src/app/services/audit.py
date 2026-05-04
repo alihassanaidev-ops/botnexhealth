@@ -56,7 +56,7 @@ class AuditPersistenceError(RuntimeError):
 class AuditEntry:
     """
     Immutable data transfer object for audit entries.
-    
+
     Decouples service layer from database model (DIP).
     """
     actor: AuditActor | str
@@ -79,21 +79,21 @@ class AuditEntry:
 class IAuditRepository(Protocol):
     """
     Interface for audit log persistence.
-    
+
     ISP: Small, focused interface with only necessary methods.
     DIP: High-level modules depend on this abstraction.
-    
+
     Implementations can be:
     - PostgresAuditRepository (primary)
     - InMemoryAuditRepository (testing)
     - S3AuditRepository (future: immutable archive)
     - MongoAuditRepository (future: alternative storage)
     """
-    
+
     async def save(self, entry: AuditEntry) -> None:
         """Persist an audit entry."""
         ...
-    
+
     async def save_batch(self, entries: list[AuditEntry]) -> None:
         """Persist multiple audit entries atomically."""
         ...
@@ -195,25 +195,25 @@ class PostgresAuditRepository:
 class InMemoryAuditRepository:
     """
     In-memory implementation for testing.
-    
+
     LSP: Can substitute for IAuditRepository.
     """
-    
+
     def __init__(self) -> None:
         self.entries: list[AuditEntry] = []
-    
+
     async def save(self, entry: AuditEntry) -> None:
         """Store entry in memory."""
         self.entries.append(entry)
-    
+
     async def save_batch(self, entries: list[AuditEntry]) -> None:
         """Store multiple entries in memory."""
         self.entries.extend(entries)
-    
+
     def clear(self) -> None:
         """Clear all entries (for test cleanup)."""
         self.entries.clear()
-    
+
     def get_all(self) -> list[AuditEntry]:
         """Get all stored entries (for test assertions)."""
         return list(self.entries)
@@ -226,10 +226,10 @@ class InMemoryAuditRepository:
 class AuditService:
     """
     High-level audit logging service.
-    
+
     SRP: Orchestrates audit logging with fire-and-forget capability.
     DIP: Depends on IAuditRepository abstraction, not concrete implementation.
-    
+
     Usage:
         service = AuditService(PostgresAuditRepository())
         await service.log(
@@ -239,15 +239,15 @@ class AuditService:
             outcome=AuditOutcome.SUCCESS,
         )
     """
-    
+
     def __init__(self, repository: IAuditRepository) -> None:
         """
         Initialize with a repository implementation.
-        
+
         DIP: Accept abstraction, not concretion.
         """
         self._repository = repository
-    
+
     async def log(
         self,
         actor: AuditActor | str,
@@ -483,15 +483,15 @@ async def audit_context(
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Context manager for automatic audit logging with outcome tracking.
-    
+
     OCP: Extends audit functionality without modifying AuditService.
-    
+
     Usage:
         async with audit_context(service, actor, action, resource) as ctx:
             # Do work...
             ctx["extra_data"] = "value"
         # Automatically logs SUCCESS on normal exit, FAILURE on exception
-    
+
     Args:
         service: AuditService instance
         actor: Who is performing the action
@@ -499,13 +499,13 @@ async def audit_context(
         target_resource: What resource is being accessed
         metadata: Additional context
         institution_id: Optional institution ID
-    
+
     Yields:
         A mutable dict for adding extra metadata during the operation
     """
     request_id = str(uuid4())
     extra_metadata: dict[str, Any] = {}
-    
+
     try:
         yield extra_metadata
         # If we get here, operation succeeded
@@ -541,7 +541,7 @@ async def audit_context(
 def _classify_exception(e: Exception) -> AuditOutcome:
     """Classify an exception into an audit outcome."""
     from fastapi import HTTPException
-    
+
     if isinstance(e, HTTPException):
         if e.status_code == 401 or e.status_code == 403:
             return AuditOutcome.FAILURE_UNAUTHORIZED
@@ -549,7 +549,7 @@ def _classify_exception(e: Exception) -> AuditOutcome:
             return AuditOutcome.FAILURE_NOT_FOUND
         elif e.status_code == 400 or e.status_code == 422:
             return AuditOutcome.FAILURE_VALIDATION
-    
+
     # Check for common exception patterns
     error_name = type(e).__name__.lower()
     if "notfound" in error_name:
@@ -558,7 +558,7 @@ def _classify_exception(e: Exception) -> AuditOutcome:
         return AuditOutcome.FAILURE_UNAUTHORIZED
     elif "validation" in error_name:
         return AuditOutcome.FAILURE_VALIDATION
-    
+
     return AuditOutcome.FAILURE_INTERNAL
 
 
@@ -582,7 +582,7 @@ _audit_service: AuditService | None = None
 def get_audit_service() -> AuditService:
     """
     Get the global audit service instance.
-    
+
     Lazy initialization with PostgreSQL repository.
     """
     global _audit_service
@@ -594,7 +594,7 @@ def get_audit_service() -> AuditService:
 def set_audit_service(service: AuditService) -> None:
     """
     Set the global audit service instance.
-    
+
     Useful for testing with InMemoryAuditRepository.
     """
     global _audit_service
@@ -618,7 +618,7 @@ async def log_audit(
 ) -> None:
     """
     Convenience function for logging audit entries.
-    
+
     Uses the global audit service instance.
     """
     service = get_audit_service()
@@ -648,7 +648,7 @@ def log_audit_background(
 ) -> None:
     """
     Convenience function for non-blocking audit logging.
-    
+
     Uses the global audit service instance.
     """
     service = get_audit_service()

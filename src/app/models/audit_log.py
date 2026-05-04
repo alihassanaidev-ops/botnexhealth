@@ -23,7 +23,7 @@ from src.app.database import Base
 class AuditActor(str, Enum):
     """
     Who performed the action.
-    
+
     Extensible: Add new actors without modifying existing code (OCP).
     """
     RETELL_AGENT = "RETELL_AGENT"   # Retell Voice Agent
@@ -35,7 +35,7 @@ class AuditActor(str, Enum):
 class AuditAction(str, Enum):
     """
     What action was performed on PHI.
-    
+
     Extensible: Add new actions without modifying existing code (OCP).
     """
     # Patient operations
@@ -43,13 +43,13 @@ class AuditAction(str, Enum):
     CREATE_PATIENT = "CREATE_PATIENT"
     UPDATE_PATIENT = "UPDATE_PATIENT"
     SEARCH_PATIENTS = "SEARCH_PATIENTS"
-    
+
     # Appointment operations
     BOOK_APPOINTMENT = "BOOK_APPOINTMENT"
     CANCEL_APPOINTMENT = "CANCEL_APPOINTMENT"
     RESCHEDULE_APPOINTMENT = "RESCHEDULE_APPOINTMENT"
     READ_APPOINTMENT = "READ_APPOINTMENT"
-    
+
     # Resource listing (may expose PHI indirectly)
     READ_PROVIDERS = "READ_PROVIDERS"
     READ_APPOINTMENT_SLOTS = "READ_APPOINTMENT_SLOTS"
@@ -62,7 +62,7 @@ class AuditAction(str, Enum):
     VIEW_CUSTOM_PHI_FIELD = "VIEW_CUSTOM_PHI_FIELD"
     VIEW_DASHBOARD = "VIEW_DASHBOARD"
     VIEW_AUDIT_LOGS = "VIEW_AUDIT_LOGS"
-    
+
     # External Integrations
     WEBHOOK_RECEIVED = "WEBHOOK_RECEIVED"
     SMS_SEND = "SMS_SEND"
@@ -73,7 +73,7 @@ class AuditAction(str, Enum):
     DEAD_LETTER_REPLAY = "DEAD_LETTER_REPLAY"
     DEAD_LETTER_DISCARD = "DEAD_LETTER_DISCARD"
 
-    
+
     # Admin operations
     INSTITUTION_CREATE = "INSTITUTION_CREATE"
     INSTITUTION_UPDATE = "INSTITUTION_UPDATE"
@@ -122,9 +122,9 @@ class AuditOutcome(str, Enum):
 class AuditLog(Base):
     """
     Immutable audit log entry for HIPAA compliance.
-    
+
     IMPORTANT: This table should be append-only. No updates or deletes.
-    
+
     Fields match the architecture document:
     - timestamp: When the action occurred (UTC)
     - actor: Who performed it (RETELL Agent, Admin, System)
@@ -132,19 +132,19 @@ class AuditLog(Base):
     - target_resource: What resource was accessed
     - outcome: Success or type of failure
     - metadata: Additional context (request_id, ip_address, etc.)
-    
+
     SRP: Only responsible for data representation.
     """
-    
+
     __tablename__ = "audit_logs"
-    
+
     # Primary key - UUID for distributed systems compatibility
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         primary_key=True,
         default=lambda: str(uuid4())
     )
-    
+
     # When the action occurred (UTC, immutable)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -152,41 +152,41 @@ class AuditLog(Base):
         nullable=False,
         index=True  # For time-range queries
     )
-    
+
     # Who performed the action
     actor: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
         index=True  # For filtering by actor
     )
-    
+
     # What action was performed
     action: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
         index=True  # For filtering by action type
     )
-    
+
     # What resource was accessed (e.g., "patient:123", "appointment:456")
     target_resource: Mapped[str] = mapped_column(
         String(255),
         nullable=False
     )
-    
+
     # Result of the action
     outcome: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
         index=True  # For finding failures
     )
-    
+
     # Additional context (NO PHI should be stored here)
     # Example: {"request_id": "...", "ip_address": "...", "institution_id": "..."}
     audit_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,
         nullable=True
     )
-    
+
     # Optional: Institution association for multi-institution filtering
     institution_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
@@ -205,7 +205,7 @@ class AuditLog(Base):
         nullable=True,
         index=True,
     )
-    
+
     def __repr__(self) -> str:
         return (
             f"<AuditLog("
@@ -215,7 +215,7 @@ class AuditLog(Base):
             f"outcome={self.outcome}"
             f")>"
         )
-    
+
     @classmethod
     def create(
         cls,

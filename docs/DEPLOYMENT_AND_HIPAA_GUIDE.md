@@ -76,8 +76,8 @@ Because NexHealth processes ePHI (Electronic Protected Health Information), our 
 ### 4.1 Data in Transit (Encryption & HTTPS)
 HIPAA requires that all ePHI transmitted over a network be encrypted.
 - **Frontend**: Served via AWS CloudFront which enforces **HTTPS (TLS 1.2+)** by default.
-- **Backend API (ACTION REQUIRED FOR PROD)**: 
-  - *Current Staging State*: The Application Load Balancer (ALB) outputs an `http://` address. 
+- **Backend API (ACTION REQUIRED FOR PROD)**:
+  - *Current Staging State*: The Application Load Balancer (ALB) outputs an `http://` address.
   - *Production Requirement*: You **must** create an ACM (AWS Certificate Manager) Certificate for your custom domain (e.g., `api.nexhealth.com`) and attach it to the ALB. Update the CDK stack to add an `HTTPS` listener to the `ecs_patterns.ApplicationLoadBalancedFargateService`. Do not expose HTTP in production.
 - **Internal Traffic**: Connections to the RDS Database and Redis ElastiCache are encrypted. Redis uses `rediss://` (TLS enabled). RDS enforces SSL connections.
 
@@ -94,15 +94,15 @@ HIPAA requires that stored ePHI cannot be read if physical access to the drives 
 ### 4.4 Audit Controls & Logging
 - **Database Auditing**: Application-level schema includes `audit_logs` to track who viewed/modified patient records.
 - **AWS CloudTrail**: Ensure CloudTrail is enabled on the AWS Account to log all infrastructure API calls (who deployed what, who accessed which secret).
-- **Application Logs**: API and Worker logs are securely shipped to CloudWatch Logs. **Rule for developers:** Never `print()` or log sensitive patient data, PII, or ePHI to standard output. 
+- **Application Logs**: API and Worker logs are securely shipped to CloudWatch Logs. **Rule for developers:** Never `print()` or log sensitive patient data, PII, or ePHI to standard output.
 
 ---
 
 ## 5. Quick Troubleshooting
 
-- **ECS Task Fails to Start (Pending -> Stopped):** 
+- **ECS Task Fails to Start (Pending -> Stopped):**
   99% of the time, this is an IAM permission issue pulling the Docker image or reading an AWS Secret. Check the `StoppedReason` in the ECS Console. Verify the secret ARNs in `staging.json` / `production.json`.
-- **Database Connection Timeouts:** 
+- **Database Connection Timeouts:**
   Ensure you are not trying to connect to the RDS instance from your local machine. It is in a private subnet. To access it locally, you must set up an AWS Systems Manager (SSM) Session Manager port-forwarding tunnel.
-- **Frontend Changes Not Showing:** 
+- **Frontend Changes Not Showing:**
   CloudFront caches aggressively. Ensure `make cdk-publish-frontend-staging` successfully runs the `aws cloudfront create-invalidation` command at the end of the script.
