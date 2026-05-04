@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aws_cdk import (
+    Annotations,
     CfnOutput,
     Duration,
     RemovalPolicy,
@@ -189,6 +190,25 @@ class NexHealthPlatformStack(Stack):
             automatically_after=Duration.days(60),
         )
 
+        # Application runtime role. The RDS-generated MASTER credentials
+        # have BYPASSRLS-equivalent privileges and would defeat the entire
+        # row-level-security model — see migrations/policies in
+        # alembic/versions/20260510_consolidated_baseline.py. Issue a
+        # separate secret for a least-privilege role; the migration task
+        # provisions the role and grants on first deploy (see
+        # src/app/scripts/migrate_database.py).
+        app_role_secret = secretsmanager.Secret(
+            self,
+            "AppRoleSecret",
+            secret_name=f"{config.app_name}/{config.environment_name}/database-app-role",
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                secret_string_template='{"username": "nexhealth_app"}',
+                generate_string_key="password",
+                exclude_punctuation=True,
+                password_length=32,
+            ),
+        )
+
         redis_security_group = ec2.SecurityGroup(
             self,
             "RedisSecurityGroup",
@@ -233,11 +253,20 @@ class NexHealthPlatformStack(Stack):
             recordings_bucket,
             database,
         )
-        runtime_secrets = self._build_runtime_secrets(
+        runtime_secrets = self._build_app_runtime_secrets(
+            jwt_secret,
+            encryption_key_secret,
+            app_role_secret,
+        )
+        migration_secrets = self._build_migration_secrets(
             jwt_secret,
             encryption_key_secret,
             database,
         )
+        migration_environment = {
+            **runtime_environment,
+            "APP_ROLE_SECRET_ARN": app_role_secret.secret_arn,
+        }
 
         app_image_asset = ecr_assets.DockerImageAsset(
             self,
@@ -327,16 +356,43 @@ class NexHealthPlatformStack(Stack):
         api_service.target_group.configure_health_check(path="/livez", healthy_http_codes="200")
 
         if hasattr(self, "frontend_distribution"):
+            # CloudFront → ALB origin protocol must match the ALB listener.
+            # When the API has domain + cert + zone, _build_api_service
+            # provisions an HTTPS-only listener on 443; we MUST then talk
+            # HTTPS to the origin so ePHI transport is encrypted end-to-end
+            # (HIPAA §164.312(e)). Without a domain the ALB can only listen
+            # on HTTP/80, and CloudFront has no public CA chain to validate
+            # an AWS-managed *.elb.amazonaws.com cert against — that path is
+            # NOT acceptable for PHI traffic and is gated below.
+            alb_has_https = bool(
+                config.api.domain_name
+                and config.api.certificate_arn
+                and config.api.hosted_zone_name
+            )
+            origin_protocol = (
+                cloudfront.OriginProtocolPolicy.HTTPS_ONLY
+                if alb_has_https
+                else cloudfront.OriginProtocolPolicy.HTTP_ONLY
+            )
+            if not alb_has_https:
+                Annotations.of(self).add_warning(
+                    "API ALB has no HTTPS listener (api.domainName / certificateArn "
+                    "/ hostedZoneName missing). CloudFront → ALB will be HTTP. "
+                    "This deployment is NOT HIPAA-compliant for ePHI transport. "
+                    "Use synthetic data only until a domain + ACM certificate "
+                    "are configured for the API service."
+                )
+
             alb_origin = origins.LoadBalancerV2Origin(
                 api_service.load_balancer,
-                protocol_policy=cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+                protocol_policy=origin_protocol,
             )
             # SSE endpoint — longer origin read timeout for streaming
             self.frontend_distribution.add_behavior(
                 "/api/institution/events*",
                 origins.LoadBalancerV2Origin(
                     api_service.load_balancer,
-                    protocol_policy=cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+                    protocol_policy=origin_protocol,
                     read_timeout=Duration.seconds(60),
                 ),
                 allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
@@ -420,13 +476,18 @@ class NexHealthPlatformStack(Stack):
             "MigrationContainer",
             image=app_image,
             command=["python", "-m", "src.app.scripts.migrate_database"],
-            environment=runtime_environment,
-            secrets=runtime_secrets,
+            environment=migration_environment,
+            secrets=migration_secrets,
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="migrations",
                 log_group=migration_log_group,
             ),
         )
+        # Migration task reads the master creds (via secret bindings above)
+        # AND must read the app-role secret to seed its initial password.
+        # API + worker tasks are NOT granted access to the master secret —
+        # only to the app-role secret (via _build_app_runtime_secrets).
+        app_role_secret.grant_read(migration_task_definition.task_role)
 
         recordings_bucket.grant_read_write(api_task_definition.task_role)
         recordings_bucket.grant_read_write(worker_task_definition.task_role)
@@ -534,29 +595,60 @@ class NexHealthPlatformStack(Stack):
             environment["TRUSTED_PROXY_CIDRS"] = ",".join(self.config.trusted_proxy_cidrs)
         return environment
 
-    def _build_runtime_secrets(
+    def _build_app_runtime_secrets(
+        self,
+        jwt_secret: secretsmanager.Secret,
+        encryption_key_secret: secretsmanager.Secret,
+        app_role_secret: secretsmanager.Secret,
+    ) -> dict[str, ecs.Secret]:
+        """Secrets for API + worker tasks.
+
+        DATABASE_USER / DATABASE_PASSWORD point at the least-privilege
+        nexhealth_app role, NOT the RDS master. The master credentials
+        are deliberately not reachable from runtime — using master
+        bypasses RLS and defeats the multi-tenant isolation model.
+        """
+        secrets: dict[str, ecs.Secret] = {
+            "JWT_SECRET": ecs.Secret.from_secrets_manager(jwt_secret),
+            "ENCRYPTION_KEY": ecs.Secret.from_secrets_manager(encryption_key_secret),
+            "DATABASE_USER": ecs.Secret.from_secrets_manager(app_role_secret, "username"),
+            "DATABASE_PASSWORD": ecs.Secret.from_secrets_manager(app_role_secret, "password"),
+        }
+        return self._add_external_secrets(secrets, "AppRuntime")
+
+    def _build_migration_secrets(
         self,
         jwt_secret: secretsmanager.Secret,
         encryption_key_secret: secretsmanager.Secret,
         database: rds.DatabaseInstance,
     ) -> dict[str, ecs.Secret]:
+        """Secrets for the one-off migration task.
+
+        Migrations run as the RDS master so they can ALTER schema and
+        provision/rotate the runtime role. Only the migration task
+        receives master credentials.
+        """
         secrets: dict[str, ecs.Secret] = {
             "JWT_SECRET": ecs.Secret.from_secrets_manager(jwt_secret),
             "ENCRYPTION_KEY": ecs.Secret.from_secrets_manager(encryption_key_secret),
         }
-
         if database.secret is not None:
             secrets["DATABASE_USER"] = ecs.Secret.from_secrets_manager(database.secret, "username")
             secrets["DATABASE_PASSWORD"] = ecs.Secret.from_secrets_manager(database.secret, "password")
+        return self._add_external_secrets(secrets, "Migration")
 
+    def _add_external_secrets(
+        self,
+        secrets: dict[str, ecs.Secret],
+        scope_id: str,
+    ) -> dict[str, ecs.Secret]:
         for env_name, secret_arn in self.config.external_secrets.items():
             secret = secretsmanager.Secret.from_secret_complete_arn(
                 self,
-                f"{env_name.title().replace('_', '')}ImportedSecret",
+                f"{scope_id}{env_name.title().replace('_', '')}ImportedSecret",
                 secret_arn,
             )
             secrets[env_name] = ecs.Secret.from_secrets_manager(secret)
-
         return secrets
 
     def _build_api_service(
