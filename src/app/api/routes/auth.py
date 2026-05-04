@@ -303,9 +303,31 @@ def _set_password_on_user(user: User, password: str) -> None:
 
 
 @asynccontextmanager
-async def _auth_db_session():
-    """Open an RLS-authenticated DB session for unauthenticated auth flows."""
-    with use_rls_context(RlsContext.system("auth")):
+async def _auth_db_session(
+    context_type: str = "auth",
+    *,
+    external_id: str | None = None,
+    user_id: str | None = None,
+):
+    """Open an RLS-authenticated DB session for an auth flow.
+
+    The default 'auth' context narrows on `users.id = app_rls_user_id()`,
+    so callers must pass ``user_id`` (e.g. the refresh-session path that
+    has already validated the cookie). Lookup-by-something-else paths
+    must use one of the per-flow subcontexts and pass the lookup value
+    in ``external_id``:
+
+      - 'auth_email'         (login, forgot-password)         → email
+      - 'auth_reset_token'   (reset-password)                 → token_hash
+      - 'auth_invite_token'  (set-password / accept invite)   → token_hash
+
+    Without this split, RLS gives zero containment for users queries
+    that don't yet know user_id — see migration
+    20260509_narrow_auth_users_rls.
+    """
+    with use_rls_context(
+        RlsContext.system(context_type, user_id=user_id, external_id=external_id)
+    ):
         async with get_db_session() as session:
             yield session
 
@@ -320,7 +342,7 @@ async def login(request: Request, response: Response, data: LoginRequest) -> Aut
     if client_ip:
         audit_meta["ip_address"] = client_ip
 
-    async with _auth_db_session() as session:
+    async with _auth_db_session("auth_email", external_id=email) as session:
         result = await session.execute(
             select(User).where(
                 User.email == email,
@@ -492,7 +514,7 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest) -> Mess
     user_for_email: User | None = None
     raw_token: str | None = None
 
-    async with _auth_db_session() as session:
+    async with _auth_db_session("auth_email", external_id=email) as session:
         result = await session.execute(
             select(User).where(
                 User.email == email,
@@ -561,7 +583,7 @@ async def reset_password(
     token_hash = PasswordService.hash_token(data.token)
     client_ip = _client_ip(request)
 
-    async with _auth_db_session() as session:
+    async with _auth_db_session("auth_reset_token", external_id=token_hash) as session:
         result = await session.execute(
             select(User).where(
                 User.password_reset_token_hash == token_hash,
@@ -610,7 +632,7 @@ async def set_password(
     token_hash = PasswordService.hash_token(data.token)
     client_ip = _client_ip(request)
 
-    async with _auth_db_session() as session:
+    async with _auth_db_session("auth_invite_token", external_id=token_hash) as session:
         result = await session.execute(
             select(User).where(
                 User.invite_token_hash == token_hash,
@@ -706,7 +728,7 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
             detail="Invalid or expired refresh token",
         )
 
-    async with _auth_db_session() as session:
+    async with _auth_db_session(user_id=str(user_id)) as session:
         result = await session.execute(
             select(User).where(
                 User.id == user_id,
