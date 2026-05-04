@@ -125,7 +125,7 @@ async def list_callbacks(
 
         location_agent_id = await _location_agent_filter(session, current_user)
         if location_agent_id:
-            conditions.append(Call.agent_used == location_agent_id)
+            conditions.append(Call.location_id == location_agent_id)
 
         if resolved is not None:
             conditions.append(Call.callback_resolved.is_(resolved))

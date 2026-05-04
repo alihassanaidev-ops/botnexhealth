@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,6 +23,13 @@ class InstitutionLocation(Base):
     """
 
     __tablename__ = "institution_locations"
+    __table_args__ = (
+        # Slugs are unique WITHIN an institution, not globally — two different
+        # dental groups can each have a location named "main" or "downtown".
+        UniqueConstraint(
+            "institution_id", "slug", name="uq_institution_locations_inst_slug"
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -37,9 +44,7 @@ class InstitutionLocation(Base):
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    slug: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False, index=True
-    )
+    slug: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # NexHealth — location-level overrides

@@ -25,7 +25,6 @@ from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call import Call
 from src.app.models.contact import Contact
 from src.app.models.custom_field import EntityType
-from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.custom_field_service import CustomFieldService
@@ -196,27 +195,33 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
     )
 
 
-async def _location_agent_filter(session, current_user: User) -> str | None:
-    """
-    For location-scoped roles, return the mapped Retell agent id to enforce call visibility.
+def _location_scope_id(current_user: User) -> str | None:
+    """For LOCATION_ADMIN / STAFF, return the location_id to filter by.
+
+    Returns None for INSTITUTION_ADMIN (no per-location filter — they see
+    all calls in their institution).
+
+    Replaces the legacy `_location_agent_filter` that did a string match
+    against InstitutionLocation.retell_agent_id. Calls now have a direct
+    ``location_id`` foreign key (set at webhook time via the agent_id →
+    location mapping) so we can scope authoritatively without a roundtrip.
     """
     if current_user.role not in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
         return None
-    if not current_user.location_id or not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Location assignment required")
-
-    location_result = await session.execute(
-        select(InstitutionLocation).where(
-            InstitutionLocation.id == current_user.location_id,
-            InstitutionLocation.institution_id == current_user.institution_id,
+    if not current_user.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location assignment required",
         )
-    )
-    location = location_result.scalar_one_or_none()
-    if not location:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assigned location not found")
-    if not location.retell_agent_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Assigned location has no agent mapping")
-    return location.retell_agent_id
+    return str(current_user.location_id)
+
+
+# Back-compat shim: callbacks.py imports this name. Keep it as a sync helper
+# returning the location_id (string) — callers should pair with
+# `Call.location_id == <id>`, not `Call.agent_used == <id>`.
+async def _location_agent_filter(session, current_user: User) -> str | None:  # noqa: ARG001
+    """Deprecated alias — returns the location_id filter for LOCATION_ADMIN/STAFF."""
+    return _location_scope_id(current_user)
 
 
 async def _get_scoped_call(
@@ -226,19 +231,14 @@ async def _get_scoped_call(
     *,
     audit_on_miss: AuditAction | None = None,
 ) -> Call:
-    """Load a call the current institution/location user is allowed to access.
-
-    When called from a PHI-reveal route (``audit_on_miss`` set), a 404 also
-    emits a FAILURE_NOT_FOUND audit row so that an attacker probing for
-    other tenants' call IDs leaves a trail.
-    """
+    """Load a call the current institution/location user is allowed to access."""
     if not current_user.institution_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
     conditions = [Call.id == call_id, Call.institution_id == current_user.institution_id]
-    location_agent_id = await _location_agent_filter(session, current_user)
-    if location_agent_id:
-        conditions.append(Call.agent_used == location_agent_id)
+    location_id = _location_scope_id(current_user)
+    if location_id:
+        conditions.append(Call.location_id == location_id)
 
     call = (
         await session.execute(
@@ -409,7 +409,7 @@ async def list_calls(
         conditions = [Call.institution_id == current_user.institution_id]
         location_agent_id = await _location_agent_filter(session, current_user)
         if location_agent_id:
-            conditions.append(Call.agent_used == location_agent_id)
+            conditions.append(Call.location_id == location_agent_id)
 
         # Tag filtering: each tag must appear in call_tags (or match call_status)
         for tag in active_tags:
@@ -702,7 +702,7 @@ async def resolve_callback(
         conditions = [Call.id == call_id, Call.institution_id == current_user.institution_id]
         location_agent_id = await _location_agent_filter(session, current_user)
         if location_agent_id:
-            conditions.append(Call.agent_used == location_agent_id)
+            conditions.append(Call.location_id == location_agent_id)
 
         call = (
             await session.execute(

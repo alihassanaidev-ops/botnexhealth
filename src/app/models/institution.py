@@ -7,7 +7,6 @@ import enum
 import secrets
 from binascii import Error as BinasciiError
 from datetime import datetime
-from typing import Any
 from uuid import uuid4
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -108,11 +107,23 @@ def encrypt_value(value: str | None) -> str | None:
     return base64.urlsafe_b64encode(encrypted_data).decode("ascii")
 
 
+class DecryptionError(RuntimeError):
+    """Raised when an encrypted PHI value cannot be decrypted.
+
+    Surfacing this as a typed error (rather than letting binascii.Error or
+    cryptography.exceptions.InvalidTag bubble up as a 500) lets the route
+    layer audit FAILURE_INTERNAL and return a clean message — and signals
+    to operators that data corruption / wrong-key / partial-write may have
+    happened.
+    """
+
+
 def decrypt_value(value: str | None) -> str | None:
     """
     Decrypt a string value encrypted with AES-256-GCM.
 
     Expects base64-encoded string containing IV + ciphertext + auth tag.
+    Raises DecryptionError on corruption / wrong key / malformed input.
     """
     if value is None:
         return None
@@ -120,17 +131,27 @@ def decrypt_value(value: str | None) -> str | None:
     key = _get_encryption_key()
     aesgcm = AESGCM(key)
 
-    # Decode base64
-    encrypted_data = base64.urlsafe_b64decode(value)
-
-    # Extract IV (first 12 bytes) and ciphertext+tag (rest)
-    iv = encrypted_data[:12]
-    ciphertext = encrypted_data[12:]
-
-    # Decrypt (GCM verifies auth tag automatically)
-    plaintext = aesgcm.decrypt(iv, ciphertext, None)
-
-    return plaintext.decode("utf-8")
+    try:
+        encrypted_data = base64.urlsafe_b64decode(value)
+        iv = encrypted_data[:12]
+        ciphertext = encrypted_data[12:]
+        plaintext = aesgcm.decrypt(iv, ciphertext, None)
+        return plaintext.decode("utf-8")
+    except Exception as e:
+        # Don't include the ciphertext or key in logs. Hash the ciphertext
+        # so operators can correlate corruption events without exposing PHI.
+        import hashlib
+        import logging
+        logger = logging.getLogger(__name__)
+        cipher_fp = hashlib.sha256(value.encode("ascii", errors="replace")).hexdigest()[:16]
+        logger.critical(
+            "PHI decryption failed: type=%s cipher_fp=%s — possible corruption, "
+            "wrong ENCRYPTION_KEY, or partial write",
+            type(e).__name__, cipher_fp,
+        )
+        raise DecryptionError(
+            f"Failed to decrypt value (cipher_fp={cipher_fp})"
+        ) from e
 
 
 class Institution(Base):

@@ -368,10 +368,10 @@ async def test_phi_reveal_rbac_matrix_allows_in_scope_clinic_users(
         SimpleNamespace(generate_presigned_url=lambda url: f"signed:{url}"),
     )
 
-    session_results = []
-    if role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
-        session_results.append(_location("agent_1"))
-    session_results.append(_call())
+    # _get_scoped_call now filters by Call.location_id directly using the
+    # user's location_id (no extra round-trip to InstitutionLocation). The
+    # test mock just returns the call.
+    session_results = [_call()]
     if endpoint == "custom-field":
         session_results.append([(_field("diagnosis_note", is_phi=True), _value("Sensitive diagnosis"))])
     _install_session(monkeypatch, *session_results)
@@ -383,11 +383,13 @@ async def test_phi_reveal_rbac_matrix_allows_in_scope_clinic_users(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", [UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value])
-async def test_phi_reveal_rbac_matrix_denies_location_users_outside_agent_scope(
+async def test_phi_reveal_rbac_matrix_denies_location_users_outside_location_scope(
     monkeypatch,
     role,
 ):
-    _install_session(monkeypatch, _location("agent_other"), None)
+    # The route's WHERE Call.location_id = current_user.location_id eliminates
+    # the row, so the call lookup returns None — same 404 as before.
+    _install_session(monkeypatch, None)
 
     with pytest.raises(HTTPException) as exc:
         await _invoke_reveal_endpoint(
