@@ -55,7 +55,6 @@ def rls_database_url() -> str:
 
 @pytest_asyncio.fixture(scope="module")
 async def rls_engine(rls_database_url: str):
-    await _prepare_previous_head_schema(rls_database_url)
     await _apply_rls_migration(rls_database_url)
     await _create_app_role(rls_database_url)
 
@@ -96,211 +95,6 @@ def _database_url_with_credentials(
     ).render_as_string(hide_password=False)
 
 
-async def _prepare_previous_head_schema(database_url: str) -> None:
-    """Create the minimal pre-RLS schema this repo's baseline stamp expects.
-
-    The existing Alembic chain starts with a baseline stamp for an already
-    deployed schema, so fresh Testcontainers DBs need that schema shape before
-    we can stamp to the previous head and run the RLS migration for real.
-    """
-    ddl = """
-    CREATE TABLE institutions (
-        id uuid PRIMARY KEY,
-        name text,
-        slug text,
-        is_active boolean
-    );
-    CREATE TABLE institution_locations (
-        id uuid PRIMARY KEY,
-        institution_id uuid REFERENCES institutions(id),
-        name text,
-        slug text,
-        is_active boolean,
-        retell_agent_id text,
-        twilio_from_number text
-    );
-    CREATE TABLE institution_providers (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE institution_appointment_types (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE institution_descriptors (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE institution_operatories (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE institution_location_transfer_numbers (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE insurance_plans (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE location_operating_hours (
-        id uuid PRIMARY KEY,
-        location_id uuid
-    );
-    CREATE TABLE location_breaks (
-        id uuid PRIMARY KEY,
-        location_id uuid
-    );
-    CREATE TABLE users (
-        id uuid PRIMARY KEY,
-        email text,
-        role text,
-        institution_id uuid,
-        location_id uuid,
-        invite_status text,
-        is_active boolean,
-        deleted_at timestamptz
-    );
-    CREATE TABLE contacts (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        full_name text,
-        is_new_patient boolean
-    );
-    CREATE TABLE calls (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        contact_id uuid,
-        retell_call_id text,
-        agent_used text,
-        is_new_patient boolean,
-        is_complaint boolean,
-        is_insurance_billing boolean,
-        callback_resolved boolean,
-        times_called integer
-    );
-    CREATE TABLE custom_field_definitions (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        entity_type text,
-        field_name text,
-        field_key text,
-        field_type text,
-        is_phi boolean,
-        is_required boolean,
-        display_order integer,
-        is_active boolean
-    );
-    CREATE TABLE custom_field_values (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        entity_type text,
-        entity_id uuid
-    );
-    CREATE TABLE notifications (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        user_id uuid,
-        type text,
-        title_encrypted text,
-        message_encrypted text,
-        is_read boolean
-    );
-    CREATE TABLE user_email_notification_preferences (
-        id uuid PRIMARY KEY,
-        user_id uuid,
-        template_type text,
-        is_enabled boolean
-    );
-    CREATE TABLE email_templates (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        template_type text,
-        name text,
-        subject_template text,
-        html_body text,
-        text_body text,
-        is_active boolean
-    );
-    CREATE TABLE external_notification_recipients (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        email text,
-        template_type text,
-        is_active boolean
-    );
-    CREATE TABLE sms_history_logs (
-        id uuid PRIMARY KEY,
-        institution_location_id uuid,
-        from_number text,
-        to_number_encrypted text,
-        body_encrypted text,
-        to_number_hash text,
-        to_number_masked text,
-        status text,
-        message_sid text,
-        provider_status text
-    );
-    CREATE TABLE consent_records (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE sms_suppressions (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE do_not_contact (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE audit_logs (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid,
-        user_id uuid
-    );
-    CREATE TABLE dead_letter_events (
-        id uuid PRIMARY KEY,
-        institution_id uuid,
-        location_id uuid
-    );
-    CREATE TABLE retell_webhook_events (
-        id uuid PRIMARY KEY,
-        call_id text,
-        institution_id uuid,
-        event_type text,
-        status text,
-        attempts integer
-    );
-    CREATE TABLE retell_function_invocations (
-        id uuid PRIMARY KEY,
-        call_id text,
-        institution_id uuid,
-        function_name text,
-        args_hash text,
-        status text
-    );
-    """
-    engine = create_async_engine(database_url, poolclass=NullPool)
-    try:
-        async with engine.begin() as conn:
-            for statement in ddl.split(";"):
-                statement = statement.strip()
-                if statement:
-                    await conn.execute(text(statement))
-    finally:
-        await engine.dispose()
-
-
 async def _apply_rls_migration(database_url: str) -> None:
     """Run the RLS Alembic migration against the prepared Postgres schema."""
     engine = create_async_engine(database_url, poolclass=NullPool)
@@ -333,8 +127,12 @@ def _run_rls_upgrade(sync_conn) -> None:  # noqa: ANN001
     from alembic.operations import Operations
     from alembic.runtime.migration import MigrationContext
 
-    migration_path = ROOT / "alembic" / "versions" / "20260506_rls_full_staged.py"
-    spec = importlib.util.spec_from_file_location("rls_full_staged_migration", migration_path)
+    migration_path = (
+        ROOT / "alembic" / "versions" / "20260510_consolidated_baseline.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "consolidated_baseline_migration", migration_path
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load RLS migration from {migration_path}")
     module = importlib.util.module_from_spec(spec)
@@ -395,11 +193,15 @@ async def _seed(conn) -> None:
         text(
             """
             INSERT INTO institution_locations
-              (id, institution_id, name, slug, is_active, retell_agent_id, twilio_from_number)
+              (id, institution_id, name, slug, is_active, retell_agent_id,
+               twilio_from_number, timezone)
             VALUES
-              (:loc_a1, :inst_a, 'Clinic A One', 'a-one', true, 'agent-a1', '+15550000001'),
-              (:loc_a2, :inst_a, 'Clinic A Two', 'a-two', true, 'agent-a2', '+15550000002'),
-              (:loc_b1, :inst_b, 'Clinic B One', 'b-one', true, 'agent-b1', '+15550000003')
+              (:loc_a1, :inst_a, 'Clinic A One', 'a-one', true, 'agent-a1',
+               '+15550000001', 'UTC'),
+              (:loc_a2, :inst_a, 'Clinic A Two', 'a-two', true, 'agent-a2',
+               '+15550000002', 'UTC'),
+              (:loc_b1, :inst_b, 'Clinic B One', 'b-one', true, 'agent-b1',
+               '+15550000003', 'UTC')
             """
         ),
         {
@@ -414,12 +216,17 @@ async def _seed(conn) -> None:
         text(
             """
             INSERT INTO users
-              (id, email, role, institution_id, location_id, invite_status, is_active)
+              (id, email, role, institution_id, location_id, invite_status,
+               is_active, created_at)
             VALUES
-              (:admin_a, 'admin-a@example.com', 'INSTITUTION_ADMIN', :inst_a, NULL, 'ACCEPTED', true),
-              (:staff_a1, 'staff-a1@example.com', 'STAFF', :inst_a, :loc_a1, 'ACCEPTED', true),
-              (:staff_a2, 'staff-a2@example.com', 'STAFF', :inst_a, :loc_a2, 'ACCEPTED', true),
-              (:super, 'super@example.com', 'SUPER_ADMIN', NULL, NULL, 'ACCEPTED', true)
+              (:admin_a, 'admin-a@example.com', 'INSTITUTION_ADMIN', :inst_a,
+               NULL, 'ACCEPTED', true, now()),
+              (:staff_a1, 'staff-a1@example.com', 'STAFF', :inst_a,
+               :loc_a1, 'ACCEPTED', true, now()),
+              (:staff_a2, 'staff-a2@example.com', 'STAFF', :inst_a,
+               :loc_a2, 'ACCEPTED', true, now()),
+              (:super, 'super@example.com', 'SUPER_ADMIN', NULL, NULL,
+               'ACCEPTED', true, now())
             """
         ),
         {
@@ -499,12 +306,12 @@ async def _seed(conn) -> None:
             INSERT INTO sms_history_logs
               (id, from_number, to_number_encrypted, body_encrypted,
                to_number_hash, to_number_masked, status, message_sid,
-               institution_id, location_id, institution_location_id)
+               institution_id, location_id, institution_location_id, timestamp)
             VALUES
               (:sms_a1, '+15550000001', 'cipher', 'cipher', 'hash-a1', '***0001',
-               'sent', 'SM_A1', :inst_a, :loc_a1, :loc_a1),
+               'sent', 'SM_A1', :inst_a, :loc_a1, :loc_a1, now()),
               (:sms_a2, '+15550000002', 'cipher', 'cipher', 'hash-a2', '***0002',
-               'sent', 'SM_A2', :inst_a, :loc_a2, :loc_a2)
+               'sent', 'SM_A2', :inst_a, :loc_a2, :loc_a2, now())
             """
         ),
         {
@@ -605,10 +412,10 @@ async def test_rls_system_contexts_are_narrow(rls_engine) -> None:
             text(
                 """
                 INSERT INTO retell_webhook_events
-                  (id, call_id, event_type, status, attempts)
+                  (id, call_id, event_type, status, attempts, created_at, updated_at)
                 VALUES
                   ('40000000-0000-0000-0000-000000000001',
-                   'retell-new-call', 'call_analyzed', 'processing', 1)
+                   'retell-new-call', 'call_analyzed', 'PROCESSING', 1, now(), now())
                 """
             )
         )
@@ -621,13 +428,17 @@ async def test_rls_system_contexts_are_narrow(rls_engine) -> None:
 
 @pytest.mark.asyncio
 async def test_rls_login_flow(rls_engine) -> None:
-    """Auth context with no user_id allows email lookup; cleared context blocks all.
+    """Auth email context allows email lookup; cleared context blocks all.
 
-    Mirrors auth.py:_auth_db_session, where login by email runs before the
-    JWT-validated user_id is known. Regression guard for B-RLS-1.
+    Mirrors auth.py:_auth_db_session("auth_email", external_id=email), where
+    login by email runs before the JWT-validated user_id is known.
     """
     async with rls_engine.begin() as conn:
-        await _set_context(conn, context_type="auth")
+        await _set_context(
+            conn,
+            context_type="auth_email",
+            external_id="admin-a@example.com",
+        )
         result = await conn.scalar(
             text("SELECT count(*) FROM users WHERE email = :email"),
             {"email": "admin-a@example.com"},
@@ -733,6 +544,77 @@ async def test_rls_institution_owned_tables_isolate_system_contexts(
                 f"{context_type}: external_notification_recipients "
                 f"visible={enr_count}, expected 1 (only INST_A row)"
             )
+
+
+@pytest.mark.asyncio
+async def test_rls_audit_context_can_stamp_own_institution_jurisdiction(
+    rls_engine,
+) -> None:
+    """Audit context must read its scoped institution for jurisdiction stamping."""
+    audit_id = "a4000000-0000-0000-0000-000000000001"
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text("UPDATE institutions SET jurisdiction = 'CA-AB' WHERE id = :inst_a"),
+            {"inst_a": INST_A},
+        )
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="audit",
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            user_id=USER_STAFF_A1,
+        )
+        assert (
+            await conn.scalar(
+                text("SELECT jurisdiction FROM institutions WHERE id = :inst_a"),
+                {"inst_a": INST_A},
+            )
+        ) == "CA-AB"
+        assert (
+            await conn.scalar(
+                text("SELECT jurisdiction FROM institutions WHERE id = :inst_b"),
+                {"inst_b": INST_B},
+            )
+        ) is None
+        await conn.execute(
+            text(
+                """
+                INSERT INTO audit_logs
+                  (id, timestamp, actor, action, target_resource, outcome,
+                   audit_metadata, institution_id, location_id, user_id)
+                VALUES
+                  (:audit_id, now(), 'ADMIN', 'VIEW_CALL_DETAIL',
+                   'audit-jurisdiction-proof', 'SUCCESS',
+                   jsonb_build_object(
+                     'jurisdiction',
+                     (SELECT jurisdiction FROM institutions WHERE id = :inst_a)
+                   ),
+                   :inst_a, :loc_a1, :staff_a1)
+                """
+            ),
+            {
+                "audit_id": audit_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+                "staff_a1": USER_STAFF_A1,
+            },
+        )
+        assert (
+            await conn.scalar(
+                text(
+                    """
+                    SELECT audit_metadata->>'jurisdiction'
+                    FROM audit_logs
+                    WHERE id = :audit_id
+                    """
+                ),
+                {"audit_id": audit_id},
+            )
+        ) == "CA-AB"
 
 
 @pytest.mark.asyncio
