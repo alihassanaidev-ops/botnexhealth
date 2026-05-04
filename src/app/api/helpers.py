@@ -2,6 +2,7 @@
 
 import logging
 import math
+import uuid
 from typing import Any, Callable, Awaitable
 
 import httpx
@@ -130,27 +131,47 @@ async def handle_nexhealth_request(
             return await client.delete(path, params=params)
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
-    except NexHealthAuthenticationError as e:
-        logger.error(f"Authentication error: {e}", exc_info=True)
-        raise HTTPException(status_code=401, detail="NexHealth authentication failed") from e
+    except NexHealthAuthenticationError:
+        # No exc_info — the message can include credential-shaped strings.
+        logger.error("PMS authentication error path=%s", path)
+        raise HTTPException(status_code=401, detail="PMS authentication failed")
     except NexHealthRateLimitError as e:
-        logger.warning(f"Rate limit error: {e}")
+        logger.warning("PMS rate-limit hit path=%s retry_after=%s", path, e.retry_after)
         raise HTTPException(
             status_code=429,
-            detail=f"Rate limit exceeded. Retry after {e.retry_after}s" if e.retry_after else "Rate limit exceeded",
-        ) from e
+            detail="Rate limit exceeded. Please retry shortly.",
+        )
     except NexHealthAPIError as e:
-        logger.error(f"API error: {e}", exc_info=True)
+        # Upstream validation errors can echo patient fields. Don't forward to
+        # the client; emit a correlation id so we can trace via internal logs.
+        correlation = uuid.uuid4().hex[:12]
+        logger.error(
+            "PMS API error correlation=%s path=%s error_count=%s",
+            correlation, path, len(e.errors or []),
+        )
         raise HTTPException(
-            status_code=502, detail=f"NexHealth API error: {', '.join(e.errors) if e.errors else str(e)}"
-        ) from e
+            status_code=502,
+            detail=f"PMS rejected the request (ref {correlation}).",
+        )
     except httpx.HTTPStatusError as e:
-        # Pass through upstream HTTP errors with correct status code
-        logger.warning(f"NexHealth HTTP error {e.response.status_code}: {e.response.text}")
+        correlation = uuid.uuid4().hex[:12]
+        body_len = len(e.response.content) if e.response.content else 0
+        logger.warning(
+            "Upstream HTTP error correlation=%s status=%s body_bytes=%s path=%s",
+            correlation, e.response.status_code, body_len, path,
+        )
         raise HTTPException(
             status_code=e.response.status_code,
-            detail=f"NexHealth API returned {e.response.status_code}: {e.response.text[:200]}"
-        ) from e
+            detail=f"Upstream returned {e.response.status_code} (ref {correlation}).",
+        )
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+        correlation = uuid.uuid4().hex[:12]
+        logger.error(
+            "Unexpected upstream error correlation=%s path=%s type=%s",
+            correlation, path, type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error (ref {correlation}).",
+        )

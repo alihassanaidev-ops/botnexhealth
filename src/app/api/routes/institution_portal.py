@@ -29,8 +29,8 @@ from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.services.institution_service import InstitutionService
 from src.app.services.invite_cooldown import apply_invite_cooldown, ensure_invite_cooldown
 from src.app.services.user_invite_service import UserInviteService
-from src.app.services.audit import log_audit_background
-from src.app.models.audit_log import AuditAction, AuditOutcome
+from src.app.services.audit import log_audit, log_audit_background
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 
 router = APIRouter(prefix="/institution", tags=["Institution Portal"])
 
@@ -300,8 +300,8 @@ async def get_location_operating_hours(
     async with get_db_session() as session:
         actor = await ensure_invite_cooldown(session, current_user)
         svc = InstitutionService(session)
-        location = await svc.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != current_user.institution_id:
+        location = await svc.get_location_by_slug(loc_slug, current_user.institution_id)
+        if not location:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
@@ -340,8 +340,8 @@ async def set_location_operating_hours(
 
     async with get_db_session() as session:
         svc = InstitutionService(session)
-        location = await svc.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != current_user.institution_id:
+        location = await svc.get_location_by_slug(loc_slug, current_user.institution_id)
+        if not location:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
@@ -415,8 +415,8 @@ async def update_location_timezone(
 
     async with get_db_session() as session:
         svc = InstitutionService(session)
-        location = await svc.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != current_user.institution_id:
+        location = await svc.get_location_by_slug(loc_slug, current_user.institution_id)
+        if not location:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
@@ -424,7 +424,8 @@ async def update_location_timezone(
         await session.flush()
 
     log_audit_background(
-        actor=current_user.id,
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
         action=AuditAction.LOCATION_UPDATE,
         target_resource=f"institution:location:{loc_slug}:timezone",
         outcome=AuditOutcome.SUCCESS,
@@ -548,7 +549,8 @@ async def create_transfer_number(
         await session.flush()
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.LOCATION_UPDATE,
             target_resource=f"location:{loc_slug}/transfer_number:{entry.id}",
             outcome=AuditOutcome.SUCCESS,
@@ -625,7 +627,8 @@ async def update_transfer_number(
         entry.department = data.department
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.LOCATION_UPDATE,
             target_resource=f"location:{loc_slug}/transfer_number:{transfer_id}",
             outcome=AuditOutcome.SUCCESS,
@@ -700,7 +703,8 @@ async def delete_transfer_number(
         await session.delete(entry)
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.LOCATION_UPDATE,
             target_resource=f"location:{loc_slug}/transfer_number:{transfer_id}",
             outcome=AuditOutcome.SUCCESS,
@@ -726,7 +730,9 @@ async def invite_institution_admin(
     email = UserInviteService.normalize_email(data.email)
     async with get_db_session() as session:
         actor = await ensure_invite_cooldown(session, current_user)
-        existing = await session.execute(select(User).where(User.email == email))
+        existing = await session.execute(
+            select(User).where(User.email == email, User.deleted_at.is_(None))
+        )
         if existing.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail="User already exists"
@@ -746,8 +752,9 @@ async def invite_institution_admin(
             )
         apply_invite_cooldown(actor)
 
-    log_audit_background(
-        actor=current_user.id,
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
         action=AuditAction.LOCATION_USER_CREATE,
         target_resource=f"user:{email}",
         outcome=AuditOutcome.SUCCESS,
@@ -859,7 +866,9 @@ async def invite_institution_user(
         actor = await ensure_invite_cooldown(session, current_user)
         from src.app.models.institution_location import InstitutionLocation
 
-        existing = await session.execute(select(User).where(User.email == email))
+        existing = await session.execute(
+            select(User).where(User.email == email, User.deleted_at.is_(None))
+        )
         if existing.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT, detail="User already exists"
@@ -902,8 +911,9 @@ async def invite_institution_user(
             )
         apply_invite_cooldown(actor)
 
-    log_audit_background(
-        actor=current_user.id,
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
         action=AuditAction.LOCATION_USER_CREATE,
         target_resource=f"user:{email}",
         outcome=AuditOutcome.SUCCESS,
@@ -963,8 +973,8 @@ async def deactivate_institution_user(
 
         target.mark_deleted()
 
-    log_audit_background(
-        actor=current_user.id,
+    await log_audit(
+        actor=AuditActor.ADMIN,
         action=AuditAction.LOCATION_USER_DELETE,
         target_resource=f"user:{user_id}",
         outcome=AuditOutcome.SUCCESS,
@@ -1034,8 +1044,8 @@ async def reinvite_institution_user(
             )
         apply_invite_cooldown(actor)
 
-    log_audit_background(
-        actor=current_user.id,
+    await log_audit(
+        actor=AuditActor.ADMIN,
         action=AuditAction.USER_REINVITED,
         target_resource=f"user:{old_email}:reinvite",
         outcome=AuditOutcome.SUCCESS,
@@ -1148,8 +1158,8 @@ async def deactivate_location_user(
 
         target.mark_deleted()
 
-    log_audit_background(
-        actor=current_user.id,
+    await log_audit(
+        actor=AuditActor.ADMIN,
         action=AuditAction.LOCATION_USER_DELETE,
         target_resource=f"user:{user_id}",
         outcome=AuditOutcome.SUCCESS,
@@ -1182,14 +1192,14 @@ async def invite_location_admin(
     async with get_db_session() as session:
         actor = await ensure_invite_cooldown(session, current_user)
         svc = InstitutionService(session)
-        location = await svc.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != current_user.institution_id:
+        location = await svc.get_location_by_slug(loc_slug, current_user.institution_id)
+        if not location:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
 
         existing = await session.execute(
-            select(User).where(User.email == email)
+            select(User).where(User.email == email, User.deleted_at.is_(None))
         )
         if existing.scalar_one_or_none():
             raise HTTPException(
@@ -1211,8 +1221,9 @@ async def invite_location_admin(
             )
         apply_invite_cooldown(actor)
 
-    log_audit_background(
-        actor=current_user.id,
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
         action=AuditAction.LOCATION_USER_CREATE,
         target_resource=f"location:{loc_slug}/user:{email}",
         outcome=AuditOutcome.SUCCESS,
@@ -1245,13 +1256,13 @@ async def invite_staff(
     async with get_db_session() as session:
         actor = await ensure_invite_cooldown(session, current_user)
         svc = InstitutionService(session)
-        location = await svc.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != current_user.institution_id:
+        location = await svc.get_location_by_slug(loc_slug, current_user.institution_id)
+        if not location:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
         existing = await session.execute(
-            select(User).where(User.email == email)
+            select(User).where(User.email == email, User.deleted_at.is_(None))
         )
         if existing.scalar_one_or_none():
             raise HTTPException(
@@ -1273,8 +1284,9 @@ async def invite_staff(
             )
         apply_invite_cooldown(actor)
 
-    log_audit_background(
-        actor=current_user.id,
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
         action=AuditAction.LOCATION_USER_CREATE,
         target_resource=f"location:{loc_slug}/staff:{email}",
         outcome=AuditOutcome.SUCCESS,
@@ -1346,7 +1358,8 @@ async def update_billing_email(
         institution.billing_email = data.billing_email
 
     log_audit_background(
-        actor=current_user.id,
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
         action=AuditAction.INSTITUTION_UPDATE,
         target_resource="institution:billing_email",
         outcome=AuditOutcome.SUCCESS,
@@ -1443,7 +1456,8 @@ async def update_roi_config(
         institution.roi_config = config_dict
 
     log_audit_background(
-        actor=current_user.id,
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
         action=AuditAction.INSTITUTION_UPDATE,
         target_resource="institution:roi_config",
         outcome=AuditOutcome.SUCCESS,
@@ -1462,7 +1476,7 @@ async def calculate_roi(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
         )
 
-    from datetime import date, datetime, timezone as tz
+    from datetime import datetime, timezone as tz
     from src.app.models.call import Call, CallStatus
 
     async with get_db_session() as session:
@@ -1581,7 +1595,8 @@ async def get_my_audit_logs(
         pages = math.ceil(total / size) if size > 0 else 0
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.VIEW_AUDIT_LOGS,
             target_resource="institution:audit_logs",
             outcome=AuditOutcome.SUCCESS,
@@ -1640,7 +1655,8 @@ async def get_location_audit_logs(
 
         pages = math.ceil(total / size) if size > 0 else 0
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.VIEW_AUDIT_LOGS,
             target_resource="location:audit_logs",
             outcome=AuditOutcome.SUCCESS,
@@ -1782,7 +1798,8 @@ async def create_insurance_plan(
         await session.flush()
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.LOCATION_UPDATE,
             target_resource=f"location:{loc_slug}/insurance_plan:{plan.id}",
             outcome=AuditOutcome.SUCCESS,
@@ -1854,7 +1871,8 @@ async def update_insurance_plan(
         plan.description = data.description
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.LOCATION_UPDATE,
             target_resource=f"location:{loc_slug}/insurance_plan:{plan_id}",
             outcome=AuditOutcome.SUCCESS,
@@ -1924,7 +1942,8 @@ async def delete_insurance_plan(
         plan.is_active = False
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.LOCATION_UPDATE,
             target_resource=f"location:{loc_slug}/insurance_plan:{plan_id}",
             outcome=AuditOutcome.SUCCESS,

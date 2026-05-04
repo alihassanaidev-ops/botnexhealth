@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -17,14 +18,23 @@ from src.app.models.user import User, InviteStatus
 from src.app.services.auth import AuthService
 from src.app.services.auth_email_service import AuthEmailService
 from src.app.services.password_service import PasswordService
-from src.app.services.refresh_token_service import RefreshTokenService
+from src.app.services.refresh_token_service import (
+    RefreshTokenReplayError,
+    RefreshTokenService,
+)
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.security import get_client_ip
-from src.app.services.audit import log_audit_background
-from src.app.api.rate_limit import limiter
+from src.app.services.audit import log_audit, log_audit_background
+from src.app.api.rate_limit import RATE_AUTH, limiter
 
 logger = logging.getLogger(__name__)
 
+
+# Pre-computed Argon2id hash used to keep /login response timing constant when
+# the user does not exist — without this, an attacker can enumerate accounts
+# by measuring how long the request takes (real Argon2 verify ~200 ms vs an
+# instant 401 for a missing user). Stable for the process lifetime.
+_LOGIN_TIMING_DUMMY_HASH = PasswordService.compute_timing_safe_dummy_hash()
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -75,6 +85,54 @@ def _client_ip(request: Request) -> str | None:
         forwarded_for=request.headers.get("x-forwarded-for"),
         direct_host=request.client.host if request.client else None,
     )
+
+
+def _allowed_origin_set() -> frozenset[str]:
+    """Origins permitted for state-changing cookie-authenticated requests."""
+    raw = (settings.cors_allowed_origins or "").strip()
+    if not raw or raw == "*":
+        return frozenset()
+    out: set[str] = set()
+    for entry in raw.split(","):
+        candidate = entry.strip().rstrip("/")
+        if candidate and candidate != "*":
+            out.add(candidate.lower())
+    return frozenset(out)
+
+
+def _origin_root(value: str | None) -> str | None:
+    """Reduce an Origin/Referer header to just scheme://host[:port]."""
+    if not value:
+        return None
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(value.strip())
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+
+
+def _enforce_same_origin(request: Request) -> None:
+    """Reject cross-origin POSTs to cookie-authenticated endpoints.
+
+    SameSite=Strict on the refresh cookie is the primary defense; this is a
+    second layer that costs nothing and stops malformed requests where the
+    Origin/Referer cannot be confirmed against the deployed CORS allowlist.
+    """
+    allowed = _allowed_origin_set()
+    if not allowed:
+        # Wildcard / no explicit origins configured (typically local dev).
+        return
+
+    origin = _origin_root(request.headers.get("origin"))
+    if origin is None:
+        origin = _origin_root(request.headers.get("referer"))
+
+    if origin is None or origin not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cross-origin request rejected",
+        )
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -213,7 +271,7 @@ def _set_password_on_user(user: User, password: str) -> None:
 
 
 @router.post("/login", response_model=AuthSession)
-@limiter.limit("30/minute")
+@limiter.limit(RATE_AUTH)
 async def login(request: Request, response: Response, data: LoginRequest) -> AuthSession:
     """Authenticate a user with local email/password credentials."""
     email = _normalize_email(data.email)
@@ -232,6 +290,10 @@ async def login(request: Request, response: Response, data: LoginRequest) -> Aut
         user = result.scalar_one_or_none()
 
         if not user:
+            # Constant-time defense against email enumeration: do a dummy
+            # Argon2 verify so the not-found branch takes ~the same time as
+            # the wrong-password branch.
+            PasswordService.verify_password(data.password, _LOGIN_TIMING_DUMMY_HASH)
             log_audit_background(
                 actor=AuditActor.API_CLIENT,
                 action=AuditAction.LOGIN,
@@ -308,6 +370,19 @@ async def login(request: Request, response: Response, data: LoginRequest) -> Aut
                 detail="Invalid email or password",
             )
 
+        audit_request_id = str(uuid4())
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            action=AuditAction.LOGIN,
+            target_resource=target_resource,
+            outcome=AuditOutcome.INITIATED,
+            metadata={**audit_meta, "phase": "intent"},
+            institution_id=user.institution_id,
+            user_id=_audit_user_id(user),
+            location_id=_audit_location_id(user),
+            request_id=audit_request_id,
+        )
+
         user.failed_login_attempts = 0
         user.locked_until = None
         if PasswordService.needs_rehash(user.password_hash):
@@ -315,21 +390,25 @@ async def login(request: Request, response: Response, data: LoginRequest) -> Aut
             user.password_set_at = datetime.now(timezone.utc)
     session = await _issue_auth_session(user, response)
 
-    log_audit_background(
-        actor=user.role,
+    # Durable: a successful login is a security-relevant event. The INITIATED
+    # row above is written before login state mutation/session issuance; this
+    # completion row closes the loop for reporting and reconciliation.
+    await log_audit(
+        actor=AuditActor.ADMIN,
         action=AuditAction.LOGIN,
         target_resource=f"user:{user.id}",
         outcome=AuditOutcome.SUCCESS,
-        metadata=audit_meta,
+        metadata={**audit_meta, "phase": "complete"},
         institution_id=user.institution_id,
         user_id=_audit_user_id(user),
         location_id=_audit_location_id(user),
+        request_id=audit_request_id,
     )
     return session
 
 
 @router.post("/token", response_model=AuthSession)
-@limiter.limit("30/minute")
+@limiter.limit(RATE_AUTH)
 async def login_oauth_form(
     request: Request,
     response: Response,
@@ -437,8 +516,10 @@ async def reset_password(
         _clear_password_reset_state(user)
     session = await _issue_auth_session(user, response, revoke_existing=True)
 
-    log_audit_background(
-        actor=user.role,
+    # Durable: password reset is a credential change; the audit row must be
+    # persistent for HIPAA §164.312(d) reviews.
+    await log_audit(
+        actor=AuditActor.ADMIN,
         action=AuditAction.PASSWORD_RESET_COMPLETE,
         target_resource=f"user:{user.id}",
         outcome=AuditOutcome.SUCCESS,
@@ -492,8 +573,9 @@ async def set_password(
         _clear_password_reset_state(user)
     session = await _issue_auth_session(user, response, revoke_existing=True)
 
-    log_audit_background(
-        actor=user.role,
+    # Durable: initial password-from-invite is a credential change.
+    await log_audit(
+        actor=AuditActor.ADMIN,
         action=AuditAction.PASSWORD_SET,
         target_resource=f"user:{user.id}",
         outcome=AuditOutcome.SUCCESS,
@@ -509,6 +591,7 @@ async def set_password(
 @limiter.limit("60/minute")
 async def refresh_session(request: Request, response: Response) -> AuthSession:
     """Rotate the refresh-token cookie and issue a new access token."""
+    _enforce_same_origin(request)
     client_ip = _client_ip(request)
     refresh_token = _get_refresh_cookie(request)
 
@@ -569,6 +652,28 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
 
     try:
         new_refresh_token = await RefreshTokenService.rotate_token(user.id, refresh_token)
+    except RefreshTokenReplayError:
+        # Stolen-token signal — every session for this user is already revoked
+        # by the service. Audit aggressively (durable: stolen-token detection
+        # is a security event we never want to lose), clear the cookie, 401.
+        await log_audit(
+            actor=AuditActor.API_CLIENT,
+            action=AuditAction.LOGIN,
+            target_resource=f"user:{user.id}",
+            outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
+            metadata={
+                "action": "refresh_token_replay_detected",
+                "ip_address": client_ip,
+            },
+            institution_id=user.institution_id,
+            user_id=_audit_user_id(user),
+            location_id=_audit_location_id(user),
+        )
+        _clear_refresh_cookie(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token replay detected. Please sign in again.",
+        )
     except Exception as e:
         logger.error("Failed to rotate refresh token: %s", e, exc_info=True)
         raise HTTPException(
@@ -593,7 +698,7 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
         ) from e
     _set_refresh_cookie(response, new_refresh_token)
     log_audit_background(
-        actor=user.role,
+        actor=AuditActor.ADMIN,
         action=AuditAction.LOGIN,
         target_resource=f"user:{user.id}",
         outcome=AuditOutcome.SUCCESS,
@@ -609,6 +714,7 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
 @limiter.limit("60/minute")
 async def logout(request: Request, response: Response) -> MessageResponse:
     """Invalidate the refresh-token cookie and access token. Idempotent."""
+    _enforce_same_origin(request)
     client_ip = _client_ip(request)
     revoked_user_id: str | None = None
     refresh_token = _get_refresh_cookie(request)
@@ -681,7 +787,8 @@ async def unlock_user_account(
         target_user.locked_until = None
         # session auto-commits on exit
 
-    log_audit_background(
+    # Durable: admin-initiated account unlock is a security-relevant action.
+    await log_audit(
         actor=AuditActor.ADMIN,
         action=AuditAction.ACCOUNT_UNLOCK,
         target_resource=f"user:{user_id}",

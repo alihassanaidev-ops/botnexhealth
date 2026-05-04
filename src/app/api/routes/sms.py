@@ -16,7 +16,7 @@ from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_consent import ConsentSource, ConsentStatus, SmsSuppression
 from src.app.models.sms_history_log import SmsHistoryLog
 from src.app.models.user import User, UserRole
-from src.app.services.audit import log_audit
+from src.app.services.audit import log_audit, phi_reveal_audit
 from src.app.services.sms_compliance import SmsComplianceService
 from src.app.services.sms_privacy import hash_for_logging
 
@@ -242,8 +242,8 @@ async def reveal_sms_phone(
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
 ) -> RevealResponse:
     row = await _get_scoped_sms_log(sms_id, current_user)
-    await _audit_reveal(current_user, row, AuditAction.VIEW_FULL_PHONE)
-    return RevealResponse(id=str(row.id), value=row.to_number or "")
+    async with _sms_reveal_audit(current_user, row, AuditAction.VIEW_FULL_PHONE):
+        return RevealResponse(id=str(row.id), value=row.to_number or "")
 
 
 @institution_router.post("/logs/{sms_id}/reveal-body", response_model=RevealResponse)
@@ -252,8 +252,8 @@ async def reveal_sms_body(
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
 ) -> RevealResponse:
     row = await _get_scoped_sms_log(sms_id, current_user)
-    await _audit_reveal(current_user, row, AuditAction.VIEW_SMS_BODY)
-    return RevealResponse(id=str(row.id), value=row.body or "")
+    async with _sms_reveal_audit(current_user, row, AuditAction.VIEW_SMS_BODY):
+        return RevealResponse(id=str(row.id), value=row.body or "")
 
 
 async def _list_sms_logs(
@@ -322,16 +322,24 @@ def _scope(user: User) -> tuple[str, str | None]:
     return str(user.institution_id), None
 
 
-async def _audit_reveal(user: User, row: SmsHistoryLog, action: AuditAction) -> None:
-    await log_audit(
+def _sms_reveal_audit(user: User, row: SmsHistoryLog, action: AuditAction):
+    """Two-row pre-then-post audit context for SMS-reveal endpoints.
+
+    Use as ``async with _sms_reveal_audit(...): return Response(...)``.
+    Writes INITIATED before the body decrypts PHI; refuses to proceed if
+    the audit DB is down. Writes SUCCESS / FAILURE after.
+    """
+    return phi_reveal_audit(
         actor=AuditActor.ADMIN,
         action=action,
         target_resource=f"sms:{row.id}",
-        outcome=AuditOutcome.SUCCESS,
-        metadata={"location_id": str(row.institution_location_id), "phone_masked": row.to_number_masked},
         institution_id=str(user.institution_id) if user.institution_id else None,
         user_id=str(user.id),
         location_id=str(row.institution_location_id),
+        metadata={
+            "location_id": str(row.institution_location_id),
+            "phone_masked": row.to_number_masked,
+        },
     )
 
 

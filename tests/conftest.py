@@ -49,11 +49,35 @@ async def async_client():
         
     await cleanup_nexhealth_client()
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mock_audit_service():
-    """Ensure tests don't try to use PostgresAuditRepository."""
+    """Install an in-memory audit service for every test.
+
+    Audit writes are durable in production: ``service.log`` raises on
+    repository failure (e.g. uninitialized DB), which would surface as 500s
+    in any test that exercises a PHI-touching route. Routing every test to
+    an in-memory repo gives us realistic durable-audit behavior without
+    requiring the test DB to be initialized.
+
+    Tests that need to inspect audit entries can grab the returned service
+    directly; tests that need to assert failure paths can replace the repo
+    via ``service._repository = ...``.
+    """
     from src.app.services.audit import InMemoryAuditRepository, AuditService, set_audit_service
     repo = InMemoryAuditRepository()
     service = AuditService(repo)
     set_audit_service(service)
     return service
+
+
+@pytest.fixture
+def audit_log_entries(mock_audit_service):
+    """Return persisted in-memory audit entries after pending background writes."""
+
+    async def _get_entries():
+        from src.app.services.audit import AuditService
+
+        await AuditService.drain_background_tasks()
+        return mock_audit_service._repository.get_all()
+
+    return _get_entries

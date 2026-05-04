@@ -1,7 +1,7 @@
 """make audit_logs immutable (prevent UPDATE and DELETE)
 
 Revision ID: 0003
-Revises: 0002
+Revises: 0001
 Create Date: 2026-02-17
 
 HIPAA §164.312(b) requires audit logs to be tamper-proof. This migration
@@ -9,8 +9,7 @@ creates a database-level trigger that prevents any UPDATE or DELETE on the
 audit_logs table, ensuring the append-only invariant is enforced at the
 PostgreSQL level — not just application code.
 
-The service_role is included in the restriction. Only a superuser can
-modify or drop this trigger.
+Only a superuser can modify or drop this trigger.
 """
 from typing import Sequence, Union
 
@@ -19,7 +18,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0003"
-down_revision: Union[str, None] = "0002"
+down_revision: Union[str, None] = "0001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

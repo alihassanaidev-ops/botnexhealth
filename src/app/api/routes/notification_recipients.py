@@ -14,14 +14,16 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from src.app.api.deps import get_current_institution_admin
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.email_template import EmailTemplateType
 from src.app.models.external_notification_recipient import ExternalNotificationRecipient
 from src.app.models.user import User
+from src.app.services.audit import log_audit
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +150,26 @@ async def add_external_recipient(
             created.append(recipient)
 
         await session.flush()
+
+        # Audit external recipient additions explicitly. Forwarding clinic
+        # email content to addresses outside our BAA scope is a high-risk
+        # action and the audit log must record who added each recipient
+        # and what they're subscribed to.
+        for recipient in created:
+            await log_audit(
+                actor=AuditActor.ADMIN,
+                action=AuditAction.EXTERNAL_RECIPIENT_ADD,
+                target_resource=f"external_recipient:{recipient.id}",
+                outcome=AuditOutcome.SUCCESS,
+                metadata={
+                    "actor_role": current_user.role,
+                    "email": recipient.email,
+                    "template_type": recipient.template_type,
+                },
+                institution_id=institution_id,
+                user_id=str(current_user.id),
+            )
+
         return ExternalRecipientListResponse(recipients=[_to_response(r) for r in created])
 
 
@@ -176,11 +198,28 @@ async def update_external_recipient(
         if not recipient:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipient not found")
 
+        was_active = recipient.is_active
         if body.is_active is not None:
             recipient.is_active = body.is_active
 
         session.add(recipient)
         await session.flush()
+
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            action=AuditAction.EXTERNAL_RECIPIENT_UPDATE,
+            target_resource=f"external_recipient:{recipient.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "email": recipient.email,
+                "template_type": recipient.template_type,
+                "was_active": was_active,
+                "is_active": recipient.is_active,
+            },
+            institution_id=institution_id,
+            user_id=str(current_user.id),
+        )
         return _to_response(recipient)
 
 
@@ -198,11 +237,31 @@ async def delete_external_recipient(
     institution_id = _require_institution(current_user)
 
     async with get_db_session() as session:
-        result = await session.execute(
-            delete(ExternalNotificationRecipient).where(
-                ExternalNotificationRecipient.id == recipient_id,
-                ExternalNotificationRecipient.institution_id == institution_id,
+        target = (
+            await session.execute(
+                select(ExternalNotificationRecipient).where(
+                    ExternalNotificationRecipient.id == recipient_id,
+                    ExternalNotificationRecipient.institution_id == institution_id,
+                )
             )
-        )
-        if result.rowcount == 0:
+        ).scalar_one_or_none()
+        if not target:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipient not found")
+
+        target_email = target.email
+        target_template = target.template_type
+        await session.delete(target)
+
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            action=AuditAction.EXTERNAL_RECIPIENT_REMOVE,
+            target_resource=f"external_recipient:{recipient_id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "email": target_email,
+                "template_type": target_template,
+            },
+            institution_id=institution_id,
+            user_id=str(current_user.id),
+        )

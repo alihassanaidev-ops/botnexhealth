@@ -163,9 +163,10 @@ async def test_pms_factory_rejects_user_with_no_institution():
 
 @pytest.mark.asyncio
 async def test_get_location_operating_hours_rejects_other_institution_slug():
-    """Slug lookup is filtered by current_user.institution_id, so a slug
-    belonging to a DIFFERENT institution should return 404 (location not found),
-    not leak the location's data."""
+    """Slug lookup is filtered by current_user.institution_id at the SQL layer,
+    so a slug belonging to a DIFFERENT institution returns None (and the
+    route returns 404) rather than leaking the location's data.
+    """
     from httpx import AsyncClient
 
     from src.app.api import deps as auth_deps
@@ -175,14 +176,13 @@ async def test_get_location_operating_hours_rejects_other_institution_slug():
     app.dependency_overrides[auth_deps.get_current_institution_or_location_user] = lambda: user
 
     mock_session = AsyncMock()
-    # InstitutionService.get_location_by_slug returns a location belonging to
-    # institution B — the route's institution_id check should reject it.
-    foreign_location = MagicMock(id=_LOC_B, institution_id=_INST_B)
 
     from src.app.api.routes import institution_portal as portal_mod
 
+    # The service's get_location_by_slug now scopes by institution_id, so a
+    # foreign-institution slug returns None — same shape as "not found".
     fake_service = MagicMock()
-    fake_service.get_location_by_slug = AsyncMock(return_value=foreign_location)
+    fake_service.get_location_by_slug = AsyncMock(return_value=None)
 
     from unittest.mock import patch
 

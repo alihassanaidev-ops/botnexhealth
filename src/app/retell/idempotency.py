@@ -65,6 +65,11 @@ async def _claim_invocation(
 ) -> tuple[str, dict[str, Any] | None]:
     """Atomically claim or look up an invocation row.
 
+    Commits the claim before returning so a downstream rollback in the
+    handler cannot erase the PROCESSING marker. Without this, a stuck-in-
+    flight or stuck-failed row could come back to life on the next retry
+    and re-execute the side-effect.
+
     Returns:
         (action, cached_result)
         action ∈ {"new", "replay_completed", "in_flight", "retry_failed"}
@@ -107,6 +112,7 @@ async def _claim_invocation(
                 existing.attempts += 1
                 existing.last_error = None
                 existing.updated_at = datetime.now(timezone.utc)
+                await session.commit()
                 return "retry_failed", None
 
             if existing.status == RetellFunctionStatus.PROCESSING.value:
@@ -117,6 +123,7 @@ async def _claim_invocation(
             existing.attempts += 1
             existing.last_error = None
             existing.updated_at = datetime.now(timezone.utc)
+            await session.commit()
             return "retry_failed", None
 
         row = RetellFunctionInvocation(
@@ -131,6 +138,7 @@ async def _claim_invocation(
         session.add(row)
         try:
             await session.flush()
+            await session.commit()
         except IntegrityError:
             await session.rollback()
             return "in_flight", None
@@ -147,6 +155,11 @@ async def _record_outcome(
     error: str | None = None,
     institution_id: str | None = None,
 ) -> None:
+    """Persist the terminal outcome of an idempotent invocation.
+
+    Commits explicitly so the COMPLETED/FAILED transition is durable even
+    if a later request-handler exception rolls back the surrounding work.
+    """
     from src.app.database import get_db_session
     from src.app.models.retell_function_invocation import RetellFunctionInvocation
 
@@ -168,6 +181,7 @@ async def _record_outcome(
         if institution_id:
             row.institution_id = institution_id
         row.updated_at = datetime.now(timezone.utc)
+        await session.commit()
 
 
 async def run_with_idempotency(
@@ -182,11 +196,27 @@ async def run_with_idempotency(
 
     Replays return the cached result. In-flight duplicates return a
     retryable error so Retell can back off without speaking false success.
-    Functions with no usable call_id bypass idempotency entirely.
+
+    Functions in :data:`IDEMPOTENT_FUNCTIONS` are mutating side-effects —
+    booking, cancellation, patient creation. Bypassing idempotency for them
+    can produce duplicate bookings or duplicate patient records, so a
+    missing ``call_id`` is rejected as a 400 rather than silently skipping
+    the dedupe layer.
     """
     from src.app.models.retell_function_invocation import RetellFunctionStatus
 
     if not call_id or call_id == _MISSING_CALL_ID:
+        if function_name in IDEMPOTENT_FUNCTIONS:
+            logger.error(
+                "Refusing idempotent function without call_id: function=%s",
+                function_name,
+            )
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"call_id is required for {function_name}",
+            )
         logger.info(
             "Skipping idempotency for %s: no usable call_id", function_name
         )

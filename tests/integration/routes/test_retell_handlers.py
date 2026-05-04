@@ -117,8 +117,11 @@ async def test_list_transfer_numbers_success():
             adapter=SimpleNamespace(),
         )
 
+    # Patch the binding in the handlers module, not in src.app.database — the
+    # handlers module imports get_db_session via `from … import …`, so the
+    # source-module attribute is no longer reached at call time.
     with patch("src.app.retell.handlers._resolve_context", new=mock_resolve), patch(
-        "src.app.database.get_db_session", new=fake_db
+        "src.app.retell.handlers.get_db_session", new=fake_db
     ):
         result = await list_transfer_numbers({})
 

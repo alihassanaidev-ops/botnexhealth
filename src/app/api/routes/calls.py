@@ -2,8 +2,9 @@
 Calls routes — institution-facing API for browsing call records.
 
 All endpoints are institution-scoped: a user can only see calls belonging
-to their own institution. PHI fields are intentionally excluded from the
-list response and are only available through audited reveal endpoints.
+to their own institution/location scope. Clinic users may see call summaries
+needed for care operations; transcript bodies, recordings, and custom PHI
+fields require explicit audited reveal endpoints.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from src.app.models.contact import Contact
 from src.app.models.custom_field import EntityType
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import User, UserRole
-from src.app.services.audit import log_audit, log_audit_background
+from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.custom_field_service import CustomFieldService
 from src.app.services.event_bus import publish_event
 
@@ -78,15 +79,11 @@ class CustomFieldValueOut(BaseModel):
 
 
 class CallDetail(CallRecord):
-    """Extended call record with scrubbed call details by default."""
-    # Raw plain-text transcript (may contain PHI — kept for internal audit)
-    transcript: str | None
-    # Structured JSONB turn-by-turn transcript arrays
-    transcript_with_tool_calls: list[dict] | None       # full unredacted
-    scrubbed_transcript_with_tool_calls: list[dict] | None  # PII-scrubbed (default UI)
-    recording_url: str | None
-    full_transcript_available: bool = False
-    raw_transcript_available: bool = False
+    """Extended call record. Transcript and recording bodies are revealed
+    only via the audited reveal endpoints — the detail response carries
+    only availability flags and scoped metadata.
+    """
+    transcript_available: bool = False
     recording_available: bool = False
     custom_fields: list[CustomFieldValueOut] = []
 
@@ -102,14 +99,9 @@ class ResolveCallbackRequest(BaseModel):
     note: str | None = None
 
 
-class FullTranscriptRevealResponse(BaseModel):
+class TranscriptRevealResponse(BaseModel):
     call_id: str
     transcript_with_tool_calls: list[dict] | None
-
-
-class RawTranscriptRevealResponse(BaseModel):
-    call_id: str
-    transcript: str | None
 
 
 class RecordingRevealResponse(BaseModel):
@@ -227,8 +219,19 @@ async def _location_agent_filter(session, current_user: User) -> str | None:
     return location.retell_agent_id
 
 
-async def _get_scoped_call(session, call_id: str, current_user: User) -> Call:
-    """Load a call that the current institution/location user is allowed to access."""
+async def _get_scoped_call(
+    session,
+    call_id: str,
+    current_user: User,
+    *,
+    audit_on_miss: AuditAction | None = None,
+) -> Call:
+    """Load a call the current institution/location user is allowed to access.
+
+    When called from a PHI-reveal route (``audit_on_miss`` set), a 404 also
+    emits a FAILURE_NOT_FOUND audit row so that an attacker probing for
+    other tenants' call IDs leaves a trail.
+    """
     if not current_user.institution_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
 
@@ -246,27 +249,72 @@ async def _get_scoped_call(session, call_id: str, current_user: User) -> Call:
     ).scalar_one_or_none()
 
     if not call:
+        if audit_on_miss is not None:
+            log_audit_background(
+                actor=AuditActor.ADMIN,
+                action=audit_on_miss,
+                target_resource=f"call:{call_id}",
+                outcome=AuditOutcome.FAILURE_NOT_FOUND,
+                metadata={
+                    "actor_role": current_user.role,
+                    "reason": "call_not_in_user_scope",
+                },
+                institution_id=current_user.institution_id,
+                user_id=str(current_user.id),
+                location_id=current_user.location_id,
+            )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
     return call
 
 
-def _ensure_phi_reveal_allowed(current_user: User) -> None:
-    """Block platform-level users from revealing clinic PHI without break-glass."""
+def _ensure_phi_reveal_allowed(
+    current_user: User,
+    *,
+    action: AuditAction,
+    target_resource: str,
+) -> None:
+    """Block platform-level users from revealing clinic PHI without break-glass.
+
+    Records a FAILURE_UNAUTHORIZED audit row before raising so that
+    HIPAA §164.312(b) reviews can detect probing attempts. The denial
+    is itself a security-relevant event — leaving it un-audited would be
+    a gap.
+    """
     if current_user.role == UserRole.SUPER_ADMIN.value:
+        log_audit_background(
+            actor=AuditActor.ADMIN,
+            action=action,
+            target_resource=target_resource,
+            outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
+            metadata={
+                "actor_role": current_user.role,
+                "reason": "super_admin_phi_reveal_blocked",
+            },
+            institution_id=current_user.institution_id,
+            user_id=str(current_user.id),
+            location_id=current_user.location_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Super-admin PHI reveal requires a break-glass workflow",
         )
 
 
-async def _audit_phi_reveal(
+def _phi_reveal_audit_for_call(
     current_user: User,
     call: Call,
     *,
     action: AuditAction,
     target_suffix: str,
     extra_metadata: dict | None = None,
-) -> None:
+):
+    """Two-row pre-then-post audit context for PHI-reveal endpoints.
+
+    Use as ``async with _phi_reveal_audit_for_call(...): return Response(...)``.
+    The body must build the response that decrypts PHI; the context
+    manager writes INITIATED before the body runs (fail-closed: if the
+    audit write fails, no PHI is decrypted) and SUCCESS / FAILURE after.
+    """
     metadata = {
         "actor_role": current_user.role,
         "institution_id": current_user.institution_id,
@@ -274,15 +322,14 @@ async def _audit_phi_reveal(
         "contact_id": call.contact_id,
         **(extra_metadata or {}),
     }
-    await log_audit(
+    return phi_reveal_audit(
         actor=AuditActor.ADMIN,
         action=action,
         target_resource=f"call:{call.id}/{target_suffix}",
-        outcome=AuditOutcome.SUCCESS,
-        metadata=metadata,
         institution_id=current_user.institution_id,
-        user_id=current_user.id,
+        user_id=str(current_user.id),
         location_id=current_user.location_id,
+        metadata=metadata,
     )
 
 
@@ -329,7 +376,12 @@ async def list_calls(
     # Multi-tag filter: ?tags=complaint&tags=faq_handled
     tags: list[str] = Query(default=[]),
     direction: str | None = Query(None),
-    search: str | None = Query(None, description="Filter by contact name or phone (partial, case-insensitive)"),
+    search: str | None = Query(
+        None,
+        max_length=64,
+        pattern=r"^[^%_]*$",
+        description="Filter by contact name (partial, case-insensitive). Wildcards not allowed.",
+    ),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
 ) -> CallsListResponse:
@@ -338,7 +390,9 @@ async def list_calls(
 
     Supports filtering by status/tags, direction, date range, and contact
     name/phone search. Returns paginated results ordered newest-first.
-    PHI fields (transcript, recording_url) are excluded — use GET /{id} for those.
+    Clinic users see the call summary/next action needed for care operations.
+    Transcript bodies, recording URLs, and custom PHI fields are excluded from
+    the list response and require explicit audited reveal endpoints.
     """
     if not current_user.institution_id:
         raise HTTPException(
@@ -427,7 +481,8 @@ async def list_calls(
             c.contact_id for c in rows if c.contact_id
         ]
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.VIEW_CALLS,
             target_resource="calls:list",
             outcome=AuditOutcome.SUCCESS,
@@ -480,17 +535,13 @@ async def get_call(
 
         response = CallDetail(
             **base.model_dump(),
-            transcript=None,
-            transcript_with_tool_calls=None,
-            scrubbed_transcript_with_tool_calls=call.scrubbed_transcript_with_tool_calls,
-            recording_url=None,
-            full_transcript_available=bool(call.transcript_with_tool_calls),
-            raw_transcript_available=bool(call.transcript),
+            transcript_available=bool(call.transcript_with_tool_calls_encrypted),
             recording_available=bool(call.recording_url),
             custom_fields=custom_fields,
         )
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.VIEW_CALL_DETAIL,
             target_resource=f"call:{call.id}",
             outcome=AuditOutcome.SUCCESS,
@@ -505,47 +556,38 @@ async def get_call(
         return response
 
 
-@router.post("/{call_id}/reveal/full-transcript", response_model=FullTranscriptRevealResponse)
+@router.post("/{call_id}/reveal/transcript", response_model=TranscriptRevealResponse)
 @limiter.limit(RATE_READ)
-async def reveal_full_transcript(
+async def reveal_transcript(
     request: Request,
     call_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
-) -> FullTranscriptRevealResponse:
-    """Reveal the full structured transcript for a scoped clinic user and audit it."""
-    _ensure_phi_reveal_allowed(current_user)
+) -> TranscriptRevealResponse:
+    """Reveal the (scrubbed) structured transcript and audit the access.
+
+    Only Retell's PII-scrubbed transcript is stored, so this single endpoint
+    replaces the legacy raw/full split.
+    """
+    _ensure_phi_reveal_allowed(
+        current_user,
+        action=AuditAction.VIEW_FULL_TRANSCRIPT,
+        target_resource=f"call:{call_id}/transcript",
+    )
     async with get_db_session() as session:
-        call = await _get_scoped_call(session, call_id, current_user)
-        await _audit_phi_reveal(
+        call = await _get_scoped_call(
+            session, call_id, current_user,
+            audit_on_miss=AuditAction.VIEW_FULL_TRANSCRIPT,
+        )
+        async with _phi_reveal_audit_for_call(
             current_user,
             call,
             action=AuditAction.VIEW_FULL_TRANSCRIPT,
-            target_suffix="full-transcript",
-        )
-        return FullTranscriptRevealResponse(
-            call_id=call.id,
-            transcript_with_tool_calls=call.transcript_with_tool_calls,
-        )
-
-
-@router.post("/{call_id}/reveal/raw-transcript", response_model=RawTranscriptRevealResponse)
-@limiter.limit(RATE_READ)
-async def reveal_raw_transcript(
-    request: Request,
-    call_id: str,
-    current_user: Annotated[User, Depends(get_current_active_user)],
-) -> RawTranscriptRevealResponse:
-    """Reveal the raw plain-text transcript for a scoped clinic user and audit it."""
-    _ensure_phi_reveal_allowed(current_user)
-    async with get_db_session() as session:
-        call = await _get_scoped_call(session, call_id, current_user)
-        await _audit_phi_reveal(
-            current_user,
-            call,
-            action=AuditAction.VIEW_RAW_TRANSCRIPT,
-            target_suffix="raw-transcript",
-        )
-        return RawTranscriptRevealResponse(call_id=call.id, transcript=call.transcript)
+            target_suffix="transcript",
+        ):
+            return TranscriptRevealResponse(
+                call_id=call.id,
+                transcript_with_tool_calls=call.transcript_with_tool_calls,
+            )
 
 
 @router.post("/{call_id}/reveal/recording", response_model=RecordingRevealResponse)
@@ -556,21 +598,32 @@ async def reveal_recording(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> RecordingRevealResponse:
     """Reveal a time-limited call recording URL for a scoped clinic user and audit it."""
-    _ensure_phi_reveal_allowed(current_user)
+    _ensure_phi_reveal_allowed(
+        current_user,
+        action=AuditAction.VIEW_CALL_RECORDING,
+        target_resource=f"call:{call_id}/recording",
+    )
     async with get_db_session() as session:
-        call = await _get_scoped_call(session, call_id, current_user)
-        # Lazy import: boto3 is only loaded when a recording is actually revealed,
-        # keeping it out of the import graph for hot paths and unit tests.
-        from src.app.tasks.recordings import generate_presigned_url
-
-        signed_recording_url = generate_presigned_url(call.recording_url) if call.recording_url else None
-        await _audit_phi_reveal(
+        call = await _get_scoped_call(
+            session, call_id, current_user,
+            audit_on_miss=AuditAction.VIEW_CALL_RECORDING,
+        )
+        async with _phi_reveal_audit_for_call(
             current_user,
             call,
             action=AuditAction.VIEW_CALL_RECORDING,
             target_suffix="recording",
-        )
-        return RecordingRevealResponse(call_id=call.id, recording_url=signed_recording_url)
+        ):
+            # Lazy import: boto3 is only loaded when a recording is actually revealed,
+            # keeping it out of the import graph for hot paths and unit tests.
+            from src.app.tasks.recordings import generate_presigned_url
+
+            signed_recording_url = (
+                generate_presigned_url(call.recording_url) if call.recording_url else None
+            )
+            return RecordingRevealResponse(
+                call_id=call.id, recording_url=signed_recording_url
+            )
 
 
 @router.post(
@@ -585,9 +638,16 @@ async def reveal_custom_phi_field(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> CustomFieldRevealResponse:
     """Reveal a single PHI custom field for a scoped clinic user and audit it."""
-    _ensure_phi_reveal_allowed(current_user)
+    _ensure_phi_reveal_allowed(
+        current_user,
+        action=AuditAction.VIEW_CUSTOM_PHI_FIELD,
+        target_resource=f"call:{call_id}/custom-fields/{field_key}",
+    )
     async with get_db_session() as session:
-        call = await _get_scoped_call(session, call_id, current_user)
+        call = await _get_scoped_call(
+            session, call_id, current_user,
+            audit_on_miss=AuditAction.VIEW_CUSTOM_PHI_FIELD,
+        )
 
         cf_svc = CustomFieldService(session)
         cf_pairs = await cf_svc.get_values_for_entity(
@@ -603,18 +663,18 @@ async def reveal_custom_phi_field(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Field is not PHI and does not require reveal",
                 )
-            await _audit_phi_reveal(
+            async with _phi_reveal_audit_for_call(
                 current_user,
                 call,
                 action=AuditAction.VIEW_CUSTOM_PHI_FIELD,
                 target_suffix=f"custom-fields/{field_key}",
                 extra_metadata={"field_key": field_key},
-            )
-            return CustomFieldRevealResponse(
-                call_id=call.id,
-                field_key=field_key,
-                value=val.get_value(is_phi=True),
-            )
+            ):
+                return CustomFieldRevealResponse(
+                    call_id=call.id,
+                    field_key=field_key,
+                    value=val.get_value(is_phi=True),
+                )
 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Custom field not found")
 
@@ -665,7 +725,8 @@ async def resolve_callback(
 
         logger.info("Callback resolved: call=%s institution=%s", call_id, current_user.institution_id)
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.LOCATION_UPDATE,
             target_resource=f"call:{call.id}/callback",
             outcome=AuditOutcome.SUCCESS,

@@ -20,6 +20,8 @@ from src.app.services.sms_privacy import sanitize_provider_error
 
 logger = logging.getLogger(__name__)
 
+SAFE_SUMMARY_PLACEHOLDER = "Available in the authenticated dashboard."
+
 
 def mask_phone(phone: str | None) -> str:
     """Mask phone number for alerts while keeping minimal operator context."""
@@ -75,7 +77,10 @@ def _build_template_variables(payload: dict[str, Any]) -> dict[str, str]:
         "duration": format_duration(payload.get("duration_seconds")),
         "primary_tag": _tag_label(payload.get("primary_tag")),
         "all_tags": ", ".join(tags) if tags else "None",
-        "summary": payload.get("summary") or "No summary available.",
+        # Legacy/custom templates may still contain {{ summary }}. Never pass
+        # call.summary into email; keep details behind authenticated dashboard
+        # access where RBAC, tenant scope, and audit controls apply.
+        "summary": SAFE_SUMMARY_PLACEHOLDER,
         "patient_name": payload.get("appointment_patient_redacted") or "Not provided",
         "appointment_datetime": payload.get("appointment_datetime") or "Not provided",
         "appointment_provider": payload.get("appointment_provider") or "Not provided",

@@ -44,6 +44,16 @@ class PasswordService:
             return False
 
     @classmethod
+    def compute_timing_safe_dummy_hash(cls) -> str:
+        """Return an Argon2id hash usable for constant-time login verification.
+
+        Used by the /login route to perform a dummy verify when a user is not
+        found, so response timing cannot distinguish "no such email" from
+        "email exists but wrong password".
+        """
+        return cls._HASHER.hash(secrets.token_urlsafe(32))
+
+    @classmethod
     def needs_rehash(cls, password_hash: str | None) -> bool:
         """Return True when a stored password hash should be upgraded."""
         if not password_hash:

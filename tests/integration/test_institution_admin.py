@@ -12,8 +12,19 @@ from httpx import AsyncClient
 
 from src.app.api.deps import get_current_admin
 from src.app.main import app
-from src.app.models.audit_log import AuditAction
+from src.app.models.audit_log import AuditAction, AuditOutcome
 from src.app.models.user import User, UserRole
+
+
+def _latest_audit_entry(entries, action: AuditAction, *, target_resource: str | None = None):
+    matches = [
+        entry
+        for entry in entries
+        if entry.action == action
+        and (target_resource is None or entry.target_resource == target_resource)
+    ]
+    assert matches, f"Expected audit entry for {action}"
+    return matches[-1]
 
 
 @pytest.mark.asyncio
@@ -95,7 +106,10 @@ async def test_create_institution_with_initial_admin(async_client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_admin_reinvite_institution_user_logs_reinvite_action(async_client: AsyncClient):
+async def test_admin_reinvite_institution_user_logs_reinvite_action(
+    async_client: AsyncClient,
+    audit_log_entries,
+):
     """SUPER_ADMIN reinvite should reuse the same user and emit USER_REINVITED."""
     current_admin = User(
         id="99999999-9999-9999-9999-999999999999",
@@ -116,9 +130,7 @@ async def test_admin_reinvite_institution_user_logs_reinvite_action(async_client
         "src.app.api.routes.admin_institutions.InstitutionService"
     ) as MockInstitutionService, patch(
         "src.app.api.routes.admin_institutions.UserInviteService"
-    ) as MockUserInviteService, patch(
-        "src.app.api.routes.admin_institutions.log_audit_background"
-    ) as mock_log_audit:
+    ) as MockUserInviteService:
         mock_session = AsyncMock()
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
@@ -150,4 +162,13 @@ async def test_admin_reinvite_institution_user_logs_reinvite_action(async_client
     assert response.status_code == 200
     assert response.json()["message"] == "Invite re-sent to owner@example.com"
     mock_invite_service.reinvite_user.assert_called_once_with(target_user)
-    assert mock_log_audit.call_args.kwargs["action"] == AuditAction.USER_REINVITED
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.USER_REINVITED,
+        target_resource="user:owner@example.com:reinvite",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.user_id == current_admin.id
+    assert entry.institution_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    assert entry.metadata["old_user_id"] == target_user.id
+    assert entry.metadata["new_user_id"] == target_user.id

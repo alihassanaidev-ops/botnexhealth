@@ -4,6 +4,7 @@ Integration tests for institution portal endpoints.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,8 +18,19 @@ from src.app.api.deps import (
     get_current_location_admin,
 )
 from src.app.main import app
-from src.app.models.audit_log import AuditAction
+from src.app.models.audit_log import AuditAction, AuditOutcome
 from src.app.models.user import User, UserRole, InviteStatus
+
+
+def _latest_audit_entry(entries, action: AuditAction, *, target_resource: str | None = None):
+    matches = [
+        entry
+        for entry in entries
+        if entry.action == action
+        and (target_resource is None or entry.target_resource == target_resource)
+    ]
+    assert matches, f"Expected audit entry for {action}"
+    return matches[-1]
 
 
 @pytest.mark.asyncio
@@ -253,8 +265,25 @@ async def test_location_admin_can_invite_staff_for_own_location(async_client: As
         invite_status=InviteStatus.PENDING.value,
     )
     app.dependency_overrides[get_current_location_admin] = lambda: mock_user
+    # The route also has `Depends(require_location_scope())`, which transitively
+    # depends on get_current_institution_or_location_user. Without overriding
+    # both, the outer dep tries to validate a real JWT and rejects the request.
+    app.dependency_overrides[get_current_institution_or_location_user] = lambda: mock_user
+
+    # require_location_scope translates the path slug → location_id via its
+    # own get_db_session binding. Stub it so the location_admin's own
+    # location matches the slug.
+    @asynccontextmanager
+    async def _scope_db():
+        scope_session = AsyncMock()
+        scope_result = MagicMock()
+        scope_result.scalar_one_or_none.return_value = mock_user.location_id
+        scope_session.execute.return_value = scope_result
+        yield scope_session
 
     with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db, patch(
+        "src.app.api.deps_scope.get_db_session", new=_scope_db
+    ), patch(
         "src.app.api.routes.institution_portal.UserInviteService"
     ) as MockUserInviteService, patch(
         "src.app.api.routes.institution_portal.InstitutionService"
@@ -330,7 +359,10 @@ async def test_deactivate_institution_user_rejects_self(async_client: AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_deactivate_institution_user_soft_deletes_target(async_client: AsyncClient):
+async def test_deactivate_institution_user_soft_deletes_target(
+    async_client: AsyncClient,
+    audit_log_entries,
+):
     """Institution admin deactivation should soft-delete the target user."""
     mock_user = User(
         id="11111111-1111-1111-1111-111111111111",
@@ -348,9 +380,7 @@ async def test_deactivate_institution_user_soft_deletes_target(async_client: Asy
     )
     app.dependency_overrides[get_current_institution_admin] = lambda: mock_user
 
-    with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.institution_portal.log_audit_background"
-    ) as mock_log_audit:
+    with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db:
         mock_session = AsyncMock()
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
@@ -368,11 +398,22 @@ async def test_deactivate_institution_user_soft_deletes_target(async_client: Asy
     assert response.status_code == 200
     assert target_user.is_active is False
     assert target_user.deleted_at is not None
-    assert mock_log_audit.call_args.kwargs["action"] == AuditAction.LOCATION_USER_DELETE
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.LOCATION_USER_DELETE,
+        target_resource=f"user:{target_user.id}",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.user_id == mock_user.id
+    assert entry.institution_id == mock_user.institution_id
+    assert entry.metadata["deactivated_user_id"] == target_user.id
 
 
 @pytest.mark.asyncio
-async def test_reinvite_institution_user_success(async_client: AsyncClient):
+async def test_reinvite_institution_user_success(
+    async_client: AsyncClient,
+    audit_log_entries,
+):
     """Reinvite rotates local invite state and keeps the same user UUID."""
     mock_user = User(
         id="11111111-1111-1111-1111-111111111111",
@@ -395,9 +436,7 @@ async def test_reinvite_institution_user_success(async_client: AsyncClient):
 
     with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db, patch(
         "src.app.api.routes.institution_portal.UserInviteService"
-    ) as MockUserInviteService, patch(
-        "src.app.api.routes.institution_portal.log_audit_background"
-    ) as mock_log_audit:
+    ) as MockUserInviteService:
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_get_db.return_value.__aenter__.return_value = mock_session
@@ -424,7 +463,16 @@ async def test_reinvite_institution_user_success(async_client: AsyncClient):
     body = response.json()
     assert body["user_id"] == "22222222-2222-2222-2222-222222222222"
     mock_invite_service.reinvite_user.assert_called_once_with(target_user)
-    assert mock_log_audit.call_args.kwargs["action"] == AuditAction.USER_REINVITED
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.USER_REINVITED,
+        target_resource="user:staff@clinic.com:reinvite",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.user_id == mock_user.id
+    assert entry.location_id == target_user.location_id
+    assert entry.metadata["old_user_id"] == target_user.id
+    assert entry.metadata["new_user_id"] == target_user.id
 
 
 
@@ -503,6 +551,10 @@ async def test_create_transfer_number_location_admin_success(async_client: Async
         invite_status=InviteStatus.PENDING.value,
     )
     app.dependency_overrides[get_current_institution_or_location_admin] = lambda: mock_user
+    # The route also has `Depends(require_location_scope())`, which transitively
+    # depends on get_current_institution_or_location_user. Override both so
+    # the request isn't rejected by the unmocked JWT validator.
+    app.dependency_overrides[get_current_institution_or_location_user] = lambda: mock_user
 
     loc = SimpleNamespace(
         id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -511,7 +563,19 @@ async def test_create_transfer_number_location_admin_success(async_client: Async
         institution_id=mock_user.institution_id,
     )
 
-    with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db:
+    # require_location_scope translates the path slug → location_id via its
+    # own get_db_session binding.
+    @asynccontextmanager
+    async def _scope_db():
+        scope_session = AsyncMock()
+        scope_result = MagicMock()
+        scope_result.scalar_one_or_none.return_value = mock_user.location_id
+        scope_session.execute.return_value = scope_result
+        yield scope_session
+
+    with patch("src.app.api.routes.institution_portal.get_db_session") as mock_get_db, patch(
+        "src.app.api.deps_scope.get_db_session", new=_scope_db
+    ):
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_session.flush = AsyncMock()

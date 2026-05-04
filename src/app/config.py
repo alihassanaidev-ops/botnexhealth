@@ -4,7 +4,6 @@ import ipaddress
 import logging
 import os
 from pathlib import Path
-from typing import Any
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 import structlog
@@ -162,6 +161,27 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CORS_ALLOWED_ORIGINS must not be '*' in production. "
                 "Set explicit origins, e.g. 'https://dashboard.yourdomain.com'"
+            )
+
+        # ENCRYPTION_KEY is the AES-256-GCM key for PHI columns (call
+        # transcripts, contact phone/email, SMS bodies, etc). It MUST be set
+        # explicitly in production and MUST be distinct from JWT_SECRET — see
+        # docs/PRINCIPAL_REVIEW.md. The same key material is reused (via
+        # HKDF) for keyed hashes (phone-hash, retell-log-hash), so rotating
+        # JWT_SECRET should never invalidate PHI lookups.
+        if self.is_production and not self.encryption_key:
+            raise ValueError(
+                "ENCRYPTION_KEY must be set in production. "
+                "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
+        if (
+            self.is_production
+            and self.encryption_key
+            and self.encryption_key == self.jwt_secret
+        ):
+            raise ValueError(
+                "ENCRYPTION_KEY must be distinct from JWT_SECRET. "
+                "Reusing the same secret means JWT rotation invalidates encrypted PHI."
             )
 
         if self.cookie_samesite.lower() not in {"strict", "lax", "none"}:

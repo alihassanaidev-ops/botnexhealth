@@ -51,27 +51,33 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         self._location_id = location_id
 
     @classmethod
-    async def create(cls, institution: Institution, location: InstitutionLocation | None = None) -> NexHealthAdapter:
-        """Factory: build an institution-specific NexHealth client and wrap it.
+    async def create(cls, institution: Institution, location: InstitutionLocation) -> NexHealthAdapter:
+        """Build a NexHealth adapter scoped to an institution + location.
 
-        If a location is provided, its subdomain/location_id override the
-        institution-level defaults (falling back to institution values when unset).
+        The platform shares a single NexHealth account, so the API key comes
+        from global settings. Per-clinic isolation is provided exclusively by
+        ``location.nexhealth_subdomain`` and ``location.nexhealth_location_id``;
+        we fail closed if either is missing to prevent a misconfigured clinic
+        from silently routing to whichever subdomain happens to be in the
+        global env.
         """
         from src.app.config import Settings, settings as global_settings
         from src.app.nexhealth.client import NexHealthClient
 
-        # Location overrides institution, institution overrides global
-        subdomain = (
-            (location.nexhealth_subdomain if location else None)
-            or global_settings.nexhealth_subdomain
-        )
-        location_id = (
-            (location.nexhealth_location_id if location else None)
-            or global_settings.nexhealth_location_id
-        )
+        api_key = global_settings.nexhealth_api_key
+        if not api_key:
+            raise RuntimeError("NEXHEALTH_API_KEY is not configured")
+
+        subdomain = location.nexhealth_subdomain
+        location_id = location.nexhealth_location_id
+        if not subdomain or not location_id:
+            raise ValueError(
+                f"Location {location.slug} is missing nexhealth_subdomain or "
+                "nexhealth_location_id; cannot create PMS adapter"
+            )
 
         institution_settings = Settings(
-            nexhealth_api_key=institution.nexhealth_api_key or global_settings.nexhealth_api_key,
+            nexhealth_api_key=api_key,
             nexhealth_subdomain=subdomain,
             nexhealth_location_id=location_id,
         )

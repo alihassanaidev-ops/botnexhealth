@@ -6,7 +6,8 @@
   "appEnv": "staging",
   "logLevel": "info",
   "network": {
-    "vpcId": "vpc-0bed8eb67fa340f59"
+    "maxAzs": 2,
+    "natGateways": 1
   },
   "corsAllowedOrigins": [
     "https://d1uhqlnfxonu18.cloudfront.net"

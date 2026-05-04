@@ -20,7 +20,7 @@ from src.app.api.deps import get_current_active_user
 from src.app.api.rate_limit import RATE_READ, limiter
 from src.app.api.routes.calls import ContactSummary, _location_agent_filter
 from src.app.database import get_db_session
-from src.app.models.audit_log import AuditAction, AuditOutcome
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call import Call, CallStatus
 from src.app.models.contact import Contact
 from src.app.models.user import User
@@ -175,7 +175,8 @@ async def list_callbacks(
         )
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.VIEW_CALLS,
             target_resource="callbacks:list",
             outcome=AuditOutcome.SUCCESS,

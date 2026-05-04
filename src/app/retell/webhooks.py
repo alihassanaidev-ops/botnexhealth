@@ -1,4 +1,9 @@
-"""Retell webhook handlers for call events (call_analyzed, call_ended)."""
+"""Retell webhook handlers for call events (call_analyzed, call_ended).
+
+We accept only the PII-scrubbed variants from Retell — raw transcripts,
+raw analysis, and the unscrubbed recording URL are intentionally ignored
+at the webhook boundary. PHI never enters our datastore in raw form.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -23,18 +28,13 @@ router = APIRouter(prefix="/retell", tags=["Retell Webhooks"])
 verify_webhook_signature = get_signature_dependency(get_retell_secret)
 
 
-def _preferred_recording_url(call) -> str | None:
-    """Prefer Retell's scrubbed recording URL whenever it is available."""
-    return getattr(call, "scrubbed_recording_url", None) or getattr(call, "recording_url", None)
-
-
 # ============================================================================
 # Pydantic Models for Retell call_analyzed webhook
 # ============================================================================
 
 
 class CallAnalysisData(BaseModel):
-    """Custom analysis data extracted by Retell."""
+    """Scrubbed analysis data extracted by Retell."""
     call_summary: str | None = Field(None, alias="call_summary")
     in_voicemail: bool | None = None
     user_sentiment: str | None = None
@@ -43,7 +43,13 @@ class CallAnalysisData(BaseModel):
 
 
 class RetellCallWebhook(BaseModel):
-    """Call data from Retell webhook."""
+    """Call data from Retell webhook.
+
+    Only the scrubbed variants of recording, transcript, and analysis are
+    consumed. Raw fields received in the payload are ignored.
+    """
+    model_config = ConfigDict(extra="ignore")
+
     call_id: str
     call_type: str | None = None
     agent_id: str | None = None
@@ -55,15 +61,10 @@ class RetellCallWebhook(BaseModel):
     duration_ms: int | None = None
     start_timestamp: int | None = None
     end_timestamp: int | None = None
-    transcript: str | None = None
-    recording_url: str | None = None
-    scrubbed_recording_url: str | None = None   # PII-scrubbed version (preferred for HIPAA)
-    # Structured turn-by-turn transcript arrays from Retell
-    transcript_with_tool_calls: list[dict] | None = None        # full unredacted
-    scrubbed_transcript_with_tool_calls: list[dict] | None = None  # PII-scrubbed (HIPAA)
+    scrubbed_recording_url: str | None = None
+    scrubbed_transcript_with_tool_calls: list[dict] | None = None
     disconnection_reason: str | None = None
-    call_analysis: CallAnalysisData | None = None
-    scrubbed_call_analysis: CallAnalysisData | None = None  # PII-scrubbed (preferred for HIPAA)
+    scrubbed_call_analysis: CallAnalysisData | None = None
     # Dynamic variables collected during the call (name, email, etc.)
     collected_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
 
@@ -76,6 +77,11 @@ class RetellWebhookEvent(BaseModel):
 
 async def _begin_webhook_processing(call_id: str, event_type: str) -> tuple[bool, str]:
     """Create or claim idempotency record for a webhook event.
+
+    Commits the row before returning so a downstream failure can never leave
+    the claim in an uncommitted state. Without the explicit commit a later
+    rollback would erase the PROCESSING marker and the next retry would
+    re-execute the side-effect.
 
     Returns:
         (can_process, reason)
@@ -104,6 +110,7 @@ async def _begin_webhook_processing(call_id: str, event_type: str) -> tuple[bool
             existing.attempts += 1
             existing.last_error = None
             existing.updated_at = datetime.now(timezone.utc)
+            await session.commit()
             return True, "retry_failed_event"
 
         event = RetellWebhookEvent(
@@ -117,6 +124,7 @@ async def _begin_webhook_processing(call_id: str, event_type: str) -> tuple[bool
         session.add(event)
         try:
             await session.flush()
+            await session.commit()
         except IntegrityError:
             await session.rollback()
             return False, "already_processing"
@@ -131,7 +139,11 @@ async def _finish_webhook_processing(
     institution_id: str | None = None,
     error: str | None = None,
 ) -> None:
-    """Update idempotency row after webhook processing finishes."""
+    """Update idempotency row after webhook processing finishes.
+
+    Commits explicitly so terminal status is durable even if the surrounding
+    request handler raises after this call.
+    """
     from src.app.database import get_db_session
     from src.app.models.retell_webhook_event import RetellWebhookEvent
 
@@ -151,6 +163,7 @@ async def _finish_webhook_processing(
         row.institution_id = institution_id or row.institution_id
         row.last_error = error
         row.updated_at = datetime.now(timezone.utc)
+        await session.commit()
 
 
 # ============================================================================
@@ -216,38 +229,30 @@ async def handle_retell_webhook(
             except Exception as e:
                 logger.warning(f"Failed to lookup institution by agent_id {event.call.agent_id}: {e}")
 
-        # Audit webhook received
-        from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
-        log_audit_background(
-            actor=AuditActor.RETELL_AGENT,
-            action=AuditAction.WEBHOOK_RECEIVED,
-            target_resource=f"call:{hash_for_logging(event.call.call_id)}",
-            outcome=AuditOutcome.SUCCESS,
-            metadata={
-                "event_type": event.event,
-                "call_id": hash_for_logging(event.call.call_id),
-            },
-            institution_id=institution.id if institution else None,
-        )
+        # NOTE: the audit row for this webhook is written ONCE at the bottom
+        # of this function — either the success path (after processing
+        # completes) or the except branch (with FAILURE_INTERNAL). Writing it
+        # here too produced two rows per webhook on failure, which misled
+        # downstream audit reports.
 
         # Process Contact & Call records if we identified the institution
         if institution:
             from src.app.database import get_db_session
             from src.app.services.post_call_service import PostCallService
-            
+
             async with get_db_session() as session:
                 post_call_service = PostCallService(session)
-                
-                # event.call is RetellCallWebhook, map it to the expected dict for analysis
-                # Prefer PII-scrubbed analysis for HIPAA; fall back to raw only if scrubbed absent
-                _analysis_src = event.call.scrubbed_call_analysis or event.call.call_analysis
-                analysis_dict = _analysis_src.model_dump() if _analysis_src else {}
+
+                # Only the scrubbed analysis is used. Raw analysis is never persisted.
+                analysis_dict = (
+                    event.call.scrubbed_call_analysis.model_dump()
+                    if event.call.scrubbed_call_analysis
+                    else {}
+                )
                 # Merge top-level collected_dynamic_variables so the service can use them
-                # as a fallback for name/email when custom_analysis_data fields are missing
+                # as a source for name/email when custom_analysis_data fields are missing.
                 analysis_dict["collected_dynamic_variables"] = event.call.collected_dynamic_variables or {}
-                
-                # Transform to RetellCallData format expected by service
-                # The webhook event structure differs slightly from the direct API structure
+
                 from src.app.retell.models import RetellCallData
                 mapped_call_data = RetellCallData(
                     call_id=event.call.call_id,
@@ -260,26 +265,22 @@ async def handle_retell_webhook(
                     disconnection_reason=event.call.disconnection_reason,
                     start_timestamp=event.call.start_timestamp,
                     end_timestamp=event.call.end_timestamp,
-                    transcript=event.call.transcript,
-                    # Prefer PII-scrubbed URL for HIPAA; fall back to raw only if scrubbed absent
-                    recording_url=event.call.scrubbed_recording_url or event.call.recording_url,
-                    # Structured JSONB transcripts (turn-by-turn with tool calls)
-                    transcript_with_tool_calls=event.call.transcript_with_tool_calls,
-                    scrubbed_transcript_with_tool_calls=event.call.scrubbed_transcript_with_tool_calls,
+                    recording_url=event.call.scrubbed_recording_url,
+                    transcript_with_tool_calls=event.call.scrubbed_transcript_with_tool_calls,
                 )
-                
+
                 # Call service to save to DB (analysis_dict is always a dict now)
                 saved_call = await post_call_service.process_call_analyzed_event(
                     institution_id=institution.id,
                     webhook_call=mapped_call_data,
                     analysis=analysis_dict,
                 )
-                
+
                 # Commit the transaction so contacts and calls are saved!
                 await session.commit()
 
             # ── Recording upload: enqueue S3 upload after DB commit ──
-            _rec_url = _preferred_recording_url(event.call)
+            _rec_url = event.call.scrubbed_recording_url
             if _rec_url:
                 try:
                     from src.app.tasks.recordings import enqueue_recording_upload
@@ -337,14 +338,15 @@ async def handle_retell_webhook(
                 )
 
             # ── Auto-SMS: enqueue after commit (durable via Celery) ────────
-            # Use raw call_analysis (not scrubbed) so patient name is intact.
-            _raw_analysis = event.call.call_analysis
-            _sms_body: str | None = (
-                (_raw_analysis.custom_analysis_data or {}).get("send_sms")
-                if _raw_analysis
-                else None
+            # The AI generates the SMS body as part of custom_analysis_data;
+            # Retell preserves agent-generated outbound text through scrubbing
+            # because it was synthesized for transmission, not extracted from
+            # the patient's speech.
+            _scrubbed_analysis = event.call.scrubbed_call_analysis
+            _custom_analysis = (
+                _scrubbed_analysis.custom_analysis_data if _scrubbed_analysis else {}
             )
-            _custom_analysis = _raw_analysis.custom_analysis_data if _raw_analysis else {}
+            _sms_body: str | None = (_custom_analysis or {}).get("send_sms")
             _fallback_from = (
                 _custom_analysis.get("from_number")
                 or _custom_analysis.get("phone_number")
@@ -426,6 +428,25 @@ async def handle_retell_webhook(
             institution_id=institution.id if institution else None,
         )
 
+        # Single audit row per webhook — written here, after processing has
+        # actually completed. Failure path writes its own row in the except
+        # branch below. We carry location_id forward because each Retell
+        # agent maps 1:1 to a location, so call audits should be scoped at
+        # that level (compliance reports filter by location).
+        from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
+        log_audit_background(
+            actor=AuditActor.RETELL_AGENT,
+            action=AuditAction.WEBHOOK_RECEIVED,
+            target_resource=f"call:{hash_for_logging(event.call.call_id)}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "event_type": event.event,
+                "call_id": hash_for_logging(event.call.call_id),
+            },
+            institution_id=institution.id if institution else None,
+            location_id=str(location.id) if location else None,
+        )
+
         return {
             "status": "success",
             "event": event.event,
@@ -435,19 +456,33 @@ async def handle_retell_webhook(
     except Exception as e:
         safe_error = sanitize_provider_error(e)
         logger.exception("Webhook processing error: %s", safe_error)
-        
-        # Audit Webhook Failure (General)
+
+        # Audit webhook failure — include the institution_id (and call_id
+        # hash) when we resolved them before the crash, so the failure row
+        # is properly tenant-scoped for compliance reports.
         try:
             from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
+            failure_target = (
+                f"call:{hash_for_logging(processing_call_id)}"
+                if processing_call_id
+                else "webhook:retell"
+            )
+            failure_metadata: dict[str, Any] = {"error": safe_error}
+            if processing_event_type:
+                failure_metadata["event_type"] = processing_event_type
+            if processing_call_id:
+                failure_metadata["call_id"] = hash_for_logging(processing_call_id)
             log_audit_background(
                 actor=AuditActor.RETELL_AGENT,
                 action=AuditAction.WEBHOOK_RECEIVED,
-                target_resource="webhook:retell",
+                target_resource=failure_target,
                 outcome=AuditOutcome.FAILURE_INTERNAL,
-                metadata={"error": safe_error},
+                metadata=failure_metadata,
+                institution_id=institution.id if institution else None,
+                location_id=str(location.id) if location else None,
             )
         except Exception:
-            pass # Failsafe
+            pass  # Failsafe
 
         try:
             from src.app.services.dead_letter import capture_dead_letter

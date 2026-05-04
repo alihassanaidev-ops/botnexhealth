@@ -7,7 +7,7 @@ import logging
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -21,6 +21,37 @@ logger = logging.getLogger(__name__)
 
 _ALEMBIC_VERSION_TABLE = "alembic_version"
 
+_AUDIT_LOG_HARDENING_SQL = (
+    """
+    CREATE OR REPLACE FUNCTION prevent_audit_log_mutation()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        RAISE EXCEPTION 'audit_logs table is append-only. UPDATE and DELETE are prohibited (HIPAA §164.312(b)).';
+        RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql;
+    """,
+    "DROP TRIGGER IF EXISTS audit_logs_no_update ON audit_logs;",
+    """
+    CREATE TRIGGER audit_logs_no_update
+        BEFORE UPDATE ON audit_logs
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_audit_log_mutation();
+    """,
+    "DROP TRIGGER IF EXISTS audit_logs_no_delete ON audit_logs;",
+    """
+    CREATE TRIGGER audit_logs_no_delete
+        BEFORE DELETE ON audit_logs
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_audit_log_mutation();
+    """,
+    "ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_actor_check;",
+    """
+    ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_actor_check
+        CHECK (actor IN ('RETELL_AGENT', 'ADMIN', 'SYSTEM', 'API_CLIENT'));
+    """,
+)
+
 
 async def _create_super_admin(database_url: str) -> None:
     from sqlalchemy import select
@@ -32,7 +63,9 @@ async def _create_super_admin(database_url: str) -> None:
     try:
         async with async_session() as session:
             email = "zulkhaifahmed@gmail.com"
-            result = await session.execute(select(User).where(User.email == email))
+            result = await session.execute(
+                select(User).where(User.email == email, User.deleted_at.is_(None))
+            )
             if not result.scalar_one_or_none():
                 user = User(
                     email=email,
@@ -65,6 +98,8 @@ async def _create_schema(database_url: str) -> None:
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all, checkfirst=True)
+            for statement in _AUDIT_LOG_HARDENING_SQL:
+                await conn.execute(text(statement))
     finally:
         await engine.dispose()
 

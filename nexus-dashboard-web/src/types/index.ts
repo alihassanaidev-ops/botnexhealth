@@ -309,26 +309,19 @@ export interface TranscriptTurn {
 }
 
 export interface CallDetail extends CallRecord {
-    // Raw plain-text transcript is only populated after an audited reveal.
-    transcript: string | null;
-    // Structured JSONB turn-by-turn arrays from the voice platform
-    transcript_with_tool_calls: TranscriptTurn[] | null;       // populated after audited reveal
-    scrubbed_transcript_with_tool_calls: TranscriptTurn[] | null;  // PII-scrubbed (default UI)
-    recording_url: string | null;                              // populated after audited reveal
-    full_transcript_available: boolean;
-    raw_transcript_available: boolean;
+    // The detail response intentionally carries no PHI bodies — only flags
+    // indicating whether a reveal is possible. Transcripts and recordings
+    // come back from explicit, audited reveal endpoints below. The backend
+    // stores only the PII-scrubbed structured transcript (raw / unscrubbed
+    // variants were dropped in migration 20260505_encrypt_call_transcript).
+    transcript_available: boolean;
     recording_available: boolean;
     custom_fields: CustomFieldValue[];
 }
 
-export interface FullTranscriptRevealResponse {
+export interface TranscriptRevealResponse {
     call_id: string;
     transcript_with_tool_calls: TranscriptTurn[] | null;
-}
-
-export interface RawTranscriptRevealResponse {
-    call_id: string;
-    transcript: string | null;
 }
 
 export interface RecordingRevealResponse {

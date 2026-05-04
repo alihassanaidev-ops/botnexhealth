@@ -91,7 +91,10 @@ async def _upload_recording_async(
     async with get_db_session() as session:
         call = (
             await session.execute(
-                select(Call).where(Call.id == call_id)
+                select(Call).where(
+                    Call.id == call_id,
+                    Call.institution_id == institution_id,
+                )
             )
         ).scalar_one_or_none()
 

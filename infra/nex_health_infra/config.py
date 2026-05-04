@@ -82,6 +82,16 @@ class EnvironmentConfig:
     frontend: FrontendConfig
     external_secrets: dict[str, str]
     optional_secrets: dict[str, str]
+    # Optional email for CloudWatch alarm notifications (RDS metrics, audit
+    # persistence failures, ALB 5xx). Leave empty to provision the alarms +
+    # SNS topic without subscribers — operators can add a subscription
+    # manually in the console without redeploying.
+    alarm_email: str | None = None
+    # Per-IP edge rate limit (requests / 5-minute window). Layered on top of
+    # slowapi (per-process) so a flood at the edge gets blocked before it
+    # touches the application. AWS default minimum is 100; raise as traffic
+    # grows. 2_000 is comfortable for staging.
+    waf_rate_limit_per_5min: int = 2000
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -170,4 +180,6 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         ),
         external_secrets=dict(raw.get("externalSecrets", {})),
         optional_secrets=dict(raw.get("optionalSecrets", {})),
+        alarm_email=raw.get("alarmEmail") or None,
+        waf_rate_limit_per_5min=int(raw.get("wafRateLimitPer5Min", 2000)),
     )

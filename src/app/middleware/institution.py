@@ -78,12 +78,17 @@ class InstitutionMiddleware(BaseHTTPMiddleware):
                     # Resolve location if header present
                     location_slug = request.headers.get(LOCATION_HEADER)
                     if location_slug:
-                        location = await service.get_location_by_slug(location_slug)
-                        if location and location.institution_id == institution.id and location.is_active:
+                        location = await service.get_location_by_slug(
+                            location_slug, institution.id
+                        )
+                        if location and location.is_active:
                             request.state.location = location
                             logger.debug(f"Resolved location: {location.slug}")
                         else:
-                            logger.warning(f"Location not found or not in institution: {location_slug}")
+                            logger.warning(
+                                f"Location not found or inactive in institution "
+                                f"{institution.slug}: {location_slug}"
+                            )
                             request.state.location = None
                     else:
                         request.state.location = None

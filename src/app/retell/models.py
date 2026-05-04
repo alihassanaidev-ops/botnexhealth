@@ -46,7 +46,11 @@ class FunctionError(BaseModel):
 
 
 class RetellCallData(BaseModel):
-    """Call data included in webhook events."""
+    """Call data included in webhook events.
+
+    Only PII-scrubbed Retell outputs are surfaced. The handler is responsible
+    for selecting the scrubbed sources at the webhook boundary.
+    """
     call_id: str
     call_type: str | None = None
     from_number: str | None = None
@@ -59,10 +63,8 @@ class RetellCallData(BaseModel):
     start_timestamp: int | None = None
     end_timestamp: int | None = None
     disconnection_reason: str | None = None
-    transcript: str | None = None
-    recording_url: str | None = None  # Always mapped from scrubbed_recording_url in webhook handler
-    transcript_with_tool_calls: list[dict] | None = None          # unredacted full conversation
-    scrubbed_transcript_with_tool_calls: list[dict] | None = None  # PII-scrubbed (default for UI)
+    recording_url: str | None = None  # mapped from scrubbed_recording_url at the webhook boundary
+    transcript_with_tool_calls: list[dict] | None = None  # PII-scrubbed structured transcript
 
 
 class WebhookEvent(BaseModel):

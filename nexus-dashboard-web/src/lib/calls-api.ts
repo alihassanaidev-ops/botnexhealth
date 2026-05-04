@@ -10,9 +10,8 @@ import type {
     CallRecord,
     CallsListResponse,
     CustomFieldRevealResponse,
-    FullTranscriptRevealResponse,
-    RawTranscriptRevealResponse,
     RecordingRevealResponse,
+    TranscriptRevealResponse,
 } from "@/types";
 
 export interface CallsFilters {
@@ -49,16 +48,9 @@ export async function getCall(callId: string): Promise<CallDetail> {
     return data;
 }
 
-export async function revealFullTranscript(callId: string): Promise<FullTranscriptRevealResponse> {
-    const { data } = await api.post<FullTranscriptRevealResponse>(
-        `/institution/calls/${callId}/reveal/full-transcript`,
-    );
-    return data;
-}
-
-export async function revealRawTranscript(callId: string): Promise<RawTranscriptRevealResponse> {
-    const { data } = await api.post<RawTranscriptRevealResponse>(
-        `/institution/calls/${callId}/reveal/raw-transcript`,
+export async function revealTranscript(callId: string): Promise<TranscriptRevealResponse> {
+    const { data } = await api.post<TranscriptRevealResponse>(
+        `/institution/calls/${callId}/reveal/transcript`,
     );
     return data;
 }

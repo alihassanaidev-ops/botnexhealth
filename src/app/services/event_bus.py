@@ -11,6 +11,7 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
+from pydantic import BaseModel, ConfigDict, ValidationError
 from redis import ConnectionPool, Redis
 from redis.asyncio import from_url as async_from_url
 
@@ -22,14 +23,33 @@ EVENT_CHANNEL_PREFIX = "sse:institution"
 SSE_TICKET_PREFIX = "sse:ticket"
 SSE_TICKET_TTL_SECONDS = 30
 
-SUPPORTED_EVENT_TYPES = frozenset(
-    {
-        "calls_updated",
-        "callbacks_updated",
-        "dashboard_updated",
-        "notification",
-    }
-)
+
+# ── Per-event-type schemas ────────────────────────────────────────────
+# Every published event must validate against the schema for its type.
+# The schemas intentionally allow no PHI fields — they only carry hints
+# that tell the frontend what to refetch.
+
+class _EmptyEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _NotificationEvent(BaseModel):
+    """Toast-style notification data."""
+
+    model_config = ConfigDict(extra="forbid")
+    notification_id: str | None = None
+    title: str | None = None
+    severity: str | None = None  # "info" | "warning" | "error"
+
+
+_EVENT_SCHEMAS: dict[str, type[BaseModel]] = {
+    "calls_updated": _EmptyEvent,
+    "callbacks_updated": _EmptyEvent,
+    "dashboard_updated": _EmptyEvent,
+    "notification": _NotificationEvent,
+}
+
+SUPPORTED_EVENT_TYPES = frozenset(_EVENT_SCHEMAS.keys())
 
 # ── Lazy sync Redis pool (shared across Celery tasks and API process) ────────
 
@@ -69,16 +89,27 @@ def _utc_now() -> str:
 # ── Publish ──────────────────────────────────────────────────────────────────
 
 def publish_event(institution_id: str, event_type: str, data: dict[str, Any] | None = None) -> None:
-    """Publish a lightweight institution-scoped event to Redis."""
+    """Publish a lightweight institution-scoped event to Redis.
+
+    The payload is validated against the per-type schema before publication.
+    Validation failure raises — publishers are expected to send only the
+    metadata fields the schema permits (no PHI).
+    """
     if not institution_id:
         raise ValueError("institution_id is required")
-    if event_type not in SUPPORTED_EVENT_TYPES:
+    schema = _EVENT_SCHEMAS.get(event_type)
+    if schema is None:
         raise ValueError(f"Unsupported SSE event type: {event_type}")
+
+    try:
+        validated = schema.model_validate(data or {})
+    except ValidationError as exc:
+        raise ValueError(f"Invalid SSE event payload for {event_type}: {exc}") from exc
 
     payload = {
         "type": event_type,
         "timestamp": _utc_now(),
-        "data": data or {},
+        "data": validated.model_dump(exclude_none=True),
     }
 
     _get_sync_client().publish(

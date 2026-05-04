@@ -8,17 +8,15 @@ A user can only see and act on their own notifications.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select
 
 from src.app.api.deps import get_current_active_user
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
-from src.app.models.audit_log import AuditAction, AuditOutcome
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.user import User
 from src.app.services.audit import log_audit_background
 from src.app.services.notification_service import NotificationService
@@ -114,7 +112,8 @@ async def list_notifications(
             items=[_notification_to_item(n) for n in items],
         )
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.VIEW_CALLS,
             target_resource="notifications:list",
             outcome=AuditOutcome.SUCCESS,
@@ -189,7 +188,8 @@ async def mark_notification_as_read(
             )
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.LOCATION_UPDATE,
             target_resource=f"notification:{notification_id}",
             outcome=AuditOutcome.SUCCESS,
@@ -226,7 +226,8 @@ async def mark_all_notifications_as_read(
         count = await svc.mark_all_as_read(user_id=current_user.id)
 
         log_audit_background(
-            actor=current_user.id,
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
             action=AuditAction.LOCATION_UPDATE,
             target_resource="notifications:mark-all-read",
             outcome=AuditOutcome.SUCCESS,

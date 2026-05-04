@@ -286,11 +286,7 @@ class PostCallService:
             retell_call_id=webhook_call.call_id,
             call_direction=webhook_call.direction,
             agent_used=webhook_call.agent_id,
-            transcript=webhook_call.transcript,
-            transcript_with_tool_calls=webhook_call.transcript_with_tool_calls,
-            scrubbed_transcript_with_tool_calls=webhook_call.scrubbed_transcript_with_tool_calls,
             recording_url=webhook_call.recording_url,  # scrubbed URL set in webhooks.py
-            summary=analysis_dict.get("call_summary"),
             patient_sentiment=analysis_dict.get("user_sentiment"),
             call_status=primary_status,
             call_tags=all_tags,
@@ -313,6 +309,10 @@ class PostCallService:
             # Treat the string "None" (from Retell when no detail exists) as NULL
             next_action=_nonempty(custom.get("Appointment Detail")),
         )
+        # Encrypted setters — write after construction so JSON serialization
+        # happens through the property and never raw onto the column.
+        call.transcript_with_tool_calls = webhook_call.transcript_with_tool_calls
+        call.summary = analysis_dict.get("call_summary")
 
         if webhook_call.start_timestamp:
             start_dt = datetime.fromtimestamp(

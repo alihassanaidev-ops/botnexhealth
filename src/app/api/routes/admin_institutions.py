@@ -17,7 +17,7 @@ from src.app.config import settings
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution import DEFAULT_JURISDICTION, Jurisdiction
 from src.app.models.user import User, UserRole
-from src.app.services.audit import log_audit_background
+from src.app.services.audit import log_audit
 from src.app.services.audit_decorator import audit
 from src.app.services.institution_service import InstitutionService
 from src.app.services.user_invite_service import UserInviteService
@@ -236,8 +236,6 @@ async def list_institutions(
     _: User = Depends(get_current_admin),
 ):
     """List all institutions with their primary user. Admins see soft-deleted institutions by default."""
-    from src.app.models.institution import Institution
-    from sqlalchemy.orm import selectinload
 
     async with get_db_session() as session:
         institution_service = InstitutionService(session)
@@ -307,7 +305,9 @@ async def create_institution(
                 detail=f"Institution with slug '{data.slug}' already exists"
             )
 
-        existing_user = await session.execute(select(User).where(User.email == email))
+        existing_user = await session.execute(
+            select(User).where(User.email == email, User.deleted_at.is_(None))
+        )
         if existing_user.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -517,8 +517,9 @@ async def reinvite_institution_user(
                 detail="Failed to re-invite user"
             )
 
-    log_audit_background(
-        actor=current_admin.id,
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_admin.id),
         action=AuditAction.USER_REINVITED,
         target_resource=f"user:{email}:reinvite",
         outcome=AuditOutcome.SUCCESS,
@@ -531,7 +532,6 @@ async def reinvite_institution_user(
             "role": user.role,
         },
         institution_id=str(institution.id),
-        user_id=str(current_admin.id),
         location_id=str(user.location_id) if user.location_id else None,
     )
     return {"message": f"Invite re-sent to {email}"}
@@ -714,7 +714,7 @@ async def create_location(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        existing = await institution_service.get_location_by_slug(data.slug)
+        existing = await institution_service.find_any_location_by_slug(data.slug)
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -784,8 +784,8 @@ async def get_location(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         return LocationResponse.from_location(location)
@@ -812,8 +812,8 @@ async def update_location(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         updates = data.model_dump(exclude_unset=True)
@@ -842,8 +842,8 @@ async def delete_location(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         await institution_service.delete_location(location, hard=hard)
@@ -871,8 +871,8 @@ async def sync_location(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         sync_service = SyncService(session)
@@ -929,13 +929,14 @@ async def invite_location_user(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
         # Validate location
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
-        # Check email uniqueness
+        # Check email uniqueness against active users only — soft-deleted
+        # rows may share an email per the partial unique index.
         existing_user = await session.execute(
-            select(User).where(User.email == email)
+            select(User).where(User.email == email, User.deleted_at.is_(None))
         )
         if existing_user.scalar_one_or_none():
             raise HTTPException(
@@ -989,8 +990,8 @@ async def list_location_users(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         result = await session.execute(
@@ -1032,8 +1033,8 @@ async def reinvite_location_user(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         # Find the user
@@ -1061,8 +1062,9 @@ async def reinvite_location_user(
                 detail="Failed to re-invite user",
             )
 
-    log_audit_background(
-        actor=current_admin.id,
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_admin.id),
         action=AuditAction.USER_REINVITED,
         target_resource=f"location:{loc_slug}/user:{email}:reinvite",
         outcome=AuditOutcome.SUCCESS,
@@ -1075,7 +1077,6 @@ async def reinvite_location_user(
             "role": user.role,
         },
         institution_id=str(institution.id),
-        user_id=str(current_admin.id),
         location_id=str(location.id),
     )
     return {"message": f"Invite re-sent to {email}"}
@@ -1168,8 +1169,8 @@ async def get_operating_hours(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         from src.app.models.location_operating_hours import LocationOperatingHours
@@ -1199,8 +1200,8 @@ async def set_operating_hours(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         # Validate no duplicate days
@@ -1258,8 +1259,8 @@ async def get_breaks(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         from src.app.models.location_break import LocationBreak
@@ -1293,8 +1294,8 @@ async def create_break(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         brk = LocationBreak(
@@ -1329,8 +1330,8 @@ async def delete_break(
         if not institution:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
 
-        location = await institution_service.get_location_by_slug(loc_slug)
-        if not location or location.institution_id != institution.id:
+        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        if not location:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
 
         result = await session.execute(

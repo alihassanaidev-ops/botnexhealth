@@ -62,9 +62,8 @@ import {
     listCalls,
     resolveCallback,
     revealCustomPhiField,
-    revealFullTranscript,
-    revealRawTranscript,
     revealRecording,
+    revealTranscript,
 } from "@/lib/calls-api"
 import { STATUS_OPTIONS, DIRECTION_OPTIONS } from "@/lib/constants"
 import { cn } from "@/lib/utils"
@@ -423,127 +422,70 @@ function TranscriptChatBubbles({ turns }: { turns: TranscriptTurn[] }) {
     )
 }
 
-type TranscriptTab = "scrubbed" | "full" | "raw"
-
 function TranscriptSection({ detail }: { detail: CallDetail }) {
-    const [tab, setTab] = useState<TranscriptTab>("scrubbed")
-    const [fullTurns, setFullTurns] = useState<TranscriptTurn[] | null>(null)
-    const [rawTranscript, setRawTranscript] = useState<string | null>(null)
-    const [revealing, setRevealing] = useState<TranscriptTab | null>(null)
+    const [turns, setTurns] = useState<TranscriptTurn[] | null>(null)
+    const [revealing, setRevealing] = useState(false)
 
     useEffect(() => {
-        setTab("scrubbed")
-        setFullTurns(null)
-        setRawTranscript(null)
-        setRevealing(null)
+        setTurns(null)
+        setRevealing(false)
     }, [detail.id])
 
-    const hasScrubbed = !!detail.scrubbed_transcript_with_tool_calls?.length
-    const hasFull = !!fullTurns?.length || detail.full_transcript_available
-    const hasRaw = !!rawTranscript || detail.raw_transcript_available
+    if (!detail.transcript_available) return null
 
-    if (!hasScrubbed && !hasFull && !hasRaw) return null
-
-    const tabs: { id: TranscriptTab; label: string; available: boolean }[] = [
-        { id: "scrubbed", label: "Scrubbed", available: hasScrubbed },
-        { id: "full", label: "Full", available: hasFull },
-        { id: "raw", label: "Raw Text", available: hasRaw },
-    ]
-
-    // Auto-select best available tab
-    const activeTab = tabs.find(t => t.id === tab && t.available)
-        ? tab
-        : (tabs.find(t => t.available)?.id ?? "scrubbed")
-
-    async function handleReveal(nextTab: TranscriptTab) {
-        setTab(nextTab)
-        if (nextTab === "full" && !fullTurns && detail.full_transcript_available) {
-            setRevealing("full")
-            try {
-                const result = await revealFullTranscript(detail.id)
-                setFullTurns(result.transcript_with_tool_calls ?? [])
-                toast.success("Full transcript revealed and audited")
-            } catch (e) {
-                toast.error(e instanceof Error ? e.message : "Failed to reveal transcript")
-            } finally {
-                setRevealing(null)
-            }
+    async function handleReveal() {
+        setRevealing(true)
+        try {
+            const result = await revealTranscript(detail.id)
+            setTurns(result.transcript_with_tool_calls ?? [])
+            toast.success("Transcript revealed and audited")
+        } catch (e) {
+            // 503 from a durable-audit failure surfaces here as well.
+            // Prefer the FastAPI `detail` field when present so the user
+            // sees "Audit log unavailable; please retry" instead of a
+            // generic axios message.
+            const detailMsg =
+                (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+            toast.error(
+                detailMsg ?? (e instanceof Error ? e.message : "Failed to reveal transcript"),
+            )
+        } finally {
+            setRevealing(false)
         }
-        if (nextTab === "raw" && rawTranscript === null && detail.raw_transcript_available) {
-            setRevealing("raw")
-            try {
-                const result = await revealRawTranscript(detail.id)
-                setRawTranscript(result.transcript ?? "")
-                toast.success("Raw transcript revealed and audited")
-            } catch (e) {
-                toast.error(e instanceof Error ? e.message : "Failed to reveal transcript")
-            } finally {
-                setRevealing(null)
-            }
-        }
-    }
-
-    function revealPrompt(label: string, onReveal: () => void, loading: boolean) {
-        return (
-            <div className="flex min-h-24 flex-col items-center justify-center gap-2 p-3 text-center">
-                <p className="text-xs text-muted-foreground">This view may contain PHI.</p>
-                <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5"
-                    onClick={onReveal}
-                    disabled={loading}
-                >
-                    {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
-                    Reveal {label}
-                </Button>
-            </div>
-        )
     }
 
     return (
         <div>
-            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1.5">Transcript</p>
-
-            {/* Tab switcher */}
-            <div className="flex gap-1 mb-2">
-                {tabs.map(t => t.available && (
-                    <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => handleReveal(t.id)}
-                        className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${activeTab === t.id
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground hover:bg-muted/70"
-                            }`}
-                    >
-                        {t.label}
-                        {t.id === "scrubbed" && (
-                            <span className="ml-1.5 text-[9px] opacity-60 font-normal">HIPAA ✓</span>
-                        )}
-                    </button>
-                ))}
-            </div>
-
-            {/* Content */}
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
+                Transcript
+                <span className="ml-1.5 text-[9px] opacity-60 font-normal normal-case">
+                    HIPAA ✓ PII-scrubbed
+                </span>
+            </p>
             <div className="rounded-lg border bg-muted max-h-64 overflow-y-auto">
-                {activeTab === "scrubbed" && hasScrubbed && (
-                    <TranscriptChatBubbles turns={detail.scrubbed_transcript_with_tool_calls!} />
-                )}
-                {activeTab === "full" && fullTurns && (
-                    <TranscriptChatBubbles turns={fullTurns} />
-                )}
-                {activeTab === "full" && !fullTurns && (
-                    revealPrompt("full transcript", () => handleReveal("full"), revealing === "full")
-                )}
-                {activeTab === "raw" && rawTranscript !== null && (
-                    <pre className="text-xs leading-relaxed p-3 whitespace-pre-wrap font-sans">
-                        {rawTranscript || "No raw transcript available."}
-                    </pre>
-                )}
-                {activeTab === "raw" && rawTranscript === null && (
-                    revealPrompt("raw transcript", () => handleReveal("raw"), revealing === "raw")
+                {turns ? (
+                    <TranscriptChatBubbles turns={turns} />
+                ) : (
+                    <div className="flex min-h-24 flex-col items-center justify-center gap-2 p-3 text-center">
+                        <p className="text-xs text-muted-foreground">
+                            Reveal the scrubbed transcript. Each reveal is audit-logged.
+                        </p>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 gap-1.5"
+                            onClick={handleReveal}
+                            disabled={revealing}
+                        >
+                            {revealing ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                                <Eye className="h-3.5 w-3.5" />
+                            )}
+                            Reveal transcript
+                        </Button>
+                    </div>
                 )}
             </div>
         </div>

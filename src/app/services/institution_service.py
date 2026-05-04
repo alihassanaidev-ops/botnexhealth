@@ -148,8 +148,33 @@ class InstitutionService:
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def get_location_by_slug(self, slug: str) -> InstitutionLocation | None:
-        """Get location by slug."""
+    async def get_location_by_slug(
+        self, slug: str, institution_id: str
+    ) -> InstitutionLocation | None:
+        """Get a location by slug, scoped to a specific institution.
+
+        Slug is globally unique today, but the institution_id predicate is
+        defense-in-depth: if a future migration changes slug uniqueness to
+        per-institution, callers don't silently start matching wrong-tenant
+        rows. For platform-admin "is this slug taken anywhere?" checks, use
+        ``find_any_location_by_slug`` instead.
+        """
+        result = await self.session.execute(
+            select(InstitutionLocation).where(
+                InstitutionLocation.slug == slug,
+                InstitutionLocation.institution_id == institution_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_any_location_by_slug(self, slug: str) -> InstitutionLocation | None:
+        """Look up a location by slug across ALL institutions.
+
+        Use this only for cross-tenant uniqueness checks (e.g. before
+        creating a new location with a candidate slug). Routes that serve
+        tenant-scoped data must use ``get_location_by_slug`` instead so the
+        institution_id predicate is in the WHERE clause.
+        """
         result = await self.session.execute(
             select(InstitutionLocation).where(InstitutionLocation.slug == slug)
         )

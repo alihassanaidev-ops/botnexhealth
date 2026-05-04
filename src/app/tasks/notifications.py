@@ -229,7 +229,6 @@ async def _send_call_notification_async(
 
         # Determine template type BEFORE resolving recipients (needed for preference filtering)
         tags = _split_csv(call.call_tags)
-        summary = (call.summary or "").strip() or None
         urgent = _is_urgent(call.call_status, tags)
         primary_tag = (call.call_status or "").lower().replace(" ", "_")
         is_appointment = primary_tag == "appointment_booked"
@@ -257,7 +256,6 @@ async def _send_call_notification_async(
             "duration_seconds": call.call_duration_seconds,
             "primary_tag": call.call_status,
             "tags": tags,
-            "summary": summary,
             "is_urgent": urgent,
             "appointment_patient_redacted": redact_patient_name(appt.get("patient_name")),
             "appointment_datetime": appt.get("appointment_datetime"),
@@ -392,9 +390,6 @@ def send_test_call_notification(
             "duration_seconds": 135,
             "primary_tag": normalized_tag,
             "tags": [normalized_tag],
-            "summary": (
-                "TEST NOTIFICATION: This is a synthetic call summary generated from the Super Admin panel."
-            ),
             "is_urgent": urgent,
             "appointment_patient_redacted": "J*** D***",
             "appointment_datetime": "2026-03-10 2:30 PM",

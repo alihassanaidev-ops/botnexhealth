@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -52,6 +52,20 @@ class User(Base):
     """
 
     __tablename__ = "users"
+    __table_args__ = (
+        # Email is unique among ACTIVE users only. Soft-deleted users
+        # (deleted_at IS NOT NULL) are preserved indefinitely for audit-log
+        # FK integrity (HIPAA §164.530(j)), so re-onboarding the same email
+        # after soft-delete must succeed. Every caller that checks "does
+        # this email already exist?" MUST filter deleted_at IS NULL to
+        # match this guarantee.
+        Index(
+            "users_email_active_uq",
+            "email",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -61,9 +75,8 @@ class User(Base):
 
     email: Mapped[str] = mapped_column(
         String(255),
-        unique=True,
         nullable=False,
-        index=True
+        index=True,
     )
 
     role: Mapped[str] = mapped_column(

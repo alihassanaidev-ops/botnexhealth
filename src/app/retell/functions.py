@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextvars import ContextVar
 from typing import Any, Callable, Coroutine, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -22,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/retell", tags=["Retell AI"])
 
-# Current call context for institution resolution
-_current_call_context: dict[str, Any] = {}
+# Per-task call context — module-global dict was unsafe under concurrent calls.
+_call_context_var: ContextVar[dict[str, Any]] = ContextVar("retell_call_context", default={})
 
 # Registry of available functions
 _function_registry: dict[str, Callable[..., Coroutine[Any, Any, dict[str, Any]]]] = {}
@@ -47,7 +48,23 @@ def register_function(name: str):
 
 def get_call_context() -> dict[str, Any]:
     """Get current call context (set during function execution)."""
-    return _current_call_context.copy()
+    return dict(_call_context_var.get())
+
+
+def set_call_context(context: dict[str, Any]) -> Any:
+    """Set the current call context. Returns a token for resetting."""
+    return _call_context_var.set(dict(context))
+
+
+def update_call_context(**fields: Any) -> Any:
+    """Merge fields into the current call context. Returns a reset token."""
+    merged = dict(_call_context_var.get())
+    merged.update(fields)
+    return _call_context_var.set(merged)
+
+
+def reset_call_context(token: Any) -> None:
+    _call_context_var.reset(token)
 
 
 async def get_institution_from_call_context() -> tuple[Optional["Institution"], Optional["InstitutionLocation"]]:
@@ -65,7 +82,8 @@ async def get_institution_from_call_context() -> tuple[Optional["Institution"], 
     from src.app.services.institution_service import InstitutionService
     from src.app.database import get_db_session
 
-    agent_id = _current_call_context.get("agent_id")
+    context = _call_context_var.get()
+    agent_id = context.get("agent_id")
     if not agent_id:
         logger.warning("Institution resolution failed: no agent_id in call context")
         return None, None
@@ -143,15 +161,15 @@ async def handle_function_call(
 
         # Set call context for institution resolution in handlers.
         # agent_id may be at the top level or nested under "call".
-        global _current_call_context
-        _current_call_context = {
+        # Stored in a ContextVar so concurrent calls don't share state.
+        token = _call_context_var.set({
             "call_id": request.call_id,
             "agent_id": (
                 payload.get("agent_id")
                 or payload.get("call", {}).get("agent_id")
             ),
             "args": request.args,
-        }
+        })
 
         try:
             # Execute the function (idempotent for mutating functions)
@@ -170,8 +188,7 @@ async def handle_function_call(
 
             return FunctionCallResponse(result=result)
         finally:
-            # Clear context after execution
-            _current_call_context = {}
+            _call_context_var.reset(token)
 
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in function call: {e}")

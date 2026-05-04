@@ -11,20 +11,16 @@ Tests cover:
 import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
-import pytest_asyncio
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
 from src.app.services.audit import (
     AuditEntry,
     AuditService,
     InMemoryAuditRepository,
-    PostgresAuditRepository,
     audit_context,
-    get_audit_service,
-    log_audit,
     set_audit_service,
 )
 
@@ -282,23 +278,52 @@ class TestAuditService:
         assert entry.location_id == "22222222-2222-2222-2222-222222222222"
     
     @pytest.mark.asyncio
-    async def test_log_handles_repository_error(self, service):
-        """Test that log() catches repository errors gracefully."""
+    async def test_log_raises_on_repository_error(self, service):
+        """log() must propagate persistence errors as AuditPersistenceError.
+
+        Silent swallowing of audit failures was a HIPAA-relevant defect:
+        PHI access without a durable audit row leaves activity unattributed.
+        """
+        from src.app.services.audit import AuditPersistenceError
+
         audit_service, repo = service
-        
-        # Mock repository to raise error
         repo.save = AsyncMock(side_effect=Exception("DB Error"))
-        
-        # Should not raise - just logs error internally
-        await audit_service.log(
-            actor=AuditActor.SYSTEM,
-            action=AuditAction.READ_LOCATIONS,
-            target_resource="locations",
-            outcome=AuditOutcome.SUCCESS,
+
+        with pytest.raises(AuditPersistenceError):
+            await audit_service.log(
+                actor=AuditActor.SYSTEM,
+                action=AuditAction.READ_LOCATIONS,
+                target_resource="locations",
+                outcome=AuditOutcome.SUCCESS,
+            )
+
+    @pytest.mark.asyncio
+    async def test_durable_audit_failure_propagates_through_decorator(self):
+        """Regression: durable audit failures must surface to the caller.
+
+        Previously the service swallowed errors internally, so the decorator
+        never saw the failure and the request returned 200 with no audit row
+        — silently violating the HIPAA durability promise.
+        """
+        from src.app.services.audit import (
+            AuditPersistenceError,
+            AuditService,
+            InMemoryAuditRepository,
+            set_audit_service,
         )
-        
-        # No entries saved due to error
-        # But no exception raised
+        from src.app.services.audit_decorator import audit
+        from src.app.models.audit_log import AuditAction
+
+        repo = InMemoryAuditRepository()
+        repo.save = AsyncMock(side_effect=Exception("DB unreachable"))
+        set_audit_service(AuditService(repo))
+
+        @audit(AuditAction.BOOK_APPOINTMENT, resource=lambda *a, **kw: "appt:test")
+        async def fake_handler(args):
+            return {"success": True, "id": "appt-1"}
+
+        with pytest.raises(AuditPersistenceError):
+            await fake_handler({"patient_id": "p1"})
 
 
 # =============================================================================
@@ -414,22 +439,154 @@ class TestAuditedDecorator:
     
     @pytest.mark.asyncio
     async def test_decorator_logs_exception(self):
-        """Test that decorator catches and logs exceptions."""
+        """Durable actions write a pre-action INITIATED row plus a
+        post-action FAILURE_INTERNAL row, sharing one request_id."""
         from src.app.services.audit_decorator import audit
-        
+
         @audit(AuditAction.BOOK_APPOINTMENT, resource="static:test")
         async def mock_fail(args):
             raise RuntimeError("Database error")
-        
+
         with pytest.raises(RuntimeError):
             await mock_fail({})
-        
+
         await self._wait_for_audit()
-        
+
+        entries = self.repo.get_all()
+        assert len(entries) == 2
+        assert {e.outcome for e in entries} == {
+            AuditOutcome.INITIATED,
+            AuditOutcome.FAILURE_INTERNAL,
+        }
+        assert all(e.target_resource == "static:test" for e in entries)
+        # Pre/post rows share the request_id — the breadcrumb operators use
+        # to reconcile if the post-action write fails.
+        assert len({e.request_id for e in entries}) == 1
+
+    @pytest.mark.asyncio
+    async def test_decorator_classifies_soft_error_dict_as_failure(self):
+        """Retell-style handlers signal failure by returning a dict with
+        ``error`` or ``success: False`` rather than raising. Without soft-error
+        classification, a failed booking lands in audit_logs as SUCCESS — a
+        HIPAA-relevant audit-trail integrity bug. Each shape below MUST land
+        as FAILURE_VALIDATION on the post-action row (paired with INITIATED)."""
+        from src.app.services.audit_decorator import audit
+
+        cases = [
+            {"error": "appointment_type_id is required."},
+            {"success": False, "error": "patient already booked"},
+            {"success": False, "message": "PMS booking failed"},
+        ]
+
+        for i, retval in enumerate(cases):
+            @audit(AuditAction.BOOK_APPOINTMENT, resource=f"appt:{i}")
+            async def handler(_args, _retval=retval):
+                return _retval
+
+            self.audit_saved.clear()
+            await handler({})
+            await self._wait_for_audit()
+
+        entries = self.repo.get_all()
+        # Each call writes 2 rows (INITIATED + outcome) — durable two-row pattern.
+        assert len(entries) == 2 * len(cases)
+
+        post_rows = [e for e in entries if e.outcome != AuditOutcome.INITIATED]
+        intent_rows = [e for e in entries if e.outcome == AuditOutcome.INITIATED]
+        assert len(post_rows) == len(cases)
+        assert len(intent_rows) == len(cases)
+        for entry in post_rows:
+            assert entry.outcome == AuditOutcome.FAILURE_VALIDATION, (
+                f"Soft-error dict was logged as {entry.outcome} — should be "
+                "FAILURE_VALIDATION (audit integrity bug)"
+            )
+            assert entry.metadata.get("error_kind") == "soft_failure"
+
+    @pytest.mark.asyncio
+    async def test_decorator_writes_initiated_before_running_func(self):
+        """If the pre-action audit write fails, the wrapped function MUST
+        NOT run — refusing to mutate PMS / reveal PHI without a recorded
+        intent. This is the §164.312(b) defense against the failure mode
+        where the side-effect commits but the audit write later fails."""
+        from src.app.services.audit_decorator import audit
+        from src.app.services.audit import AuditPersistenceError
+
+        ran = []
+
+        class _FailingIntentRepo(_SignalingAuditRepository):
+            def __init__(self, event):
+                super().__init__(event)
+                self.calls = 0
+
+            async def save(self, entry):
+                self.calls += 1
+                if entry.outcome == AuditOutcome.INITIATED:
+                    raise AuditPersistenceError("simulated audit DB outage")
+                await super().save(entry)
+
+        repo = _FailingIntentRepo(self.audit_saved)
+        set_audit_service(AuditService(repo))
+
+        @audit(AuditAction.BOOK_APPOINTMENT, resource="appt:test")
+        async def book(_args):
+            ran.append(True)  # MUST NOT execute when intent write fails
+            return {"success": True}
+
+        with pytest.raises(AuditPersistenceError):
+            await book({})
+
+        assert ran == [], (
+            "Wrapped function ran despite intent-audit write failure — "
+            "this is the gap the two-row pattern is meant to close"
+        )
+        # The repo saw exactly one save attempt (the failed INITIATED write).
+        # No post-action row was written because func() never ran.
+        assert repo.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_decorator_does_not_misclassify_success_with_message(self):
+        """A successful response that happens to include a "message" field
+        (e.g. ``lookup_patient`` returning {"match_status": "single",
+        "message": "Found 1 patient(s)."}) must still be SUCCESS."""
+        from src.app.services.audit_decorator import audit
+
+        @audit(AuditAction.SEARCH_PATIENTS, resource="patient:search")
+        async def handler(_args):
+            return {"count": 1, "message": "Found 1 patient(s)."}
+
+        await handler({})
+        await self._wait_for_audit()
+
         entries = self.repo.get_all()
         assert len(entries) == 1
-        assert entries[0].outcome == AuditOutcome.FAILURE_INTERNAL
-        assert entries[0].target_resource == "static:test"
+        assert entries[0].outcome == AuditOutcome.SUCCESS
+
+    @pytest.mark.asyncio
+    async def test_search_patients_audit_metadata_is_non_phi_and_best_effort(self):
+        """Debounced patient search logs useful metadata without raw PHI."""
+        from src.app.services.audit_decorator import audit
+
+        @audit(AuditAction.SEARCH_PATIENTS, resource="patient:search")
+        async def handler(args):
+            return {"count": 2, "patients": [{"id": "1"}, {"id": "2"}]}
+
+        await handler(
+            {
+                "name": "Jane Smith",
+                "email": "jane@example.test",
+                "phone_number": "+15551234567",
+            }
+        )
+        await self._wait_for_audit()
+
+        entries = self.repo.get_all()
+        assert len(entries) == 1
+        assert entries[0].outcome == AuditOutcome.SUCCESS
+        assert entries[0].metadata["high_volume_read"] is True
+        assert entries[0].metadata["search_criteria"] == ["name", "email", "phone"]
+        assert entries[0].metadata["result_count"] == 2
+        assert "Jane Smith" not in str(entries[0].metadata)
+        assert "jane@example.test" not in str(entries[0].metadata)
 
     @pytest.mark.asyncio
     async def test_decorator_writes_direct_user_and_location_ids(self):

@@ -95,11 +95,15 @@ class SmsService:
                 clinic_identity=location.name,
             )
         except SmsSendBlockedError as blocked:
+            # Use the structured reason code only — never the stringified
+            # exception, which can incidentally contain free-text body bits
+            # or PHI-shaped substrings the redactor wouldn't recognize.
+            block_reason = blocked.reason
             sms_log = SmsHistoryLog(
                 from_number=from_number,
                 status=SmsStatus.SUPPRESSED.value,
                 provider_status="suppressed",
-                error_message=sanitize_provider_error(blocked),
+                error_message=block_reason,
                 institution_location_id=institution_location_id,
                 patient_contact_id=patient_contact_id,
                 call_id=call_id,
@@ -116,7 +120,7 @@ class SmsService:
                 from_hash,
                 to_hash,
                 hash_for_logging(str(location.id)),
-                sanitize_provider_error(blocked),
+                block_reason,
             )
             return sms_log
 

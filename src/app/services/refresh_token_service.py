@@ -10,8 +10,21 @@ from src.app.config import settings
 from src.app.services.password_service import PasswordService
 
 
+class RefreshTokenReplayError(RuntimeError):
+    """Raised when a previously rotated refresh token is presented again."""
+
+
 class RefreshTokenService:
-    """Issue, rotate, and revoke opaque refresh tokens."""
+    """Issue, rotate, and revoke opaque refresh tokens.
+
+    Replay protection: every rotated token's hash is recorded for a short
+    window after rotation. If a caller presents a token whose hash is in the
+    revoked-rotation set, all sessions for that user are revoked and a
+    :class:`RefreshTokenReplayError` is raised so the route layer can audit
+    it. This is the standard pattern for refresh-token theft detection: a
+    legitimate client that already received a new token will never present
+    the old one again, so a replay almost always indicates an attacker.
+    """
 
     TOKEN_BYTES = 32
     SESSION_PREFIX = "refresh"
@@ -19,6 +32,8 @@ class RefreshTokenService:
     INDEX_PREFIX = "refresh_index"
     ACCESS_DENY_PREFIX = "access_deny"
     ACCESS_INDEX_PREFIX = "access_index"
+    ROTATED_PREFIX = "refresh_rotated"
+    ROTATED_TTL_SECONDS = 24 * 60 * 60  # 24h replay window
 
     _client: Redis | None = None
 
@@ -72,6 +87,10 @@ class RefreshTokenService:
         return f"{cls.ACCESS_INDEX_PREFIX}:{user_id}"
 
     @classmethod
+    def _rotated_key(cls, token_hash: str) -> str:
+        return f"{cls.ROTATED_PREFIX}:{token_hash}"
+
+    @classmethod
     async def issue_token(cls, user_id: str) -> str:
         token = secrets.token_urlsafe(cls.TOKEN_BYTES)
         token_hash = cls._token_hash(token)
@@ -106,6 +125,14 @@ class RefreshTokenService:
         old_hash = cls._token_hash(token)
         client = await cls.get_client()
 
+        # Replay detection: if the presented token's hash is already in the
+        # rotated set, the legitimate client cannot be the caller — revoke
+        # everything and surface the event.
+        if await client.exists(cls._rotated_key(old_hash)):
+            await cls.revoke_all_for_user(user_id)
+            await cls.revoke_all_access_tokens_for_user(user_id)
+            raise RefreshTokenReplayError(user_id)
+
         if not await client.exists(cls._session_key(user_id, old_hash)):
             return None
 
@@ -114,6 +141,8 @@ class RefreshTokenService:
             cls._lookup_key(old_hash),
         )
         await client.srem(cls._index_key(user_id), old_hash)
+        # Remember the rotated hash so any later replay trips detection.
+        await client.setex(cls._rotated_key(old_hash), cls.ROTATED_TTL_SECONDS, user_id)
 
         return await cls.issue_token(user_id)
 

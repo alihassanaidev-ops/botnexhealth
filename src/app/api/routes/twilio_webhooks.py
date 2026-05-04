@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -29,6 +30,27 @@ STOP_KEYWORDS = {"STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"}
 START_KEYWORDS = {"START", "UNSTOP"}
 HELP_KEYWORDS = {"HELP", "INFO"}
 
+# Tokenize on any non-letter run. Catches phrasings like "please stop calling"
+# and "STOP!" without false-positives on partial words inside other tokens.
+_TOKEN_RE = re.compile(r"[A-Z]+")
+
+
+def _classify_intent(body: str) -> str:
+    """Return STOP/START/HELP if any keyword appears as a whole token.
+
+    STOP wins over START in the unlikely "STOP and START" case — opting out
+    is the safer default. HELP is only returned when no opt-out keyword is
+    present.
+    """
+    tokens = set(_TOKEN_RE.findall(body.upper()))
+    if tokens & STOP_KEYWORDS:
+        return "STOP"
+    if tokens & START_KEYWORDS:
+        return "START"
+    if tokens & HELP_KEYWORDS:
+        return "HELP"
+    return ""
+
 
 @router.post("/inbound-sms")
 async def inbound_sms(request: Request) -> Response:
@@ -36,7 +58,8 @@ async def inbound_sms(request: Request) -> Response:
     from_number = _field(form, "From")
     to_number = _field(form, "To")
     body = (_field(form, "Body") or "").strip()
-    keyword = body.upper().split()[0] if body else ""
+    intent = _classify_intent(body)
+    keyword = intent  # back-compat with audit metadata that records "keyword"
 
     async with get_db_session() as session:
         location = await _location_for_twilio_number(session, to_number)
@@ -50,7 +73,7 @@ async def inbound_sms(request: Request) -> Response:
             return _twiml("")
 
         compliance = SmsComplianceService(session)
-        if keyword in STOP_KEYWORDS:
+        if intent == "STOP":
             await compliance.suppress(
                 institution_id=location.institution_id,
                 location_id=str(location.id),
@@ -63,7 +86,7 @@ async def inbound_sms(request: Request) -> Response:
             await session.commit()
             return _twiml(f"You have been opted out of SMS from {location.name}. Reply START to opt back in.")
 
-        if keyword in START_KEYWORDS:
+        if intent == "START":
             await compliance.release_suppression(
                 institution_id=location.institution_id,
                 location_id=str(location.id),
@@ -75,7 +98,7 @@ async def inbound_sms(request: Request) -> Response:
             await session.commit()
             return _twiml(f"You have been opted in to SMS from {location.name}. Reply STOP to opt out.")
 
-        if keyword in HELP_KEYWORDS:
+        if intent == "HELP":
             await session.commit()
             return _twiml(_help_text(location))
 

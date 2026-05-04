@@ -26,11 +26,24 @@ def test_publish_event_rejects_unknown_event_type() -> None:
         publish_event("inst-1", "made_up_event")
 
 
+_VALID_PAYLOADS: dict[str, dict] = {
+    "calls_updated": {},
+    "callbacks_updated": {},
+    "dashboard_updated": {},
+    "notification": {
+        "notification_id": "n-1",
+        "title": "New call",
+        "severity": "info",
+    },
+}
+
+
 @pytest.mark.parametrize("event_type", sorted(SUPPORTED_EVENT_TYPES))
 def test_publish_event_publishes_to_institution_channel(event_type: str) -> None:
     client = MagicMock()
+    payload_in = _VALID_PAYLOADS[event_type]
     with patch.object(event_bus, "_get_sync_client", return_value=client):
-        publish_event("inst-abc", event_type, {"hello": "world"})
+        publish_event("inst-abc", event_type, payload_in)
 
     client.publish.assert_called_once()
     channel, payload_json = client.publish.call_args.args
@@ -39,5 +52,20 @@ def test_publish_event_publishes_to_institution_channel(event_type: str) -> None
     import json
     payload = json.loads(payload_json)
     assert payload["type"] == event_type
-    assert payload["data"] == {"hello": "world"}
+    assert payload["data"] == payload_in
     assert "timestamp" in payload
+
+
+def test_publish_event_rejects_payload_not_matching_schema() -> None:
+    """Schema validation refuses unknown fields on system-update events."""
+    with pytest.raises(ValueError, match="Invalid SSE event payload"):
+        publish_event("inst-1", "calls_updated", {"unexpected_field": "x"})
+
+
+def test_publish_event_notification_rejects_unknown_field() -> None:
+    with pytest.raises(ValueError, match="Invalid SSE event payload"):
+        publish_event(
+            "inst-1",
+            "notification",
+            {"notification_id": "n-1", "patient_phone": "+15551234567"},
+        )

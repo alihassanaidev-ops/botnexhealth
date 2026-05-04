@@ -33,7 +33,7 @@ TEMPLATE_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"key": "duration", "label": "Call Duration", "sample": "2m 15s"},
         {"key": "primary_tag", "label": "Primary Tag", "sample": "appointment booked"},
         {"key": "all_tags", "label": "All Tags", "sample": "appointment booked, new patient"},
-        {"key": "summary", "label": "Call Summary", "sample": "Patient called to schedule a routine cleaning. Appointment booked for next Tuesday at 2:30 PM with Dr. Smith."},
+        {"key": "summary", "label": "Dashboard Summary Notice", "sample": "Available in the authenticated dashboard."},
         {"key": "patient_name", "label": "Patient Name (redacted)", "sample": "J*** D***"},
         {"key": "appointment_datetime", "label": "Appointment Date/Time", "sample": "2026-03-28 2:30 PM"},
         {"key": "appointment_provider", "label": "Appointment Provider", "sample": "Dr. Smith"},
@@ -45,7 +45,7 @@ TEMPLATE_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"key": "duration", "label": "Call Duration", "sample": "4m 30s"},
         {"key": "primary_tag", "label": "Primary Tag", "sample": "emergency"},
         {"key": "all_tags", "label": "All Tags", "sample": "emergency, pain"},
-        {"key": "summary", "label": "Call Summary", "sample": "URGENT: Patient reporting severe tooth pain and swelling. Requires immediate attention. Patient has been advised to come in as an emergency walk-in."},
+        {"key": "summary", "label": "Dashboard Summary Notice", "sample": "Available in the authenticated dashboard."},
         {"key": "patient_name", "label": "Patient Name (redacted)", "sample": "J*** D***"},
         {"key": "appointment_datetime", "label": "Appointment Date/Time", "sample": "Not provided"},
         {"key": "appointment_provider", "label": "Appointment Provider", "sample": "Not provided"},
@@ -57,7 +57,7 @@ TEMPLATE_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"key": "duration", "label": "Call Duration", "sample": "3m 45s"},
         {"key": "primary_tag", "label": "Primary Tag", "sample": "appointment booked"},
         {"key": "all_tags", "label": "All Tags", "sample": "appointment booked, returning patient"},
-        {"key": "summary", "label": "Call Summary", "sample": "Returning patient booked a follow-up appointment. Insurance verified. No special requirements noted."},
+        {"key": "summary", "label": "Dashboard Summary Notice", "sample": "Available in the authenticated dashboard."},
         {"key": "patient_name", "label": "Patient Name (redacted)", "sample": "J*** D***"},
         {"key": "appointment_datetime", "label": "Appointment Date/Time", "sample": "2026-03-28 2:30 PM"},
         {"key": "appointment_provider", "label": "Appointment Provider", "sample": "Dr. Smith"},
@@ -145,8 +145,6 @@ def _call_details_table() -> str:
         f'border-radius:12px;font-size:12px;font-weight:600;">{{{{ primary_tag }}}}</span></td></tr>'
         f'<tr><td style="{_LABEL_STYLE}">All Tags</td>'
         f'<td style="{_VALUE_STYLE}font-size:13px;">{{{{ all_tags }}}}</td></tr>'
-        f'<tr><td style="{_LABEL_STYLE}">Summary</td>'
-        f'<td style="{_VALUE_STYLE}font-size:13px;line-height:1.5;">{{{{ summary }}}}</td></tr>'
         "</table>"
     )
 
@@ -200,7 +198,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             "Duration: {{ duration }}\n"
             "Primary Tag: {{ primary_tag }}\n"
             "All Tags: {{ all_tags }}\n"
-            "Summary: {{ summary }}\n\n"
+            "Details: {{ summary }}\n\n"
             "Appointment Confirmation\n"
             "Patient: {{ patient_name }}\n"
             "Date/Time: {{ appointment_datetime }}\n"
@@ -222,7 +220,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             "Duration: {{ duration }}\n"
             "Primary Tag: {{ primary_tag }}\n"
             "All Tags: {{ all_tags }}\n"
-            "Summary: {{ summary }}\n\n"
+            "Details: {{ summary }}\n\n"
             "Appointment Confirmation\n"
             "Patient: {{ patient_name }}\n"
             "Date/Time: {{ appointment_datetime }}\n"
@@ -245,8 +243,6 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
                 f'<td style="{_VALUE_STYLE}font-family:monospace;">{{{{ caller_phone }}}}</td></tr>'
                 f'<tr><td style="{_LABEL_STYLE}">Duration</td>'
                 f'<td style="{_VALUE_STYLE}">{{{{ duration }}}}</td></tr>'
-                f'<tr><td style="{_LABEL_STYLE}">Summary</td>'
-                f'<td style="{_VALUE_STYLE}font-size:13px;line-height:1.5;">{{{{ summary }}}}</td></tr>'
                 "</table></div>"
             ),
         ),
@@ -259,7 +255,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             "Call Details\n"
             "Caller Phone: {{ caller_phone }}\n"
             "Duration: {{ duration }}\n"
-            "Summary: {{ summary }}\n"
+            "Details: {{ summary }}\n"
         ),
     },
 }

@@ -108,6 +108,11 @@ class _FakeSession:
     async def rollback(self) -> None:
         self._pending = None
 
+    async def commit(self) -> None:
+        # Explicit-commit path used by run_with_idempotency to make claims
+        # durable; in this in-memory store there is nothing to flush further.
+        return None
+
 
 class _FakeSessionContext:
     def __init__(self, session: _FakeSession) -> None:
@@ -239,25 +244,45 @@ async def test_different_args_produces_separate_invocations(fake_store: _FakeSto
 
 
 @pytest.mark.asyncio
-async def test_unknown_call_id_skips_idempotency(fake_store: _FakeStore):
+async def test_unknown_call_id_rejected_for_idempotent_function(fake_store: _FakeStore):
+    """A booking call without a usable call_id must be rejected outright.
+
+    Bypassing idempotency for booking would allow Retell network blips to
+    produce duplicate bookings — so the system fails loud rather than
+    silently disabling the safety net.
+    """
+    from fastapi import HTTPException
+
     handler = AsyncMock(return_value={"ok": True})
 
-    r1 = await run_with_idempotency(
+    with pytest.raises(HTTPException) as exc:
+        await run_with_idempotency(
+            handler,
+            function_name="book_appointment",
+            call_id="unknown_call_id",
+            args={"x": 1},
+        )
+
+    assert exc.value.status_code == 400
+    handler.assert_not_awaited()
+    assert fake_store.rows == {}
+
+
+@pytest.mark.asyncio
+async def test_unknown_call_id_allowed_for_non_idempotent_function(fake_store: _FakeStore):
+    """Read-only (non-idempotent) functions still tolerate missing call_id."""
+    handler = AsyncMock(return_value={"ok": True})
+
+    result = await run_with_idempotency(
         handler,
-        function_name="book_appointment",
-        call_id="unknown_call_id",
-        args={"x": 1},
-    )
-    r2 = await run_with_idempotency(
-        handler,
-        function_name="book_appointment",
+        function_name="lookup_patient",
         call_id="unknown_call_id",
         args={"x": 1},
     )
 
-    assert r1 == r2 == {"ok": True}
-    assert handler.await_count == 2  # no dedupe, both executed
-    assert fake_store.rows == {}  # nothing persisted
+    assert result == {"ok": True}
+    handler.assert_awaited_once()
+    assert fake_store.rows == {}
 
 
 @pytest.mark.asyncio

@@ -1,20 +1,35 @@
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.app.api.deps import get_current_institution_or_location_user
+from src.app.api.rate_limit import limiter
 from src.app.api.routes.universal import appointments
 from src.app.pms.factory import get_institution_pms
 from src.app.pms.models import BookingResult
+
+
+def _fake_user():
+    return SimpleNamespace(
+        id="user-1",
+        role="LOCATION_ADMIN",
+        institution_id="inst-1",
+        location_id="loc-1",
+        is_active=True,
+    )
 
 
 # Setup app with overrides
 
 def get_test_app(mock_adapter):
     app = FastAPI()
+    app.state.limiter = limiter
     app.include_router(appointments.router, prefix="/pms")
 
     app.dependency_overrides[get_institution_pms] = lambda: mock_adapter
+    app.dependency_overrides[get_current_institution_or_location_user] = _fake_user
     return app
 
 

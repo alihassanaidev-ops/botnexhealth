@@ -13,8 +13,8 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, String
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
@@ -58,7 +58,6 @@ class AuditAction(str, Enum):
     VIEW_CALLS = "VIEW_CALLS"
     VIEW_CALL_DETAIL = "VIEW_CALL_DETAIL"
     VIEW_FULL_TRANSCRIPT = "VIEW_FULL_TRANSCRIPT"
-    VIEW_RAW_TRANSCRIPT = "VIEW_RAW_TRANSCRIPT"
     VIEW_CALL_RECORDING = "VIEW_CALL_RECORDING"
     VIEW_CUSTOM_PHI_FIELD = "VIEW_CUSTOM_PHI_FIELD"
     VIEW_DASHBOARD = "VIEW_DASHBOARD"
@@ -85,6 +84,9 @@ class AuditAction(str, Enum):
     LOCATION_SYNC = "LOCATION_SYNC"
     LOCATION_USER_CREATE = "LOCATION_USER_CREATE"
     LOCATION_USER_DELETE = "LOCATION_USER_DELETE"
+    EXTERNAL_RECIPIENT_ADD = "EXTERNAL_RECIPIENT_ADD"
+    EXTERNAL_RECIPIENT_UPDATE = "EXTERNAL_RECIPIENT_UPDATE"
+    EXTERNAL_RECIPIENT_REMOVE = "EXTERNAL_RECIPIENT_REMOVE"
 
     # Auth operations
     LOGIN = "LOGIN"
@@ -98,9 +100,16 @@ class AuditAction(str, Enum):
 class AuditOutcome(str, Enum):
     """
     Result of the action.
-    
+
+    INITIATED is written BEFORE a side-effecting durable action runs. If the
+    side effect (e.g. booking via NexHealth) succeeds but the post-action
+    audit write fails, the INITIATED row is the breadcrumb operators use to
+    reconcile. Compliance reports filtering on "completed actions" should
+    exclude INITIATED.
+
     Extensible: Add new outcomes without modifying existing code (OCP).
     """
+    INITIATED = "INITIATED"
     SUCCESS = "SUCCESS"
     FAILURE_UNAUTHORIZED = "FAILURE_UNAUTHORIZED"
     FAILURE_NOT_FOUND = "FAILURE_NOT_FOUND"
@@ -174,7 +183,7 @@ class AuditLog(Base):
     # Additional context (NO PHI should be stored here)
     # Example: {"request_id": "...", "ip_address": "...", "institution_id": "..."}
     audit_metadata: Mapped[dict[str, Any] | None] = mapped_column(
-        JSON,
+        JSONB,
         nullable=True
     )
     

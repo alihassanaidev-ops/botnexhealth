@@ -24,7 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.app.database import Base
 from src.app.models.institution import decrypt_value, encrypt_value
-from src.app.security import keyed_hash
+from src.app.services.sms_privacy import hash_phone
 
 
 class Contact(Base):
@@ -115,8 +115,8 @@ class Contact(Base):
     @phone.setter
     def phone(self, value: str | None) -> None:
         self.phone_encrypted = encrypt_value(value)
-        # Update hash for lookups
-        self.phone_hash = self._hash_phone(value) if value else None
+        # Update hash for lookups using the canonical E.164 normalizer.
+        self.phone_hash = hash_phone(value) if value else None
 
     @property
     def date_of_birth(self) -> str | None:
@@ -126,17 +126,10 @@ class Contact(Base):
     def date_of_birth(self, value: str | None) -> None:
         self.date_of_birth_encrypted = encrypt_value(value)
 
-    @staticmethod
-    def _hash_phone(phone: str) -> str:
-        """Keyed hash of phone number for lookup without decryption."""
-        # Normalize: strip spaces, dashes, parens — keep only digits and +
-        normalized = "".join(c for c in phone if c.isdigit() or c == "+")
-        return keyed_hash(normalized, purpose="phone-lookup-hash-v1")
-
     @classmethod
-    def find_by_phone_hash(cls, phone: str) -> str:
+    def find_by_phone_hash(cls, phone: str) -> str | None:
         """Generate the hash to use in a WHERE clause for phone lookup."""
-        return cls._hash_phone(phone)
+        return hash_phone(phone)
 
     def __repr__(self) -> str:
         return f"<Contact(id={self.id}, institution_id={self.institution_id}, name='{self.full_name}')>"

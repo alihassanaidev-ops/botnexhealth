@@ -24,7 +24,9 @@ async def main(email: str, password: str, first_name: str, last_name: str) -> No
 
     try:
         async with async_session() as session:
-            result = await session.execute(select(User).where(User.email == email))
+            result = await session.execute(
+                select(User).where(User.email == email, User.deleted_at.is_(None))
+            )
             user = result.scalar_one_or_none()
 
             if user:

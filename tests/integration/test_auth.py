@@ -16,9 +16,35 @@ from httpx import AsyncClient
 from src.app.config import settings
 from src.app.api.deps import get_current_admin
 from src.app.main import app
-from src.app.models.audit_log import AuditAction
+from src.app.models.audit_log import AuditAction, AuditOutcome
 from src.app.models.user import InviteStatus, User, UserRole
+from src.app.services.audit import AuditPersistenceError
 from src.app.services.password_service import PasswordService
+
+
+class _FailingInitialAuditRepository:
+    def __init__(self) -> None:
+        self.entries = []
+
+    async def save(self, entry) -> None:
+        self.entries.append(entry)
+        if entry.outcome == AuditOutcome.INITIATED:
+            raise AuditPersistenceError("simulated audit store outage")
+
+    async def save_batch(self, entries) -> None:
+        for entry in entries:
+            await self.save(entry)
+
+
+def _latest_audit_entry(entries, action: AuditAction, *, target_resource: str | None = None):
+    matches = [
+        entry
+        for entry in entries
+        if entry.action == action
+        and (target_resource is None or entry.target_resource == target_resource)
+    ]
+    assert matches, f"Expected audit entry for {action}"
+    return matches[-1]
 
 
 @pytest.mark.asyncio
@@ -39,7 +65,7 @@ async def test_token_endpoint_validation(async_client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_local_login_success(async_client: AsyncClient):
+async def test_local_login_success(async_client: AsyncClient, audit_log_entries):
     password = "ValidPass123!"
     user = User(
         id="11111111-1111-1111-1111-111111111111",
@@ -63,9 +89,7 @@ async def test_local_login_success(async_client: AsyncClient):
     ), patch(
         "src.app.api.routes.auth.RefreshTokenService.register_access_token",
         new=AsyncMock(),
-    ), patch(
-        "src.app.api.routes.auth.log_audit_background"
-    ) as mock_log_audit:
+    ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
         response = await async_client.post(
@@ -86,8 +110,65 @@ async def test_local_login_success(async_client: AsyncClient):
     assert "secure" in cookie_lower
     assert "path=/api/auth" in cookie_lower
     assert response.cookies.get("refresh_token") == "refresh-token-123"
-    assert mock_log_audit.call_args.kwargs["user_id"] == user.id
-    assert mock_log_audit.call_args.kwargs["location_id"] == user.location_id
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.LOGIN,
+        target_resource=f"user:{user.id}",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.user_id == user.id
+    assert entry.location_id == user.location_id
+
+
+@pytest.mark.asyncio
+async def test_local_login_audit_intent_failure_does_not_issue_session(
+    async_client: AsyncClient,
+    mock_audit_service,
+):
+    password = "ValidPass123!"
+    user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="admin@example.com",
+        role=UserRole.SUPER_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+        location_id="33333333-3333-3333-3333-333333333333",
+        is_active=True,
+        invite_status=InviteStatus.ACCEPTED.value,
+        password_hash=PasswordService.hash_password(password),
+        failed_login_attempts=2,
+    )
+    failing_repo = _FailingInitialAuditRepository()
+    mock_audit_service._repository = failing_repo
+
+    mock_session = AsyncMock()
+    query_result = MagicMock()
+    query_result.scalar_one_or_none.return_value = user
+    mock_session.execute.return_value = query_result
+    issue_token = AsyncMock(return_value="refresh-token-should-not-exist")
+    register_access_token = AsyncMock()
+
+    with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
+        "src.app.api.routes.auth.RefreshTokenService.issue_token",
+        new=issue_token,
+    ), patch(
+        "src.app.api.routes.auth.RefreshTokenService.register_access_token",
+        new=register_access_token,
+    ):
+        mock_get_db.return_value.__aenter__.return_value = mock_session
+
+        response = await async_client.post(
+            "/api/auth/login",
+            json={"email": "admin@example.com", "password": password},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Audit log unavailable; the action could not be safely recorded. Please retry."
+    )
+    issue_token.assert_not_awaited()
+    register_access_token.assert_not_awaited()
+    assert user.failed_login_attempts == 2
+    assert [entry.outcome for entry in failing_repo.entries] == [AuditOutcome.INITIATED]
 
 
 @pytest.mark.asyncio
@@ -121,8 +202,6 @@ async def test_local_login_rehashes_outdated_argon2_parameters(async_client: Asy
     ), patch(
         "src.app.api.routes.auth.RefreshTokenService.register_access_token",
         new=AsyncMock(),
-    ), patch(
-        "src.app.api.routes.auth.log_audit_background"
     ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
@@ -138,7 +217,10 @@ async def test_local_login_rehashes_outdated_argon2_parameters(async_client: Asy
 
 
 @pytest.mark.asyncio
-async def test_forgot_password_sends_generic_success(async_client: AsyncClient):
+async def test_forgot_password_sends_generic_success(
+    async_client: AsyncClient,
+    audit_log_entries,
+):
     user = User(
         id="22222222-2222-2222-2222-222222222222",
         email="user@example.com",
@@ -159,7 +241,7 @@ async def test_forgot_password_sends_generic_success(async_client: AsyncClient):
 
     with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
         "src.app.api.routes.auth.AuthEmailService", return_value=mock_email_service
-    ), patch("src.app.api.routes.auth.log_audit_background") as mock_log_audit:
+    ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
         response = await async_client.post(
@@ -176,8 +258,14 @@ async def test_forgot_password_sends_generic_success(async_client: AsyncClient):
     assert user.password_reset_expires_at is not None
     mock_email_service.resolve_redirect_url.assert_called_once()
     mock_email_service.send_password_reset_email.assert_awaited_once()
-    assert mock_log_audit.call_args.kwargs["user_id"] == user.id
-    assert mock_log_audit.call_args.kwargs["location_id"] == user.location_id
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.PASSWORD_RESET_REQUEST,
+        target_resource=f"user:{user.id}",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.user_id == user.id
+    assert entry.location_id == user.location_id
 
 
 @pytest.mark.asyncio
@@ -201,7 +289,10 @@ async def test_forgot_password_rejects_unapproved_redirect(
 
 
 @pytest.mark.asyncio
-async def test_reset_password_audit_logs_user_id(async_client: AsyncClient):
+async def test_reset_password_audit_logs_user_id(
+    async_client: AsyncClient,
+    audit_log_entries,
+):
     reset_token = PasswordService.generate_one_time_token()
     user = User(
         id="99999999-9999-9999-9999-999999999999",
@@ -232,9 +323,7 @@ async def test_reset_password_audit_logs_user_id(async_client: AsyncClient):
     ), patch(
         "src.app.api.routes.auth.RefreshTokenService.register_access_token",
         new=AsyncMock(),
-    ), patch(
-        "src.app.api.routes.auth.log_audit_background"
-    ) as mock_log_audit:
+    ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
         response = await async_client.post(
@@ -245,13 +334,21 @@ async def test_reset_password_audit_logs_user_id(async_client: AsyncClient):
     assert response.status_code == 200
     assert user.password_reset_token_hash is None
     assert user.password_reset_expires_at is None
-    assert mock_log_audit.call_args.kwargs["action"] == AuditAction.PASSWORD_RESET_COMPLETE
-    assert mock_log_audit.call_args.kwargs["user_id"] == user.id
-    assert mock_log_audit.call_args.kwargs["location_id"] == user.location_id
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.PASSWORD_RESET_COMPLETE,
+        target_resource=f"user:{user.id}",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.user_id == user.id
+    assert entry.location_id == user.location_id
 
 
 @pytest.mark.asyncio
-async def test_set_password_consumes_invite_token(async_client: AsyncClient):
+async def test_set_password_consumes_invite_token(
+    async_client: AsyncClient,
+    audit_log_entries,
+):
     invite_token = PasswordService.generate_one_time_token()
     user = User(
         id="44444444-4444-4444-4444-444444444444",
@@ -282,9 +379,7 @@ async def test_set_password_consumes_invite_token(async_client: AsyncClient):
     ), patch(
         "src.app.api.routes.auth.RefreshTokenService.register_access_token",
         new=AsyncMock(),
-    ), patch(
-        "src.app.api.routes.auth.log_audit_background"
-    ) as mock_log_audit:
+    ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
         response = await async_client.post(
@@ -302,12 +397,21 @@ async def test_set_password_consumes_invite_token(async_client: AsyncClient):
     assert user.invite_expires_at is None
     assert user.password_hash is not None
     assert PasswordService.verify_password("NewValidPass123!", user.password_hash) is True
-    assert mock_log_audit.call_args.kwargs["user_id"] == user.id
-    assert mock_log_audit.call_args.kwargs["location_id"] == user.location_id
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.PASSWORD_SET,
+        target_resource=f"user:{user.id}",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.user_id == user.id
+    assert entry.location_id == user.location_id
 
 
 @pytest.mark.asyncio
-async def test_refresh_session_rotates_token(async_client: AsyncClient):
+async def test_refresh_session_rotates_token(
+    async_client: AsyncClient,
+    audit_log_entries,
+):
     user = User(
         id="66666666-6666-6666-6666-666666666666",
         email="refresh@example.com",
@@ -332,7 +436,7 @@ async def test_refresh_session_rotates_token(async_client: AsyncClient):
     ), patch(
         "src.app.api.routes.auth.RefreshTokenService.register_access_token",
         new=AsyncMock(),
-    ), patch("src.app.api.routes.auth.log_audit_background") as mock_log_audit:
+    ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
         response = await async_client.post(
@@ -345,8 +449,15 @@ async def test_refresh_session_rotates_token(async_client: AsyncClient):
     assert data["access_token"]
     assert "refresh_token" not in data
     assert response.cookies.get("refresh_token") == "rotated-refresh-token"
-    assert mock_log_audit.call_args.kwargs["user_id"] == user.id
-    assert mock_log_audit.call_args.kwargs["location_id"] == user.location_id
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.LOGIN,
+        target_resource=f"user:{user.id}",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.metadata["action"] == "refresh_session"
+    assert entry.user_id == user.id
+    assert entry.location_id == user.location_id
 
 
 @pytest.mark.asyncio
@@ -357,7 +468,10 @@ async def test_refresh_session_without_cookie_returns_401(async_client: AsyncCli
 
 
 @pytest.mark.asyncio
-async def test_logout_revokes_refresh_token(async_client: AsyncClient):
+async def test_logout_revokes_refresh_token(
+    async_client: AsyncClient,
+    audit_log_entries,
+):
     with patch(
         "src.app.api.routes.auth.RefreshTokenService.revoke_token",
         new=AsyncMock(return_value="88888888-8888-8888-8888-888888888888"),
@@ -370,7 +484,7 @@ async def test_logout_revokes_refresh_token(async_client: AsyncClient):
     ), patch(
         "src.app.api.routes.auth.AuthService.remaining_ttl_seconds",
         return_value=900,
-    ), patch("src.app.api.routes.auth.log_audit_background") as mock_log_audit:
+    ):
         response = await async_client.post(
             "/api/auth/logout",
             cookies={"refresh_token": "refresh-token-logout"},
@@ -389,7 +503,14 @@ async def test_logout_revokes_refresh_token(async_client: AsyncClient):
     set_cookie = response.headers.get("set-cookie", "")
     assert "refresh_token=" in set_cookie
     assert 'Max-Age=0' in set_cookie or 'expires=' in set_cookie.lower()
-    assert mock_log_audit.call_args.kwargs["user_id"] == "88888888-8888-8888-8888-888888888888"
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.LOGIN,
+        target_resource="user:88888888-8888-8888-8888-888888888888",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.metadata["action"] == "logout"
+    assert entry.user_id == "88888888-8888-8888-8888-888888888888"
 
 
 @pytest.mark.asyncio
@@ -400,7 +521,7 @@ async def test_logout_without_cookie_is_idempotent(async_client: AsyncClient):
     ) as revoke_refresh, patch(
         "src.app.api.routes.auth.RefreshTokenService.revoke_access_token_jti",
         new=AsyncMock(),
-    ), patch("src.app.api.routes.auth.log_audit_background"):
+    ):
         response = await async_client.post("/api/auth/logout")
 
     assert response.status_code == 200
@@ -409,7 +530,10 @@ async def test_logout_without_cookie_is_idempotent(async_client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_unlock_user_account_audit_logs_acting_admin_id(async_client: AsyncClient):
+async def test_unlock_user_account_audit_logs_acting_admin_id(
+    async_client: AsyncClient,
+    audit_log_entries,
+):
     admin = User(
         id="aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa",
         email="admin@example.com",
@@ -434,9 +558,7 @@ async def test_unlock_user_account_audit_logs_acting_admin_id(async_client: Asyn
     query_result.scalar_one_or_none.return_value = target_user
     mock_session.execute.return_value = query_result
 
-    with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.auth.log_audit_background"
-    ) as mock_log_audit:
+    with patch("src.app.api.routes.auth.get_db_session") as mock_get_db:
         mock_get_db.return_value.__aenter__.return_value = mock_session
         app.dependency_overrides[get_current_admin] = lambda: admin
 
@@ -451,6 +573,12 @@ async def test_unlock_user_account_audit_logs_acting_admin_id(async_client: Asyn
     assert response.json()["user_id"] == target_user.id
     assert target_user.failed_login_attempts == 0
     assert target_user.locked_until is None
-    assert mock_log_audit.call_args.kwargs["action"] == AuditAction.ACCOUNT_UNLOCK
-    assert mock_log_audit.call_args.kwargs["user_id"] == admin.id
-    assert mock_log_audit.call_args.kwargs["location_id"] == target_user.location_id
+    entry = _latest_audit_entry(
+        await audit_log_entries(),
+        AuditAction.ACCOUNT_UNLOCK,
+        target_resource=f"user:{target_user.id}",
+    )
+    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.user_id == admin.id
+    assert entry.location_id == target_user.location_id
+    assert entry.metadata["admin_id"] == admin.id

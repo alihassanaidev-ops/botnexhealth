@@ -63,15 +63,24 @@ async def lifespan(app: FastAPI):
     await init_nexhealth_client()
     
     yield  # Application runs here
-    
+
     # === SHUTDOWN ===
     logger.info("Shutting down application")
-    
+
+    # Drain in-flight best-effort audit writes BEFORE closing the database —
+    # otherwise SIGTERM / rolling-deploys silently lose audit rows for
+    # actions that already committed (login, dashboard view, callback
+    # resolve, etc). Bounded by the service's own timeout so a wedged audit
+    # DB cannot block shutdown indefinitely.
+    if settings.database_url:
+        from src.app.services.audit import AuditService
+        await AuditService.drain_background_tasks()
+
     # Close database
     if settings.database_url:
         from src.app.database import close_database
         await close_database()
-    
+
     # Cleanup API clients
     from src.app.dependencies import cleanup_nexhealth_client
     await cleanup_nexhealth_client()
@@ -99,26 +108,68 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "authorization",
+            "content-type",
+            "x-request-id",
+            "x-institution-slug",
+            "x-location-slug",
+        ],
+        expose_headers=["x-request-id"],
+        max_age=600,
     )
 
     # Security headers (HSTS, X-Frame-Options, Cache-Control, etc.)
     from src.app.middleware.security_headers import SecurityHeadersMiddleware
     app.add_middleware(SecurityHeadersMiddleware)
 
-    # Rate limiting
+    # Starlette runs middleware in REVERSE order of registration: the LAST
+    # add_middleware call wraps the others and runs FIRST on inbound requests.
+    # The chain below is registered inner-to-outer so the runtime order is:
+    #   RequestID → SlowAPI (rate limit) → Institution (DB lookup) → security
+    #   headers → CORS → app
+    # Rate limiting must run BEFORE the institution DB lookup so a flood of
+    # unauthenticated requests with random X-Institution-Slug headers cannot
+    # amplify into per-request DB queries.
+
+    # Institution middleware — innermost of the request-shaping middlewares.
+    if settings.database_url:
+        from src.app.middleware.institution import InstitutionMiddleware
+        app.add_middleware(InstitutionMiddleware)
+
+    # Rate limiting — registered AFTER InstitutionMiddleware so it wraps it
+    # and runs first on inbound requests.
     from src.app.api.rate_limit import limiter
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
 
-    # Add institution middleware (after CORS, before routes)
-    if settings.database_url:
-        from src.app.middleware.institution import InstitutionMiddleware
-        app.add_middleware(InstitutionMiddleware)
+    # Durable audit-write failures must not surface as 500 — the action
+    # itself usually committed; the audit row is what's missing. Map to 503
+    # so clients understand "retry safe-ish" semantics, and emit a CRITICAL
+    # log line that operators can pivot off to reconcile via request_id.
+    from fastapi.responses import JSONResponse
+    from src.app.services.audit import AuditPersistenceError
 
-    # Starlette runs the most recently added middleware first.
+    @app.exception_handler(AuditPersistenceError)
+    async def _audit_persistence_error_handler(request, exc):  # type: ignore[no-redef]
+        logger.critical(
+            "AUDIT PERSISTENCE FAILURE on %s %s: %s",
+            request.method, request.url.path, exc,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": (
+                    "Audit log unavailable; the action could not be safely "
+                    "recorded. Please retry."
+                )
+            },
+        )
+
+    # Request ID — outermost, so every response (including 429s and CORS
+    # preflight rejections) carries a correlation id for log triage.
     from src.app.middleware.request_id import RequestIDMiddleware
     app.add_middleware(RequestIDMiddleware)
 

@@ -11,6 +11,8 @@ from aws_cdk import (
     aws_certificatemanager as acm,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
+    aws_cloudwatch as cloudwatch,
+    aws_cloudwatch_actions as cw_actions,
     aws_ec2 as ec2,
     aws_ecr_assets as ecr_assets,
     aws_ecs as ecs,
@@ -22,6 +24,8 @@ from aws_cdk import (
     aws_route53_targets as route53_targets,
     aws_s3 as s3,
     aws_secretsmanager as secretsmanager,
+    aws_sns as sns,
+    aws_sns_subscriptions as sns_subs,
     aws_wafv2 as wafv2,
 )
 from constructs import Construct
@@ -59,7 +63,41 @@ class NexHealthPlatformStack(Stack):
             versioned=True,
             removal_policy=RemovalPolicy.RETAIN,
             auto_delete_objects=False,
+            lifecycle_rules=[
+                # Recordings cost is otherwise unbounded. Move warm-rare data
+                # off Standard quickly (call recordings are accessed at most
+                # a handful of times via the audited reveal endpoint, then
+                # almost never). Net saving — no upfront cost.
+                s3.LifecycleRule(
+                    id="recordings-tiering",
+                    enabled=True,
+                    transitions=[
+                        s3.Transition(
+                            storage_class=s3.StorageClass.INFREQUENT_ACCESS,
+                            transition_after=Duration.days(90),
+                        ),
+                        s3.Transition(
+                            storage_class=s3.StorageClass.DEEP_ARCHIVE,
+                            transition_after=Duration.days(365),
+                        ),
+                    ],
+                    abort_incomplete_multipart_upload_after=Duration.days(7),
+                    noncurrent_version_expiration=Duration.days(30),
+                ),
+            ],
         )
+
+        # VPC Gateway Endpoint for S3 — free, removes NAT egress charges for
+        # recording uploads/downloads. Routes S3 traffic through a private
+        # endpoint instead of out via the NAT gateway.
+        if not config.network.vpc_id:
+            # add_gateway_endpoint only works on VPCs we created. For
+            # imported VPCs the endpoint must be added at the VPC level
+            # outside this stack.
+            vpc.add_gateway_endpoint(
+                "S3GatewayEndpoint",
+                service=ec2.GatewayVpcEndpointAwsService.S3,
+            )
 
         frontend_bundle = self._build_frontend()
         frontend_base_url = config.auth_frontend_base_url or frontend_bundle["url"]
@@ -94,15 +132,34 @@ class NexHealthPlatformStack(Stack):
             description="PostgreSQL access for ECS services",
         )
 
+        # Force SSL for every connection to RDS. HIPAA §164.312(e) requires
+        # encryption-in-transit for ePHI; without this parameter group RDS
+        # accepts cleartext connections from the VPC. force_ssl is a static
+        # parameter so attaching this on an existing DB triggers a reboot.
+        db_engine = rds.DatabaseInstanceEngine.postgres(
+            version=rds.PostgresEngineVersion.of(
+                config.database.engine_full_version,
+                config.database.engine_major_version,
+            )
+        )
+        db_parameter_group = rds.ParameterGroup(
+            self,
+            "DatabaseParameters",
+            engine=db_engine,
+            description=f"{config.app_name}-{config.environment_name} force-SSL params",
+            parameters={
+                "rds.force_ssl": "1",
+                # Log connections / disconnections at low cost — useful for
+                # forensic incident review.
+                "log_connections": "1",
+                "log_disconnections": "1",
+            },
+        )
+
         database = rds.DatabaseInstance(
             self,
             "Database",
-            engine=rds.DatabaseInstanceEngine.postgres(
-                version=rds.PostgresEngineVersion.of(
-                    config.database.engine_full_version,
-                    config.database.engine_major_version,
-                )
-            ),
+            engine=db_engine,
             instance_type=ec2.InstanceType(config.database.instance_type),
             credentials=rds.Credentials.from_generated_secret(
                 config.database.username,
@@ -112,6 +169,7 @@ class NexHealthPlatformStack(Stack):
             vpc=vpc,
             vpc_subnets=private_subnets,
             security_groups=[db_security_group],
+            parameter_group=db_parameter_group,
             allocated_storage=config.database.allocated_storage,
             max_allocated_storage=config.database.max_allocated_storage,
             multi_az=config.database.multi_az,
@@ -122,6 +180,13 @@ class NexHealthPlatformStack(Stack):
             publicly_accessible=False,
             enable_performance_insights=True,
             auto_minor_version_upgrade=True,
+        )
+
+        # Rotate the master password on a schedule. Uses the AWS-provided
+        # rotation Lambda (deployed into the VPC by CDK) — invocation cost
+        # is pennies/month at this cadence.
+        database.add_rotation_single_user(
+            automatically_after=Duration.days(60),
         )
 
         redis_security_group = ec2.SecurityGroup(
@@ -183,6 +248,46 @@ class NexHealthPlatformStack(Stack):
         )
         app_image = ecs.ContainerImage.from_docker_image_asset(app_image_asset)
 
+        # Explicit log groups so we can attach a metric filter for
+        # "AUDIT PERSISTENCE FAILURE" and tighten retention per stream.
+        api_log_group = logs.LogGroup(
+            self,
+            "ApiLogs",
+            log_group_name=f"/{config.app_name}/{config.environment_name}/api",
+            retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        worker_log_group = logs.LogGroup(
+            self,
+            "WorkerLogs",
+            log_group_name=f"/{config.app_name}/{config.environment_name}/worker",
+            retention=logs.RetentionDays.TWO_WEEKS,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+        migration_log_group = logs.LogGroup(
+            self,
+            "MigrationLogs",
+            log_group_name=f"/{config.app_name}/{config.environment_name}/migrations",
+            retention=logs.RetentionDays.ONE_WEEK,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        # Audit-write failure alarm. When the @audit decorator's durable
+        # post-action write fails, audit.py logs at CRITICAL with
+        # "AUDIT PERSISTENCE FAILURE" — see services/audit.py:283. That log
+        # line is the operator's ONLY signal that a PHI mutation committed
+        # without a paired audit row, so we want it paged immediately.
+        audit_failure_filter = logs.MetricFilter(
+            self,
+            "AuditPersistenceFailureFilter",
+            log_group=api_log_group,
+            filter_pattern=logs.FilterPattern.literal('"AUDIT PERSISTENCE FAILURE"'),
+            metric_namespace=f"{config.app_name}/{config.environment_name}",
+            metric_name="AuditPersistenceFailures",
+            metric_value="1",
+            default_value=0,
+        )
+
         api_task_definition = ecs.FargateTaskDefinition(
             self,
             "ApiTaskDefinition",
@@ -200,7 +305,7 @@ class NexHealthPlatformStack(Stack):
             secrets=runtime_secrets,
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="api",
-                log_retention=logs.RetentionDays.ONE_MONTH,
+                log_group=api_log_group,
             ),
             health_check=ecs.HealthCheck(
                 command=["CMD-SHELL", "curl --fail http://localhost:8000/livez || exit 1"],
@@ -274,7 +379,7 @@ class NexHealthPlatformStack(Stack):
             secrets=runtime_secrets,
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="worker",
-                log_retention=logs.RetentionDays.ONE_MONTH,
+                log_group=worker_log_group,
             ),
             health_check=ecs.HealthCheck(
                 command=["CMD-SHELL", "celery -A src.app.worker inspect ping || exit 1"],
@@ -319,7 +424,7 @@ class NexHealthPlatformStack(Stack):
             secrets=runtime_secrets,
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="migrations",
-                log_retention=logs.RetentionDays.ONE_WEEK,
+                log_group=migration_log_group,
             ),
         )
 
@@ -349,6 +454,11 @@ class NexHealthPlatformStack(Stack):
         )
 
         self._attach_waf(api_service.load_balancer.load_balancer_arn)
+        self._attach_alarms(
+            api_service=api_service,
+            database=database,
+            audit_failure_filter=audit_failure_filter,
+        )
         api_url = self._api_base_url(api_service)
 
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)
@@ -625,6 +735,26 @@ class NexHealthPlatformStack(Stack):
                         "sampledRequestsEnabled": True,
                     },
                 },
+                # Per-IP edge rate limit. slowapi inside the app handles
+                # per-process limits; this stops floods at the WAF before
+                # they reach Fargate. AWS counts requests over a rolling
+                # 5-minute window per source IP.
+                {
+                    "name": "RateLimitPerIp",
+                    "priority": 2,
+                    "action": {"block": {}},
+                    "statement": {
+                        "rateBasedStatement": {
+                            "limit": self.config.waf_rate_limit_per_5min,
+                            "aggregateKeyType": "IP",
+                        }
+                    },
+                    "visibilityConfig": {
+                        "cloudWatchMetricsEnabled": True,
+                        "metricName": "rate-limit-per-ip",
+                        "sampledRequestsEnabled": True,
+                    },
+                },
             ],
         )
         wafv2.CfnWebACLAssociation(
@@ -633,6 +763,104 @@ class NexHealthPlatformStack(Stack):
             resource_arn=resource_arn,
             web_acl_arn=web_acl.attr_arn,
         )
+
+    def _attach_alarms(
+        self,
+        *,
+        api_service: ecs_patterns.ApplicationLoadBalancedFargateService,
+        database: rds.DatabaseInstance,
+        audit_failure_filter: logs.MetricFilter,
+    ) -> None:
+        """Provision a SNS topic + CloudWatch alarms.
+
+        Free-tier-eligible: SNS topic creation, the first 10 alarms, and
+        the metric filters used here are all $0/mo at staging volumes. If
+        ``alarm_email`` is unset, the alarms still get created — operators
+        can subscribe later from the console without redeploying.
+        """
+        topic = sns.Topic(
+            self,
+            "AlarmTopic",
+            display_name=f"{self.config.app_name}-{self.config.environment_name}-alarms",
+        )
+        if self.config.alarm_email:
+            topic.add_subscription(sns_subs.EmailSubscription(self.config.alarm_email))
+
+        action = cw_actions.SnsAction(topic)
+
+        # 1. Audit-write failure — the §164.312(b) tripwire. ANY occurrence
+        #    means a PHI side-effect committed without a paired audit row.
+        audit_alarm = cloudwatch.Alarm(
+            self,
+            "AuditPersistenceFailureAlarm",
+            metric=audit_failure_filter.metric(
+                statistic="Sum", period=Duration.minutes(5)
+            ),
+            threshold=1,
+            evaluation_periods=1,
+            datapoints_to_alarm=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarm_description=(
+                "Audit row failed to persist for a durable action. PHI may have "
+                "been mutated/revealed without a matching audit_logs entry — "
+                "reconcile via the request_id in the CRITICAL log line."
+            ),
+        )
+        audit_alarm.add_alarm_action(action)
+
+        # 2. RDS CPU sustained.
+        rds_cpu = cloudwatch.Alarm(
+            self,
+            "RdsHighCpuAlarm",
+            metric=database.metric_cpu_utilization(period=Duration.minutes(5)),
+            threshold=80,
+            evaluation_periods=3,
+            datapoints_to_alarm=3,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarm_description="RDS CPU > 80% for 15 minutes",
+        )
+        rds_cpu.add_alarm_action(action)
+
+        # 3. RDS free storage low (< 2 GB). Catches before the DB locks up.
+        rds_storage = cloudwatch.Alarm(
+            self,
+            "RdsLowStorageAlarm",
+            metric=database.metric_free_storage_space(period=Duration.minutes(5)),
+            threshold=2 * 1024 * 1024 * 1024,
+            evaluation_periods=2,
+            datapoints_to_alarm=2,
+            comparison_operator=cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarm_description="RDS free storage < 2 GB",
+        )
+        rds_storage.add_alarm_action(action)
+
+        # 4. ALB 5xx rate — backend errors visible to clients.
+        alb_5xx_metric = cloudwatch.Metric(
+            namespace="AWS/ApplicationELB",
+            metric_name="HTTPCode_Target_5XX_Count",
+            dimensions_map={
+                "LoadBalancer": api_service.load_balancer.load_balancer_full_name,
+            },
+            period=Duration.minutes(5),
+            statistic="Sum",
+        )
+        alb_5xx = cloudwatch.Alarm(
+            self,
+            "Alb5xxAlarm",
+            metric=alb_5xx_metric,
+            threshold=10,
+            evaluation_periods=2,
+            datapoints_to_alarm=2,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarm_description="ALB 5xx > 10 in 5 minutes (sustained)",
+        )
+        alb_5xx.add_alarm_action(action)
+
+        CfnOutput(self, "AlarmTopicArn", value=topic.topic_arn)
 
     def _api_base_url(self, api_service: ecs_patterns.ApplicationLoadBalancedFargateService) -> str:
         if self.config.api.domain_name and self.config.api.certificate_arn:

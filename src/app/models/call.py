@@ -2,12 +2,16 @@
 
 HIPAA Compliance:
 - All records are institution-scoped (institution_id NOT NULL).
-- Transcript and summary may contain PHI references — stored in institution-isolated rows.
+- Transcript and summary are AES-256-GCM encrypted at the application
+  layer (defense in depth on top of RDS at-rest encryption).
+- We only persist Retell's scrubbed outputs — raw, unredacted transcripts
+  never reach this table.
 - retell_call_id UNIQUE constraint ensures webhook idempotency.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, time
 from enum import Enum
 from uuid import uuid4
@@ -25,10 +29,11 @@ from sqlalchemy import (
     text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.app.database import Base
+from src.app.models.institution import decrypt_value, encrypt_value
 
 
 class CallStatus(str, Enum):
@@ -122,15 +127,12 @@ class Call(Base):
     call_direction: Mapped[str | None] = mapped_column(String(20), nullable=True)
     agent_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    # Call content
-    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Structured JSONB transcripts from Retell (turn-by-turn with tool calls)
-    # transcript_with_tool_calls: unredacted full conversation (internal use only)
-    # scrubbed_transcript_with_tool_calls: PII-scrubbed version (shown in dashboard by default)
-    transcript_with_tool_calls: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    scrubbed_transcript_with_tool_calls: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Call content (AES-256-GCM encrypted — see encrypt_value/decrypt_value)
+    # Only Retell's scrubbed structured transcript is stored. Raw transcripts
+    # never reach this table.
+    transcript_with_tool_calls_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Classification
     patient_sentiment: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -184,6 +186,38 @@ class Call(Base):
     contact: Mapped["Contact"] = relationship(  # noqa: F821
         "Contact", back_populates="calls", lazy="selectin",
     )
+
+    # =========================================================================
+    # Encrypted field properties
+    # =========================================================================
+
+    @property
+    def transcript_with_tool_calls(self) -> list | None:
+        """Decrypted scrubbed structured transcript (turn-by-turn)."""
+        raw = decrypt_value(self.transcript_with_tool_calls_encrypted)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    @transcript_with_tool_calls.setter
+    def transcript_with_tool_calls(self, value: list | None) -> None:
+        if value is None:
+            self.transcript_with_tool_calls_encrypted = None
+            return
+        self.transcript_with_tool_calls_encrypted = encrypt_value(
+            json.dumps(value, separators=(",", ":"), default=str)
+        )
+
+    @property
+    def summary(self) -> str | None:
+        return decrypt_value(self.summary_encrypted)
+
+    @summary.setter
+    def summary(self, value: str | None) -> None:
+        self.summary_encrypted = encrypt_value(value)
 
     def __repr__(self) -> str:
         return (

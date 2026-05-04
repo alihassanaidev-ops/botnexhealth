@@ -6,15 +6,18 @@ Notifications are created when calls are processed, callbacks are resolved, etc.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from enum import Enum
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
+from src.app.models.institution import decrypt_value, encrypt_value
 
 
 class NotificationType(str, Enum):
@@ -63,14 +66,18 @@ class Notification(Base):
         nullable=False,
     )
 
-    # Notification payload
+    # Notification payload. These values may contain PHI (caller name,
+    # summaries, callback details), so they are encrypted at the application
+    # layer before being persisted.
     type: Mapped[str] = mapped_column(String(50), nullable=False)
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
+    title_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    message_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # Extra metadata (call_id, contact info, etc.)
-    data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Extra metadata (call_id, contact identifiers, routing hints, etc.).
+    # Stored as encrypted JSON text instead of JSONB because the contents are
+    # user-visible notification context, not a query surface.
+    data_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -78,6 +85,42 @@ class Notification(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+    @property
+    def title(self) -> str:
+        """Decrypt and return the notification title."""
+        return decrypt_value(self.title_encrypted) or ""
+
+    @title.setter
+    def title(self, value: str) -> None:
+        self.title_encrypted = encrypt_value(value or "")  # type: ignore[assignment]
+
+    @property
+    def message(self) -> str:
+        """Decrypt and return the notification body."""
+        return decrypt_value(self.message_encrypted) or ""
+
+    @message.setter
+    def message(self, value: str) -> None:
+        self.message_encrypted = encrypt_value(value or "")  # type: ignore[assignment]
+
+    @property
+    def data(self) -> dict[str, Any] | None:
+        """Decrypt and deserialize the notification metadata payload."""
+        raw = decrypt_value(self.data_encrypted)
+        if not raw:
+            return None
+        decoded = json.loads(raw)
+        return decoded if isinstance(decoded, dict) else None
+
+    @data.setter
+    def data(self, value: dict[str, Any] | None) -> None:
+        if value is None:
+            self.data_encrypted = None
+            return
+        self.data_encrypted = encrypt_value(
+            json.dumps(value, separators=(",", ":"), sort_keys=True)
+        )
 
     def __repr__(self) -> str:
         return (

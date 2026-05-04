@@ -128,10 +128,22 @@ class NexHealthHTTPClient:
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     continue  # Will be handled above
-                logger.error(f"HTTP error {e.response.status_code}: {e.response.text}")
+                # Don't log e.response.text — upstream validation errors can
+                # echo back patient-submitted fields. Status + content length
+                # are enough for triage; detail belongs in PMS-side logs.
+                body_len = len(e.response.content) if e.response.content else 0
+                logger.error(
+                    "Upstream HTTP error: status=%s body_bytes=%s method=%s path=%s",
+                    e.response.status_code, body_len, method, path,
+                )
                 raise
             except httpx.RequestError as e:
-                logger.error(f"Request error: {e}")
+                # Use type name and request URL only — the message can include
+                # connection details that aren't useful for log retention.
+                logger.error(
+                    "Upstream request error: type=%s method=%s path=%s",
+                    type(e).__name__, method, path,
+                )
                 if attempt < self._max_retries:
                     await asyncio.sleep(self._retry_delay * (attempt + 1))
                     continue

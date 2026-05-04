@@ -324,10 +324,10 @@ async def test_list_providers_filters_by_age(monkeypatch):
     async def fake_db():
         yield _FakeDBSession(age_rows)
 
-    monkeypatch.setattr(
-        "src.app.database.get_db_session",
-        fake_db,
-    )
+    # Patch the binding inside the handlers module — handlers.py imports
+    # get_db_session via `from … import …`, which creates a local name. The
+    # database module's attribute is no longer reached at call time.
+    monkeypatch.setattr(handlers, "get_db_session", fake_db)
 
     # Patient is 10 years old — should match Dr Pediatric + Dr Everyone
     dob_child = (date.today().replace(year=date.today().year - 10)).isoformat()
@@ -375,10 +375,7 @@ async def test_list_providers_adult_patient(monkeypatch):
     async def fake_db():
         yield _FakeDBSession(age_rows)
 
-    monkeypatch.setattr(
-        "src.app.database.get_db_session",
-        fake_db,
-    )
+    monkeypatch.setattr(handlers, "get_db_session", fake_db)
 
     # Patient is 30 years old
     dob_adult = (date.today().replace(year=date.today().year - 30)).isoformat()

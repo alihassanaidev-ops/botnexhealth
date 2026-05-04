@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -38,6 +37,15 @@ from uuid import UUID, uuid4
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
 
 logger = logging.getLogger(__name__)
+
+
+class AuditPersistenceError(RuntimeError):
+    """Raised when an audit row cannot be durably persisted.
+
+    Callers performing PHI-touching actions MUST treat this as fatal — the
+    row is the legal record of access, and a missing row leaves PHI
+    activity unattributed.
+    """
 
 
 # =============================================================================
@@ -241,11 +249,14 @@ class AuditService:
         location_id: str | None = None,
         request_id: str | None = None,
     ) -> None:
-        """
-        Log an audit entry.
-        
-        This is a fire-and-forget operation - failures are logged but don't
-        propagate to the caller to avoid disrupting the main request flow.
+        """Persist an audit entry. Raises ``AuditPersistenceError`` on failure.
+
+        This is the synchronous, durable path — callers MUST handle or
+        propagate the exception. PHI access without a persisted audit row is
+        a HIPAA-relevant gap, so silent swallowing is a defect.
+
+        For best-effort logging where dropping a row is acceptable, use
+        ``log_background`` instead.
         """
         entry = AuditEntry(
             actor=actor,
@@ -262,16 +273,64 @@ class AuditService:
             location_id=location_id or _coerce_uuid((metadata or {}).get("location_id")),
             request_id=request_id or str(uuid4()),
         )
-        
+
         try:
             await self._repository.save(entry)
-            logger.debug(
-                f"Audit logged: {action} on {target_resource} by {actor} => {outcome}"
-            )
         except Exception as e:
-            # Never let audit failures break the main request
-            logger.error(f"Failed to save audit log: {e}", exc_info=True)
-    
+            # Surface as a typed error so callers can distinguish persistence
+            # failure from any business-logic exception.
+            logger.critical(
+                "AUDIT WRITE FAILURE action=%s outcome=%s institution=%s "
+                "resource=%s request_id=%s error_type=%s",
+                action, outcome, institution_id, target_resource,
+                entry.request_id, type(e).__name__,
+                exc_info=True,
+            )
+            raise AuditPersistenceError(
+                f"Failed to persist audit row for {action}"
+            ) from e
+
+        logger.debug(
+            "Audit logged: %s on %s by %s => %s",
+            action, target_resource, actor, outcome,
+        )
+
+    # Strong references to background tasks so the event loop's GC cannot
+    # collect them mid-run (asyncio's create_task only keeps a weakref).
+    _background_tasks: set[asyncio.Task] = set()
+
+    @classmethod
+    async def drain_background_tasks(cls, *, timeout_seconds: float = 10.0) -> int:
+        """Wait for in-flight best-effort audit writes to finish.
+
+        Called from the FastAPI lifespan shutdown branch so SIGTERM /
+        rolling-deploy events don't drop pending audit rows for actions that
+        already happened (login, dashboard view, callback resolve, etc).
+
+        Returns the number of tasks that were pending when called. Bounded
+        by ``timeout_seconds`` so a wedged audit DB cannot block shutdown
+        indefinitely.
+        """
+        pending = [t for t in cls._background_tasks if not t.done()]
+        if not pending:
+            return 0
+        logger.info(
+            "Draining %d background audit task(s) before shutdown", len(pending)
+        )
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            still_pending = sum(1 for t in pending if not t.done())
+            logger.error(
+                "Background audit drain timed out: %d task(s) still pending. "
+                "Audit rows for in-flight actions may be lost.",
+                still_pending,
+            )
+        return len(pending)
+
     def log_background(
         self,
         actor: AuditActor | str,
@@ -284,29 +343,123 @@ class AuditService:
         location_id: str | None = None,
         request_id: str | None = None,
     ) -> None:
+        """Best-effort, non-blocking audit log.
+
+        All identifying values (actor, institution_id, user_id, location_id,
+        request_id) are captured by the closure *now*, so the eventual log
+        row reflects the caller's context even if the task runs after the
+        caller's contextvars have been reset.
+
+        Failures are logged at ERROR level but never raised. Use this only
+        for non-mutating reads where a dropped row is tolerable.
         """
-        Log an audit entry in the background (non-blocking).
-        
-        Use this for maximum performance when you don't need to wait.
-        """
-        asyncio.create_task(
-            self.log(
-                actor=actor,
-                action=action,
-                target_resource=target_resource,
-                outcome=outcome,
-                metadata=metadata,
-                institution_id=institution_id,
-                user_id=user_id,
-                location_id=location_id,
-                request_id=request_id,
-            )
-        )
+        # Snapshot all parameters explicitly so the closure cannot pick up
+        # later mutations to a shared dict.
+        snapshot_metadata = dict(metadata) if metadata else None
+
+        async def _safe_log() -> None:
+            try:
+                await self.log(
+                    actor=actor,
+                    action=action,
+                    target_resource=target_resource,
+                    outcome=outcome,
+                    metadata=snapshot_metadata,
+                    institution_id=institution_id,
+                    user_id=user_id,
+                    location_id=location_id,
+                    request_id=request_id,
+                )
+            except Exception as e:
+                logger.error(
+                    "Background audit log failed action=%s outcome=%s "
+                    "institution=%s error=%s",
+                    action, outcome, institution_id, e,
+                )
+
+        try:
+            task = asyncio.create_task(_safe_log())
+        except RuntimeError:
+            # No running event loop (e.g. inside a sync Celery task).
+            # Run synchronously to ensure the row is still attempted.
+            asyncio.run(_safe_log())
+            return
+
+        type(self)._background_tasks.add(task)
+        task.add_done_callback(type(self)._background_tasks.discard)
 
 
 # =============================================================================
 # Audit Context Manager (OCP)
 # =============================================================================
+
+@asynccontextmanager
+async def phi_reveal_audit(
+    *,
+    actor: AuditActor | str,
+    action: AuditAction | str,
+    target_resource: str,
+    institution_id: str | None,
+    user_id: str | None,
+    location_id: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> AsyncGenerator[None, None]:
+    """Two-row pre-then-post audit pattern for PHI-reveal endpoints.
+
+    Writes an ``INITIATED`` row BEFORE yielding control. If that write
+    fails the body never runs — no PHI is decrypted or returned. On
+    normal completion writes a paired ``SUCCESS`` row; on exception
+    writes a ``FAILURE_INTERNAL`` row and re-raises. Both pre/post rows
+    share one ``request_id`` so an "intent without completion"
+    reconciliation report can find orphans if the post-write fails.
+    """
+    request_id = str(uuid4())
+    base_metadata = dict(metadata or {})
+
+    await log_audit(
+        actor=actor,
+        action=action,
+        target_resource=target_resource,
+        outcome=AuditOutcome.INITIATED,
+        metadata={**base_metadata, "phase": "intent"},
+        institution_id=institution_id,
+        user_id=user_id,
+        location_id=location_id,
+        request_id=request_id,
+    )
+
+    try:
+        yield
+    except Exception as e:
+        await log_audit(
+            actor=actor,
+            action=action,
+            target_resource=target_resource,
+            outcome=AuditOutcome.FAILURE_INTERNAL,
+            metadata={
+                **base_metadata,
+                "phase": "complete",
+                "error_type": type(e).__name__,
+            },
+            institution_id=institution_id,
+            user_id=user_id,
+            location_id=location_id,
+            request_id=request_id,
+        )
+        raise
+
+    await log_audit(
+        actor=actor,
+        action=action,
+        target_resource=target_resource,
+        outcome=AuditOutcome.SUCCESS,
+        metadata={**base_metadata, "phase": "complete"},
+        institution_id=institution_id,
+        user_id=user_id,
+        location_id=location_id,
+        request_id=request_id,
+    )
+
 
 @asynccontextmanager
 async def audit_context(

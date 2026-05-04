@@ -29,9 +29,13 @@ async def main(email: str, frontend_base_url: str) -> None:
 
     try:
         async with async_session() as session:
-            # 1. Check if user already exists
+            # 1. Check if user already exists (only active rows; soft-deleted
+            # users may share an email since the partial unique index excludes
+            # them — see migration 20260505_user_email_partial_unique).
             from sqlalchemy import select
-            result = await session.execute(select(User).where(User.email == email))
+            result = await session.execute(
+                select(User).where(User.email == email, User.deleted_at.is_(None))
+            )
             existing_user = result.scalar_one_or_none()
             
             if existing_user:

@@ -32,10 +32,11 @@ from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.pms.base import PMSAdapter, SupportsAvailabilityLinking
-from src.app.pms.factory import get_adapter_for_institution, get_adapter_for_institution_location
+from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
-from src.app.retell.functions import get_institution_from_call_context, register_function
+from src.app.retell.functions import get_institution_from_call_context, register_function, update_call_context
 from src.app.retell.security import hash_for_logging
+from src.app.services.audit import phi_reveal_audit
 from src.app.services.audit_decorator import audit
 from src.app.services.slot_filter import (
     apply_buffer,
@@ -57,29 +58,37 @@ class ResolvedContext:
     """Resolved institution, location, and PMS adapter from call context."""
 
     institution: Institution
-    location: InstitutionLocation | None
+    location: InstitutionLocation
     adapter: PMSAdapter
 
 
 async def _resolve_context() -> ResolvedContext:
     """Resolve PMS adapter and location from current Retell call context.
 
-    Returns a ResolvedContext containing the institution, location (if mapped),
-    and the scoped PMS adapter. Since each Retell agent is mapped 1:1 to an
-    InstitutionLocation, the location is automatically resolved — the agent
-    does not need to call list_locations or pass location_id.
+    Each Retell agent is mapped 1:1 to an InstitutionLocation; the location is
+    the only legitimate scope for PMS routing on this platform (per-clinic
+    NexHealth subdomain + location_id live on the location row). If we can't
+    resolve a location for the agent, we fail closed rather than silently
+    routing to whichever clinic happens to be the global default.
 
     Raises:
-        ValueError: If no institution can be resolved from the agent_id.
+        ValueError: If no institution or location can be resolved from agent_id.
     """
     institution, location = await get_institution_from_call_context()
-    if not institution:
-        raise ValueError("No institution resolved from call context. Check agent_id mapping.")
+    if not institution or not location:
+        raise ValueError(
+            "Could not resolve institution + location from agent_id. "
+            "Each Retell agent must be mapped 1:1 to an active InstitutionLocation."
+        )
 
-    if location:
-        adapter = await get_adapter_for_institution_location(institution, location)
-    else:
-        adapter = await get_adapter_for_institution(institution)
+    adapter = await get_adapter_for_institution_location(institution, location)
+
+    # Stash resolved IDs in the call context so the audit decorator can scope
+    # log entries to the correct institution/location.
+    update_call_context(
+        institution_id=str(institution.id),
+        location_id=str(location.id),
+    )
 
     return ResolvedContext(institution=institution, location=location, adapter=adapter)
 
@@ -165,6 +174,20 @@ def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
         "date_of_birth": patient.date_of_birth,
         **patient.extra,
     }
+
+
+def _patient_lookup_criteria(args: dict[str, Any]) -> list[str]:
+    """Return patient-search criteria names without raw PHI values."""
+    criteria: list[str] = []
+    for key, label in (
+        ("name", "name"),
+        ("email", "email"),
+        ("phone_number", "phone"),
+        ("date_of_birth", "dob"),
+    ):
+        if args.get(key):
+            criteria.append(label)
+    return criteria
 
 
 # ============================================================================
@@ -272,6 +295,61 @@ async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
 # ============================================================================
 
 
+def _normalize_dob(value: Any) -> str | None:
+    """Coerce a DOB string to ISO YYYY-MM-DD, or return None if unparseable."""
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw or raw.lower() in {"none", "n/a"}:
+        return None
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError:
+        for fmt in ("%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(raw, fmt).date().isoformat()
+            except ValueError:
+                continue
+    return None
+
+
+def _identity_gate_passes(patient: Any, args: dict[str, Any]) -> tuple[bool, str | None]:
+    """Verify the caller supplied a DOB that matches the matched patient.
+
+    A second factor (email exact-match or last 4 digits of phone) is also
+    required so that DOB obtained from social engineering or public records
+    is not by itself sufficient to unlock a patient's PHI.
+
+    Returns (passed, reason_if_failed).
+    """
+    supplied_dob = _normalize_dob(args.get("date_of_birth"))
+    if not supplied_dob:
+        return False, "missing_dob"
+
+    actual_dob = _normalize_dob(getattr(patient, "date_of_birth", None))
+    if not actual_dob or supplied_dob != actual_dob:
+        return False, "dob_mismatch"
+
+    supplied_email = (args.get("email") or "").strip().lower() or None
+    supplied_phone = args.get("phone_number")
+    actual_email = (getattr(patient, "email", None) or "").strip().lower() or None
+    actual_phone_digits = "".join(
+        ch for ch in (getattr(patient, "phone", None) or "") if ch.isdigit()
+    )
+
+    if supplied_email and actual_email and supplied_email == actual_email:
+        return True, None
+    if supplied_phone:
+        supplied_digits = "".join(ch for ch in str(supplied_phone) if ch.isdigit())
+        if (
+            len(supplied_digits) >= 4
+            and len(actual_phone_digits) >= 4
+            and supplied_digits[-4:] == actual_phone_digits[-4:]
+        ):
+            return True, None
+    return False, "second_factor_missing"
+
+
 @register_function("lookup_patient")
 @audit(
     AuditAction.SEARCH_PATIENTS,
@@ -281,11 +359,21 @@ async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
     ),
 )
 async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
-    """Lookup a patient by name, email, phone, or date of birth."""
+    """Lookup a patient by name, email, phone, or date of birth.
+
+    Detail-level escalation: ``detail_level='full'`` returns full PHI only
+    after the caller-supplied DOB matches the matched patient's DOB *and* a
+    second factor (exact email match or last-4 digits of phone) verifies.
+    A mismatched DOB or missing second factor demotes the response to
+    ``basic`` even when a single patient matched. The Retell prompt's
+    identity gate is treated as advisory only — server-side verification is
+    the access control of record.
+    """
     try:
         ctx = await _resolve_context()
     except ValueError as e:
-        return {"message": str(e)}
+        # Surface as an error so the audit decorator records this as FAILURE.
+        return {"error": str(e), "message": str(e)}
 
     detail_level = str(args.get("detail_level", "basic")).lower()
     if detail_level not in {"basic", "full"}:
@@ -293,11 +381,17 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 
     query = args.get("name") or args.get("email") or args.get("phone_number") or ""
     if not query and not args.get("date_of_birth"):
-        return {"message": "Please provide at least one search criterion (name, email, phone, or DOB)."}
+        return {
+            "error": "missing_search_criterion",
+            "message": "Please provide at least one search criterion (name, email, phone, or DOB).",
+        }
 
-    include = None
-    if detail_level == "full":
-        include = ["upcoming_appts", "last_visited_appointment", "procedures", "insurance_coverages"]
+    full_detail_include = [
+        "upcoming_appts",
+        "last_visited_appointment",
+        "procedures",
+        "insurance_coverages",
+    ]
 
     try:
         patients = await ctx.adapter.search_patients(
@@ -305,11 +399,14 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
             email=args.get("email"),
             phone_number=args.get("phone_number"),
             date_of_birth=args.get("date_of_birth"),
-            include=include,
+            include=None,
         )
     except Exception as e:
         logger.error(f"Patient lookup failed: {e}")
-        return {"message": "I had trouble accessing the patient records. Please try again."}
+        return {
+            "error": "patient_lookup_failed",
+            "message": "I had trouble accessing the patient records. Please try again.",
+        }
 
     if not patients:
         return {
@@ -320,9 +417,50 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     match_count = len(patients)
     needs_disambiguation = match_count > 1
     effective_detail_level = "basic" if needs_disambiguation else detail_level
+    identity_failure_reason: str | None = None
+    if effective_detail_level == "full":
+        passed, identity_failure_reason = _identity_gate_passes(patients[0], args)
+        if not passed:
+            logger.info(
+                "Identity gate denied full PHI: reason=%s patient_hash=%s",
+                identity_failure_reason,
+                hash_for_logging(str(getattr(patients[0], "id", "unknown"))),
+            )
+            effective_detail_level = "basic"
 
     if effective_detail_level == "full":
-        simplified = [_to_full_patient_payload(p) for p in patients[:10]]
+        patient_id = str(getattr(patients[0], "id", "unknown"))
+        try:
+            async with phi_reveal_audit(
+                actor=AuditActor.RETELL_AGENT,
+                action=AuditAction.READ_PATIENT,
+                target_resource=f"patient:{hash_for_logging(patient_id)}",
+                institution_id=str(ctx.institution.id),
+                user_id=None,
+                location_id=str(ctx.location.id) if ctx.location else None,
+                metadata={
+                    "source": "retell_lookup_patient",
+                    "detail_level": "full",
+                    "identity_gate": "passed",
+                    "search_criteria": _patient_lookup_criteria(args),
+                },
+            ):
+                full_patients = await ctx.adapter.search_patients(
+                    query,
+                    email=args.get("email"),
+                    phone_number=args.get("phone_number"),
+                    date_of_birth=args.get("date_of_birth"),
+                    include=full_detail_include,
+                )
+                payload_patients = full_patients or patients
+                simplified = [_to_full_patient_payload(p) for p in payload_patients[:10]]
+        except Exception as e:
+            logger.error("Full patient detail lookup failed: %s", e)
+            return {
+                "error": "patient_lookup_failed",
+                "message": "I had trouble accessing the patient records. Please try again.",
+            }
+
         if ctx.location:
             tz_str = (ctx.location.timezone or "UTC").strip()
             try:
@@ -370,19 +508,25 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     else:
         simplified = [_to_basic_patient_payload(p) for p in patients[:10]]
 
-    return {
+    response: dict[str, Any] = {
         "detail_level": effective_detail_level,
         "count": len(simplified),
         "patients": simplified,
         "match_status": "multiple" if needs_disambiguation else "single",
         "disambiguation_required": needs_disambiguation,
         "disambiguation_hints": ["date_of_birth", "email"] if needs_disambiguation else [],
-        "message": (
-            "Multiple patients matched. Please ask for date of birth or email to confirm."
-            if needs_disambiguation
-            else f"Found {len(simplified)} patient(s)."
-        ),
     }
+    if needs_disambiguation:
+        response["message"] = "Multiple patients matched. Please ask for date of birth or email to confirm."
+    elif identity_failure_reason:
+        response["identity_gate"] = identity_failure_reason
+        response["message"] = (
+            "I can confirm a record exists. To share full appointment details I need to verify "
+            "your date of birth and either your email on file or the last four digits of your phone."
+        )
+    else:
+        response["message"] = f"Found {len(simplified)} patient(s)."
+    return response
 
 
 @register_function("create_patient")
@@ -527,7 +671,9 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             )
 
         # Shuffle provider group order so the AI doesn't always favour the first provider
-        keyfunc = lambda s: s.provider_id
+        def keyfunc(s):
+            return s.provider_id
+
         grouped = {pid: list(group) for pid, group in groupby(sorted(slots, key=keyfunc), key=keyfunc)}
         provider_ids = list(grouped.keys())
         random.shuffle(provider_ids)
@@ -551,7 +697,7 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
 @register_function("book_appointment")
 @audit(
     AuditAction.BOOK_APPOINTMENT,
-    resource=lambda args: f"appt_for:{args.get('patient_id')}",
+    resource=lambda args: f"appt_for:{hash_for_logging(str(args.get('patient_id'))) if args.get('patient_id') else 'unknown'}",
 )
 async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """Book a new appointment."""
@@ -595,7 +741,7 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
 @register_function("cancel_appointment")
 @audit(
     AuditAction.CANCEL_APPOINTMENT,
-    resource=lambda args: f"appointment:{args.get('appointment_id')}",
+    resource=lambda args: f"appointment:{hash_for_logging(str(args.get('appointment_id'))) if args.get('appointment_id') else 'unknown'}",
 )
 async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """Cancel an existing appointment."""
@@ -619,7 +765,7 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
 @register_function("reschedule_appointment")
 @audit(
     AuditAction.RESCHEDULE_APPOINTMENT,
-    resource=lambda args: f"reschedule:old={args.get('old_appointment_id')}",
+    resource=lambda args: f"reschedule:old={hash_for_logging(str(args.get('old_appointment_id'))) if args.get('old_appointment_id') else 'unknown'}",
 )
 async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """Reschedule an appointment (cancel old + book new)."""
@@ -749,7 +895,7 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
                             InstitutionProvider.max_age,
                         ).where(
                             InstitutionProvider.location_id == str(ctx.location.id),
-                            InstitutionProvider.is_active == True,
+                            InstitutionProvider.is_active.is_(True),
                         )
                     )
                 ).all()
@@ -815,7 +961,7 @@ async def list_insurance_plans_handler(args: dict[str, Any]) -> dict[str, Any]:
                     select(InsurancePlan).where(
                         InsurancePlan.location_id == str(ctx.location.id),
                         InsurancePlan.institution_id == str(ctx.institution.id),
-                        InsurancePlan.is_active == True,
+                        InsurancePlan.is_active.is_(True),
                     ).order_by(InsurancePlan.name)
                 )
             ).scalars().all()

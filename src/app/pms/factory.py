@@ -19,35 +19,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def get_adapter_for_institution(institution: "Institution") -> PMSAdapter:
-    """Create a fresh PMS adapter for an institution (backward compat)."""
-    adapter: PMSAdapter
+async def get_adapter_for_institution_location(
+    institution: "Institution", location: "InstitutionLocation"
+) -> PMSAdapter:
+    """Create a fresh PMS adapter scoped to a specific location.
 
+    The platform shares one NexHealth account; per-clinic isolation comes
+    from the location's nexhealth_subdomain + nexhealth_location_id, so a
+    location is mandatory.
+    """
     from src.app.config import settings
 
-    if institution.nexhealth_api_key or settings.nexhealth_api_key:
-        from src.app.pms.nexhealth.adapter import NexHealthAdapter
-        adapter = await NexHealthAdapter.create(institution)
-    else:
-        raise ValueError(f"No PMS configured for institution {institution.slug}")
+    if not settings.nexhealth_api_key:
+        raise ValueError("NEXHEALTH_API_KEY is not configured")
 
-    logger.info(f"Created {adapter.source} adapter for institution '{institution.slug}'")
-    return adapter
+    from src.app.pms.nexhealth.adapter import NexHealthAdapter
+    adapter = await NexHealthAdapter.create(institution, location=location)
 
-
-async def get_adapter_for_institution_location(institution: "Institution", location: "InstitutionLocation") -> PMSAdapter:
-    """Create a fresh PMS adapter scoped to a specific location."""
-    adapter: PMSAdapter
-
-    from src.app.config import settings
-
-    if institution.nexhealth_api_key or settings.nexhealth_api_key:
-        from src.app.pms.nexhealth.adapter import NexHealthAdapter
-        adapter = await NexHealthAdapter.create(institution, location=location)
-    else:
-        raise ValueError(f"No PMS configured for institution {institution.slug}")
-
-    logger.info(f"Created {adapter.source} adapter for institution '{institution.slug}' location '{location.slug}'")
+    logger.info(
+        "Created %s adapter for institution '%s' location '%s'",
+        adapter.source, institution.slug, location.slug,
+    )
     return adapter
 
 
@@ -96,31 +88,28 @@ async def get_institution_pms(
         if not institution:
             raise HTTPException(status_code=404, detail="Institution not found")
 
-        if scoped_location_id:
-            location = (
-                await session.execute(
-                    select(InstitutionLocation).where(
-                        InstitutionLocation.id == scoped_location_id,
-                        InstitutionLocation.institution_id == institution.id,
-                        InstitutionLocation.is_active == True,
-                    )
+        if not scoped_location_id:
+            # Each location maps 1:1 to a NexHealth subdomain. Picking
+            # an arbitrary "first" location for a multi-location institution
+            # silently routes the admin's request into the wrong subdomain,
+            # so we require location_id to be explicit.
+            raise HTTPException(
+                status_code=400,
+                detail="location_id is required (pass ?location_id= or use a path that includes it)",
+            )
+
+        location = (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.id == scoped_location_id,
+                    InstitutionLocation.institution_id == institution.id,
+                    InstitutionLocation.is_active == True,
                 )
-            ).scalar_one_or_none()
-        else:
-            location = (
-                await session.execute(
-                    select(InstitutionLocation)
-                    .where(
-                        InstitutionLocation.institution_id == institution.id,
-                        InstitutionLocation.is_active == True,
-                    )
-                    .order_by(InstitutionLocation.created_at)
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
+            )
+        ).scalar_one_or_none()
 
         if not location:
-            raise HTTPException(status_code=404, detail="No active location found")
+            raise HTTPException(status_code=404, detail="Location not found")
 
     # Preserve compatibility with handlers reading request.state.location/institution.
     request.state.institution = institution

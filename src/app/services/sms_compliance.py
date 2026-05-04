@@ -21,8 +21,28 @@ from src.app.models.sms_consent import (
 from src.app.services.sms_privacy import hash_phone, mask_phone
 
 
+class SmsBlockedReason(str):
+    """Stable enum-like reason codes used in audit & log lines.
+
+    Values are short identifiers — never include user-supplied strings,
+    free-text bodies, or PHI in the reason.
+    """
+
+    DO_NOT_CONTACT = "do_not_contact"
+    OPTED_OUT = "opted_out"
+    CONSENT_REVOKED = "consent_revoked"
+
+
 class SmsSendBlockedError(RuntimeError):
-    """Raised when an SMS must not be sent for compliance reasons."""
+    """Raised when an SMS must not be sent for compliance reasons.
+
+    The exception message is one of :class:`SmsBlockedReason` so it is safe
+    to surface in audit metadata and log lines without PHI leakage.
+    """
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -64,7 +84,7 @@ class SmsComplianceService:
             )
         ).scalars().first()
         if dnc:
-            raise SmsSendBlockedError("Recipient is on the do-not-contact list")
+            raise SmsSendBlockedError(SmsBlockedReason.DO_NOT_CONTACT)
 
         suppression = (
             await self.session.execute(
@@ -77,7 +97,7 @@ class SmsComplianceService:
             )
         ).scalars().first()
         if suppression:
-            raise SmsSendBlockedError("Recipient has opted out of SMS")
+            raise SmsSendBlockedError(SmsBlockedReason.OPTED_OUT)
 
         latest_consent = (
             await self.session.execute(
@@ -91,7 +111,7 @@ class SmsComplianceService:
             )
         ).scalars().first()
         if latest_consent and latest_consent.status == ConsentStatus.REVOKED.value:
-            raise SmsSendBlockedError("Recipient SMS consent is revoked")
+            raise SmsSendBlockedError(SmsBlockedReason.CONSENT_REVOKED)
 
         return identity
 
