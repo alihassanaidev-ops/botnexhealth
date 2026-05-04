@@ -7,6 +7,7 @@ from typing import Any
 from src.app.nexhealth.auth import AuthConfig, AuthService
 from src.app.nexhealth.exceptions import NexHealthError
 from src.app.nexhealth.http_client import NexHealthHTTPClient
+from src.app.nexhealth.rate_limit import NexHealthRateLimiter
 from src.app.nexhealth.token_manager import TokenManager
 
 
@@ -25,19 +26,32 @@ class NexHealthClient:
         config: AuthConfig,
         token_manager: TokenManager | None = None,
         http_client: NexHealthHTTPClient | None = None,
+        rate_limiter: NexHealthRateLimiter | None = None,
     ) -> None:
         self._config = config
         self._token_manager = token_manager or TokenManager()
         self._http_client = http_client
         self._auth_service: AuthService | None = None
+        self._rate_limiter = rate_limiter
 
     async def __aenter__(self) -> "NexHealthClient":
         # Initialize HTTP client if not provided (for dependency injection in tests)
         if not self._http_client:
+            api_key_id = (
+                NexHealthRateLimiter.hash_api_key(self._config.api_key)
+                if self._config.api_key
+                else None
+            )
             self._http_client = NexHealthHTTPClient(
                 base_url=self._config.base_url,
                 accept_header=self._config.accept_header,
                 api_version=self._config.api_version,
+                max_keepalive_connections=getattr(
+                    self._config, "nexhealth_max_keepalive_connections", 10
+                ),
+                max_connections=getattr(self._config, "nexhealth_max_connections", 20),
+                rate_limiter=self._rate_limiter,
+                api_key_id=api_key_id,
             )
             await self._http_client.__aenter__()
 

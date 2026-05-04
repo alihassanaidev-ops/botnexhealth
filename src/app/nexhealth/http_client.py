@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from src.app.nexhealth.exceptions import NexHealthAPIError, NexHealthRateLimitError
+from src.app.nexhealth.rate_limit import NexHealthRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,10 @@ class NexHealthHTTPClient:
         timeout: float = 30.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        max_keepalive_connections: int = 10,
+        max_connections: int = 20,
+        rate_limiter: NexHealthRateLimiter | None = None,
+        api_key_id: str | None = None,
     ) -> None:
         self._base_url = base_url
         self._accept_header = accept_header
@@ -31,7 +36,16 @@ class NexHealthHTTPClient:
         self._timeout = timeout
         self._max_retries = max_retries
         self._retry_delay = retry_delay
+        self._max_keepalive_connections = max_keepalive_connections
+        self._max_connections = max_connections
         self._client: httpx.AsyncClient | None = None
+        # Pre-flight rate limiter — coordinates concurrency across Fargate
+        # tasks so we never burst NexHealth past its documented per-API-key
+        # caps (100/s, 10/s for slot/appt GETs, 1000/min for patient/appt
+        # endpoints, 2000/min otherwise). The reactive 429 retry below stays
+        # as a safety net for the boundary-burst case + clock skew.
+        self._rate_limiter = rate_limiter
+        self._api_key_id = api_key_id
 
     def _build_headers(self, token: str) -> dict[str, str]:
         """
@@ -50,7 +64,10 @@ class NexHealthHTTPClient:
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=self._timeout,
-            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            limits=httpx.Limits(
+                max_keepalive_connections=self._max_keepalive_connections,
+                max_connections=self._max_connections,
+            ),
         )
         return self
 
@@ -90,6 +107,12 @@ class NexHealthHTTPClient:
         headers = self._build_headers(token)
 
         for attempt in range(self._max_retries + 1):
+            # Pre-flight: ask the cluster-wide limiter for a slot before we
+            # spend a real network round-trip. The limiter fails open on
+            # Redis errors, so this can't break us if the cache is down.
+            if self._rate_limiter and self._api_key_id:
+                await self._rate_limiter.acquire(self._api_key_id, method, path)
+
             try:
                 response = await self._client.request(
                     method,
