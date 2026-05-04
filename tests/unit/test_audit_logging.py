@@ -503,6 +503,36 @@ class TestAuditedDecorator:
             assert entry.metadata.get("error_kind") == "soft_failure"
 
     @pytest.mark.asyncio
+    async def test_decorator_classifies_failed_pydantic_booking_result_as_failure(self):
+        """Universal appointment routes return ``BookingResult`` Pydantic
+        models, not plain dicts. Without normalising via ``model_dump()``,
+        a failed booking (success=False, error=...) is silently classified
+        as SUCCESS — same audit-trail integrity bug the dict path catches."""
+        from src.app.pms.models import BookingResult
+        from src.app.services.audit_decorator import audit
+
+        @audit(AuditAction.BOOK_APPOINTMENT, resource="appt:pyd")
+        async def handler(_args):
+            return BookingResult(
+                success=False,
+                status="error",
+                error="Slot unavailable",
+            )
+
+        await handler({})
+        await self._wait_for_audit()
+
+        entries = self.repo.get_all()
+        post_rows = [e for e in entries if e.outcome != AuditOutcome.INITIATED]
+        assert len(post_rows) == 1
+        assert post_rows[0].outcome == AuditOutcome.FAILURE_VALIDATION, (
+            f"Pydantic BookingResult(success=False) logged as "
+            f"{post_rows[0].outcome} — must be FAILURE_VALIDATION"
+        )
+        assert post_rows[0].metadata.get("error_kind") == "soft_failure"
+        assert post_rows[0].metadata.get("error_message") == "Slot unavailable"
+
+    @pytest.mark.asyncio
     async def test_decorator_writes_initiated_before_running_func(self):
         """If the pre-action audit write fails, the wrapped function MUST
         NOT run — refusing to mutate PMS / reveal PHI without a recorded
@@ -612,6 +642,50 @@ class TestAuditedDecorator:
         assert len(entries) == 1
         assert entries[0].user_id == current_user.id
         assert entries[0].location_id == current_user.location_id
+
+
+# =============================================================================
+# _classify_soft_error direct tests
+# =============================================================================
+
+
+class TestClassifySoftError:
+    """Direct coverage of the classifier — both dict and Pydantic-model paths."""
+
+    def test_pydantic_booking_result_failure_classified_as_validation_failure(self):
+        from src.app.pms.models import BookingResult
+        from src.app.services.audit_decorator import _classify_soft_error
+
+        result = BookingResult(success=False, status="error", error="Slot unavailable")
+        outcome, message = _classify_soft_error(result)
+
+        assert outcome == AuditOutcome.FAILURE_VALIDATION
+        assert message == "Slot unavailable"
+
+    def test_pydantic_booking_result_success_returns_none(self):
+        from src.app.pms.models import BookingResult
+        from src.app.services.audit_decorator import _classify_soft_error
+
+        result = BookingResult(success=True, status="confirmed", id="appt-1")
+        outcome, message = _classify_soft_error(result)
+
+        assert outcome is None
+        assert message is None
+
+    def test_dict_with_error_classified_as_validation_failure(self):
+        from src.app.services.audit_decorator import _classify_soft_error
+
+        outcome, message = _classify_soft_error({"error": "patient not found"})
+        assert outcome == AuditOutcome.FAILURE_VALIDATION
+        assert message == "patient not found"
+
+    def test_non_dict_non_pydantic_returns_none(self):
+        from src.app.services.audit_decorator import _classify_soft_error
+
+        for value in (None, "ok", 42, ["a", "b"]):
+            outcome, message = _classify_soft_error(value)
+            assert outcome is None
+            assert message is None
 
 
 # =============================================================================

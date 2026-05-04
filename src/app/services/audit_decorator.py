@@ -398,18 +398,30 @@ def _classify_exception(e: Exception) -> AuditOutcome:
 def _classify_soft_error(result: Any) -> tuple[AuditOutcome | None, str | None]:
     """Detect soft-failure signals in a handler's return value.
 
-    Retell function handlers always return a dict so the voice agent can read
-    the response back to the caller. A failed booking or validation error is
-    signalled with one of:
+    Retell function handlers return a dict so the voice agent can read the
+    response back to the caller. The universal appointment routes return a
+    ``BookingResult`` Pydantic model. Both signal failure with one of:
       - ``{"success": False, ...}``
       - ``{"error": "<message>", ...}``
+
+    Pydantic models are normalised via ``model_dump()`` before the dict
+    check; without that, a failed booking would land in audit_logs as
+    SUCCESS — a HIPAA-relevant audit-trail integrity bug.
 
     When neither sentinel is present the result is treated as a success.
     Returns ``(outcome, error_message)`` where ``outcome`` is ``None`` for
     successes.
     """
     if not isinstance(result, dict):
-        return None, None
+        model_dump = getattr(result, "model_dump", None)
+        if not callable(model_dump):
+            return None, None
+        try:
+            result = model_dump()
+        except Exception:
+            return None, None
+        if not isinstance(result, dict):
+            return None, None
 
     error_message = result.get("error")
     if isinstance(error_message, str) and error_message.strip():
