@@ -81,18 +81,38 @@ async def _resolve_institution_location(
             )
         ).scalar_one_or_none()
     else:
-        # Default: first active location
-        location = (
-            await session.execute(
-                select(InstitutionLocation)
-                .where(
-                    InstitutionLocation.institution_id == institution.id,
-                    InstitutionLocation.is_active.is_(True),
+        # No location_id supplied. Auto-defaulting to the oldest active
+        # location is only safe for single-location institutions; for
+        # multi-location ones the caller must be explicit, otherwise a
+        # mutating route would silently target the wrong NexHealth
+        # subaccount (cross-clinic write). Look up all active locations
+        # and pick the single one if there's exactly one.
+        active_locations = list(
+            (
+                await session.execute(
+                    select(InstitutionLocation)
+                    .where(
+                        InstitutionLocation.institution_id == institution.id,
+                        InstitutionLocation.is_active.is_(True),
+                    )
+                    .order_by(InstitutionLocation.created_at)
                 )
-                .order_by(InstitutionLocation.created_at)
-                .limit(1)
+            ).scalars()
+        )
+        if not active_locations:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "No active location found for institution"
             )
-        ).scalar_one_or_none()
+        if len(active_locations) > 1:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                (
+                    "location_id is required for multi-location institutions. "
+                    f"Active locations: {len(active_locations)}. Pass "
+                    "?location_id=<id> to disambiguate."
+                ),
+            )
+        location = active_locations[0]
 
     if not location:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No active location found for institution")
