@@ -74,10 +74,41 @@ Send the client the following message + records (paste verbatim).
 > we manage everything under it from our AWS account.
 
 GoDaddy's UI for this:
-1. Log in → My Products → DNS for `scalenexus.ai`.
-2. **Add Record** → Type **NS**, Host **staging**, Value (one of the
-   four). Repeat 4 times.
-3. Save. TTL 1 hour by default.
+
+1. Domain Portfolio → click `scalenexus.ai`.
+2. **DNS** in the left sidebar (some accounts: **Manage DNS**).
+3. Scroll past the Nameservers section. We do NOT want to change
+   the zone's nameservers — that would un-delegate the entire
+   domain from GoDaddy.
+4. In the **DNS Records** table, click **Add New Record** (or **+**).
+5. Type: **NS** · Name/Host: `staging` · Value: one of the four
+   ``ns-*.awsdns-*`` values · TTL: 1 hour default.
+6. Repeat for the other three.
+7. Save. Result: four new rows alongside the existing A / MX / TXT
+   records. The zone's overall nameservers stay untouched.
+
+GoDaddy reference: <https://www.godaddy.com/help/manage-dns-records-680>
+
+### When the client can't add NS records (Option B fallback)
+
+Some GoDaddy account types (locked-down enterprise plans, etc.)
+restrict NS-record creation in the DNS-record editor. In that case
+skip the delegation entirely and have the client add CNAMEs
+directly:
+
+1. ACM cert validation CNAME for `sn.dev.staging.scalenexus.ai`
+   (us-east-1 cert). Must persist forever — ACM rechecks at every
+   60-day renewal.
+2. ACM cert validation CNAME for
+   `api.sn.dev.staging.scalenexus.ai` (ca-central-1 cert). Same
+   persistence requirement.
+3. After ``cdk deploy``: CNAME `sn.dev.staging` → CloudFront DNS
+   from CFN output.
+4. CNAME `api.sn.dev.staging` → ALB DNS from CFN output.
+
+Trade-off: the client touches GoDaddy every time we add a
+subdomain. Operationally noisier than Option A, same final
+behaviour.
 
 ## Step 3 — Verify delegation propagated
 
