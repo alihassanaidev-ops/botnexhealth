@@ -180,9 +180,17 @@ class AuthEmailService:
                 json=payload,
             )
             if response.status_code >= 400:
+                # Never log the response body. The request body contains a
+                # live action URL with ?token=...; if the provider or any
+                # proxy in front of it echoes request content into the
+                # error response, logging response.text leaks the token —
+                # which is effectively a credential. Log only safe fields
+                # plus the provider's request id for triage.
                 logger.error(
-                    "Auth email send failed: status=%s body=%s",
+                    "Auth email send failed: provider=resend status=%s "
+                    "body_bytes=%d request_id=%s",
                     response.status_code,
-                    response.text[:500],
+                    len(response.content or b""),
+                    response.headers.get("x-request-id") or "-",
                 )
                 response.raise_for_status()
