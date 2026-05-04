@@ -118,6 +118,15 @@ class Call(Base):
         index=True,
     )
 
+    # Location isolation. Backfilled from the Retell agent mapping for
+    # historical rows; new webhook rows set this directly.
+    location_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institution_locations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # Idempotency key — prevents duplicate records from webhook retries
     retell_call_id: Mapped[str | None] = mapped_column(
         String(128), unique=True, nullable=True, index=True,

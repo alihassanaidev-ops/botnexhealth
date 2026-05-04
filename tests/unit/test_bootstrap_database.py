@@ -77,7 +77,7 @@ async def test_create_schema_applies_audit_log_hardening_after_metadata(
         async def run_sync(self, fn: object, **kwargs: object) -> None:
             calls.append(("create_all", kwargs))
 
-        async def execute(self, statement: object) -> None:
+        async def execute(self, statement: object, params: object = None) -> None:
             calls.append(("execute", str(statement)))
 
     class FakeBegin:
@@ -102,9 +102,17 @@ async def test_create_schema_applies_audit_log_hardening_after_metadata(
 
     await bootstrap_database._create_schema("postgresql+asyncpg://example")
 
-    assert calls[0] == ("create_all", {"checkfirst": True})
+    # RLS context (set_config) is set BEFORE create_all so that subsequent
+    # DDL runs as SUPER_ADMIN and is not blocked by FORCE ROW LEVEL SECURITY.
+    create_all_idx = next(
+        i for i, (action, _) in enumerate(calls) if action == "create_all"
+    )
+    assert calls[create_all_idx] == ("create_all", {"checkfirst": True})
+    # All hardening DDL runs after create_all.
     hardening_sql = "\n".join(
-        value for action, value in calls if action == "execute"
+        value
+        for action, value in calls[create_all_idx + 1 :]
+        if action == "execute"
     )
     assert "CREATE OR REPLACE FUNCTION prevent_audit_log_mutation()" in hardening_sql
     assert "CREATE TRIGGER audit_logs_no_update" in hardening_sql

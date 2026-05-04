@@ -86,10 +86,10 @@ async def _begin_webhook_processing(call_id: str, event_type: str) -> tuple[bool
     Returns:
         (can_process, reason)
     """
-    from src.app.database import get_db_session
+    from src.app.database import get_system_db_session
     from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
 
-    async with get_db_session() as session:
+    async with get_system_db_session("retell", external_id=call_id) as session:
         existing = (
             await session.execute(
                 select(RetellWebhookEvent).where(
@@ -144,10 +144,14 @@ async def _finish_webhook_processing(
     Commits explicitly so terminal status is durable even if the surrounding
     request handler raises after this call.
     """
-    from src.app.database import get_db_session
+    from src.app.database import get_system_db_session
     from src.app.models.retell_webhook_event import RetellWebhookEvent
 
-    async with get_db_session() as session:
+    async with get_system_db_session(
+        "retell",
+        institution_id=institution_id,
+        external_id=call_id,
+    ) as session:
         row = (
             await session.execute(
                 select(RetellWebhookEvent).where(
@@ -218,10 +222,13 @@ async def handle_retell_webhook(
         location = None
         if event.call.agent_id:
             try:
-                from src.app.database import get_db_session
+                from src.app.database import get_system_db_session
                 from src.app.services.institution_service import InstitutionService
 
-                async with get_db_session() as session:
+                async with get_system_db_session(
+                    "retell_lookup",
+                    external_id=event.call.agent_id,
+                ) as session:
                     institution_service = InstitutionService(session)
                     result = await institution_service.get_location_by_retell_agent_id(event.call.agent_id)
                     if result:
@@ -237,10 +244,15 @@ async def handle_retell_webhook(
 
         # Process Contact & Call records if we identified the institution
         if institution:
-            from src.app.database import get_db_session
+            from src.app.database import get_system_db_session
             from src.app.services.post_call_service import PostCallService
 
-            async with get_db_session() as session:
+            async with get_system_db_session(
+                "retell",
+                institution_id=institution.id,
+                location_id=str(location.id) if location else None,
+                external_id=event.call.call_id,
+            ) as session:
                 post_call_service = PostCallService(session)
 
                 # Only the scrubbed analysis is used. Raw analysis is never persisted.
@@ -272,6 +284,7 @@ async def handle_retell_webhook(
                 # Call service to save to DB (analysis_dict is always a dict now)
                 saved_call = await post_call_service.process_call_analyzed_event(
                     institution_id=institution.id,
+                    location_id=str(location.id) if location else None,
                     webhook_call=mapped_call_data,
                     analysis=analysis_dict,
                 )

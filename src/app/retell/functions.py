@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from contextvars import ContextVar
-from typing import Any, Callable, Coroutine, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -20,6 +20,10 @@ from src.app.retell.models import FunctionCallRequest, FunctionCallResponse, Fun
 from src.app.retell.security import get_retell_secret, get_signature_dependency, hash_for_logging
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from src.app.models.institution import Institution
+    from src.app.models.institution_location import InstitutionLocation
 
 router = APIRouter(prefix="/retell", tags=["Retell AI"])
 
@@ -80,7 +84,7 @@ async def get_institution_from_call_context() -> tuple[Optional["Institution"], 
     2. Not found -> (None, None)
     """
     from src.app.services.institution_service import InstitutionService
-    from src.app.database import get_db_session
+    from src.app.database import get_system_db_session
 
     context = _call_context_var.get()
     agent_id = context.get("agent_id")
@@ -89,7 +93,10 @@ async def get_institution_from_call_context() -> tuple[Optional["Institution"], 
         return None, None
 
     try:
-        async with get_db_session() as session:
+        async with get_system_db_session(
+            "retell_lookup",
+            external_id=str(agent_id),
+        ) as session:
             institution_service = InstitutionService(session)
 
             result = await institution_service.get_location_by_retell_agent_id(agent_id)

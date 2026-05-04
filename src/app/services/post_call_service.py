@@ -5,10 +5,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.call import Call, CallStatus, PatientStatus
 from src.app.models.contact import Contact
+from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.retell.models import RetellCallData
 from src.app.services.custom_field_service import CustomFieldService
 
@@ -147,9 +149,9 @@ class PostCallService:
         combined = _nonempty(custom.get("Patient name"))
         if combined:
             parts = combined.split(None, 1)
-            f = parts[0]
-            l = parts[1] if len(parts) > 1 else None
-            return f, l, combined
+            first = parts[0]
+            last = parts[1] if len(parts) > 1 else None
+            return first, last, combined
 
         return None, None, None
 
@@ -176,6 +178,7 @@ class PostCallService:
         institution_id: str,
         webhook_call: RetellCallData,
         analysis: dict[str, Any] | None,
+        location_id: str | None = None,
     ) -> Call:
         """
         Process a call_analyzed event: upsert Contact and create Call.
@@ -272,6 +275,19 @@ class PostCallService:
             self.session.add(contact)
             await self.session.flush()
 
+        if contact and location_id:
+            await self.session.execute(
+                pg_insert(ContactLocationAccess)
+                .values(
+                    institution_id=institution_id,
+                    contact_id=contact.id,
+                    location_id=location_id,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=["contact_id", "location_id"],
+                )
+            )
+
         # ── 2. Resolve call status tags ───────────────────────────────────────
         primary_status, all_tags = self._parse_call_tags(custom)
 
@@ -283,6 +299,7 @@ class PostCallService:
         call = Call(
             institution_id=institution_id,
             contact_id=contact.id if contact else None,
+            location_id=location_id,
             retell_call_id=webhook_call.call_id,
             call_direction=webhook_call.direction,
             agent_used=webhook_call.agent_id,

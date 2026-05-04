@@ -126,9 +126,14 @@ class PostgresAuditRepository:
 
     async def save(self, entry: AuditEntry) -> None:
         """Persist a single audit entry to PostgreSQL."""
-        from src.app.database import get_db_session
+        from src.app.database import get_system_db_session
 
-        async with get_db_session() as session:
+        async with get_system_db_session(
+            "audit",
+            institution_id=entry.institution_id,
+            location_id=entry.location_id,
+            user_id=entry.user_id,
+        ) as session:
             metadata = {"request_id": entry.request_id, **entry.metadata}
             if "jurisdiction" not in metadata:
                 jurisdiction = await _resolve_jurisdiction(session, entry.institution_id)
@@ -152,9 +157,15 @@ class PostgresAuditRepository:
 
     async def save_batch(self, entries: list[AuditEntry]) -> None:
         """Persist multiple audit entries atomically."""
-        from src.app.database import get_db_session
+        from src.app.database import get_system_db_session
 
-        async with get_db_session() as session:
+        first = entries[0] if entries else None
+        async with get_system_db_session(
+            "audit",
+            institution_id=first.institution_id if first else None,
+            location_id=first.location_id if first else None,
+            user_id=first.user_id if first else None,
+        ) as session:
             jurisdiction_cache: dict[str, str | None] = {}
             for entry in entries:
                 metadata = {"request_id": entry.request_id, **entry.metadata}

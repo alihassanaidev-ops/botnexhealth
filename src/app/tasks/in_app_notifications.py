@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from src.app.config import settings
-from src.app.database import get_db_session, init_database, is_database_initialized
+from src.app.database import get_system_db_session, init_database, is_database_initialized
 from src.app.models.call import Call, CallStatus
 from src.app.models.notification import NotificationType
 from src.app.services.event_bus import publish_event
@@ -18,6 +18,19 @@ from src.app.services.notification_service import NotificationService
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def get_db_session(*, institution_id: str, location_id: str | None):
+    """Return the RLS-scoped DB session used by this task.
+
+    Kept as a local wrapper so tests and callers can patch the task's session
+    boundary without reaching into the shared database module.
+    """
+    return get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        location_id=location_id,
+    )
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -80,7 +93,10 @@ async def _send_in_app_notifications_async(
 
     notifications_created = 0
 
-    async with get_db_session() as session:
+    async with get_db_session(
+        institution_id=institution_id,
+        location_id=location_id,
+    ) as session:
         # If call_id is provided, load the call and use service method
         if call_id:
             call = (

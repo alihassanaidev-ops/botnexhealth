@@ -45,7 +45,7 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # institution association is recorded on the row only after the handler
     # resolves it. A cross-tenant collision would require two clinics to
     # share the same Retell call_id, which Retell guarantees never happens.
-    ("src/app/retell/idempotency.py", 87, "RetellFunctionInvocation"),
+    ("src/app/retell/idempotency.py", 90, "RetellFunctionInvocation"),
     ("src/app/retell/idempotency.py", 169, "RetellFunctionInvocation"),
     ("src/app/retell/webhooks.py", 95, "RetellWebhookEvent"),
     ("src/app/retell/webhooks.py", 153, "RetellWebhookEvent"),
@@ -54,7 +54,7 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # globally unique message id). Twilio doesn't know our institution_id.
     # Adding institution_id would require Twilio to send it back, which
     # they won't.
-    ("src/app/services/sms_service.py", 224, "SmsHistoryLog"),
+    ("src/app/services/sms_service.py", 228, "SmsHistoryLog"),
 }
 
 

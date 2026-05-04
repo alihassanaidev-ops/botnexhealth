@@ -40,6 +40,7 @@ dependencies = [
 dev = [
   "ruff>=0.3",
   "pyngrok>=7.1",
+  "testcontainers[postgres]>=4.8",
 ]
 
 [build-system]

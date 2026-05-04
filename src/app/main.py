@@ -57,7 +57,59 @@ async def lifespan(app: FastAPI):
             logger.info("Database initialized and dev tables created")
         else:
             logger.info("Database initialized (production — tables managed by migrations)")
-    
+
+        # Verify every tenant-scoped table has RLS enabled. A table with an
+        # institution_id column but relrowsecurity=false is a tenant-isolation
+        # bug that lets cross-tenant data leak — log CRITICAL so it is loud
+        # in production. Skipped under the test env so unit tests don't hit
+        # a real DB; broad except handles fresh DBs that haven't migrated yet.
+        if settings.app_env != "test":
+            from sqlalchemy import text as _text
+            from src.app.database import get_system_db_session
+
+            try:
+                async with get_system_db_session(
+                    "user",
+                    role="SUPER_ADMIN",
+                    user_id="00000000-0000-0000-0000-000000000000",
+                ) as _verify_session:
+                    result = await _verify_session.execute(
+                        _text(
+                            """
+                            SELECT c.relname
+                            FROM pg_class c
+                            JOIN pg_namespace n ON c.relnamespace = n.oid
+                            WHERE n.nspname = 'public'
+                              AND c.relkind = 'r'
+                              AND c.relrowsecurity = false
+                              AND EXISTS (
+                                  SELECT 1 FROM information_schema.columns
+                                  WHERE table_schema = 'public'
+                                    AND table_name = c.relname
+                                    AND column_name = 'institution_id'
+                              )
+                            """
+                        )
+                    )
+                    missing = [row[0] for row in result.fetchall()]
+                    if missing:
+                        logger.critical(
+                            "RLS NOT ENABLED on tenant-scoped tables: %s — "
+                            "cross-tenant data exposure possible. Run RLS "
+                            "migration immediately.",
+                            ", ".join(sorted(missing)),
+                        )
+                    else:
+                        logger.info("RLS verification passed on all tenant-scoped tables")
+            except Exception as exc:  # noqa: BLE001
+                # Fresh DB before migrations, or transient catalog issue —
+                # do not crash startup.
+                logger.info(
+                    "Skipping RLS startup verification (DB not ready or "
+                    "catalog query failed): %s",
+                    exc,
+                )
+
     # Initialize API clients
     from src.app.dependencies import init_nexhealth_client
     await init_nexhealth_client()

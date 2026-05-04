@@ -9,7 +9,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # -- App imports ---------------------------------------------------------------
@@ -22,6 +22,7 @@ from src.app.models import (  # noqa: F401 — side-effect import
     AuditLog,
     Call,
     Contact,
+    ContactLocationAccess,
     CustomFieldDefinition,
     CustomFieldValue,
     InsurancePlan,
@@ -82,6 +83,19 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection) -> None:
     """Run migrations with the given connection."""
+    # Set SUPER_ADMIN RLS context so migrations can see/touch all rows under
+    # FORCE ROW LEVEL SECURITY. The zero-UUID is the recognized system bootstrap
+    # identity. Without this, raw-engine migrations evaluate every policy to
+    # false and silently affect 0 rows.
+    connection.execute(
+        text(
+            "SELECT set_config('app.context_type', 'user', false), "
+            "set_config('app.role', 'SUPER_ADMIN', false), "
+            "set_config('app.user_id', :uid, false)"
+        ),
+        {"uid": "00000000-0000-0000-0000-000000000000"},
+    )
+
     context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():

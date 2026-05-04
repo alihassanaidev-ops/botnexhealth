@@ -10,6 +10,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from src.app.database import clear_current_rls_context
+
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(
@@ -17,6 +19,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         request_id = request.headers.get("X-Request-ID") or str(uuid4())
         request.state.request_id = request_id
+        clear_current_rls_context()
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
         try:
@@ -24,4 +27,5 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
             response.headers["X-Request-ID"] = request_id
             return response
         finally:
+            clear_current_rls_context()
             structlog.contextvars.clear_contextvars()

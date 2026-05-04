@@ -12,7 +12,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
 
 from src.app.config import settings
-from src.app.database import get_db_session, init_database, is_database_initialized
+from src.app.database import get_system_db_session, init_database, is_database_initialized
 from src.app.models.call import Call, CallStatus
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import InviteStatus, User, UserRole
@@ -203,7 +203,11 @@ async def _send_call_notification_async(
     if not is_database_initialized():
         init_database(settings.database_url)
 
-    async with get_db_session() as session:
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        location_id=location_id,
+    ) as session:
         call = (
             await session.execute(
                 select(Call)

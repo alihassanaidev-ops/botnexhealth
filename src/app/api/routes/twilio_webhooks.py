@@ -12,7 +12,7 @@ from sqlalchemy import select
 from twilio.request_validator import RequestValidator
 
 from src.app.config import settings
-from src.app.database import get_db_session
+from src.app.database import get_system_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_consent import ConsentSource
@@ -61,7 +61,10 @@ async def inbound_sms(request: Request) -> Response:
     intent = _classify_intent(body)
     keyword = intent  # back-compat with audit metadata that records "keyword"
 
-    async with get_db_session() as session:
+    async with get_system_db_session(
+        "twilio_lookup",
+        external_id=to_number,
+    ) as session:
         location = await _location_for_twilio_number(session, to_number)
         if not location:
             await capture_dead_letter(
@@ -72,6 +75,12 @@ async def inbound_sms(request: Request) -> Response:
             )
             return _twiml("")
 
+    async with get_system_db_session(
+        "twilio",
+        institution_id=str(location.institution_id),
+        location_id=str(location.id),
+        external_id=to_number,
+    ) as session:
         compliance = SmsComplianceService(session)
         if intent == "STOP":
             await compliance.suppress(
@@ -122,7 +131,10 @@ async def sms_status(request: Request) -> dict[str, str]:
     if not message_sid or not provider_status:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Twilio status fields")
 
-    async with get_db_session() as session:
+    async with get_system_db_session(
+        "twilio_status",
+        external_id=message_sid,
+    ) as session:
         sms_service = SmsService(session)
         row = await sms_service.update_delivery_status(
             message_sid=message_sid,
@@ -211,7 +223,7 @@ def _twiml(message: str) -> Response:
         if message
         else ""
     )
-    body = f'<?xml version="1.0" encoding="UTF-8"?><Response>'
+    body = '<?xml version="1.0" encoding="UTF-8"?><Response>'
     if escaped:
         body += f"<Message>{escaped}</Message>"
     body += "</Response>"

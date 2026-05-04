@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from src.app.config import settings
-from src.app.database import get_db_session, init_database, is_database_initialized
+from src.app.database import get_system_db_session, init_database, is_database_initialized
 from src.app.models.sms_history_log import SmsStatus
 from src.app.services.dead_letter import capture_dead_letter, should_retry_vendor_error
 from src.app.services.sms_service import SmsService
@@ -30,7 +30,11 @@ async def _send_sms_async(
     if not is_database_initialized():
         init_database(settings.database_url)
 
-    async with get_db_session() as session:
+    async with get_system_db_session(
+        "celery",
+        location_id=institution_location_id,
+        external_id=institution_location_id,
+    ) as session:
         sms_service = SmsService(session)
         log_record = await sms_service.send_sms(
             from_number=from_number,

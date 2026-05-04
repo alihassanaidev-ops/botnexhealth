@@ -11,7 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.config import settings
-from src.app.database import get_db_session, init_database, is_database_initialized
+from src.app.database import (
+    get_system_db_session,
+    init_database,
+    is_database_initialized,
+)
 from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
 from src.app.services.sms_privacy import payload_hash, redact_payload, sanitize_provider_error
 
@@ -95,7 +99,11 @@ async def capture_dead_letter(
             return
         if not is_database_initialized():
             init_database(settings.database_url)
-        async with get_db_session() as session:
+        async with get_system_db_session(
+            "dead_letter",
+            institution_id=institution_id,
+            location_id=location_id,
+        ) as session:
             svc = DeadLetterService(session)
             await svc.capture(
                 source=source,

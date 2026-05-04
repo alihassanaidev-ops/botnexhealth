@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
 from src.app.models.institution import decrypt_value, encrypt_value
@@ -79,6 +79,20 @@ class SmsHistoryLog(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     
     # Relations
+    institution_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institutions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    location_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institution_locations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     institution_location_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("institution_locations.id", ondelete="CASCADE"),

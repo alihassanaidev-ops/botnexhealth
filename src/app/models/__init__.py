@@ -3,6 +3,7 @@
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
 from src.app.models.call import Call, CallDirection, CallStatus, PatientStatus
 from src.app.models.contact import Contact
+from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.models.custom_field import (
     CustomFieldDefinition,
     CustomFieldValue,
@@ -50,6 +51,7 @@ __all__ = [
     "InstitutionLocationTransferNumber",
     "InsurancePlan",
     "Contact",
+    "ContactLocationAccess",
     "Call",
     "CallStatus",
     "CallDirection",

@@ -4,6 +4,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
 
@@ -29,6 +30,17 @@ async def main(email: str, frontend_base_url: str) -> None:
 
     try:
         async with async_session() as session:
+            # Set SUPER_ADMIN RLS context so this raw session can see/insert
+            # rows under FORCE ROW LEVEL SECURITY. Zero-UUID is the recognized
+            # system bootstrap identity.
+            await session.execute(
+                text(
+                    "SELECT set_config('app.context_type', 'user', false), "
+                    "set_config('app.role', 'SUPER_ADMIN', false), "
+                    "set_config('app.user_id', :uid, false)"
+                ),
+                {"uid": "00000000-0000-0000-0000-000000000000"},
+            )
             # 1. Check if user already exists (only active rows; soft-deleted
             # users may share an email since the partial unique index excludes
             # them — see migration 20260505_user_email_partial_unique).

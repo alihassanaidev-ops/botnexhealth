@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 
-from src.app.database import get_db_session
+from src.app.database import get_system_db_session
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
@@ -638,7 +638,11 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         provider_cutoff = None
 
         if normalized_provider_id and ctx.location:
-            async with get_db_session() as session:
+            async with get_system_db_session(
+                "retell",
+                institution_id=str(ctx.institution.id),
+                location_id=str(ctx.location.id),
+            ) as session:
                 prov = (await session.execute(
                     select(
                         InstitutionProvider.buffer_minutes,
@@ -886,7 +890,11 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
         if patient_age is not None and ctx.location:
             # Look up age-group rules from local cache
             age_rules: dict[str, tuple[int | None, int | None]] = {}
-            async with get_db_session() as session:
+            async with get_system_db_session(
+                "retell",
+                institution_id=str(ctx.institution.id),
+                location_id=str(ctx.location.id),
+            ) as session:
                 rows = (
                     await session.execute(
                         select(
@@ -955,7 +963,11 @@ async def list_insurance_plans_handler(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "No location resolved for this agent."}
 
     try:
-        async with get_db_session() as session:
+        async with get_system_db_session(
+            "retell",
+            institution_id=str(ctx.institution.id),
+            location_id=str(ctx.location.id),
+        ) as session:
             plans = (
                 await session.execute(
                     select(InsurancePlan).where(
@@ -1004,7 +1016,11 @@ async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "No location resolved for this agent."}
 
     try:
-        async with get_db_session() as session:
+        async with get_system_db_session(
+            "retell",
+            institution_id=str(ctx.institution.id),
+            location_id=str(ctx.location.id),
+        ) as session:
             timezone = (ctx.location.timezone or "UTC").strip()
             try:
                 tz = ZoneInfo(timezone)

@@ -75,13 +75,16 @@ async def _claim_invocation(
         action ∈ {"new", "replay_completed", "in_flight", "retry_failed"}
         cached_result is set only when action == "replay_completed".
     """
-    from src.app.database import get_db_session
+    from src.app.database import get_system_db_session
     from src.app.models.retell_function_invocation import (
         RetellFunctionInvocation,
         RetellFunctionStatus,
     )
 
-    async with get_db_session() as session:
+    async with get_system_db_session(
+        "retell_function",
+        external_id=call_id,
+    ) as session:
         existing = (
             await session.execute(
                 select(RetellFunctionInvocation).where(
@@ -160,10 +163,14 @@ async def _record_outcome(
     Commits explicitly so the COMPLETED/FAILED transition is durable even
     if a later request-handler exception rolls back the surrounding work.
     """
-    from src.app.database import get_db_session
+    from src.app.database import get_system_db_session
     from src.app.models.retell_function_invocation import RetellFunctionInvocation
 
-    async with get_db_session() as session:
+    async with get_system_db_session(
+        "retell_function",
+        institution_id=institution_id,
+        external_id=call_id,
+    ) as session:
         row = (
             await session.execute(
                 select(RetellFunctionInvocation).where(

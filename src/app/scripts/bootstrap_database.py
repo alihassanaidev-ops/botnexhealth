@@ -62,6 +62,17 @@ async def _create_super_admin(database_url: str) -> None:
     async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     try:
         async with async_session() as session:
+            # Set SUPER_ADMIN RLS context so this raw session can see/insert
+            # rows under FORCE ROW LEVEL SECURITY. Zero-UUID is the recognized
+            # system bootstrap identity.
+            await session.execute(
+                text(
+                    "SELECT set_config('app.context_type', 'user', false), "
+                    "set_config('app.role', 'SUPER_ADMIN', false), "
+                    "set_config('app.user_id', :uid, false)"
+                ),
+                {"uid": "00000000-0000-0000-0000-000000000000"},
+            )
             email = "zulkhaifahmed@gmail.com"
             result = await session.execute(
                 select(User).where(User.email == email, User.deleted_at.is_(None))
@@ -97,6 +108,17 @@ async def _create_schema(database_url: str) -> None:
     engine = create_async_engine(database_url, echo=False, poolclass=NullPool)
     try:
         async with engine.begin() as conn:
+            # Set SUPER_ADMIN RLS context so DDL/DML executed on this raw
+            # connection isn't blocked by FORCE ROW LEVEL SECURITY. Zero-UUID
+            # is the recognized system bootstrap identity.
+            await conn.execute(
+                text(
+                    "SELECT set_config('app.context_type', 'user', false), "
+                    "set_config('app.role', 'SUPER_ADMIN', false), "
+                    "set_config('app.user_id', :uid, false)"
+                ),
+                {"uid": "00000000-0000-0000-0000-000000000000"},
+            )
             await conn.run_sync(Base.metadata.create_all, checkfirst=True)
             for statement in _AUDIT_LOG_HARDENING_SQL:
                 await conn.execute(text(statement))

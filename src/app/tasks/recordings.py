@@ -81,14 +81,18 @@ async def _upload_recording_async(
     s3_url = f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{key}"
 
     # Update the call record with the S3 URL
-    from src.app.database import get_db_session, init_database, is_database_initialized
+    from src.app.database import get_system_db_session, init_database, is_database_initialized
     from src.app.models.call import Call
     from sqlalchemy import select
 
     if not is_database_initialized():
         init_database(settings.database_url)
 
-    async with get_db_session() as session:
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        external_id=call_id,
+    ) as session:
         call = (
             await session.execute(
                 select(Call).where(

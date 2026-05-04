@@ -8,7 +8,7 @@ from typing import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.app.database import get_db_session
+from src.app.database import get_system_db_session
 from src.app.services.institution_service import InstitutionService
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,10 @@ class InstitutionMiddleware(BaseHTTPMiddleware):
 
         # Lookup institution (and optional location)
         try:
-            async with get_db_session() as session:
+            async with get_system_db_session(
+                "middleware_lookup",
+                external_id=institution_slug,
+            ) as session:
                 service = InstitutionService(session)
                 institution = await service.get_by_slug(institution_slug)
 

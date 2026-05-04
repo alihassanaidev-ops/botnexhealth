@@ -2,7 +2,7 @@ import asyncio
 import logging
 import sys
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -24,6 +24,17 @@ async def main(email: str, password: str, first_name: str, last_name: str) -> No
 
     try:
         async with async_session() as session:
+            # Set SUPER_ADMIN RLS context so this raw session can see/insert
+            # rows under FORCE ROW LEVEL SECURITY. Zero-UUID is the recognized
+            # system bootstrap identity.
+            await session.execute(
+                text(
+                    "SELECT set_config('app.context_type', 'user', false), "
+                    "set_config('app.role', 'SUPER_ADMIN', false), "
+                    "set_config('app.user_id', :uid, false)"
+                ),
+                {"uid": "00000000-0000-0000-0000-000000000000"},
+            )
             result = await session.execute(
                 select(User).where(User.email == email, User.deleted_at.is_(None))
             )

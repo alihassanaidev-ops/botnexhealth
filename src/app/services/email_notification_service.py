@@ -121,9 +121,12 @@ class EmailNotificationService:
 
         if institution_id:
             try:
-                from src.app.database import get_db_session
+                from src.app.database import get_system_db_session
 
-                async with get_db_session() as session:
+                async with get_system_db_session(
+                    "celery",
+                    institution_id=institution_id,
+                ) as session:
                     svc = EmailTemplateService(session)
                     template = await svc.get_template_by_type(institution_id, template_type)
                     if template and template.is_active:

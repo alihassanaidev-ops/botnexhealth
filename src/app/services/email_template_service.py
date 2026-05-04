@@ -335,6 +335,7 @@ class EmailTemplateService:
 
         self._session.add(template)
         await self._session.flush()
+        await self._session.refresh(template)
         return template
 
     async def reset_template(

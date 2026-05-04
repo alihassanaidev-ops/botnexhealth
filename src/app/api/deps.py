@@ -4,12 +4,17 @@ API dependencies for authentication and authorization.
 
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy import select
 
-from src.app.database import get_db_session
+from src.app.database import (
+    RlsContext,
+    get_db_session,
+    set_current_rls_context,
+    use_rls_context,
+)
 from src.app.models.user import User, UserRole
 from src.app.services.auth import AuthService
 from src.app.services.refresh_token_service import RefreshTokenService
@@ -18,7 +23,10 @@ from src.app.services.refresh_token_service import RefreshTokenService
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
 
-async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> User:
+async def get_current_user(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    request: Request = None,  # type: ignore[assignment]
+) -> User:
     """Validate JWT token and return current user."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -47,19 +55,23 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> Use
             detail="Authentication session store is unavailable",
         ) from exc
 
-    async with get_db_session() as session:
-        result = await session.execute(
-            select(User).where(
-                User.id == user_id,
-                User.deleted_at.is_(None),
+    with use_rls_context(RlsContext.system("auth", user_id=str(user_id))):
+        async with get_db_session() as session:
+            result = await session.execute(
+                select(User).where(
+                    User.id == user_id,
+                    User.deleted_at.is_(None),
+                )
             )
-        )
-        user = result.scalar_one_or_none()
+            user = result.scalar_one_or_none()
 
-        if user is None:
-            raise credentials_exception
+            if user is None:
+                raise credentials_exception
 
-        return user
+    set_current_rls_context(RlsContext.for_user(user))
+    if request is not None:
+        request.state.rls_context = RlsContext.for_user(user)
+    return user
 
 
 async def get_current_active_user(

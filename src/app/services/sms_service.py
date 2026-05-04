@@ -104,6 +104,8 @@ class SmsService:
                 status=SmsStatus.SUPPRESSED.value,
                 provider_status="suppressed",
                 error_message=block_reason,
+                institution_id=location.institution_id,
+                location_id=str(location.id),
                 institution_location_id=institution_location_id,
                 patient_contact_id=patient_contact_id,
                 call_id=call_id,
@@ -128,6 +130,8 @@ class SmsService:
         sms_log = SmsHistoryLog(
             from_number=from_number,
             status=SmsStatus.PENDING.value,
+            institution_id=location.institution_id,
+            location_id=str(location.id),
             institution_location_id=institution_location_id,
             patient_contact_id=patient_contact_id,
             call_id=call_id,
