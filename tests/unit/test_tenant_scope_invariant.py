@@ -54,7 +54,7 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # globally unique message id). Twilio doesn't know our institution_id.
     # Adding institution_id would require Twilio to send it back, which
     # they won't.
-    ("src/app/services/sms_service.py", 228, "SmsHistoryLog"),
+    ("src/app/services/sms_service.py", 238, "SmsHistoryLog"),
 }
 
 

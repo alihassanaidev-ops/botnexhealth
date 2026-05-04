@@ -78,6 +78,16 @@ class SmsService:
         if not location:
             raise ValueError("Institution location not found for SMS send")
 
+        configured_from_number = (location.twilio_from_number or "").strip()
+        requested_from_number = (from_number or "").strip()
+        if not configured_from_number:
+            raise ValueError("Location is missing a valid Twilio sender number")
+        if requested_from_number != configured_from_number:
+            raise ValueError(
+                "SMS sender number does not match the location's configured Twilio number"
+            )
+        from_number = configured_from_number
+
         compliance = SmsComplianceService(self.session)
         identity = compliance.identify(to_number)
         from_hash = hash_for_logging(from_number)

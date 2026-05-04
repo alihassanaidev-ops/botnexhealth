@@ -164,6 +164,11 @@ async def send_sms(
                     "to_phone_hash": hash_for_logging(body.to_number),
                     "location_id": body.institution_location_id,
                 },
+                institution_id=(
+                    str(log_record.institution_id)
+                    if log_record.institution_id
+                    else None
+                ),
                 user_id=str(current_admin.id),
                 location_id=body.institution_location_id,
             )

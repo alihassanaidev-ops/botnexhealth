@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.app.config import settings
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_consent import ConsentChannel, ConsentRecord, ConsentStatus, SmsSuppression
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.services.sms_compliance import SmsComplianceService, SmsSendBlockedError
@@ -179,6 +180,52 @@ async def test_release_suppression_does_not_grant_consent_when_no_rows_released(
     )
 
     assert released == 0
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_sms_send_rejects_sender_number_from_another_location() -> None:
+    location = InstitutionLocation(
+        id="11111111-1111-1111-1111-111111111111",
+        institution_id="22222222-2222-2222-2222-222222222222",
+        name="Main Office",
+        slug="main-office",
+        twilio_from_number="+15550000001",
+    )
+    session = _FakeSession(location)
+    service = SmsService(session)
+
+    with pytest.raises(ValueError, match="sender number does not match"):
+        await service.send_sms(
+            from_number="+15550000002",
+            to_number="+14155550123",
+            body="Appointment reminder",
+            institution_location_id=str(location.id),
+        )
+
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_sms_send_rejects_location_without_sender_number() -> None:
+    location = InstitutionLocation(
+        id="11111111-1111-1111-1111-111111111111",
+        institution_id="22222222-2222-2222-2222-222222222222",
+        name="Main Office",
+        slug="main-office",
+        twilio_from_number=None,
+    )
+    session = _FakeSession(location)
+    service = SmsService(session)
+
+    with pytest.raises(ValueError, match="missing a valid Twilio sender number"):
+        await service.send_sms(
+            from_number="+15550000001",
+            to_number="+14155550123",
+            body="Appointment reminder",
+            institution_location_id=str(location.id),
+        )
+
     assert session.added == []
 
 
