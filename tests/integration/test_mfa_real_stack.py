@@ -128,6 +128,17 @@ def migrated_postgres(postgres_url: str) -> str:
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter_between_real_stack_tests():
+    """All real-stack tests hit the app from 127.0.0.1, so the
+    ``RATE_AUTH = "10/minute"`` limiter on /api/auth/login eventually
+    starts returning 429 across multiple tests. Reset between tests."""
+    from src.app.api.rate_limit import limiter
+    limiter.reset()
+    yield
+    limiter.reset()
+
+
 @pytest_asyncio.fixture
 async def real_stack(monkeypatch: pytest.MonkeyPatch, migrated_postgres: str, redis_url: str):
     monkeypatch.setattr(settings, "database_url", migrated_postgres)
