@@ -521,6 +521,13 @@ async def audit_context(
     except Exception as e:
         # Determine failure type
         outcome = _classify_exception(e)
+        # Truncating str(e) is NOT de-identification: a 200-char prefix of
+        # a vendor exception still contains patient name / DOB / phone.
+        # Persist only the structural fields — type, HTTP status, and any
+        # structured error code the exception exposes. The audit_metadata
+        # JSONB column docs explicitly forbid PHI here.
+        from src.app.services.sms_privacy import safe_error_summary
+
         await service.log(
             actor=actor,
             action=action,
@@ -530,7 +537,7 @@ async def audit_context(
                 **(metadata or {}),
                 **extra_metadata,
                 "error_type": type(e).__name__,
-                "error_message": str(e)[:200],  # Truncate for safety
+                "error_summary": safe_error_summary(e),
             },
             institution_id=institution_id,
             request_id=request_id,

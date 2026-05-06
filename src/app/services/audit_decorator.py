@@ -423,15 +423,29 @@ def _classify_soft_error(result: Any) -> tuple[AuditOutcome | None, str | None]:
         if not isinstance(result, dict):
             return None, None
 
+    # Soft-failure messages are persisted to audit_metadata. Truncating to
+    # 200 chars is not de-identification: a 200-char prefix of a vendor
+    # exception still contains patient name / DOB / phone. Run the message
+    # through the privacy redactor so phone/email/DOB shapes are stripped
+    # before the row hits audit_logs.
+    from src.app.services.sms_privacy import sanitize_provider_error
+
     error_message = result.get("error")
     if isinstance(error_message, str) and error_message.strip():
-        return AuditOutcome.FAILURE_VALIDATION, error_message[:200]
+        return (
+            AuditOutcome.FAILURE_VALIDATION,
+            sanitize_provider_error(error_message, max_length=200),
+        )
 
     if result.get("success") is False:
         # No "error" key but explicit success=False — fall back to "message"
         # for forensics.
         message = result.get("message")
-        msg = str(message)[:200] if message else None
+        msg = (
+            sanitize_provider_error(str(message), max_length=200)
+            if message
+            else None
+        )
         return AuditOutcome.FAILURE_VALIDATION, msg
 
     return None, None
