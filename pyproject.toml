@@ -34,6 +34,9 @@ dependencies = [
   "phonenumbers>=8.13",
   # AWS S3 (call recordings)
   "boto3>=1.34",
+  # MFA (WebAuthn/passkeys + TOTP)
+  "webauthn>=2.7.1",
+  "pyotp>=2.9.0",
 ]
 
 [project.optional-dependencies]

@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     password_reset_token_ttl_minutes: int = 60
     auth_frontend_base_url: str | None = None
     auth_redirect_allowed_hosts: str = ""
+    webauthn_rp_id: str | None = None
+    webauthn_rp_name: str = "NexHealth Dashboard"
+    webauthn_allowed_origins: str = ""
 
     # CORS — comma-separated allowed origins; defaults to "*" for local dev only
     cors_allowed_origins: str = "*"
@@ -206,6 +209,18 @@ class Settings(BaseSettings):
         ):
             raise ValueError("AUTH_FRONTEND_BASE_URL must use https in production")
 
+        if self.is_production and not self.webauthn_rp_id:
+            raise ValueError("WEBAUTHN_RP_ID must be set in production")
+        if self.is_production and not self.webauthn_allowed_origins.strip():
+            raise ValueError("WEBAUTHN_ALLOWED_ORIGINS must be set in production")
+        if self.is_production:
+            for origin in self._split_csv(self.webauthn_allowed_origins):
+                parsed = urlparse(origin)
+                if parsed.scheme != "https" or not parsed.netloc:
+                    raise ValueError(
+                        "WEBAUTHN_ALLOWED_ORIGINS must contain HTTPS origins in production"
+                    )
+
         for cidr in self._split_csv(self.trusted_proxy_cidrs):
             ipaddress.ip_network(cidr, strict=False)
 
@@ -256,6 +271,24 @@ class Settings(BaseSettings):
     def effective_redis_url(self) -> str | None:
         """Return the best available Redis URL for session storage."""
         return self.normalized_redis_url or self.normalized_celery_broker_url
+
+    @property
+    def effective_webauthn_rp_id(self) -> str:
+        return (self.webauthn_rp_id or "localhost").strip()
+
+    @property
+    def effective_webauthn_allowed_origins(self) -> list[str]:
+        explicit = self._split_csv(self.webauthn_allowed_origins)
+        if explicit:
+            return [origin.rstrip("/") for origin in explicit]
+        if self.auth_frontend_base_url:
+            return [self.auth_frontend_base_url.rstrip("/")]
+        return [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
 
     @staticmethod
     def _split_csv(raw: str | None) -> list[str]:
@@ -332,8 +365,16 @@ def setup_logging(log_level: str = "info", app_env: str = "local") -> None:
     handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
+    capture_handlers = [
+        existing_handler
+        for existing_handler in root_logger.handlers
+        if existing_handler.__class__.__name__ == "LogCaptureHandler"
+        and existing_handler.__class__.__module__.startswith("_pytest.")
+    ]
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
+    for capture_handler in capture_handlers:
+        root_logger.addHandler(capture_handler)
     root_logger.setLevel(level)
 
 

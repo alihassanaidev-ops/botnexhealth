@@ -33,6 +33,13 @@ class PasswordService:
         return cls._HASHER.hash(password)
 
     @classmethod
+    def hash_secret(cls, secret: str) -> str:
+        """Hash a high-entropy one-time secret without password-strength rules."""
+        if not secret:
+            raise ValueError("Secret is required")
+        return cls._HASHER.hash(secret)
+
+    @classmethod
     def verify_password(cls, password: str, password_hash: str | None) -> bool:
         """Return True when the password matches the stored hash."""
         if not password or not password_hash:
@@ -42,6 +49,11 @@ class PasswordService:
             return bool(cls._HASHER.verify(password_hash, password))
         except (InvalidHashError, TypeError, VerificationError):
             return False
+
+    @classmethod
+    def verify_secret(cls, secret: str, secret_hash: str | None) -> bool:
+        """Verify a high-entropy one-time secret hash."""
+        return cls.verify_password(secret, secret_hash)
 
     @classmethod
     def compute_timing_safe_dummy_hash(cls) -> str:

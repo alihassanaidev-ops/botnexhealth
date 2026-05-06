@@ -19,7 +19,9 @@ from src.app.main import app
 from src.app.models.audit_log import AuditAction, AuditOutcome
 from src.app.models.user import InviteStatus, User, UserRole
 from src.app.services.audit import AuditPersistenceError
+from src.app.services.mfa import MfaStatus
 from src.app.services.password_service import PasswordService
+from src.app.services.refresh_token_service import RefreshSession
 
 
 class _FailingInitialAuditRepository:
@@ -84,11 +86,11 @@ async def test_local_login_success(async_client: AsyncClient, audit_log_entries)
     mock_session.execute.return_value = query_result
 
     with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.auth.RefreshTokenService.issue_token",
-        new=AsyncMock(return_value="refresh-token-123"),
+        "src.app.api.routes.auth.MfaService.status_for_user",
+        new=AsyncMock(return_value=MfaStatus(0, False, 0)),
     ), patch(
-        "src.app.api.routes.auth.RefreshTokenService.register_access_token",
-        new=AsyncMock(),
+        "src.app.api.routes.auth.MfaTicketService.create",
+        new=AsyncMock(return_value="mfa-ticket-123"),
     ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
@@ -99,25 +101,87 @@ async def test_local_login_success(async_client: AsyncClient, audit_log_entries)
 
     assert response.status_code == 200
     data = response.json()
-    assert data["token_type"] == "bearer"
-    assert data["access_token"]
-    assert "refresh_token" not in data
-    set_cookie = response.headers.get("set-cookie", "")
-    cookie_lower = set_cookie.lower()
-    assert "refresh_token=refresh-token-123" in cookie_lower
-    assert "httponly" in cookie_lower
-    assert "samesite=strict" in cookie_lower
-    assert "secure" in cookie_lower
-    assert "path=/api/auth" in cookie_lower
-    assert response.cookies.get("refresh_token") == "refresh-token-123"
+    assert data["status"] == "mfa_setup_required"
+    assert data["mfa_ticket"] == "mfa-ticket-123"
+    assert data["setup_methods"] == ["webauthn"]
+    assert "access_token" not in data
+    assert response.cookies.get("refresh_token") is None
     entry = _latest_audit_entry(
         await audit_log_entries(),
         AuditAction.LOGIN,
         target_resource=f"user:{user.id}",
     )
-    assert entry.outcome == AuditOutcome.SUCCESS
+    assert entry.outcome == AuditOutcome.INITIATED
     assert entry.user_id == user.id
     assert entry.location_id == user.location_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    (
+        UserRole.SUPER_ADMIN,
+        UserRole.INSTITUTION_ADMIN,
+        UserRole.LOCATION_ADMIN,
+        UserRole.STAFF,
+    ),
+)
+async def test_interactive_roles_require_mfa_before_token_issuance(
+    async_client: AsyncClient,
+    role: UserRole,
+):
+    password = "ValidPass123!"
+    user = User(
+        id="12121212-1212-1212-1212-121212121212",
+        email=f"{role.value.lower()}@example.com",
+        role=role.value,
+        institution_id=None
+        if role == UserRole.SUPER_ADMIN
+        else "22222222-2222-2222-2222-222222222222",
+        location_id="33333333-3333-3333-3333-333333333333"
+        if role in (UserRole.LOCATION_ADMIN, UserRole.STAFF)
+        else None,
+        is_active=True,
+        invite_status=InviteStatus.ACCEPTED.value,
+        password_hash=PasswordService.hash_password(password),
+    )
+
+    mock_session = AsyncMock()
+    query_result = MagicMock()
+    query_result.scalar_one_or_none.return_value = user
+    mock_session.execute.return_value = query_result
+    issue_token = AsyncMock(return_value="refresh-token-should-not-exist")
+    register_access_token = AsyncMock()
+
+    with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
+        "src.app.api.routes.auth.MfaService.status_for_user",
+        new=AsyncMock(return_value=MfaStatus(1, True, 3)),
+    ), patch(
+        "src.app.api.routes.auth.MfaTicketService.create",
+        new=AsyncMock(return_value="mfa-ticket-role"),
+    ) as create_ticket, patch(
+        "src.app.api.routes.auth.RefreshTokenService.issue_token",
+        new=issue_token,
+    ), patch(
+        "src.app.api.routes.auth.RefreshTokenService.register_access_token",
+        new=register_access_token,
+    ):
+        mock_get_db.return_value.__aenter__.return_value = mock_session
+
+        response = await async_client.post(
+            "/api/auth/login",
+            json={"email": user.email, "password": password},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "mfa_required"
+    assert data["mfa_ticket"] == "mfa-ticket-role"
+    assert "access_token" not in data
+    assert response.cookies.get("refresh_token") is None
+    create_ticket.assert_awaited_once()
+    issue_token.assert_not_awaited()
+    register_access_token.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -197,11 +261,11 @@ async def test_local_login_rehashes_outdated_argon2_parameters(async_client: Asy
     mock_session.execute.return_value = query_result
 
     with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.auth.RefreshTokenService.issue_token",
-        new=AsyncMock(return_value="refresh-token-123"),
+        "src.app.api.routes.auth.MfaService.status_for_user",
+        new=AsyncMock(return_value=MfaStatus(0, False, 0)),
     ), patch(
-        "src.app.api.routes.auth.RefreshTokenService.register_access_token",
-        new=AsyncMock(),
+        "src.app.api.routes.auth.MfaTicketService.create",
+        new=AsyncMock(return_value="mfa-ticket-123"),
     ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
@@ -211,6 +275,7 @@ async def test_local_login_rehashes_outdated_argon2_parameters(async_client: Asy
         )
 
     assert response.status_code == 200
+    assert response.json()["status"] == "mfa_setup_required"
     assert user.password_hash != weak_hash
     assert user.password_hash.startswith("$argon2id$")
     assert PasswordService.needs_rehash(user.password_hash) is False
@@ -312,17 +377,11 @@ async def test_reset_password_audit_logs_user_id(
     mock_session.execute.return_value = query_result
 
     with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.auth.RefreshTokenService.revoke_all_for_user",
-        new=AsyncMock(return_value=0),
+        "src.app.api.routes.auth.MfaService.status_for_user",
+        new=AsyncMock(return_value=MfaStatus(0, False, 0)),
     ), patch(
-        "src.app.api.routes.auth.RefreshTokenService.revoke_all_access_tokens_for_user",
-        new=AsyncMock(return_value=0),
-    ), patch(
-        "src.app.api.routes.auth.RefreshTokenService.issue_token",
-        new=AsyncMock(return_value="refresh-token-reset"),
-    ), patch(
-        "src.app.api.routes.auth.RefreshTokenService.register_access_token",
-        new=AsyncMock(),
+        "src.app.api.routes.auth.MfaTicketService.create",
+        new=AsyncMock(return_value="mfa-ticket-reset"),
     ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
@@ -332,6 +391,11 @@ async def test_reset_password_audit_logs_user_id(
         )
 
     assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "mfa_setup_required"
+    assert data["mfa_ticket"] == "mfa-ticket-reset"
+    assert data["setup_methods"] == ["webauthn", "totp"]
+    assert response.cookies.get("refresh_token") is None
     assert user.password_reset_token_hash is None
     assert user.password_reset_expires_at is None
     entry = _latest_audit_entry(
@@ -368,17 +432,11 @@ async def test_set_password_consumes_invite_token(
     mock_session.execute.return_value = query_result
 
     with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.auth.RefreshTokenService.revoke_all_for_user",
-        new=AsyncMock(return_value=0),
+        "src.app.api.routes.auth.MfaService.status_for_user",
+        new=AsyncMock(return_value=MfaStatus(0, False, 0)),
     ), patch(
-        "src.app.api.routes.auth.RefreshTokenService.revoke_all_access_tokens_for_user",
-        new=AsyncMock(return_value=0),
-    ), patch(
-        "src.app.api.routes.auth.RefreshTokenService.issue_token",
-        new=AsyncMock(return_value="refresh-token-456"),
-    ), patch(
-        "src.app.api.routes.auth.RefreshTokenService.register_access_token",
-        new=AsyncMock(),
+        "src.app.api.routes.auth.MfaTicketService.create",
+        new=AsyncMock(return_value="mfa-ticket-set"),
     ):
         mock_get_db.return_value.__aenter__.return_value = mock_session
 
@@ -389,9 +447,10 @@ async def test_set_password_consumes_invite_token(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["access_token"]
-    assert "refresh_token" not in data
-    assert response.cookies.get("refresh_token") == "refresh-token-456"
+    assert data["status"] == "mfa_setup_required"
+    assert data["mfa_ticket"] == "mfa-ticket-set"
+    assert data["setup_methods"] == ["webauthn", "totp"]
+    assert response.cookies.get("refresh_token") is None
     assert user.invite_status == InviteStatus.ACCEPTED.value
     assert user.invite_token_hash is None
     assert user.invite_expires_at is None
@@ -405,6 +464,43 @@ async def test_set_password_consumes_invite_token(
     assert entry.outcome == AuditOutcome.SUCCESS
     assert entry.user_id == user.id
     assert entry.location_id == user.location_id
+
+
+@pytest.mark.asyncio
+async def test_set_password_rejects_weak_password(
+    async_client: AsyncClient,
+):
+    invite_token = PasswordService.generate_one_time_token()
+    user = User(
+        id="99999999-9999-9999-9999-999999999999",
+        email="weak-invitee@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="55555555-5555-5555-5555-555555555555",
+        location_id="66666666-6666-6666-6666-666666666666",
+        is_active=True,
+        invite_status=InviteStatus.PENDING.value,
+        invite_token_hash=PasswordService.hash_token(invite_token),
+        invite_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    mock_session = AsyncMock()
+    query_result = MagicMock()
+    query_result.scalar_one_or_none.return_value = user
+    mock_session.execute.return_value = query_result
+
+    with patch("src.app.api.routes.auth.get_db_session") as mock_get_db:
+        mock_get_db.return_value.__aenter__.return_value = mock_session
+
+        response = await async_client.post(
+            "/api/auth/set-password",
+            json={"token": invite_token, "password": "Levi@144"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Password must be at least 12 characters long."
+    assert user.invite_status == InviteStatus.PENDING.value
+    assert user.invite_token_hash == PasswordService.hash_token(invite_token)
+    assert user.password_hash is None
 
 
 @pytest.mark.asyncio
@@ -428,8 +524,15 @@ async def test_refresh_session_rotates_token(
     mock_session.execute.return_value = query_result
 
     with patch("src.app.api.routes.auth.get_db_session") as mock_get_db, patch(
-        "src.app.api.routes.auth.RefreshTokenService.get_user_id_for_token",
-        new=AsyncMock(return_value=user.id),
+        "src.app.api.routes.auth.RefreshTokenService.get_session_for_token",
+        new=AsyncMock(
+            return_value=RefreshSession(
+                user_id=user.id,
+                mfa=True,
+                amr=("pwd", "webauthn"),
+                auth_time=123,
+            )
+        ),
     ), patch(
         "src.app.api.routes.auth.RefreshTokenService.rotate_token",
         new=AsyncMock(return_value="rotated-refresh-token"),

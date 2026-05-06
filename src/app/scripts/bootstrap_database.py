@@ -54,7 +54,10 @@ def upgrade_to_head() -> None:
         )
 
     alembic_cfg = Config("alembic.ini")
-    alembic_cfg.set_main_option("sqlalchemy.url", admin_url)
+    # Double `%` so configparser's BasicInterpolation passes the literal
+    # character through — RDS-generated passwords containing URL-encoded
+    # special chars (e.g. `%5E`) otherwise blow up at set time.
+    alembic_cfg.set_main_option("sqlalchemy.url", admin_url.replace("%", "%%"))
     if admin_url != settings.database_url:
         logger.warning(
             "Bootstrap will run alembic upgrade head with DATABASE_ADMIN_URL "

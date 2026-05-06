@@ -81,7 +81,8 @@ async def test_create_patient_api_failure():
         result = await create_patient(mock_args)
 
     assert result["success"] is False
-    assert "API Error" in result["error"]
+    assert result["error"] == "Failed to create patient"
+    assert "API Error" not in result["error"]
 
 
 @pytest.mark.asyncio

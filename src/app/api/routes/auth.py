@@ -3,7 +3,7 @@
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -15,13 +15,24 @@ from sqlalchemy import select
 from src.app.api.deps import get_current_active_user, get_current_admin
 from src.app.config import settings
 from src.app.database import RlsContext, get_db_session, use_rls_context
-from src.app.models.user import User, InviteStatus
+from src.app.models.user import User, InviteStatus, UserRole
 from src.app.services.auth import AuthService
 from src.app.services.auth_email_service import AuthEmailService
 from src.app.services.password_service import PasswordService
 from src.app.services.refresh_token_service import (
     RefreshTokenReplayError,
+    RefreshSession,
     RefreshTokenService,
+)
+from src.app.services.mfa import (
+    MfaError,
+    MfaService,
+    MfaStatus,
+    MfaStoreUnavailable,
+    MfaTicket,
+    MfaTicketInvalid,
+    MfaTicketService,
+    MfaVerificationFailed,
 )
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.security import get_client_ip
@@ -43,12 +54,69 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 class AuthSession(BaseModel):
     """Login/refresh response. Refresh token is delivered via HttpOnly cookie."""
+    status: Literal["authenticated"] = "authenticated"
     access_token: str
     token_type: str
+    recovery_codes: list[str] | None = None
+
+
+class MfaChallengeResponse(BaseModel):
+    """Password accepted; MFA must be completed before session issuance."""
+    status: Literal["mfa_required", "mfa_setup_required"]
+    mfa_ticket: str
+    methods: list[str] = []
+    setup_methods: list[str] = []
+    expires_in_seconds: int = MfaTicketService.TTL_SECONDS
+    role: str
+    email: str
+
+
+AuthResult = AuthSession | MfaChallengeResponse
 
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class MfaTicketRequest(BaseModel):
+    mfa_ticket: str
+
+
+class WebAuthnOptionsResponse(BaseModel):
+    options: dict[str, Any]
+
+
+class WebAuthnRegistrationVerifyRequest(MfaTicketRequest):
+    credential: dict[str, Any]
+    device_label: str | None = None
+
+
+class WebAuthnAuthenticationVerifyRequest(MfaTicketRequest):
+    credential: dict[str, Any]
+
+
+class TotpSetupResponse(BaseModel):
+    secret: str
+    provisioning_uri: str
+
+
+class TotpVerifyRequest(MfaTicketRequest):
+    code: str
+
+
+class RecoveryCodeVerifyRequest(MfaTicketRequest):
+    code: str
+
+
+class MfaStatusResponse(BaseModel):
+    webauthn_count: int
+    totp_enabled: bool
+    recovery_codes_remaining: int
+    methods: list[str]
+
+
+class RecoveryCodesResponse(BaseModel):
+    recovery_codes: list[str]
 
 
 class LoginRequest(BaseModel):
@@ -185,7 +253,106 @@ def _get_refresh_cookie(request: Request) -> str | None:
     return request.cookies.get(settings.refresh_cookie_name)
 
 
+def _user_agent(request: Request) -> str | None:
+    return request.headers.get("user-agent")
+
+
+def _mfa_exception_to_http(exc: MfaError) -> HTTPException:
+    if isinstance(exc, MfaStoreUnavailable):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="MFA session store is unavailable",
+        )
+    if isinstance(exc, MfaTicketInvalid):
+        return HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc) or "Invalid or expired MFA ticket",
+        )
+    if isinstance(exc, MfaVerificationFailed):
+        return HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc) or "MFA verification failed",
+        )
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+def _mfa_response(
+    *,
+    user: User,
+    ticket: str,
+    mfa_status: MfaStatus,
+) -> MfaChallengeResponse:
+    is_enrolled = mfa_status.enrolled_for_role(user.role)
+    return MfaChallengeResponse(
+        status="mfa_required" if is_enrolled else "mfa_setup_required",
+        mfa_ticket=ticket,
+        methods=mfa_status.available_methods_for_role(user.role) if is_enrolled else [],
+        setup_methods=[] if is_enrolled else mfa_status.setup_methods_for_role(user.role),
+        role=user.role,
+        email=user.email,
+    )
+
+
+async def _create_mfa_ticket_response(
+    *,
+    request: Request,
+    user: User,
+    mfa_status: MfaStatus,
+    audit_request_id: str,
+    purpose: str,
+    revoke_existing: bool = False,
+    post_password_action: str | None = None,
+) -> MfaChallengeResponse:
+    try:
+        ticket = await MfaTicketService.create(
+            user=user,
+            purpose=purpose,
+            client_ip=_client_ip(request),
+            user_agent=_user_agent(request),
+            audit_request_id=audit_request_id,
+            revoke_existing=revoke_existing,
+            post_password_action=post_password_action,
+        )
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+    return _mfa_response(user=user, ticket=ticket, mfa_status=mfa_status)
+
+
+async def _ticket_from_request(
+    request: Request,
+    token: str,
+    *,
+    purpose: str | None = None,
+) -> MfaTicket:
+    try:
+        return await MfaTicketService.get(
+            token,
+            client_ip=_client_ip(request),
+            user_agent=_user_agent(request),
+            purpose=purpose,
+        )
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+
+
+def _mfa_amr(method: str) -> tuple[str, ...]:
+    return ("pwd", method)
+
+
 async def _issue_access_token(user: User) -> AuthSession:
+    return await _issue_mfa_bound_access_token(
+        user,
+        amr=("pwd", "mfa"),
+        auth_time=int(datetime.now(timezone.utc).timestamp()),
+    )
+
+
+async def _issue_mfa_bound_access_token(
+    user: User,
+    *,
+    amr: tuple[str, ...],
+    auth_time: int,
+) -> AuthSession:
     auth_service = AuthService()
     access_token, jti, ttl_seconds = auth_service.build_access_token(
         data={
@@ -193,6 +360,10 @@ async def _issue_access_token(user: User) -> AuthSession:
             "role": user.role,
             "institution_id": user.institution_id,
             "location_id": user.location_id,
+            "mfa": True,
+            "amr": list(amr),
+            "auth_time": auth_time,
+            "mfa_time": int(datetime.now(timezone.utc).timestamp()),
         },
         expires_delta=timedelta(minutes=settings.access_token_ttl_minutes),
     )
@@ -205,13 +376,25 @@ async def _issue_auth_session(
     response: Response,
     *,
     revoke_existing: bool = False,
+    amr: tuple[str, ...] = ("pwd", "mfa"),
+    auth_time: int | None = None,
 ) -> AuthSession:
     try:
+        issued_auth_time = auth_time or int(datetime.now(timezone.utc).timestamp())
         if revoke_existing:
             await RefreshTokenService.revoke_all_for_user(user.id)
             await RefreshTokenService.revoke_all_access_tokens_for_user(user.id)
-        refresh_token = await RefreshTokenService.issue_token(user.id)
-        session = await _issue_access_token(user)
+        refresh_token = await RefreshTokenService.issue_token(
+            user.id,
+            mfa=True,
+            amr=amr,
+            auth_time=issued_auth_time,
+        )
+        session = await _issue_mfa_bound_access_token(
+            user,
+            amr=amr,
+            auth_time=issued_auth_time,
+        )
     except Exception as e:
         logger.error("Failed to issue auth session: %s", e, exc_info=True)
         raise HTTPException(
@@ -302,6 +485,139 @@ def _set_password_on_user(user: User, password: str) -> None:
     user.locked_until = None
 
 
+def _set_password_or_400(user: User, password: str) -> None:
+    try:
+        _set_password_on_user(user, password)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+async def _user_for_mfa_ticket(session, ticket: MfaTicket) -> User:  # noqa: ANN001
+    result = await session.execute(
+        select(User).where(
+            User.id == ticket.user_id,
+            User.deleted_at.is_(None),
+        )
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired MFA ticket",
+        )
+    if user.is_locked():
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Account is temporarily locked. Contact your administrator.",
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive",
+        )
+    return user
+
+
+async def _audit_mfa_failure(
+    *,
+    request: Request,
+    user: User,
+    ticket: MfaTicket,
+    method: str,
+    phase: str,
+    error: MfaError,
+    enrolled: bool = False,
+) -> None:
+    """Persist a HIPAA §164.312(b) audit row for a failed MFA verification.
+
+    Failed MFA attempts are security-relevant events under
+    §164.312(b) (Audit Controls) and §164.308(a)(1)(ii)(D) (Information
+    System Activity Review). The previous code path raised the HTTP error
+    without writing an audit row, so a stolen-credential attacker hammering
+    the verify endpoint left no trace correlatable to the targeted user.
+
+    Durable: ``log_audit`` (not background) — a missing failure row is
+    indistinguishable from "no attempt happened" during a forensic review,
+    which is exactly the kind of gap incident responders need to close.
+    """
+    await log_audit(
+        actor=AuditActor.API_CLIENT,
+        action=AuditAction.MFA_ENROLL if enrolled else AuditAction.MFA_VERIFY,
+        target_resource=f"user:{user.id}",
+        outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
+        metadata={
+            "method": method,
+            "phase": phase,
+            "ip_address": _client_ip(request),
+            "purpose": ticket.purpose,
+            "error_type": type(error).__name__,
+        },
+        institution_id=user.institution_id,
+        user_id=_audit_user_id(user),
+        location_id=_audit_location_id(user),
+        request_id=ticket.audit_request_id,
+    )
+
+
+async def _complete_mfa_auth(
+    *,
+    request: Request,
+    response: Response,
+    ticket: MfaTicket,
+    user: User,
+    method: str,
+    recovery_codes: list[str] | None = None,
+    enrolled: bool = False,
+) -> AuthSession:
+    client_ip = _client_ip(request)
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.MFA_ENROLL if enrolled else AuditAction.MFA_VERIFY,
+        target_resource=f"user:{user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "method": method,
+            "ip_address": client_ip,
+            "purpose": ticket.purpose,
+        },
+        institution_id=user.institution_id,
+        user_id=_audit_user_id(user),
+        location_id=_audit_location_id(user),
+        request_id=ticket.audit_request_id,
+    )
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.LOGIN,
+        target_resource=f"user:{user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "action": "mfa_complete",
+            "method": method,
+            "ip_address": client_ip,
+            "purpose": ticket.purpose,
+        },
+        institution_id=user.institution_id,
+        user_id=_audit_user_id(user),
+        location_id=_audit_location_id(user),
+        request_id=ticket.audit_request_id,
+    )
+    try:
+        await MfaTicketService.consume(ticket)
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+    session = await _issue_auth_session(
+        user,
+        response,
+        revoke_existing=ticket.revoke_existing,
+        amr=_mfa_amr(method),
+    )
+    session.recovery_codes = recovery_codes
+    return session
+
+
 @asynccontextmanager
 async def _auth_db_session(
     context_type: str = "auth",
@@ -332,9 +648,9 @@ async def _auth_db_session(
             yield session
 
 
-@router.post("/login", response_model=AuthSession)
+@router.post("/login", response_model=AuthResult)
 @limiter.limit(RATE_AUTH)
-async def login(request: Request, response: Response, data: LoginRequest) -> AuthSession:
+async def login(request: Request, response: Response, data: LoginRequest) -> AuthResult:
     """Authenticate a user with local email/password credentials."""
     email = _normalize_email(data.email)
     client_ip = _client_ip(request)
@@ -457,32 +773,24 @@ async def login(request: Request, response: Response, data: LoginRequest) -> Aut
         if PasswordService.needs_rehash(user.password_hash):
             user.password_hash = PasswordService.hash_password(data.password)
             user.password_set_at = datetime.now(timezone.utc)
-    session = await _issue_auth_session(user, response)
 
-    # Durable: a successful login is a security-relevant event. The INITIATED
-    # row above is written before login state mutation/session issuance; this
-    # completion row closes the loop for reporting and reconciliation.
-    await log_audit(
-        actor=AuditActor.ADMIN,
-        action=AuditAction.LOGIN,
-        target_resource=f"user:{user.id}",
-        outcome=AuditOutcome.SUCCESS,
-        metadata={**audit_meta, "phase": "complete"},
-        institution_id=user.institution_id,
-        user_id=_audit_user_id(user),
-        location_id=_audit_location_id(user),
-        request_id=audit_request_id,
-    )
-    return session
+        mfa_status = await MfaService(session).status_for_user(str(user.id))
+        return await _create_mfa_ticket_response(
+            request=request,
+            user=user,
+            mfa_status=mfa_status,
+            audit_request_id=audit_request_id,
+            purpose="login",
+        )
 
 
-@router.post("/token", response_model=AuthSession)
+@router.post("/token", response_model=AuthResult)
 @limiter.limit(RATE_AUTH)
 async def login_oauth_form(
     request: Request,
     response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-) -> AuthSession:
+) -> AuthResult:
     """OAuth2 form-compatible alias for local login."""
     return await login(
         request=request,
@@ -572,13 +880,13 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest) -> Mess
     )
 
 
-@router.post("/reset-password", response_model=AuthSession)
+@router.post("/reset-password", response_model=AuthResult)
 @limiter.limit("20/minute")
 async def reset_password(
     request: Request,
     response: Response,
     data: ResetPasswordRequest,
-) -> AuthSession:
+) -> AuthResult:
     """Consume a password reset token, set a new password, and issue a JWT."""
     token_hash = PasswordService.hash_token(data.token)
     client_ip = _client_ip(request)
@@ -602,32 +910,40 @@ async def reset_password(
                 detail="Invalid or expired password reset token",
             )
 
-        _set_password_on_user(user, data.password)
+        _set_password_or_400(user, data.password)
         _clear_password_reset_state(user)
-    session = await _issue_auth_session(user, response, revoke_existing=True)
 
-    # Durable: password reset is a credential change; the audit row must be
-    # persistent for HIPAA §164.312(d) reviews.
-    await log_audit(
-        actor=AuditActor.ADMIN,
-        action=AuditAction.PASSWORD_RESET_COMPLETE,
-        target_resource=f"user:{user.id}",
-        outcome=AuditOutcome.SUCCESS,
-        metadata={"action": "reset_password", "ip_address": client_ip},
-        institution_id=user.institution_id,
-        user_id=_audit_user_id(user),
-        location_id=_audit_location_id(user),
-    )
-    return session
+        # Durable: password reset is a credential change; record it before any
+        # session can be issued from the MFA completion step.
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            action=AuditAction.PASSWORD_RESET_COMPLETE,
+            target_resource=f"user:{user.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={"action": "reset_password", "ip_address": client_ip},
+            institution_id=user.institution_id,
+            user_id=_audit_user_id(user),
+            location_id=_audit_location_id(user),
+        )
+        mfa_status = await MfaService(session).status_for_user(str(user.id))
+        return await _create_mfa_ticket_response(
+            request=request,
+            user=user,
+            mfa_status=mfa_status,
+            audit_request_id=str(uuid4()),
+            purpose="reset_password",
+            revoke_existing=True,
+            post_password_action="reset_password",
+        )
 
 
-@router.post("/set-password", response_model=AuthSession)
+@router.post("/set-password", response_model=AuthResult)
 @limiter.limit("20/minute")
 async def set_password(
     request: Request,
     response: Response,
     data: SetPasswordRequest,
-) -> AuthSession:
+) -> AuthResult:
     """Consume an invite token, set a password, and issue a JWT."""
     token_hash = PasswordService.hash_token(data.token)
     client_ip = _client_ip(request)
@@ -657,24 +973,392 @@ async def set_password(
                 detail="Account is inactive",
             )
 
-        _set_password_on_user(user, data.password)
+        _set_password_or_400(user, data.password)
         user.invite_status = InviteStatus.ACCEPTED.value
         _clear_invite_state(user)
         _clear_password_reset_state(user)
-    session = await _issue_auth_session(user, response, revoke_existing=True)
 
-    # Durable: initial password-from-invite is a credential change.
+        # Durable: initial password-from-invite is a credential change.
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            action=AuditAction.PASSWORD_SET,
+            target_resource=f"user:{user.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={"action": "set_password", "ip_address": client_ip},
+            institution_id=user.institution_id,
+            user_id=_audit_user_id(user),
+            location_id=_audit_location_id(user),
+        )
+        mfa_status = await MfaService(session).status_for_user(str(user.id))
+        return await _create_mfa_ticket_response(
+            request=request,
+            user=user,
+            mfa_status=mfa_status,
+            audit_request_id=str(uuid4()),
+            purpose="set_password",
+            revoke_existing=True,
+            post_password_action="set_password",
+        )
+
+
+@router.post("/mfa/webauthn/register/options", response_model=WebAuthnOptionsResponse)
+@limiter.limit(RATE_AUTH)
+async def mfa_webauthn_register_options(
+    request: Request,
+    data: MfaTicketRequest,
+) -> WebAuthnOptionsResponse:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        mfa = MfaService(session)
+        mfa_status = await mfa.status_for_user(str(user.id))
+        if mfa_status.enrolled_for_role(user.role):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MFA is already enrolled; verify an existing factor",
+            )
+        options, challenge = await mfa.generate_webauthn_registration_options(user=user)
+        await MfaTicketService.update(
+            ticket,
+            challenge=challenge,
+            challenge_type="webauthn_register",
+        )
+        log_audit_background(
+            actor=AuditActor.API_CLIENT,
+            action=AuditAction.MFA_CHALLENGE,
+            target_resource=f"user:{user.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={"method": "webauthn", "phase": "register_options"},
+            institution_id=user.institution_id,
+            user_id=_audit_user_id(user),
+            location_id=_audit_location_id(user),
+            request_id=ticket.audit_request_id,
+        )
+        return WebAuthnOptionsResponse(options=options)
+
+
+@router.post("/mfa/webauthn/register/verify", response_model=AuthSession)
+@limiter.limit(RATE_AUTH)
+async def mfa_webauthn_register_verify(
+    request: Request,
+    response: Response,
+    data: WebAuthnRegistrationVerifyRequest,
+) -> AuthSession:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    if ticket.challenge_type != "webauthn_register" or not ticket.challenge:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passkey registration challenge is missing or expired",
+        )
+
+    recovery_codes: list[str] = []
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        mfa = MfaService(session)
+        mfa_status = await mfa.status_for_user(str(user.id))
+        if mfa_status.enrolled_for_role(user.role):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MFA is already enrolled; verify an existing factor",
+            )
+        try:
+            await mfa.verify_webauthn_registration(
+                user=user,
+                credential=data.credential,
+                expected_challenge=ticket.challenge,
+                device_label=data.device_label,
+            )
+            recovery_codes = await mfa.ensure_recovery_codes(user_id=str(user.id))
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=user, ticket=ticket,
+                method="webauthn", phase="register_verify",
+                error=exc, enrolled=True,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+
+    return await _complete_mfa_auth(
+        request=request,
+        response=response,
+        ticket=ticket,
+        user=user,
+        method="webauthn",
+        recovery_codes=recovery_codes,
+        enrolled=True,
+    )
+
+
+@router.post("/mfa/webauthn/authenticate/options", response_model=WebAuthnOptionsResponse)
+@limiter.limit(RATE_AUTH)
+async def mfa_webauthn_authenticate_options(
+    request: Request,
+    data: MfaTicketRequest,
+) -> WebAuthnOptionsResponse:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        mfa = MfaService(session)
+        options, challenge = await mfa.generate_webauthn_authentication_options(
+            user_id=str(user.id)
+        )
+        await MfaTicketService.update(
+            ticket,
+            challenge=challenge,
+            challenge_type="webauthn_authenticate",
+        )
+        log_audit_background(
+            actor=AuditActor.API_CLIENT,
+            action=AuditAction.MFA_CHALLENGE,
+            target_resource=f"user:{user.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={"method": "webauthn", "phase": "authenticate_options"},
+            institution_id=user.institution_id,
+            user_id=_audit_user_id(user),
+            location_id=_audit_location_id(user),
+            request_id=ticket.audit_request_id,
+        )
+        return WebAuthnOptionsResponse(options=options)
+
+
+@router.post("/mfa/webauthn/authenticate/verify", response_model=AuthSession)
+@limiter.limit(RATE_AUTH)
+async def mfa_webauthn_authenticate_verify(
+    request: Request,
+    response: Response,
+    data: WebAuthnAuthenticationVerifyRequest,
+) -> AuthSession:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    if ticket.challenge_type != "webauthn_authenticate" or not ticket.challenge:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passkey authentication challenge is missing or expired",
+        )
+
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        try:
+            await MfaService(session).verify_webauthn_authentication(
+                user_id=str(user.id),
+                credential=data.credential,
+                expected_challenge=ticket.challenge,
+            )
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=user, ticket=ticket,
+                method="webauthn", phase="authenticate_verify",
+                error=exc,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+
+    return await _complete_mfa_auth(
+        request=request,
+        response=response,
+        ticket=ticket,
+        user=user,
+        method="webauthn",
+    )
+
+
+@router.post("/mfa/totp/setup/options", response_model=TotpSetupResponse)
+@limiter.limit(RATE_AUTH)
+async def mfa_totp_setup_options(
+    request: Request,
+    data: MfaTicketRequest,
+) -> TotpSetupResponse:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    if ticket.role == UserRole.SUPER_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super admin accounts must enroll a passkey",
+        )
+    secret = MfaService.new_totp_secret()
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        mfa_status = await MfaService(session).status_for_user(str(user.id))
+        if mfa_status.enrolled_for_role(user.role):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MFA is already enrolled; verify an existing factor",
+            )
+        await MfaTicketService.update(
+            ticket,
+            pending_totp_secret=secret,
+            challenge_type="totp_setup",
+        )
+        return TotpSetupResponse(
+            secret=secret,
+            provisioning_uri=MfaService.totp_uri(secret=secret, email=user.email),
+        )
+
+
+@router.post("/mfa/totp/setup/verify", response_model=AuthSession)
+@limiter.limit(RATE_AUTH)
+async def mfa_totp_setup_verify(
+    request: Request,
+    response: Response,
+    data: TotpVerifyRequest,
+) -> AuthSession:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    if ticket.role == UserRole.SUPER_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super admin accounts must enroll a passkey",
+        )
+    if ticket.challenge_type != "totp_setup" or not ticket.pending_totp_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="TOTP setup challenge is missing or expired",
+        )
+
+    recovery_codes: list[str] = []
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        mfa = MfaService(session)
+        mfa_status = await mfa.status_for_user(str(user.id))
+        if mfa_status.enrolled_for_role(user.role):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MFA is already enrolled; verify an existing factor",
+            )
+        try:
+            await mfa.verify_and_store_totp_setup(
+                user_id=str(user.id),
+                secret=ticket.pending_totp_secret,
+                code=data.code,
+            )
+            recovery_codes = await mfa.ensure_recovery_codes(user_id=str(user.id))
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=user, ticket=ticket,
+                method="totp", phase="setup_verify",
+                error=exc, enrolled=True,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+
+    return await _complete_mfa_auth(
+        request=request,
+        response=response,
+        ticket=ticket,
+        user=user,
+        method="totp",
+        recovery_codes=recovery_codes,
+        enrolled=True,
+    )
+
+
+@router.post("/mfa/totp/verify", response_model=AuthSession)
+@limiter.limit(RATE_AUTH)
+async def mfa_totp_verify(
+    request: Request,
+    response: Response,
+    data: TotpVerifyRequest,
+) -> AuthSession:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    if ticket.role == UserRole.SUPER_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super admin accounts must use a passkey or recovery code",
+        )
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        try:
+            await MfaService(session).verify_totp(user_id=str(user.id), code=data.code)
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=user, ticket=ticket,
+                method="totp", phase="verify",
+                error=exc,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+
+    return await _complete_mfa_auth(
+        request=request,
+        response=response,
+        ticket=ticket,
+        user=user,
+        method="totp",
+    )
+
+
+@router.post("/mfa/recovery-code/verify", response_model=AuthSession)
+@limiter.limit(RATE_AUTH)
+async def mfa_recovery_code_verify(
+    request: Request,
+    response: Response,
+    data: RecoveryCodeVerifyRequest,
+) -> AuthSession:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        try:
+            await MfaService(session).use_recovery_code(
+                user_id=str(user.id),
+                code=data.code,
+            )
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=user, ticket=ticket,
+                method="recovery_code", phase="verify",
+                error=exc,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+
     await log_audit(
         actor=AuditActor.ADMIN,
-        action=AuditAction.PASSWORD_SET,
+        action=AuditAction.MFA_RECOVERY_CODE_USE,
         target_resource=f"user:{user.id}",
         outcome=AuditOutcome.SUCCESS,
-        metadata={"action": "set_password", "ip_address": client_ip},
+        metadata={"ip_address": _client_ip(request), "purpose": ticket.purpose},
         institution_id=user.institution_id,
         user_id=_audit_user_id(user),
         location_id=_audit_location_id(user),
+        request_id=ticket.audit_request_id,
     )
-    return session
+    return await _complete_mfa_auth(
+        request=request,
+        response=response,
+        ticket=ticket,
+        user=user,
+        method="recovery_code",
+    )
+
+
+@router.get("/mfa/status", response_model=MfaStatusResponse)
+@limiter.limit("30/minute")
+async def mfa_status(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> MfaStatusResponse:
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        status_value = await MfaService(session).status_for_user(str(current_user.id))
+    return MfaStatusResponse(
+        webauthn_count=status_value.webauthn_count,
+        totp_enabled=status_value.totp_enabled,
+        recovery_codes_remaining=status_value.recovery_codes_remaining,
+        methods=status_value.available_methods_for_role(current_user.role),
+    )
+
+
+@router.post("/mfa/recovery-codes/regenerate", response_model=RecoveryCodesResponse)
+@limiter.limit("10/minute")
+async def mfa_recovery_codes_regenerate(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> RecoveryCodesResponse:
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        codes = await MfaService(session).replace_recovery_codes(user_id=str(current_user.id))
+
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.MFA_RECOVERY_CODES_REGENERATE,
+        target_resource=f"user:{current_user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={"ip_address": _client_ip(request)},
+        institution_id=current_user.institution_id,
+        user_id=_audit_user_id(current_user),
+        location_id=_audit_location_id(current_user),
+    )
+    return RecoveryCodesResponse(recovery_codes=codes)
 
 
 @router.post("/refresh", response_model=AuthSession)
@@ -691,8 +1375,9 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
             detail="Invalid or expired refresh token",
         )
 
+    refresh_session_data: RefreshSession | None
     try:
-        user_id = await RefreshTokenService.get_user_id_for_token(refresh_token)
+        refresh_session_data = await RefreshTokenService.get_session_for_token(refresh_token)
     except RefreshTokenReplayError as replay_err:
         # Replay can be detected at first lookup (rotated set hit) — handle
         # the same way as rotate_token's replay branch: audit + 401.
@@ -721,12 +1406,21 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
             detail="Authentication session store is unavailable",
         )
 
-    if not user_id:
+    if not refresh_session_data:
         _clear_refresh_cookie(response)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
         )
+    if not refresh_session_data.mfa:
+        await RefreshTokenService.revoke_token(refresh_token)
+        _clear_refresh_cookie(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="MFA verification required. Please sign in again.",
+        )
+
+    user_id = refresh_session_data.user_id
 
     async with _auth_db_session(user_id=str(user_id)) as session:
         result = await session.execute(
@@ -762,7 +1456,13 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
             )
 
     try:
-        new_refresh_token = await RefreshTokenService.rotate_token(user.id, refresh_token)
+        new_refresh_token = await RefreshTokenService.rotate_token(
+            user.id,
+            refresh_token,
+            mfa=True,
+            amr=refresh_session_data.amr,
+            auth_time=refresh_session_data.auth_time,
+        )
     except RefreshTokenReplayError:
         # Stolen-token signal — every session for this user is already revoked
         # by the service. Audit aggressively (durable: stolen-token detection
@@ -800,7 +1500,12 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
         )
 
     try:
-        access = await _issue_access_token(user)
+        access = await _issue_mfa_bound_access_token(
+            user,
+            amr=refresh_session_data.amr or ("pwd", "mfa"),
+            auth_time=refresh_session_data.auth_time
+            or int(datetime.now(timezone.utc).timestamp()),
+        )
     except Exception as e:
         logger.error("Failed to issue access token: %s", e, exc_info=True)
         raise HTTPException(

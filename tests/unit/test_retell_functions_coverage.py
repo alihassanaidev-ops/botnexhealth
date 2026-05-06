@@ -106,3 +106,128 @@ async def test_handle_function_call_nested_call_id(mock_registry):
     await functions.handle_function_call(body=body)
     # Logging check would be ideal but hard to assert without capturing logs.
     # Code execution path verification is enough for coverage.
+
+
+@pytest.mark.asyncio
+async def test_handle_function_call_uses_call_object_call_id_for_idempotent_tool(mock_registry):
+    mock_handler = AsyncMock(return_value={"should": "not be called directly"})
+    mock_registry["create_patient"] = mock_handler
+
+    payload = {
+        "function_name": "create_patient",
+        "call": {"call_id": "call_nested_123", "agent_id": "agent_123"},
+        "args": {"first_name": "Test"},
+    }
+
+    with patch.object(
+        functions,
+        "run_with_idempotency",
+        new=AsyncMock(return_value={"ok": True}),
+    ) as run_with_idempotency:
+        response = await functions.handle_function_call(
+            body=json.dumps(payload).encode()
+        )
+
+    assert response.result == {"ok": True}
+    assert run_with_idempotency.await_args.kwargs["call_id"] == "call_nested_123"
+
+
+@pytest.mark.asyncio
+async def test_handle_function_call_falls_back_to_tool_call_id_for_idempotent_tool(mock_registry):
+    mock_registry["book_appointment"] = AsyncMock()
+
+    payload = {
+        "function_name": "book_appointment",
+        "tool_call_id": "tool_call_123",
+        "args": {"patient_id": "patient_123"},
+    }
+
+    with patch.object(
+        functions,
+        "run_with_idempotency",
+        new=AsyncMock(return_value={"ok": True}),
+    ) as run_with_idempotency:
+        response = await functions.handle_function_call(
+            body=json.dumps(payload).encode()
+        )
+
+    assert response.result == {"ok": True}
+    assert run_with_idempotency.await_args.kwargs["call_id"] == "tool_call_123"
+
+
+@pytest.mark.asyncio
+async def test_handle_function_call_prefers_call_id_over_tool_call_id(mock_registry):
+    mock_registry["book_appointment"] = AsyncMock()
+
+    payload = {
+        "function_name": "book_appointment",
+        "call": {"call_id": "call_123"},
+        "tool_call_id": "tool_call_123",
+        "args": {"patient_id": "patient_123"},
+    }
+
+    with patch.object(
+        functions,
+        "run_with_idempotency",
+        new=AsyncMock(return_value={"ok": True}),
+    ) as run_with_idempotency:
+        await functions.handle_function_call(body=json.dumps(payload).encode())
+
+    assert run_with_idempotency.await_args.kwargs["call_id"] == "call_123"
+
+
+@pytest.mark.asyncio
+async def test_handle_function_call_routes_from_chat_agent_id(mock_registry):
+    async def handler(args):
+        return {"context": functions.get_call_context()}
+
+    mock_registry["test"] = handler
+
+    payload = {
+        "function_name": "test",
+        "chat": {"call_id": "chat_123", "agent_id": "agent_chat"},
+        "args": {},
+    }
+    response = await functions.handle_function_call(body=json.dumps(payload).encode())
+
+    assert response.result["context"]["agent_id"] == "agent_chat"
+    assert response.result["context"]["agent_id_source"] == "payload.chat.agent_id"
+
+
+@pytest.mark.asyncio
+async def test_handle_function_call_routes_from_args_agent_id(mock_registry):
+    async def handler(args):
+        return {"context": functions.get_call_context()}
+
+    mock_registry["test"] = handler
+
+    payload = {
+        "function_name": "test",
+        "call_id": "call_123",
+        "args": {"agent_id": "agent_args", "date_of_birth": "2000-01-01"},
+    }
+    response = await functions.handle_function_call(body=json.dumps(payload).encode())
+
+    assert response.result["context"]["agent_id"] == "agent_args"
+    assert response.result["context"]["agent_id_source"] == "args.agent_id"
+
+
+@pytest.mark.asyncio
+async def test_handle_function_call_routes_from_query_agent_id(mock_registry):
+    async def handler(args):
+        return {"context": functions.get_call_context()}
+
+    mock_registry["test"] = handler
+
+    payload = {
+        "function_name": "test",
+        "call_id": "call_123",
+        "args": {},
+    }
+    response = await functions.handle_function_call(
+        query_agent_id="agent_query",
+        body=json.dumps(payload).encode(),
+    )
+
+    assert response.result["context"]["agent_id"] == "agent_query"
+    assert response.result["context"]["agent_id_source"] == "query.agent_id"
