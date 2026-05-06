@@ -491,3 +491,46 @@ class MfaService:
     @staticmethod
     def auth_time_now() -> int:
         return int(time.time())
+
+    # =========================================================================
+    # Factor management — operational completeness (lost device, swap phone).
+    # The runtime auth flow (login + MFA challenge) handles re-enrollment on
+    # the next login when a user has zero factors, so removing a factor never
+    # bricks the account: the next login simply returns mfa_setup_required.
+    # =========================================================================
+
+    async def remove_webauthn_credential(
+        self, *, user_id: str, credential_pk: str
+    ) -> WebAuthnCredential | None:
+        """Remove a passkey owned by the user. Returns the deleted row or None.
+
+        Filtering on ``user_id`` defends against IDOR even with RLS, so a
+        coding mistake that drops the RLS context still cannot delete
+        another user's credential.
+        """
+        row = await self.session.scalar(
+            select(WebAuthnCredential).where(
+                WebAuthnCredential.id == credential_pk,
+                WebAuthnCredential.user_id == user_id,
+            )
+        )
+        if row is None:
+            return None
+        await self.session.delete(row)
+        await self.session.flush()
+        return row
+
+    async def disable_totp(self, *, user_id: str) -> bool:
+        """Remove any registered TOTP factor for the user.
+
+        Returns True if a row was deleted. Idempotent — disabling when no
+        factor exists returns False without error.
+        """
+        row = await self.session.scalar(
+            select(UserTotpFactor).where(UserTotpFactor.user_id == user_id)
+        )
+        if row is None:
+            return False
+        await self.session.delete(row)
+        await self.session.flush()
+        return True

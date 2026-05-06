@@ -115,6 +115,22 @@ class MfaStatusResponse(BaseModel):
     methods: list[str]
 
 
+class WebAuthnCredentialSummary(BaseModel):
+    """Public-facing passkey metadata. Never includes the public key."""
+    id: str
+    device_label: str | None
+    aaguid: str | None
+    credential_device_type: str | None
+    credential_backed_up: bool
+    transports: list[str] | None
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+class WebAuthnCredentialListResponse(BaseModel):
+    credentials: list[WebAuthnCredentialSummary]
+
+
 class RecoveryCodesResponse(BaseModel):
     recovery_codes: list[str]
 
@@ -1359,6 +1375,113 @@ async def mfa_recovery_codes_regenerate(
         location_id=_audit_location_id(current_user),
     )
     return RecoveryCodesResponse(recovery_codes=codes)
+
+
+# =============================================================================
+# Factor management — for lost / stolen / swapped authenticators.
+# Removing a factor never bricks the account: if the user ends up with zero
+# factors, the next login returns mfa_setup_required and re-enrolls them.
+# =============================================================================
+
+@router.get("/mfa/webauthn", response_model=WebAuthnCredentialListResponse)
+@limiter.limit("30/minute")
+async def mfa_webauthn_list(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> WebAuthnCredentialListResponse:
+    """List the user's registered passkeys (metadata only, never the key)."""
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        rows = await MfaService(session).webauthn_credentials(str(current_user.id))
+    return WebAuthnCredentialListResponse(
+        credentials=[
+            WebAuthnCredentialSummary(
+                id=row.id,
+                device_label=row.device_label,
+                aaguid=row.aaguid,
+                credential_device_type=row.credential_device_type,
+                credential_backed_up=row.credential_backed_up,
+                transports=row.transports,
+                created_at=row.created_at,
+                last_used_at=row.last_used_at,
+            )
+            for row in rows
+        ]
+    )
+
+
+@router.delete("/mfa/webauthn/{credential_pk}", response_model=MessageResponse)
+@limiter.limit("20/minute")
+async def mfa_webauthn_remove(
+    request: Request,
+    credential_pk: str,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> MessageResponse:
+    """Remove a passkey owned by the current user. §164.312(b) audited."""
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        removed = await MfaService(session).remove_webauthn_credential(
+            user_id=str(current_user.id),
+            credential_pk=credential_pk,
+        )
+
+    if removed is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Passkey not found",
+        )
+
+    # Durable: factor removal is a security-relevant credential change.
+    # The 401-on-no-factors case is handled at next login; here we only
+    # need a clean audit trail of "user X removed credential Y at time T".
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.MFA_FACTOR_REMOVE,
+        target_resource=f"user:{current_user.id}/webauthn:{credential_pk}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "method": "webauthn",
+            "device_label": removed.device_label,
+            "ip_address": _client_ip(request),
+        },
+        institution_id=current_user.institution_id,
+        user_id=_audit_user_id(current_user),
+        location_id=_audit_location_id(current_user),
+    )
+    return MessageResponse(message="Passkey removed")
+
+
+@router.post("/mfa/totp/disable", response_model=MessageResponse)
+@limiter.limit("10/minute")
+async def mfa_totp_disable(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> MessageResponse:
+    """Disable the current user's TOTP authenticator. Idempotent."""
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        was_enabled = await MfaService(session).disable_totp(
+            user_id=str(current_user.id)
+        )
+
+    # Audit only the state-changing case so a quiet retry doesn't generate
+    # noise rows. Idempotent no-op (already disabled) is not a security
+    # event worth logging — the existing MFA_FACTOR_DISABLE row from the
+    # original disable is the durable record.
+    if was_enabled:
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            action=AuditAction.MFA_FACTOR_DISABLE,
+            target_resource=f"user:{current_user.id}/totp",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "method": "totp",
+                "ip_address": _client_ip(request),
+            },
+            institution_id=current_user.institution_id,
+            user_id=_audit_user_id(current_user),
+            location_id=_audit_location_id(current_user),
+        )
+    return MessageResponse(
+        message="Authenticator app disabled" if was_enabled else "Authenticator app was not enabled"
+    )
 
 
 @router.post("/refresh", response_model=AuthSession)

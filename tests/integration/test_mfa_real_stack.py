@@ -316,6 +316,95 @@ async def test_wrong_totp_writes_failure_audit_row_in_real_postgres(real_stack):
 
 
 @pytest.mark.asyncio
+async def test_totp_disable_round_trip_with_real_postgres(real_stack):
+    """End-to-end: enroll TOTP → call /mfa/totp/disable → row gone + audit row.
+
+    Pins the §164.312(b) contract for factor disablement against a real
+    Postgres + Redis stack: the user can self-service disable a factor,
+    the table reflects it, and the audit row is durable.
+    """
+    from src.app.models.audit_log import AuditAction, AuditLog, AuditOutcome
+    from src.app.models.mfa import UserTotpFactor
+    from src.app.services.audit import (
+        AuditService, PostgresAuditRepository, set_audit_service,
+    )
+
+    set_audit_service(AuditService(PostgresAuditRepository()))
+
+    user_id, _, _ = await _seed_user(
+        "mfa-disable@example.com", role=UserRole.INSTITUTION_ADMIN.value
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # 1. Login → enroll TOTP → get authenticated session.
+        login = await client.post(
+            "/api/auth/login",
+            json={"email": "mfa-disable@example.com", "password": "ValidPass123!"},
+        )
+        ticket = login.json()["mfa_ticket"]
+        setup = await client.post(
+            "/api/auth/mfa/totp/setup/options",
+            json={"mfa_ticket": ticket},
+        )
+        secret = setup.json()["secret"]
+        verify = await client.post(
+            "/api/auth/mfa/totp/setup/verify",
+            json={"mfa_ticket": ticket, "code": pyotp.TOTP(secret).now()},
+        )
+        assert verify.status_code == 200, verify.text
+        access_token = verify.json()["access_token"]
+
+        # Sanity: TOTP factor row exists.
+        async with get_system_db_session("user", role=UserRole.SUPER_ADMIN.value, user_id=user_id) as session:
+            existing = await session.execute(
+                select(UserTotpFactor).where(UserTotpFactor.user_id == user_id)
+            )
+            assert existing.scalars().first() is not None
+
+        # 2. Call /mfa/totp/disable.
+        disable = await client.post(
+            "/api/auth/mfa/totp/disable",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert disable.status_code == 200
+        assert disable.json() == {"message": "Authenticator app disabled"}
+
+        # 3. Idempotent — second call returns the no-op message.
+        disable_again = await client.post(
+            "/api/auth/mfa/totp/disable",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert disable_again.status_code == 200
+        assert disable_again.json() == {"message": "Authenticator app was not enabled"}
+
+    # 4. TOTP row is gone from the real Postgres table.
+    async with get_system_db_session("user", role=UserRole.SUPER_ADMIN.value, user_id=user_id) as session:
+        gone = await session.execute(
+            select(UserTotpFactor).where(UserTotpFactor.user_id == user_id)
+        )
+        assert gone.scalars().first() is None
+
+    # 5. Exactly one MFA_FACTOR_DISABLE audit row landed (idempotent retry
+    # didn't write a second one).
+    from src.app.services.audit import AuditService as _AuditSvc
+    await _AuditSvc.drain_background_tasks()
+    async with get_system_db_session("audit") as session:
+        result = await session.execute(
+            select(AuditLog).where(
+                AuditLog.action == AuditAction.MFA_FACTOR_DISABLE.value,
+                AuditLog.outcome == AuditOutcome.SUCCESS.value,
+                AuditLog.user_id == user_id,
+            )
+        )
+        rows = list(result.scalars().all())
+    assert len(rows) == 1, f"Expected exactly one audit row, got {len(rows)}"
+    row = rows[0]
+    assert row.target_resource == f"user:{user_id}/totp"
+    assert row.audit_metadata is not None
+    assert row.audit_metadata.get("method") == "totp"
+
+
+@pytest.mark.asyncio
 async def test_mfa_rls_blocks_cross_user_recovery_codes(real_stack):
     user_a, _, _ = await _seed_user("mfa-a@example.com", role=UserRole.INSTITUTION_ADMIN.value)
     user_b, _, _ = await _seed_user("mfa-b@example.com", role=UserRole.INSTITUTION_ADMIN.value)
