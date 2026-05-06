@@ -115,7 +115,11 @@ class Settings(BaseSettings):
     max_failed_login_attempts: int = 5
     account_lockout_minutes: int = 30
     access_token_ttl_minutes: int = 15
-    refresh_token_ttl_days: int = 7
+    # HIPAA §164.312(a)(2)(iii) "automatic logoff": short-circuit a stale
+    # session if the dashboard is left open and idle. Each /refresh resets
+    # this window, so an actively-used SPA stays logged in indefinitely;
+    # a walked-away tab expires after the configured idle window.
+    refresh_token_ttl_minutes: int = 60
     invite_token_ttl_hours: int = 72
     password_reset_token_ttl_minutes: int = 60
     auth_frontend_base_url: str | None = None

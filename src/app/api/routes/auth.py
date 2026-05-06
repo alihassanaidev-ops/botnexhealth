@@ -251,7 +251,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
         secure=settings.cookie_secure,
         samesite=settings.cookie_samesite.lower(),
         path=settings.refresh_cookie_path,
-        max_age=settings.refresh_token_ttl_days * 24 * 60 * 60,
+        max_age=settings.refresh_token_ttl_minutes * 60,
     )
 
 

@@ -49,7 +49,7 @@ class RefreshTokenService:
 
     @classmethod
     def _ttl_seconds(cls) -> int:
-        return settings.refresh_token_ttl_days * 24 * 60 * 60
+        return settings.refresh_token_ttl_minutes * 60
 
     @classmethod
     def _redis_url(cls) -> str:

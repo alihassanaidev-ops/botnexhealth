@@ -327,6 +327,58 @@ async def test_wrong_totp_writes_failure_audit_row_in_real_postgres(real_stack):
 
 
 @pytest.mark.asyncio
+async def test_refresh_session_redis_ttl_matches_idle_timeout(real_stack):
+    """End-to-end against real Redis: an issued refresh token's TTL is
+    the configured idle-timeout window (M1, HIPAA §164.312(a)(2)(iii))."""
+    from redis.asyncio import from_url
+
+    user_id, _, _ = await _seed_user(
+        "ttl-real@example.com", role=UserRole.INSTITUTION_ADMIN.value
+    )
+
+    # Drive the full enroll flow so the cookie is issued.
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        login = await client.post(
+            "/api/auth/login",
+            json={"email": "ttl-real@example.com", "password": "ValidPass123!"},
+        )
+        ticket = login.json()["mfa_ticket"]
+        secret = (await client.post(
+            "/api/auth/mfa/totp/setup/options", json={"mfa_ticket": ticket},
+        )).json()["secret"]
+        verify = await client.post(
+            "/api/auth/mfa/totp/setup/verify",
+            json={"mfa_ticket": ticket, "code": pyotp.TOTP(secret).now()},
+        )
+        assert verify.status_code == 200, verify.text
+
+    # Inspect Redis directly — the refresh-session key must have a TTL
+    # bounded by the configured 1-hour idle window, not days.
+    expected_ttl = settings.refresh_token_ttl_minutes * 60
+
+    redis = from_url(settings.redis_url, decode_responses=True)
+    try:
+        keys = await redis.keys(f"refresh:{user_id}:*")
+        assert keys, "Expected exactly one refresh-session key for the user"
+        ttls = [await redis.ttl(k) for k in keys]
+    finally:
+        await redis.aclose()
+
+    # Server has ~milliseconds of slack between SETEX and the TTL read,
+    # so allow a small floor; ceiling = the configured value.
+    assert ttls, "Redis returned no TTL for refresh session"
+    longest = max(ttls)
+    assert expected_ttl - 5 <= longest <= expected_ttl, (
+        f"Refresh-session Redis TTL ({longest}s) should match the configured "
+        f"idle window ({expected_ttl}s)"
+    )
+    # Catch the regression cleanly: must NOT exceed one day.
+    assert longest < 24 * 60 * 60, (
+        "Refresh-session Redis TTL is multi-day — HIPAA idle-logoff window violated"
+    )
+
+
+@pytest.mark.asyncio
 async def test_totp_disable_round_trip_with_real_postgres(real_stack):
     """End-to-end: enroll TOTP → call /mfa/totp/disable → row gone + audit row.
 
