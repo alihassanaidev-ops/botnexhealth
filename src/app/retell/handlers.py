@@ -44,6 +44,7 @@ from src.app.services.slot_filter import (
     get_local_date_string,
     merge_buffer_minutes,
 )
+from src.app.services.sms_privacy import safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,10 @@ async def _validate_appointment_type_for_provider(
     try:
         availabilities = await ctx.adapter.list_availabilities(provider_id=raw_provider_id)
     except Exception as e:
-        logger.error("Failed to validate appointment type: %s", e)
+        logger.error(
+            "Failed to validate appointment type: %s",
+            safe_error_summary(e),
+        )
         return "Unable to validate appointment type for this provider."
 
     allowed_ids = {
@@ -235,8 +239,11 @@ async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
             "message": f"Found {len(locations)} location(s).",
         }
     except Exception as e:
-        logger.error(f"Failed to list locations: {e}")
-        return {"error": f"Failed to list locations: {str(e)}"}
+        logger.error(
+            "Failed to list locations: %s",
+            safe_error_summary(e),
+        )
+        return {"error": "Failed to list locations"}
 
 
 @register_function("get_location_details")
@@ -286,8 +293,11 @@ async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
             "location": loc.model_dump(),
         }
     except Exception as e:
-        logger.error(f"Failed to get location details: {e}")
-        return {"error": f"Failed to retrieve location details: {str(e)}"}
+        logger.error(
+            "Failed to get location details: %s",
+            safe_error_summary(e),
+        )
+        return {"error": "Failed to retrieve location details"}
 
 
 # ============================================================================
@@ -402,7 +412,10 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
             include=None,
         )
     except Exception as e:
-        logger.error(f"Patient lookup failed: {e}")
+        logger.error(
+            "Patient lookup failed: %s",
+            safe_error_summary(e),
+        )
         return {
             "error": "patient_lookup_failed",
             "message": "I had trouble accessing the patient records. Please try again.",
@@ -455,7 +468,10 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
                 payload_patients = full_patients or patients
                 simplified = [_to_full_patient_payload(p) for p in payload_patients[:10]]
         except Exception as e:
-            logger.error("Full patient detail lookup failed: %s", e)
+            logger.error(
+                "Full patient detail lookup failed: %s",
+                safe_error_summary(e),
+            )
             return {
                 "error": "patient_lookup_failed",
                 "message": "I had trouble accessing the patient records. Please try again.",
@@ -559,8 +575,11 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
             )
         )
     except Exception as e:
-        logger.error(f"Failed to create patient: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(
+            "Failed to create patient: %s",
+            safe_error_summary(e),
+        )
+        return {"success": False, "error": "Failed to create patient"}
 
 
 # ============================================================================
@@ -689,8 +708,11 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             "message": f"Found {len(slots)} available slot(s).",
         }
     except Exception as e:
-        logger.error(f"Failed to find slots: {e}")
-        return {"error": f"Failed to find slots: {str(e)}"}
+        logger.error(
+            "Failed to find slots: %s",
+            safe_error_summary(e),
+        )
+        return {"error": "Failed to find slots"}
 
 
 # ============================================================================
@@ -738,8 +760,11 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
         )
         return result.model_dump()
     except Exception as e:
-        logger.error(f"Failed to book appointment: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(
+            "Failed to book appointment: %s",
+            safe_error_summary(e),
+        )
+        return {"success": False, "error": "Failed to book appointment"}
 
 
 @register_function("cancel_appointment")
@@ -762,8 +787,11 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
         result = await ctx.adapter.cancel_appointment(appointment_id)
         return result.model_dump()
     except Exception as e:
-        logger.error(f"Failed to cancel appointment: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(
+            "Failed to cancel appointment: %s",
+            safe_error_summary(e),
+        )
+        return {"success": False, "error": "Failed to cancel appointment"}
 
 
 @register_function("reschedule_appointment")
@@ -811,8 +839,11 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
         )
         return result.model_dump()
     except Exception as e:
-        logger.error(f"Failed to reschedule: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(
+            "Failed to reschedule: %s",
+            safe_error_summary(e),
+        )
+        return {"success": False, "error": "Failed to reschedule"}
 
 
 # ============================================================================
@@ -849,8 +880,11 @@ async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
             "message": f"Found {len(simplified)} appointment types.",
         }
     except Exception as e:
-        logger.error(f"Failed to list appointment types: {e}")
-        return {"error": str(e)}
+        logger.error(
+            "Failed to list appointment types: %s",
+            safe_error_summary(e),
+        )
+        return {"error": "Failed to list appointment types"}
 
 
 @register_function("list_providers")
@@ -943,8 +977,11 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
             "message": f"Found {len(simplified)} provider(s).",
         }
     except Exception as e:
-        logger.error(f"Failed to list providers: {e}")
-        return {"error": f"Failed to list providers: {str(e)}"}
+        logger.error(
+            "Failed to list providers: %s",
+            safe_error_summary(e),
+        )
+        return {"error": "Failed to list providers"}
 
 
 @register_function("list_insurance_plans")
@@ -996,8 +1033,11 @@ async def list_insurance_plans_handler(args: dict[str, Any]) -> dict[str, Any]:
                 "message": f"We accept {len(simplified)} insurance plan(s): {', '.join(p['name'] for p in simplified)}.",
             }
     except Exception as e:
-        logger.error(f"Failed to list insurance plans: {e}")
-        return {"error": f"Failed to retrieve insurance plans: {str(e)}"}
+        logger.error(
+            "Failed to list insurance plans: %s",
+            safe_error_summary(e),
+        )
+        return {"error": "Failed to retrieve insurance plans"}
 
 
 @register_function("list_transfer_numbers")
@@ -1120,8 +1160,11 @@ async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
                 "message": f"Found {len(simplified)} transfer number(s).",
             }
     except Exception as e:
-        logger.error(f"Failed to list transfer numbers: {e}")
-        return {"error": f"Failed to retrieve transfer numbers: {str(e)}"}
+        logger.error(
+            "Failed to list transfer numbers: %s",
+            safe_error_summary(e),
+        )
+        return {"error": "Failed to retrieve transfer numbers"}
 
 
 @register_function("list_operatories")
@@ -1144,5 +1187,8 @@ async def list_operatories(args: dict[str, Any]) -> dict[str, Any]:
             "message": f"Found {len(simplified)} operatories.",
         }
     except Exception as e:
-        logger.error(f"Failed to list operatories: {e}")
-        return {"error": f"Failed to list operatories: {str(e)}"}
+        logger.error(
+            "Failed to list operatories: %s",
+            safe_error_summary(e),
+        )
+        return {"error": "Failed to list operatories"}
