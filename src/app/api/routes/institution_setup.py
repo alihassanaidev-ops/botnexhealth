@@ -221,6 +221,57 @@ class CachedAvailabilityResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+def _prefixed_nexhealth_id(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    value_str = str(value)
+    return value_str if value_str.startswith("nh-") else f"nh-{value_str}"
+
+
+def _availability_response_from_raw(
+    item: dict[str, Any],
+    *,
+    fallback_source_id: str | None = None,
+) -> CachedAvailabilityResponse:
+    raw_id = item.get("id") or fallback_source_id
+    appointment_types = item.get("appointment_types") or []
+    raw_type_ids = item.get("appointment_type_ids") or []
+    type_ids = [
+        _prefixed_nexhealth_id(at.get("id"))
+        for at in appointment_types
+        if at.get("id") is not None
+    ] or [
+        _prefixed_nexhealth_id(type_id)
+        for type_id in raw_type_ids
+        if type_id is not None
+    ]
+
+    return CachedAvailabilityResponse(
+        id=str(raw_id or ""),
+        source_id=_prefixed_nexhealth_id(raw_id) or "",
+        provider_source_id=_prefixed_nexhealth_id(item.get("provider_id")),
+        provider_name=item.get("provider_name"),
+        operatory_source_id=_prefixed_nexhealth_id(item.get("operatory_id")),
+        operatory_name=item.get("operatory_name"),
+        begin_time=item.get("begin_time"),
+        end_time=item.get("end_time"),
+        days=item.get("days"),
+        specific_date=item.get("specific_date"),
+        appointment_type_ids=[type_id for type_id in type_ids if type_id],
+        appointment_type_names=[
+            at.get("name", "")
+            for at in appointment_types
+            if at.get("name") is not None
+        ],
+        active=item.get("active", True),
+        synced=item.get("synced", False),
+        source_metadata={
+            "tz_offset": item.get("tz_offset"),
+            "custom_recurrence": item.get("custom_recurrence"),
+        },
+    )
+
+
 class LocationInfoResponse(BaseModel):
     id: str
     name: str
@@ -250,6 +301,15 @@ class UpdateAppointmentTypeRequest(BaseModel):
     name: str | None = None
     duration_minutes: int | None = None
     descriptor_ids: list[str] | None = None
+
+
+class CreateAvailabilityRequest(BaseModel):
+    provider_id: str
+    appointment_type_ids: list[str]
+    operatory_id: str
+    days: list[str]
+    start_time: str
+    end_time: str
 
 
 class UpdateAvailabilityRequest(BaseModel):
@@ -729,28 +789,64 @@ async def list_availabilities(
         # Map raw PMS response to the response schema
         results: list[CachedAvailabilityResponse] = []
         for item in raw_items:
-            appt_types = item.get("appointment_types") or []
-            results.append(CachedAvailabilityResponse(
-                id=str(item.get("id", "")),
-                source_id=f"nh-{item['id']}" if item.get("id") else "",
-                provider_source_id=f"nh-{item['provider_id']}" if item.get("provider_id") else None,
-                provider_name=item.get("provider_name"),
-                operatory_source_id=f"nh-{item['operatory_id']}" if item.get("operatory_id") else None,
-                operatory_name=item.get("operatory_name"),
-                begin_time=item.get("begin_time"),
-                end_time=item.get("end_time"),
-                days=item.get("days"),
-                specific_date=item.get("specific_date"),
-                appointment_type_ids=[f"nh-{at.get('id')}" for at in appt_types],
-                appointment_type_names=[at.get("name", "") for at in appt_types],
-                active=item.get("active", True),
-                synced=item.get("synced", False),
-                source_metadata={
-                    "tz_offset": item.get("tz_offset"),
-                    "custom_recurrence": item.get("custom_recurrence"),
-                },
-            ))
+            results.append(_availability_response_from_raw(item))
         return results
+
+
+@router.post("/availabilities", response_model=CachedAvailabilityResponse, status_code=201)
+async def create_availability(
+    req: CreateAvailabilityRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
+):
+    """Create a PMS work window and return it in the setup response shape."""
+    if not req.appointment_type_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "appointment_type_ids is required")
+    if not req.days:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "days is required")
+
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
+
+        if not isinstance(adapter, SupportsAvailabilityLinking):
+            raise HTTPException(400, "This PMS does not support creating availability windows")
+
+        raw = await adapter.link_availability(
+            provider_id=req.provider_id,
+            appointment_type_ids=req.appointment_type_ids,
+            operatory_id=req.operatory_id,
+            days=req.days,
+            start_time=req.start_time,
+            end_time=req.end_time,
+        )
+        created = raw.get("data", raw) if isinstance(raw, dict) else {}
+        if not isinstance(created, dict):
+            created = {}
+        if isinstance(created.get("availability"), dict):
+            created = created["availability"]
+
+        response = _availability_response_from_raw(created)
+        loc_slug = location.slug
+        institution_id = institution.id
+        created_source_id = response.source_id
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/availability:{created_source_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "create_availability",
+            "provider_id": req.provider_id,
+            "operatory_id": req.operatory_id,
+            "days": req.days,
+        },
+        institution_id=institution_id,
+    )
+    return response
 
 
 @router.patch("/availabilities/{source_id}", response_model=CachedAvailabilityResponse)
@@ -778,28 +874,7 @@ async def update_availability(
             active=req.active,
         )
 
-        # Return the PMS response directly
-        appt_types = updated.get("appointment_types") or []
-        response = CachedAvailabilityResponse(
-            id=str(updated.get("id", source_id)),
-            source_id=f"nh-{updated.get('id', source_id)}",
-            provider_source_id=f"nh-{updated['provider_id']}" if updated.get("provider_id") else None,
-            provider_name=updated.get("provider_name"),
-            operatory_source_id=f"nh-{updated['operatory_id']}" if updated.get("operatory_id") else None,
-            operatory_name=updated.get("operatory_name"),
-            begin_time=updated.get("begin_time"),
-            end_time=updated.get("end_time"),
-            days=updated.get("days"),
-            specific_date=updated.get("specific_date"),
-            appointment_type_ids=[f"nh-{at.get('id')}" for at in appt_types],
-            appointment_type_names=[at.get("name", "") for at in appt_types],
-            active=updated.get("active", True),
-            synced=updated.get("synced", False),
-            source_metadata={
-                "tz_offset": updated.get("tz_offset"),
-                "custom_recurrence": updated.get("custom_recurrence"),
-            },
-        )
+        response = _availability_response_from_raw(updated, fallback_source_id=source_id)
         loc_slug = location.slug
         institution_id = institution.id
         fields_changed = sorted(req.model_fields_set)

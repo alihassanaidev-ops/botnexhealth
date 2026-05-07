@@ -13,6 +13,7 @@ from src.app.api.routes.institution_setup import (
     CachedDescriptorResponse,
     CachedOperatoryResponse,
     CachedProviderResponse,
+    CreateAvailabilityRequest,
     CreateAppointmentTypeRequest,
     LocationInfoResponse,
     SetupOverviewResponse,
@@ -108,6 +109,20 @@ class TestCreateAppointmentTypeRequest:
     def test_defaults(self):
         req = CreateAppointmentTypeRequest(name="Exam", duration_minutes=30)
         assert req.descriptor_ids == []
+
+
+class TestCreateAvailabilityRequest:
+    def test_required_fields(self):
+        req = CreateAvailabilityRequest(
+            provider_id="nh-10",
+            appointment_type_ids=["nh-50"],
+            operatory_id="nh-100",
+            days=["Monday"],
+            start_time="09:00",
+            end_time="17:00",
+        )
+        assert req.provider_id == "nh-10"
+        assert req.appointment_type_ids == ["nh-50"]
 
 
 class TestUpdateAppointmentTypeRequest:

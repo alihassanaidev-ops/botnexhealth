@@ -102,6 +102,95 @@ async def test_has_provider_appointments_safe_fallback_on_unexpected_payload(mon
     assert result is True
 
 
+@pytest.mark.asyncio
+async def test_list_availabilities_uses_provider_embedded_windows_when_endpoint_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[tuple[str, dict]] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append((path, params or {}))
+        if path == "/availabilities":
+            return {"data": []}
+        if path == "/providers":
+            return {
+                "count": 1,
+                "data": [
+                    {
+                        "id": 123,
+                        "first_name": "Ada",
+                        "last_name": "Lovelace",
+                        "availabilities": [
+                            {
+                                "id": 456,
+                                "provider_id": 123,
+                                "operatory_id": 789,
+                                "begin_time": "08:00",
+                                "end_time": "17:00",
+                                "days": ["Monday"],
+                                "specific_date": "2099-01-05",
+                                "active": True,
+                                "appointment_types": [{"id": 50, "name": "Cleaning"}],
+                            }
+                        ],
+                    }
+                ],
+            }
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.list_availabilities(provider_id="nh-123")
+
+    assert len(result) == 1
+    assert result[0]["id"] == 456
+    assert result[0]["provider_id"] == 123
+    assert result[0]["provider_name"] == "Ada Lovelace"
+    assert calls[0][0] == "/availabilities"
+    assert calls[0][1]["provider_id"] == "123"
+    assert calls[1][0] == "/providers"
+
+
+@pytest.mark.asyncio
+async def test_create_availability_wraps_body_under_availability_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict = {}
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        captured["method"] = method
+        captured["path"] = path
+        captured["params"] = params
+        captured["json"] = json
+        return {"data": {"id": 1}}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    adapter = _make_adapter()
+    await adapter.link_availability(
+        provider_id="nh-123",
+        appointment_type_ids=["nh-50", "51"],
+        operatory_id="nh-789",
+        days=["Monday"],
+        start_time="09:00",
+        end_time="17:00",
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/availabilities"
+    assert captured["json"] == {
+        "availability": {
+            "provider_id": "123",
+            "appointment_type_ids": ["50", "51"],
+            "operatory_id": "789",
+            "days": ["Monday"],
+            "begin_time": "09:00",
+            "end_time": "17:00",
+        }
+    }
+
+
 # ── Reschedule ordering: book new before cancelling old ─────────────────────
 
 

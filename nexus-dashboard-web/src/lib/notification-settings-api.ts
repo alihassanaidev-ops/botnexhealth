@@ -1,5 +1,22 @@
 import api from "@/lib/api"
 
+function unwrapArray<T>(
+    payload: unknown,
+    keys: string[],
+    endpoint: string,
+): T[] {
+    if (Array.isArray(payload)) return payload as T[];
+    if (payload && typeof payload === "object") {
+        const record = payload as Record<string, unknown>;
+        for (const key of keys) {
+            const value = record[key];
+            if (Array.isArray(value)) return value as T[];
+        }
+    }
+    console.warn(`Expected array response from ${endpoint}`, payload);
+    return [];
+}
+
 // -- External recipients ----------------------------------------------------
 
 export interface ExternalRecipient {
@@ -11,21 +28,29 @@ export interface ExternalRecipient {
 }
 
 export async function listExternalRecipients(): Promise<ExternalRecipient[]> {
-    const { data } = await api.get<{ recipients: ExternalRecipient[] }>(
+    const { data } = await api.get<unknown>(
         "/institution/notification-recipients",
     )
-    return data.recipients
+    return unwrapArray<ExternalRecipient>(
+        data,
+        ["recipients", "data", "items"],
+        "/institution/notification-recipients",
+    )
 }
 
 export async function addExternalRecipient(body: {
     email: string
     template_types: string[]
 }): Promise<ExternalRecipient[]> {
-    const { data } = await api.post<{ recipients: ExternalRecipient[] }>(
+    const { data } = await api.post<unknown>(
         "/institution/notification-recipients",
         body,
     )
-    return data.recipients
+    return unwrapArray<ExternalRecipient>(
+        data,
+        ["recipients", "data", "items"],
+        "/institution/notification-recipients",
+    )
 }
 
 export async function updateExternalRecipient(
@@ -51,18 +76,26 @@ export interface NotificationPreference {
 }
 
 export async function getNotificationPreferences(): Promise<NotificationPreference[]> {
-    const { data } = await api.get<{ preferences: NotificationPreference[] }>(
+    const { data } = await api.get<unknown>(
         "/institution/notification-preferences",
     )
-    return data.preferences
+    return unwrapArray<NotificationPreference>(
+        data,
+        ["preferences", "data", "items"],
+        "/institution/notification-preferences",
+    )
 }
 
 export async function updateNotificationPreferences(
     preferences: NotificationPreference[],
 ): Promise<NotificationPreference[]> {
-    const { data } = await api.put<{ preferences: NotificationPreference[] }>(
+    const { data } = await api.put<unknown>(
         "/institution/notification-preferences",
         { preferences },
     )
-    return data.preferences
+    return unwrapArray<NotificationPreference>(
+        data,
+        ["preferences", "data", "items"],
+        "/institution/notification-preferences",
+    )
 }

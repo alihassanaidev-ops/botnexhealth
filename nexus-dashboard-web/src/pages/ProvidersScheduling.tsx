@@ -642,7 +642,7 @@ export default function ProvidersScheduling() {
                             <DialogHeader>
                                 <DialogTitle>Create Custom Work Window</DialogTitle>
                                 <DialogDescription>
-                                    Create a manual schedule block. This will not be pushed back to your PMS, but it will be used to offer booking slots.
+                                    Create a schedule block for this provider.
                                 </DialogDescription>
                             </DialogHeader>
                             <div className="space-y-4 py-2">

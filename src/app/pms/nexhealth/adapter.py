@@ -8,6 +8,7 @@ availability linking, subdomain/location_id) lives here.
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from src.app.api.helpers import fetch_all_pages, handle_nexhealth_request
@@ -499,13 +500,85 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         return raw.get("data", {})
 
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
+        provider_id = kwargs.pop("provider_id", None)
+        ignore_past_dates = bool(kwargs.get("ignore_past_dates", False))
+
         params = {
             **self._default_params(),
             "per_page": 100,
             "ignore_past_dates": True,
             **kwargs,  # caller can still override
         }
+        if provider_id:
+            params["provider_id"] = _strip(provider_id)
         if "include[]" not in params:
             params["include[]"] = ["appointment_types"]
+
         raw = await handle_nexhealth_request(self._client, "GET", "/availabilities", params=params)
-        return raw.get("data", [])
+        direct_items = raw.get("data", [])
+        if not isinstance(direct_items, list):
+            direct_items = []
+
+        # NexHealth's /availabilities endpoint can return 200 with no rows for
+        # normal PMS-synced provider schedules. Those same work windows are
+        # exposed on /providers when availabilities are included, so merge that
+        # embedded source as the display/read path for setup.
+        provider_items = await self._list_provider_embedded_availabilities(
+            provider_id=_strip(provider_id) if provider_id else None,
+            ignore_past_dates=ignore_past_dates,
+        )
+
+        merged: dict[str, dict] = {}
+        for item in [*direct_items, *provider_items]:
+            item_id = item.get("id")
+            key = str(item_id) if item_id is not None else repr(sorted(item.items()))
+            merged[key] = item
+        return list(merged.values())
+
+    async def _list_provider_embedded_availabilities(
+        self,
+        *,
+        provider_id: str | None = None,
+        ignore_past_dates: bool = True,
+    ) -> list[dict]:
+        params = self._default_params()
+
+        async def fetch(page: int, per_page: int) -> dict[str, Any]:
+            p = {
+                **params,
+                "page": page,
+                "per_page": per_page,
+                "include[]": ["availabilities", "appointment_types"],
+            }
+            return await handle_nexhealth_request(self._client, "GET", "/providers", params=p)
+
+        providers = await fetch_all_pages(fetch, per_page=50, max_items=200)
+        today = date.today().isoformat()
+        items: list[dict] = []
+
+        for provider in providers:
+            raw_provider_id = provider.get("id")
+            if provider_id and str(raw_provider_id) != str(provider_id):
+                continue
+
+            provider_name = (
+                provider.get("name")
+                or " ".join(
+                    part for part in [provider.get("first_name"), provider.get("last_name")]
+                    if part
+                )
+                or None
+            )
+            for availability in provider.get("availabilities") or []:
+                if availability.get("active") is False:
+                    continue
+                specific_date = availability.get("specific_date")
+                if ignore_past_dates and specific_date and specific_date < today:
+                    continue
+
+                item = dict(availability)
+                item.setdefault("provider_id", raw_provider_id)
+                item.setdefault("provider_name", provider_name)
+                items.append(item)
+
+        return items

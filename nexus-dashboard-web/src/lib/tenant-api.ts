@@ -23,6 +23,17 @@ function qs(locationId?: string): string {
     return locationId ? `?location_id=${locationId}` : "";
 }
 
+function unwrapArray<T>(payload: unknown, endpoint: string): T[] {
+    if (Array.isArray(payload)) return payload as T[];
+    if (payload && typeof payload === "object") {
+        const record = payload as { data?: unknown; items?: unknown };
+        if (Array.isArray(record.data)) return record.data as T[];
+        if (Array.isArray(record.items)) return record.items as T[];
+    }
+    console.warn(`Expected array response from ${endpoint}`, payload);
+    return [];
+}
+
 // ── Overview ────────────────────────────────────────────────────────────
 
 export async function getSetupOverview(locationId?: string): Promise<SetupOverview> {
@@ -33,15 +44,15 @@ export async function getSetupOverview(locationId?: string): Promise<SetupOvervi
 // ── Locations ───────────────────────────────────────────────────────────
 
 export async function listLocations(): Promise<LocationInfo[]> {
-    const { data } = await api.get<LocationInfo[]>(`${BASE}/locations`);
-    return data;
+    const { data } = await api.get<unknown>(`${BASE}/locations`);
+    return unwrapArray<LocationInfo>(data, `${BASE}/locations`);
 }
 
 // ── Providers ───────────────────────────────────────────────────────────
 
 export async function listProviders(locationId?: string): Promise<CachedProvider[]> {
-    const { data } = await api.get<CachedProvider[]>(`${BASE}/providers${qs(locationId)}`);
-    return data;
+    const { data } = await api.get<unknown>(`${BASE}/providers${qs(locationId)}`);
+    return unwrapArray<CachedProvider>(data, `${BASE}/providers`);
 }
 
 export async function updateProvider(
@@ -64,10 +75,10 @@ export async function updateProvider(
 // ── Appointment Types ───────────────────────────────────────────────────
 
 export async function listAppointmentTypes(locationId?: string): Promise<CachedAppointmentType[]> {
-    const { data } = await api.get<CachedAppointmentType[]>(
+    const { data } = await api.get<unknown>(
         `${BASE}/appointment-types${qs(locationId)}`
     );
-    return data;
+    return unwrapArray<CachedAppointmentType>(data, `${BASE}/appointment-types`);
 }
 
 export async function createAppointmentType(
@@ -103,15 +114,15 @@ export async function updateAppointmentType(
 // ── Operatories ─────────────────────────────────────────────────────────
 
 export async function listOperatories(locationId?: string): Promise<CachedOperatory[]> {
-    const { data } = await api.get<CachedOperatory[]>(`${BASE}/operatories${qs(locationId)}`);
-    return data;
+    const { data } = await api.get<unknown>(`${BASE}/operatories${qs(locationId)}`);
+    return unwrapArray<CachedOperatory>(data, `${BASE}/operatories`);
 }
 
 // ── Descriptors ─────────────────────────────────────────────────────────
 
 export async function listDescriptors(locationId?: string): Promise<CachedDescriptor[]> {
-    const { data } = await api.get<CachedDescriptor[]>(`${BASE}/descriptors${qs(locationId)}`);
-    return data;
+    const { data } = await api.get<unknown>(`${BASE}/descriptors${qs(locationId)}`);
+    return unwrapArray<CachedDescriptor>(data, `${BASE}/descriptors`);
 }
 
 // ── Availabilities ──────────────────────────────────────────────────────
@@ -124,8 +135,8 @@ export async function listAvailabilities(
     if (locationId) params.set("location_id", locationId);
     if (providerSourceId) params.set("provider_source_id", providerSourceId);
     const q = params.toString() ? `?${params.toString()}` : "";
-    const { data } = await api.get<CachedAvailability[]>(`${BASE}/availabilities${q}`);
-    return data;
+    const { data } = await api.get<unknown>(`${BASE}/availabilities${q}`);
+    return unwrapArray<CachedAvailability>(data, `${BASE}/availabilities`);
 }
 
 export async function createAvailability(
