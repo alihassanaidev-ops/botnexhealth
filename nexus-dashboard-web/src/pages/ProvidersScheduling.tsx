@@ -250,12 +250,26 @@ export default function ProvidersScheduling() {
         }
     }
 
-    // Filter availabilities by selected appointment type
-    const filteredAvailabilities = selectedApptTypeId === "all"
-        ? availabilities
-        : availabilities.filter(
-            (av) => av.appointment_type_ids?.includes(selectedApptTypeId)
-        )
+    // Filter availabilities by selected appointment type, then sort by date.
+    // NexHealth returns rows in insertion order, which renders as random
+    // dates from the operator's perspective — easy to mis-link an
+    // appointment type to a far-future row instead of the soonest one.
+    // Sort: specific_date ascending, then begin_time. Rows without a
+    // specific_date (pure recurring rules) sort first.
+    const filteredAvailabilities = (
+        selectedApptTypeId === "all"
+            ? availabilities
+            : availabilities.filter(
+                (av) => av.appointment_type_ids?.includes(selectedApptTypeId)
+            )
+    ).slice().sort((a, b) => {
+        const ad = a.specific_date ?? ""
+        const bd = b.specific_date ?? ""
+        if (ad !== bd) return ad.localeCompare(bd)
+        const at = a.begin_time ?? ""
+        const bt = b.begin_time ?? ""
+        return at.localeCompare(bt)
+    })
 
     const unlinkedCount = availabilities.filter(
         (av) => !av.appointment_type_ids || av.appointment_type_ids.length === 0
