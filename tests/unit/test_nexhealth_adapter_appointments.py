@@ -184,3 +184,49 @@ async def test_reschedule_returns_warning_when_cancel_fails_after_new_booked(mon
     assert result.success is True  # the booking did happen
     assert "failed to cancel old appointment" in (result.message or "").lower()
     assert "please cancel manually" in (result.message or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Regression — POST /appointment_types body wrap (NexHealth-specific).
+# NexHealth's REST convention requires write payloads wrapped under the
+# singular resource name. A flat body returns 400 "Missing parameter
+# appointment_type". Reproduced live + verified against staging on
+# 2026-05-08; this test pins the wrap so the bug cannot regress silently.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_appointment_type_wraps_body_under_appointment_type_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict = {}
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        captured["method"] = method
+        captured["path"] = path
+        captured["params"] = params
+        captured["json"] = json
+        return {"data": {"id": 1, "name": "X", "minutes": 30}}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    adapter = _make_adapter()
+    await adapter.create_appointment_type(
+        name="Hygiene",
+        duration_minutes=45,
+        descriptor_ids=["nh-12", "34"],
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/appointment_types"
+    # The whole point of this test: the body must be wrapped, not flat.
+    assert captured["json"] == {
+        "appointment_type": {
+            "name": "Hygiene",
+            "minutes": 45,
+            "appointment_descriptor_ids": ["12", "34"],
+        }
+    }, (
+        "create_appointment_type body must be wrapped under "
+        "'appointment_type'; flat payloads get 400 'Missing parameter "
+        "appointment_type' from NexHealth"
+    )

@@ -399,10 +399,16 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         self, name: str, duration_minutes: int, descriptor_ids: list[str]
     ) -> UniversalAppointmentType:
         params = self._default_params()
+        # NexHealth REST convention: write endpoints expect the resource
+        # wrapped under the singular resource name. A flat body returns
+        # ``{"error":["Missing parameter appointment_type"]}`` (HTTP 400).
+        # Matches the wrap pattern already used by ``update_appointment_type``.
         body = {
-            "name": name,
-            "minutes": duration_minutes,
-            "appointment_descriptor_ids": [_strip(d) for d in descriptor_ids],
+            "appointment_type": {
+                "name": name,
+                "minutes": duration_minutes,
+                "appointment_descriptor_ids": [_strip(d) for d in descriptor_ids],
+            }
         }
         raw = await handle_nexhealth_request(self._client, "POST", "/appointment_types", params=params, json=body)
         return mappers.to_appointment_type(raw.get("data", {}))
