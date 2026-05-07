@@ -430,21 +430,31 @@ class NexHealthPlatformStack(Stack):
                     "are configured for the API service."
                 )
 
-            alb_origin = origins.LoadBalancerV2Origin(
-                api_service.load_balancer,
+            api_origin_domain = (
+                config.api.domain_name
+                if alb_has_https
+                else api_service.load_balancer.load_balancer_dns_name
+            )
+            api_origin_request_policy = (
+                cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER
+                if alb_has_https
+                else cloudfront.OriginRequestPolicy.ALL_VIEWER
+            )
+            alb_origin = origins.HttpOrigin(
+                api_origin_domain,
                 protocol_policy=origin_protocol,
             )
             # SSE endpoint — longer origin read timeout for streaming
             self.frontend_distribution.add_behavior(
                 "/api/institution/events*",
-                origins.LoadBalancerV2Origin(
-                    api_service.load_balancer,
+                origins.HttpOrigin(
+                    api_origin_domain,
                     protocol_policy=origin_protocol,
                     read_timeout=Duration.seconds(60),
                 ),
                 allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
                 cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
-                origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER,
+                origin_request_policy=api_origin_request_policy,
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
             )
             # All other API requests
@@ -453,7 +463,7 @@ class NexHealthPlatformStack(Stack):
                 alb_origin,
                 allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
                 cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
-                origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER,
+                origin_request_policy=api_origin_request_policy,
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
             )
 
@@ -507,6 +517,7 @@ class NexHealthPlatformStack(Stack):
             assign_public_ip=False,
             enable_execute_command=True,
             vpc_subnets=private_subnets,
+            circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
         )
         worker_scaling = worker_service.auto_scale_task_count(
             min_capacity=config.worker.min_count,
@@ -1027,6 +1038,7 @@ class NexHealthPlatformStack(Stack):
             "enable_execute_command": True,
             "assign_public_ip": False,
             "task_subnets": subnet_selection,
+            "circuit_breaker": ecs.DeploymentCircuitBreaker(rollback=True),
         }
 
         if service_config.domain_name and service_config.certificate_arn and service_config.hosted_zone_name:
@@ -1155,9 +1167,54 @@ class NexHealthPlatformStack(Stack):
                 "sampledRequestsEnabled": True,
             },
             rules=[
+                # Bypass WAF for HMAC-signed webhook paths. Retell and
+                # Twilio sign every request with a shared secret; the
+                # application verifies the signature before any handler
+                # runs, so WAF inspection is redundant and routinely
+                # false-positives on legitimate large payloads
+                # (transcripts, structured args). WAF terminates on the
+                # first matching rule, so an Allow here short-circuits
+                # the managed rule sets and the rate limiter for these
+                # paths only.
+                {
+                    "name": "AllowSignedWebhooks",
+                    "priority": 0,
+                    "action": {"allow": {}},
+                    "statement": {
+                        "orStatement": {
+                            "statements": [
+                                {
+                                    "byteMatchStatement": {
+                                        "searchString": "/api/v1/retell/",
+                                        "fieldToMatch": {"uriPath": {}},
+                                        "textTransformations": [
+                                            {"priority": 0, "type": "NONE"}
+                                        ],
+                                        "positionalConstraint": "STARTS_WITH",
+                                    }
+                                },
+                                {
+                                    "byteMatchStatement": {
+                                        "searchString": "/api/v1/twilio/webhooks/",
+                                        "fieldToMatch": {"uriPath": {}},
+                                        "textTransformations": [
+                                            {"priority": 0, "type": "NONE"}
+                                        ],
+                                        "positionalConstraint": "STARTS_WITH",
+                                    }
+                                },
+                            ]
+                        }
+                    },
+                    "visibilityConfig": {
+                        "cloudWatchMetricsEnabled": True,
+                        "metricName": "allow-signed-webhooks",
+                        "sampledRequestsEnabled": True,
+                    },
+                },
                 {
                     "name": "AWSManagedRulesCommonRuleSet",
-                    "priority": 0,
+                    "priority": 1,
                     "overrideAction": {"none": {}},
                     "statement": {
                         "managedRuleGroupStatement": {
@@ -1173,7 +1230,7 @@ class NexHealthPlatformStack(Stack):
                 },
                 {
                     "name": "AWSManagedRulesKnownBadInputsRuleSet",
-                    "priority": 1,
+                    "priority": 2,
                     "overrideAction": {"none": {}},
                     "statement": {
                         "managedRuleGroupStatement": {
@@ -1193,7 +1250,7 @@ class NexHealthPlatformStack(Stack):
                 # 5-minute window per source IP.
                 {
                     "name": "RateLimitPerIp",
-                    "priority": 2,
+                    "priority": 3,
                     "action": {"block": {}},
                     "statement": {
                         "rateBasedStatement": {
