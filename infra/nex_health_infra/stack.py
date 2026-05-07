@@ -1096,15 +1096,20 @@ class NexHealthPlatformStack(Stack):
                 origin=origins.S3BucketOrigin.with_origin_access_control(site_bucket),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             ),
+            # SPA deep-link fallback: when S3 has no object at the requested
+            # key (BlockPublicAccess + OAC makes S3 return 403, NOT 404),
+            # serve index.html so React Router can take over.
+            #
+            # Important: do NOT register a 404→index.html rule. CloudFront
+            # error responses are global across all behaviors, so a 404
+            # rewrite would also catch BACKEND 404/405 responses on the
+            # /api/* behavior (e.g. an unregistered route or a missing
+            # institution_location), turn them into HTTP 200 + HTML, and
+            # crash the SPA when it tries to JSON-parse / call .filter on
+            # the HTML body.
             "error_responses": [
                 cloudfront.ErrorResponse(
                     http_status=403,
-                    response_http_status=200,
-                    response_page_path="/index.html",
-                    ttl=Duration.minutes(1),
-                ),
-                cloudfront.ErrorResponse(
-                    http_status=404,
                     response_http_status=200,
                     response_page_path="/index.html",
                     ttl=Duration.minutes(1),
