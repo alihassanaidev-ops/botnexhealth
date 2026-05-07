@@ -239,7 +239,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     <span className="text-sm font-bold tracking-tight">N</span>
                                 </div>
                                 <div className="flex flex-col gap-0.5 leading-none">
-                                    <span className="font-semibold text-sidebar-foreground">Nexus Dental</span>
+                                    <span className="font-semibold text-sidebar-foreground">Scale Nexus</span>
                                     <span className="text-xs text-sidebar-foreground/50">Dashboard</span>
                                 </div>
                             </Link>

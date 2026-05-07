@@ -10,8 +10,10 @@
     "natGateways": 1
   },
   "corsAllowedOrigins": [
-    "https://d1uhqlnfxonu18.cloudfront.net"
+    "https://staging.scalenexus.ai",
+    "https://staging.wortholic.com"
   ],
+  "authFrontendBaseUrl": "https://staging.scalenexus.ai",
   "trustedProxyCidrs": [
     "10.0.0.0/8",
     "172.16.0.0/12",
@@ -51,7 +53,10 @@
     "maxCount": 2,
     "containerPort": 8000,
     "webConcurrency": 2,
-    "requestsPerTarget": 800
+    "requestsPerTarget": 800,
+    "domainName": "api.staging.scalenexus.ai",
+    "certificateArn": "arn:aws:acm:ca-central-1:287553036543:certificate/8178f102-9bdd-4ec7-8406-1b8b248c9eb3",
+    "hostedZoneName": "staging.scalenexus.ai"
   },
   "worker": {
     "cpu": 512,
@@ -70,14 +75,17 @@
     ]
   },
   "frontend": {
-    "enabled": true
+    "enabled": true,
+    "domainName": "staging.scalenexus.ai",
+    "certificateArn": "arn:aws:acm:us-east-1:287553036543:certificate/3e5eedda-1ace-4ced-a140-9b1c9ff68432",
+    "hostedZoneName": "staging.scalenexus.ai"
   },
   "externalSecrets": {
-    "NEXHEALTH_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/nexhealth-api-key-AjY7Um",
-    "RETELL_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/retell-api-secret-Q5QVaI",
-    "RESEND_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-api-key-3JaSHl",
-    "RESEND_FROM_EMAIL": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-from-email-A4umYM",
-    "TWILLIO_SID": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-sid-08rFL8",
-    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-api-secret-xfrJIi"
+    "NEXHEALTH_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/nexhealth-api-key-ShK1ui",
+    "RETELL_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/retell-api-secret-xOTgpx",
+    "RESEND_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-api-key-Oa3iKd",
+    "RESEND_FROM_EMAIL": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-from-email-Upf1bK",
+    "TWILLIO_SID": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-sid-SF6GPp",
+    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-api-secret-Wcvoaw"
   }
 }
