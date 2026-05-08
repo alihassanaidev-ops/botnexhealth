@@ -393,6 +393,9 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
         "insurance_coverages",
     ]
 
+    # TEMP DEBUG (remove after phone-format / mismatch is diagnosed):
+    logger.info("DEBUG lookup_patient args: %s", args)
+
     try:
         patients = await ctx.adapter.search_patients(
             query,
@@ -400,6 +403,14 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
             phone_number=args.get("phone_number"),
             date_of_birth=args.get("date_of_birth"),
             include=None,
+        )
+        logger.info(
+            "DEBUG lookup_patient result: count=%d patients=%s",
+            len(patients),
+            [{"id": getattr(p, "patient_id", None), "phone": getattr(p, "phone", None),
+              "email": getattr(p, "email", None), "dob": getattr(p, "date_of_birth", None),
+              "first_name": getattr(p, "first_name", None), "last_name": getattr(p, "last_name", None)}
+             for p in patients],
         )
     except Exception as e:
         logger.error(f"Patient lookup failed: {e}")
@@ -536,6 +547,9 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 )
 async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
     """Create a new patient."""
+    # TEMP DEBUG (remove after diagnosis):
+    logger.info("DEBUG create_patient args: %s", args)
+
     required = ["first_name", "last_name", "email", "phone_number", "date_of_birth", "provider_id"]
     for field in required:
         if not args.get(field):
@@ -547,7 +561,7 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
     try:
-        return await ctx.adapter.create_patient(
+        result = await ctx.adapter.create_patient(
             PatientCreateRequest(
                 first_name=args["first_name"],
                 last_name=args["last_name"],
@@ -558,6 +572,8 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
                 gender=args.get("gender", "Female"),
             )
         )
+        logger.info("DEBUG create_patient result: %s", result)
+        return result
     except Exception as e:
         logger.error(f"Failed to create patient: {e}")
         return {"success": False, "error": str(e)}
