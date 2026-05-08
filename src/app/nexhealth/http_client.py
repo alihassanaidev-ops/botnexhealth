@@ -159,6 +159,24 @@ class NexHealthHTTPClient:
                     "Upstream HTTP error: status=%s body_bytes=%s method=%s path=%s",
                     e.response.status_code, body_len, method, path,
                 )
+                # TEMP DEBUG (per-user request, demo prep): log both the
+                # request payload AND the raw response body for /patients
+                # 400 so we can see exactly what NexHealth is rejecting.
+                # Remove once diagnosed.
+                if (
+                    e.response.status_code == 400
+                    and method == "POST"
+                    and path == "/patients"
+                ):
+                    raw_body = e.response.text or ""
+                    logger.warning(
+                        "DEBUG NexHealth /patients 400 REQUEST body: %s",
+                        json,
+                    )
+                    logger.warning(
+                        "DEBUG NexHealth /patients 400 RESPONSE body: %s",
+                        raw_body[:1000],
+                    )
                 raise
             except httpx.RequestError as e:
                 # Use type name and request URL only — the message can include
