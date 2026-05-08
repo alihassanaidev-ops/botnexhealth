@@ -43,19 +43,61 @@ def _strip(prefixed_id: str) -> str:
 
 
 def _normalize_phone_for_nexhealth(phone: str | None) -> str | None:
-    """Truncate phone to first 10 digits to match NexHealth's storage rule.
+    """Normalize phone to a 10-digit form NexHealth will accept and find,
+    tolerating the common ways a user or an LLM might shape a number.
 
-    NexHealth silently truncates phone_number to the first 10 characters at
-    create time but performs exact-string match on lookup. Verified directly
-    via curl: a 12-char input was stored as the first 10 chars, and lookup
-    with the original 12-char string returned 0 hits while the truncated
-    10-char form returned the row. Pre-truncating to digits-only first 10
-    on both create and lookup paths gives create and lookup the same key.
+    Two NexHealth quirks combine here:
+
+      1. ``POST /patients`` truncates ``phone_number`` to the first 10
+         characters at storage time but does exact-string match on
+         ``GET /patients?phone_number=``. Pre-truncating on both paths
+         keeps create and lookup pointing at the same key.
+
+      2. ``POST /patients`` validates against NANP area-code rules
+         ("User phone number is invalid" with code=false). NANP area
+         codes must start with 2-9 — never 1 or 0 — so a US number
+         passed in ``+1NNNXXXXXXX`` form would, after a naive first-10
+         truncation, become ``1NNNXXXXXX`` whose "area code" is ``1NN``
+         and gets rejected.
+
+    The function accepts any of these inputs and produces the same
+    canonical 10-digit value:
+
+      * ``+1 (505) 482-1234`` / ``1-505-482-1234`` / ``15054821234``
+        → ``5054821234``  (NANP 10-digit, country code stripped)
+      * ``5054821234`` / ``(505) 482-1234``
+        → ``5054821234``  (already 10-digit NANP, kept as-is)
+      * ``03485619645`` / ``(0348) 561-9645``
+        → ``0348561964``  (PK 11-digit, leading 0, first-10 to match
+        NexHealth's storage truncation)
+      * Other shapes / international country codes other than ``1``
+        → first 10 digits, same matching strategy
+
+    Strict E.164 (``+`` prefix) is parsed identically to the same digits
+    without the ``+``; non-digit separators are stripped before any
+    decision.
     """
     if not phone:
         return None
     digits = "".join(c for c in str(phone) if c.isdigit())
-    return digits[:10] if digits else None
+    if not digits:
+        return None
+
+    # US/CA E.164: 11 digits with leading country-code "1". The "1"
+    # is NOT part of the area code; strip it so the next 10 are the
+    # NANP-valid form.
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+
+    # Already 10-digit NANP (area code 2-9). Keep as-is — passes
+    # NexHealth's NANP validator without further surgery.
+    if len(digits) == 10 and digits[0] in "23456789":
+        return digits
+
+    # Everything else (PK ``0XXXXXXXXXX``, other-country E.164,
+    # padded/odd shapes): first 10 chars, matching NexHealth's
+    # silent storage truncation so that lookup and create agree.
+    return digits[:10]
 
 
 class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking):

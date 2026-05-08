@@ -18,23 +18,53 @@ from src.app.pms.nexhealth.adapter import _normalize_phone_for_nexhealth
 @pytest.mark.parametrize(
     "raw, expected",
     [
-        # Pakistan local 11-char with leading 0 — what Retell collects.
+        # ── US / Canada (NANP) — multiple shapes, all canonical 10 digits ──
+        # Strict E.164 with plus and country code.
+        ("+15054821234", "5054821234"),
+        # Same digits, plus-less.
+        ("15054821234", "5054821234"),
+        # Bare 10-digit NANP.
+        ("5054821234", "5054821234"),
+        # User-typed with separators (US convention).
+        ("(505) 482-1234", "5054821234"),
+        ("505-482-1234", "5054821234"),
+        ("1 (505) 482-1234", "5054821234"),
+        ("1-505-482-1234", "5054821234"),
+        ("+1 505 482 1234", "5054821234"),
+        # Another valid NANP area code (212 NYC).
+        ("+12125551234", "2125551234"),
+        # ── Pakistan ──
+        # Local 11-digit form with leading 0 — most common.
         ("03485619645", "0348561964"),
-        # Same number with country-code prefix; normaliser sees first 10 digits.
+        # Same number with separators.
+        ("(0348) 561-9645", "0348561964"),
+        ("0348-561-9645", "0348561964"),
+        # ── Other shapes — fall back to first-10 (matches NexHealth's
+        # storage truncation so lookup still finds the row) ──
         ("923485619645", "9234856196"),
-        # User-typed format with separators — digits-only first.
-        ("(0342) 711-2331", "0342711233"),
-        ("0342 711 2331", "0342711233"),
-        # Already 10 chars — passthrough.
-        ("0348561964", "0348561964"),
-        # US-style 10 digits — passthrough.
-        ("5551234567", "5551234567"),
-        # E.164 with plus and country code — first 10 digits include the country.
-        ("+15551234567", "1555123456"),
+        ("0348561964", "0348561964"),  # already 10-digit non-NANP-leading
     ],
 )
-def test_normalizes_to_first_ten_digits(raw: str, expected: str) -> None:
+def test_normalizes_phone_for_nexhealth(raw: str, expected: str) -> None:
     assert _normalize_phone_for_nexhealth(raw) == expected
+
+
+def test_us_canonical_form_collapses_across_input_styles() -> None:
+    """All the ways an LLM/operator can write a US number must collapse
+    to the same 10-digit canonical so that a create followed by any
+    style of lookup will hit the same NexHealth row."""
+    inputs = [
+        "+15054821234",
+        "15054821234",
+        "5054821234",
+        "(505) 482-1234",
+        "505-482-1234",
+        "1 (505) 482-1234",
+        "+1 505-482-1234",
+        "  +1 505 482 1234  ",
+    ]
+    canonical = {_normalize_phone_for_nexhealth(p) for p in inputs}
+    assert canonical == {"5054821234"}
 
 
 @pytest.mark.parametrize("raw", [None, "", "   ", "abc", "()-"])

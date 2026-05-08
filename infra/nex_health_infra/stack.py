@@ -1182,7 +1182,7 @@ class NexHealthPlatformStack(Stack):
                 # the managed rule sets and the rate limiter for these
                 # paths only.
                 {
-                    "name": "AllowSignedWebhooks",
+                    "name": "AllowSignedWebhooksAndAuthenticatedHtmlEditors",
                     "priority": 0,
                     "action": {"allow": {}},
                     "statement": {
@@ -1201,6 +1201,30 @@ class NexHealthPlatformStack(Stack):
                                 {
                                     "byteMatchStatement": {
                                         "searchString": "/api/v1/twilio/webhooks/",
+                                        "fieldToMatch": {"uriPath": {}},
+                                        "textTransformations": [
+                                            {"priority": 0, "type": "NONE"}
+                                        ],
+                                        "positionalConstraint": "STARTS_WITH",
+                                    }
+                                },
+                                # Email-template editor: institution-admin
+                                # users POST HTML bodies (full <html>... with
+                                # inline styles and Jinja2 placeholders) to
+                                # both /preview/live (live preview) and
+                                # /{type} (save). The Common Rule Set's
+                                # XssBody / HtmlInjection rules false-positive
+                                # on this legitimate authenticated payload,
+                                # blocking it before FastAPI sees it. The
+                                # endpoint enforces INSTITUTION_ADMIN at the
+                                # app layer (get_current_institution_admin)
+                                # and template body is rendered server-side
+                                # via Jinja2 with autoescape, so the WAF's
+                                # XSS protection here is duplicating an
+                                # already-tighter app-side guard.
+                                {
+                                    "byteMatchStatement": {
+                                        "searchString": "/api/institution/email-templates",
                                         "fieldToMatch": {"uriPath": {}},
                                         "textTransformations": [
                                             {"priority": 0, "type": "NONE"}
