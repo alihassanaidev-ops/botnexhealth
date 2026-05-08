@@ -339,18 +339,24 @@ async def _load_aggregate_tag_distribution(
     *,
     institution_id: str,
     today,
+    month_start,
 ) -> list["TagCount"]:
-    """Tag distribution across rollup-historical + today-live.
+    """Tag distribution scoped to month-to-date (rollup-historical + today-live).
+
+    Window matches the KPI cards (``appointments_booked_month`` etc.) so
+    that the tag-breakdown chart and the headline KPIs always tell a
+    consistent story. Without this scoping the breakdown was all-time
+    while KPIs were month-only, which made e.g. 4 historical
+    "appointment_booked" tags coexist with a 0 "Appointments Booked"
+    KPI in the same view.
 
     Two small queries: a SUM-by-key over the rollup's JSONB column for
-    everything before today, plus a live ``GROUP BY call_status`` for
-    today. Merged in Python and re-sorted descending. The merge keeps
-    today's data fresh without polluting the rollup with a
-    same-second-recompute-on-every-write pattern.
-
-    SQLAlchemy's table-valued helpers don't compose with ``func.sum``
-    cleanly here; the lateral cross join with ``jsonb_each_text`` reads
-    naturally as raw SQL and stays one statement.
+    every day in [month_start, today), plus a live
+    ``GROUP BY call_status`` for today. Merged in Python and re-sorted
+    descending. SQLAlchemy's table-valued helpers don't compose with
+    ``func.sum`` cleanly here; the lateral cross join with
+    ``jsonb_each_text`` reads naturally as raw SQL and stays one
+    statement.
     """
     from sqlalchemy import text
 
@@ -363,10 +369,15 @@ async def _load_aggregate_tag_distribution(
                      jsonb_each_text(call_metrics_daily.tag_counts) AS t(key, value)
                 WHERE call_metrics_daily.institution_id = :institution_id
                   AND call_metrics_daily.call_date < :today
+                  AND call_metrics_daily.call_date >= :month_start
                 GROUP BY t.key
                 """
             ),
-            {"institution_id": institution_id, "today": today},
+            {
+                "institution_id": institution_id,
+                "today": today,
+                "month_start": month_start,
+            },
         )
     ).all()
 
@@ -617,10 +628,20 @@ async def get_dashboard_summary(
         )
 
         # ── Tag counts (by primary call_status) ───────────────────────────
+        # Scoped to month-to-date so the breakdown agrees with the KPI
+        # cards (also month-to-date). Mixing all-time tags with
+        # month-only KPIs in the same view produced inconsistent numbers
+        # — e.g. 4 historical "appointment_booked" tags next to a 0
+        # "Appointments Booked" KPI.
         tag_rows = (
             await session.execute(
                 select(Call.call_status, func.count(Call.id).label("cnt"))
-                .where(Call.institution_id == institution_id, Call.call_status.isnot(None), *extra_conditions)
+                .where(
+                    Call.institution_id == institution_id,
+                    Call.call_status.isnot(None),
+                    Call.call_date >= month_start,
+                    *extra_conditions,
+                )
                 .group_by(Call.call_status)
                 .order_by(func.count(Call.id).desc())
             )
@@ -790,6 +811,7 @@ async def get_aggregate_dashboard(
             session,
             institution_id=institution_id,
             today=today,
+            month_start=month_start,
         )
 
         # ── Per-location comparison ─────────────────────────────────────

@@ -400,3 +400,141 @@ async def test_summary_rejects_unknown_location_slug(async_client: AsyncClient):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Location not found"
+
+
+@pytest.mark.asyncio
+async def test_aggregate_tag_distribution_scoped_to_month_to_date(async_client: AsyncClient):
+    """The tag-distribution chart must read month-to-date so it matches the
+    KPI cards (``appointments_booked_month`` etc.). Before this fix the
+    rollup query was unbounded ``call_date < today`` which made the
+    breakdown all-time while KPIs were month-only — producing reports
+    like "0 Appointments Booked" alongside "4 appointment_booked tags".
+
+    This test pins the SQL parameter binding: the rollup tag query must
+    include ``month_start``, and that bound value must equal the first
+    day of the current month.
+    """
+    from datetime import date as _date_today
+
+    today = _date_today.today()
+    expected_month_start = today.replace(day=1)
+
+    mock_user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="admin@clinic.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_institution_admin] = lambda: mock_user
+
+    loc = SimpleNamespace(
+        id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        name="Downtown",
+        slug="downtown",
+        is_active=True,
+        retell_agent_id="agent-1",
+    )
+
+    with patch("src.app.api.routes.dashboard.get_db_session") as mock_get_db:
+        mock_session = AsyncMock()
+        mock_get_db.return_value.__aenter__.return_value = mock_session
+
+        locations_result = MagicMock()
+        locations_result.scalars.return_value.all.return_value = [loc]
+        rollup_summary = _row_result(
+            week_total=0, month_total=0, all_time_total=0,
+            new_patients_month=0, appointments_booked_month=0, all_time_duration=0,
+        )
+        live_summary = _row_result(
+            today_count=0, today_appointments_booked=0, today_new_patients=0,
+            today_duration=0, open_callbacks=0,
+        )
+        rollup_tags = MagicMock()
+        rollup_tags.all.return_value = []
+        live_tags = MagicMock()
+        live_tags.all.return_value = []
+        per_loc_rollup = MagicMock()
+        per_loc_rollup.all.return_value = []
+        per_loc_live = MagicMock()
+        per_loc_live.all.return_value = []
+
+        mock_session.execute.side_effect = [
+            locations_result, rollup_summary, live_summary,
+            rollup_tags, live_tags, per_loc_rollup, per_loc_live,
+        ]
+
+        try:
+            response = await async_client.get("/api/institution/dashboard/aggregate")
+        finally:
+            app.dependency_overrides = {}
+
+    assert response.status_code == 200, response.text
+
+    # The 4th execute() call is the rollup tag-distribution query (see
+    # the docstring of test_get_aggregate_dashboard_combines_rollup_and_live
+    # for the call ordering). Inspect its bound parameters.
+    rollup_tag_call = mock_session.execute.await_args_list[3]
+    bound_params = rollup_tag_call.args[1] if len(rollup_tag_call.args) > 1 else {}
+    assert "month_start" in bound_params, (
+        f"rollup tag query missing month_start scoping; bound={bound_params}"
+    )
+    assert bound_params["month_start"] == expected_month_start
+
+
+@pytest.mark.asyncio
+async def test_summary_tag_counts_scoped_to_month_to_date(async_client: AsyncClient):
+    """The location-scoped /summary endpoint also restricts tag_counts to
+    month-to-date. Pin the SQL: the WHERE clause for the tag query must
+    include ``Call.call_date >= month_start``.
+    """
+    from datetime import date as _date_today
+
+    today = _date_today.today()
+    expected_month_start = today.replace(day=1)
+
+    mock_user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="staff@clinic.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        is_active=True,
+    )
+    app.dependency_overrides[get_current_active_user] = lambda: mock_user
+
+    with patch("src.app.api.routes.dashboard.get_db_session") as mock_get_db:
+        mock_session = AsyncMock()
+        mock_get_db.return_value.__aenter__.return_value = mock_session
+
+        today_count_result = MagicMock()
+        today_count_result.scalar_one.return_value = 0
+        rollup_volume = _row_result(
+            week_total=0, month_total=0, all_time_total=0, all_time_duration=0,
+        )
+        tag_rows_result = MagicMock()
+        tag_rows_result.all.return_value = []
+        callback_rows_result = MagicMock()
+        callback_rows_result.all.return_value = []
+
+        mock_session.execute.side_effect = [
+            today_count_result, rollup_volume, tag_rows_result, callback_rows_result,
+        ]
+
+        try:
+            response = await async_client.get("/api/institution/dashboard/summary")
+        finally:
+            app.dependency_overrides = {}
+
+    assert response.status_code == 200, response.text
+
+    # 3rd execute() is the tag_rows SELECT. We need to confirm a
+    # call_date >= month_start predicate is in its compiled WHERE.
+    tag_call = mock_session.execute.await_args_list[2]
+    statement = tag_call.args[0]
+    compiled = str(statement.compile(compile_kwargs={"literal_binds": True}))
+    # The predicate stringifies as something like
+    # "calls.call_date >= '2026-05-01'" once literal_binds resolves it.
+    assert (
+        f"calls.call_date >= '{expected_month_start.isoformat()}'" in compiled
+        or f"call_date >= '{expected_month_start.isoformat()}'" in compiled
+    ), f"tag_rows query missing call_date >= month_start; compiled was:\n{compiled}"
