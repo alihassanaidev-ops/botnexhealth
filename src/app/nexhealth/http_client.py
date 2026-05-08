@@ -159,6 +159,33 @@ class NexHealthHTTPClient:
                     "Upstream HTTP error: status=%s body_bytes=%s method=%s path=%s",
                     e.response.status_code, body_len, method, path,
                 )
+                # TEMP DEBUG (remove once create_patient 400 is diagnosed):
+                # NexHealth's /patients 400 body usually contains a generic
+                # English error ("Email has already been taken", "Date of
+                # birth is invalid"). PHI is unlikely but possible if
+                # NexHealth echoes a submitted value back. Apply the existing
+                # sanitizer (phone+email) and an inline DOB pattern, then cap
+                # at 500 chars before logging.
+                if (
+                    e.response.status_code == 400
+                    and method == "POST"
+                    and path == "/patients"
+                ):
+                    try:
+                        import re as _re
+
+                        from src.app.services.sms_privacy import sanitize_provider_error
+
+                        raw_body = e.response.text or ""
+                        scrubbed = sanitize_provider_error(raw_body, max_length=500)
+                        scrubbed = _re.sub(r"\d{4}-\d{2}-\d{2}", "[dob-redacted]", scrubbed)
+                        scrubbed = _re.sub(r"\d{1,2}/\d{1,2}/\d{2,4}", "[dob-redacted]", scrubbed)
+                        logger.warning(
+                            "DEBUG NexHealth /patients 400 body (sanitized): %s",
+                            scrubbed,
+                        )
+                    except Exception:  # pragma: no cover - debug-only
+                        logger.warning("DEBUG NexHealth /patients 400 body: <unserializable>")
                 raise
             except httpx.RequestError as e:
                 # Use type name and request URL only — the message can include
