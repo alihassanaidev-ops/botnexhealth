@@ -119,9 +119,17 @@ async def get_institution_from_call_context() -> tuple[Optional["Institution"], 
 verify_signature = get_signature_dependency(get_retell_secret)
 
 
+def _string_value(value: Any) -> str | None:
+    """Return a non-empty string value, ignoring FastAPI Param defaults."""
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
 @router.post("/functions", response_model=FunctionCallResponse)
 async def handle_function_call(
     function_name: str | None = Query(None, alias="name"),
+    call_id: str | None = Query(None),
     body: bytes = Depends(verify_signature),
 ) -> FunctionCallResponse | FunctionError:
     """
@@ -137,19 +145,66 @@ async def handle_function_call(
     try:
         # Parse the verified body
         payload = json.loads(body)
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid function payload")
 
-        # Allow specifying function name via query param (Standard Retell Pattern)
-        # Retell often sends just { args: {...}, call_id: ... }
-        if "function_name" not in payload and function_name:
-            payload["function_name"] = function_name
+        query_function_name = _string_value(function_name)
+        query_call_id = _string_value(call_id)
+
+        # TEMP DEBUG (remove after web-call identifier shape is captured):
+        # log the full payload structure with `args` redacted so we can see
+        # where Retell puts call_id / chat_id / tool_call_id for web calls.
+        try:
+            _debug_payload = {
+                k: ("<redacted>" if k == "args" else v)
+                for k, v in payload.items()
+            }
+            logger.info(
+                "DEBUG Retell function payload (args redacted): query_call_id=%r query_name=%r body=%s",
+                query_call_id,
+                query_function_name,
+                json.dumps(_debug_payload, default=str),
+            )
+        except Exception:  # pragma: no cover - debug only
+            logger.info("DEBUG Retell function payload: <unserializable>")
+
+        # Allow specifying function name via query param, Retell's standard
+        # body `name`, or legacy `function_name`.
+        resolved_function_name = (
+            _string_value(payload.get("function_name"))
+            or _string_value(payload.get("name"))
+            or query_function_name
+        )
+
+        # Retell's "Payload: args only" mode sends only the argument object.
+        # If the function name came from the query string and no wrapper fields
+        # are present, wrap the body into our internal request shape.
+        wrapper_keys = {"args", "call", "chat", "call_id", "function_name", "name"}
+        if (
+            query_function_name
+            and "args" not in payload
+            and not any(key in payload for key in wrapper_keys)
+        ):
+            payload = {
+                "function_name": query_function_name,
+                "call_id": query_call_id,
+                "args": payload,
+            }
+        else:
+            if "function_name" not in payload and resolved_function_name:
+                payload["function_name"] = resolved_function_name
+            if "call_id" not in payload and query_call_id:
+                payload["call_id"] = query_call_id
 
         request = FunctionCallRequest.model_validate(payload)
 
         # Handle call_id extraction
         if not request.call_id and request.chat:
-             request.call_id = request.chat.get("call_id")
+            request.call_id = request.chat.get("call_id")
+        if not request.call_id and isinstance(payload.get("call"), dict):
+            request.call_id = payload["call"].get("call_id")
         if not request.call_id:
-             request.call_id = "unknown_call_id"
+            request.call_id = "unknown_call_id"
 
         # Log function call (HIPAA-safe: hash call_id, log function name only)
         call_id_hash = hash_for_logging(request.call_id)
