@@ -42,6 +42,22 @@ def _strip(prefixed_id: str) -> str:
     return prefixed_id.removeprefix(f"{PREFIX}-")
 
 
+def _normalize_phone_for_nexhealth(phone: str | None) -> str | None:
+    """Truncate phone to first 10 digits to match NexHealth's storage rule.
+
+    NexHealth silently truncates phone_number to the first 10 characters at
+    create time but performs exact-string match on lookup. Verified directly
+    via curl: a 12-char input was stored as the first 10 chars, and lookup
+    with the original 12-char string returned 0 hits while the truncated
+    10-char form returned the row. Pre-truncating to digits-only first 10
+    on both create and lookup paths gives create and lookup the same key.
+    """
+    if not phone:
+        return None
+    digits = "".join(c for c in str(phone) if c.isdigit())
+    return digits[:10] if digits else None
+
+
 class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking):
     source = "nexhealth"
 
@@ -121,7 +137,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         if kwargs.get("email"):
             params["email"] = kwargs["email"]
         elif kwargs.get("phone_number"):
-            params["phone_number"] = kwargs["phone_number"]
+            params["phone_number"] = _normalize_phone_for_nexhealth(kwargs["phone_number"])
         elif kwargs.get("date_of_birth"):
             params["date_of_birth"] = kwargs["date_of_birth"]
         else:
@@ -152,7 +168,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
                 email=req.email,
                 bio=CreatePatientBio(
                     date_of_birth=req.date_of_birth,
-                    phone_number=req.phone,
+                    phone_number=_normalize_phone_for_nexhealth(req.phone),
                     gender=req.gender,
                 ),
             ),
