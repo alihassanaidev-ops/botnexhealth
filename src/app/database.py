@@ -204,25 +204,42 @@ class RlsAsyncSession(AsyncSession):
             await apply_rls_context(self, context)
 
 
-def init_database(database_url: str) -> None:
+def init_database(database_url: str, *, use_null_pool: bool = False) -> None:
     """
     Initialize the database engine and session factory.
 
     Args:
-        database_url: PostgreSQL connection string (asyncpg format)
+        database_url: PostgreSQL connection string (asyncpg format).
+        use_null_pool: When True, the engine uses :class:`NullPool` so that
+            no asyncpg connection is ever cached in the pool. Required for
+            Celery prefork workers, where each task runs inside its own
+            ``asyncio.run()`` event loop — a pooled asyncpg connection would
+            be bound to the loop of whichever task created it and raise
+            ``RuntimeError: ... attached to a different loop`` on the next
+            task. With NullPool, every checkout opens a fresh connection on
+            the current loop and closes it on checkin.
     """
     global _engine, _session_factory
     from src.app.config import settings
 
-    _engine = create_async_engine(
-        database_url,
-        echo=False,
-        pool_size=settings.database_pool_size,
-        max_overflow=settings.database_max_overflow,
-        pool_timeout=settings.database_pool_timeout_seconds,
-        pool_recycle=settings.database_pool_recycle_seconds,
-        pool_pre_ping=True,
-    )
+    if use_null_pool:
+        from sqlalchemy.pool import NullPool
+
+        _engine = create_async_engine(
+            database_url,
+            echo=False,
+            poolclass=NullPool,
+        )
+    else:
+        _engine = create_async_engine(
+            database_url,
+            echo=False,
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout=settings.database_pool_timeout_seconds,
+            pool_recycle=settings.database_pool_recycle_seconds,
+            pool_pre_ping=True,
+        )
 
     _session_factory = async_sessionmaker(
         bind=_engine,

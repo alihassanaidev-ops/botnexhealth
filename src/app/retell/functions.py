@@ -151,23 +151,6 @@ async def handle_function_call(
         query_function_name = _string_value(function_name)
         query_call_id = _string_value(call_id)
 
-        # TEMP DEBUG (remove after web-call identifier shape is captured):
-        # log the full payload structure with `args` redacted so we can see
-        # where Retell puts call_id / chat_id / tool_call_id for web calls.
-        try:
-            _debug_payload = {
-                k: ("<redacted>" if k == "args" else v)
-                for k, v in payload.items()
-            }
-            logger.info(
-                "DEBUG Retell function payload (args redacted): query_call_id=%r query_name=%r body=%s",
-                query_call_id,
-                query_function_name,
-                json.dumps(_debug_payload, default=str),
-            )
-        except Exception:  # pragma: no cover - debug only
-            logger.info("DEBUG Retell function payload: <unserializable>")
-
         # Allow specifying function name via query param, Retell's standard
         # body `name`, or legacy `function_name`.
         resolved_function_name = (
