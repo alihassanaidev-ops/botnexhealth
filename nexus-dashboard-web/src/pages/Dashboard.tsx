@@ -38,15 +38,6 @@ import { getDashboardSummary, getAggregateDashboard } from "@/lib/dashboard-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const EMPTY_AGGREGATE_METRICS = {
-    appointments_booked_month: 0,
-    new_patients_month: 0,
-    booking_rate_month: 0,
-    avg_call_duration_seconds: 0,
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatTime(timeStr: string | null): string {
@@ -408,48 +399,40 @@ export default function Dashboard() {
     const fetchSummary = useCallback(async () => {
         try {
             const locationSlug = selectedLocationSlug === "all" ? undefined : selectedLocationSlug
-            const [summaryData] = await Promise.all([
-                getDashboardSummary(locationSlug),
-            ])
+            const summaryData = await getDashboardSummary(locationSlug)
             setSummary(summaryData)
 
-            const isInstitutionAdmin = user?.role === "INSTITUTION_ADMIN"
+            // KPI cards are now sourced from /summary for ALL roles. The
+            // backend scopes them by extra_conditions (user.location_id
+            // for STAFF/LOCATION_ADMIN, the selected slug for
+            // INSTITUTION_ADMIN, or institution-wide when no slug is
+            // supplied), so a location admin sees real numbers instead
+            // of the hardcoded zeroes that were here before.
+            setAggregateMetrics({
+                appointments_booked_month: summaryData.appointments_booked_month ?? 0,
+                new_patients_month: summaryData.new_patients_month ?? 0,
+                booking_rate_month: summaryData.booking_rate_month ?? 0,
+                avg_call_duration_seconds: summaryData.avg_call_duration_seconds ?? 0,
+            })
 
+            // The location switcher list still comes from the aggregate
+            // endpoint (institution-admin only — it's the only place
+            // that returns clinic_comparison). LOCATION_ADMIN/STAFF
+            // can't switch anyway.
+            const isInstitutionAdmin = user?.role === "INSTITUTION_ADMIN"
             if (isInstitutionAdmin) {
                 try {
                     const aggregateData = await getAggregateDashboard()
-
-                    if (selectedLocationSlug === "all") {
-                        setAggregateMetrics({
-                            appointments_booked_month: aggregateData.summary.appointments_booked_month,
-                            new_patients_month: aggregateData.summary.new_patients_month,
-                            booking_rate_month: aggregateData.summary.booking_rate_month,
-                            avg_call_duration_seconds: aggregateData.summary.avg_call_duration_seconds,
-                        })
-                        setLocations(
-                            aggregateData.clinic_comparison.map((c) => ({
-                                slug: c.location_slug,
-                                name: c.location_name,
-                            }))
-                        )
-                    } else {
-                        const locData = aggregateData.clinic_comparison.find(
-                            (c) => c.location_slug === selectedLocationSlug
-                        )
-                        if (locData) {
-                            setAggregateMetrics({
-                                appointments_booked_month: locData.appointments_booked_month,
-                                new_patients_month: locData.new_patients_month,
-                                booking_rate_month: locData.booking_rate_month,
-                                avg_call_duration_seconds: locData.avg_call_duration_seconds,
-                            })
-                        }
-                    }
+                    setLocations(
+                        aggregateData.clinic_comparison.map((c) => ({
+                            slug: c.location_slug,
+                            name: c.location_name,
+                        }))
+                    )
                 } catch {
-                    setAggregateMetrics({ ...EMPTY_AGGREGATE_METRICS })
+                    /* keep prior locations on transient failure */
                 }
             } else {
-                setAggregateMetrics({ ...EMPTY_AGGREGATE_METRICS })
                 setLocations([])
             }
         } catch (error: unknown) {

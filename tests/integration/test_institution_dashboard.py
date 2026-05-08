@@ -210,11 +210,22 @@ async def test_get_dashboard_summary_combines_rollup_and_today_live(async_client
         today_count_result = MagicMock()
         today_count_result.scalar_one.return_value = 3
 
-        # Rollup (date < today): 6 this week so far, 11 this month, 41 all-time.
+        # Rollup (date < today): 6 this week so far, 11 this month, 41 all-time,
+        # plus the KPI columns now also surfaced for /summary.
         rollup_row_result = _row_result(
             week_total=6,
             month_total=11,
             all_time_total=41,
+            new_patients_month=2,
+            appointments_booked_month=4,
+            all_time_duration=4100,  # 100s avg × 41 calls
+        )
+
+        # Today's live KPI components (1 booked, 1 new, 360s of talk time).
+        today_kpi_row_result = _row_result(
+            today_appointments_booked=1,
+            today_new_patients=1,
+            today_duration=360,
         )
 
         tag_rows_result = MagicMock()
@@ -241,6 +252,7 @@ async def test_get_dashboard_summary_combines_rollup_and_today_live(async_client
         mock_session.execute.side_effect = [
             today_count_result,
             rollup_row_result,
+            today_kpi_row_result,
             tag_rows_result,
             callback_rows_result,
         ]
@@ -261,6 +273,12 @@ async def test_get_dashboard_summary_combines_rollup_and_today_live(async_client
         "all_time": 44,    # 41 + 3
     }
     assert payload["tag_counts"][0]["tag"] == "appointment_booked"
+    # KPI cards: rollup + today overlay, scoped by extra_conditions.
+    assert payload["appointments_booked_month"] == 5    # 4 rollup + 1 today
+    assert payload["new_patients_month"] == 3            # 2 rollup + 1 today
+    assert payload["booking_rate_month"] == round(5 / 14 * 100, 2)
+    # avg = (4100 rollup + 360 today) / 44 all-time calls
+    assert payload["avg_call_duration_seconds"] == round(4460 / 44, 2)
     assert payload["callback_queue"] == [
         {
             "call_id": "call-1",
@@ -272,7 +290,7 @@ async def test_get_dashboard_summary_combines_rollup_and_today_live(async_client
             "next_action": "Call back this afternoon",
         }
     ]
-    assert mock_session.execute.await_count == 4
+    assert mock_session.execute.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -325,6 +343,14 @@ async def test_summary_scopes_staff_by_call_location_id_not_agent_used(
             week_total=1,
             month_total=2,
             all_time_total=9,
+            new_patients_month=0,
+            appointments_booked_month=0,
+            all_time_duration=0,
+        )
+        today_kpi_row_result = _row_result(
+            today_appointments_booked=0,
+            today_new_patients=0,
+            today_duration=0,
         )
         tag_rows_result = MagicMock()
         tag_rows_result.all.return_value = []
@@ -345,6 +371,7 @@ async def test_summary_scopes_staff_by_call_location_id_not_agent_used(
             location_result,
             today_count_result,
             rollup_row_result,
+            today_kpi_row_result,
             tag_rows_result,
             callback_rows_result,
         ]
@@ -509,7 +536,11 @@ async def test_summary_tag_counts_scoped_to_month_to_date(async_client: AsyncCli
         today_count_result = MagicMock()
         today_count_result.scalar_one.return_value = 0
         rollup_volume = _row_result(
-            week_total=0, month_total=0, all_time_total=0, all_time_duration=0,
+            week_total=0, month_total=0, all_time_total=0,
+            new_patients_month=0, appointments_booked_month=0, all_time_duration=0,
+        )
+        today_kpi = _row_result(
+            today_appointments_booked=0, today_new_patients=0, today_duration=0,
         )
         tag_rows_result = MagicMock()
         tag_rows_result.all.return_value = []
@@ -517,7 +548,7 @@ async def test_summary_tag_counts_scoped_to_month_to_date(async_client: AsyncCli
         callback_rows_result.all.return_value = []
 
         mock_session.execute.side_effect = [
-            today_count_result, rollup_volume, tag_rows_result, callback_rows_result,
+            today_count_result, rollup_volume, today_kpi, tag_rows_result, callback_rows_result,
         ]
 
         try:
@@ -527,9 +558,10 @@ async def test_summary_tag_counts_scoped_to_month_to_date(async_client: AsyncCli
 
     assert response.status_code == 200, response.text
 
-    # 3rd execute() is the tag_rows SELECT. We need to confirm a
-    # call_date >= month_start predicate is in its compiled WHERE.
-    tag_call = mock_session.execute.await_args_list[2]
+    # 4th execute() is the tag_rows SELECT (today_count, rollup, today_kpi,
+    # tag_rows, callback). Confirm a call_date >= month_start predicate
+    # is in its compiled WHERE.
+    tag_call = mock_session.execute.await_args_list[3]
     statement = tag_call.args[0]
     compiled = str(statement.compile(compile_kwargs={"literal_binds": True}))
     # The predicate stringifies as something like

@@ -62,6 +62,16 @@ class DashboardSummary(BaseModel):
     tag_counts: list[TagCount]
     callback_queue: list[CallbackQueueItem]   # unresolved needs_callback calls, oldest first
     as_of: str                                 # ISO timestamp of when this was computed
+    # KPI cards — month-to-date, scoped to whatever extra_conditions
+    # apply (the user's pinned location for STAFF/LOCATION_ADMIN, the
+    # selected location_slug for INSTITUTION_ADMIN, or institution-wide
+    # when no slug is supplied). Surfaced here so non-institution-admin
+    # users see real numbers instead of the previous frontend-hardcoded
+    # zeroes when /dashboard/aggregate was the only KPI source.
+    appointments_booked_month: int = 0
+    new_patients_month: int = 0
+    booking_rate_month: float = 0.0
+    avg_call_duration_seconds: float = 0.0
 
 
 class AggregateSummaryCards(BaseModel):
@@ -188,6 +198,44 @@ async def _load_rollup_volume_metrics(
                     0,
                 ).label("month_total"),
                 func.coalesce(func.sum(CallMetricsDaily.total_calls), 0).label("all_time_total"),
+                # KPI columns: same shape the aggregate endpoint computes,
+                # restricted by ``rollup_filters`` so a location-scoped
+                # caller gets numbers for their location only.
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                CallMetricsDaily.call_date >= month_start,
+                                CallMetricsDaily.new_patient_calls,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("new_patients_month"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                CallMetricsDaily.call_date >= month_start,
+                                func.coalesce(
+                                    func.cast(
+                                        CallMetricsDaily.tag_counts.op("->>")(
+                                            CallStatus.APPOINTMENT_BOOKED.value
+                                        ),
+                                        Integer,
+                                    ),
+                                    0,
+                                ),
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("appointments_booked_month"),
+                func.coalesce(
+                    func.sum(CallMetricsDaily.total_duration_seconds), 0
+                ).label("all_time_duration"),
             ).where(*rollup_filters)
         )
     ).one()
@@ -627,6 +675,40 @@ async def get_dashboard_summary(
             location_filter=_rollup_location_filter(rollup_location_id),
         )
 
+        # Today's live KPI components — used to overlay onto the rollup
+        # for the month-to-date numbers (see KPI math after the response
+        # is built). One round-trip; predicates are tight index ranges
+        # under the (institution_id, call_date) covering index.
+        today_kpi_row = (
+            await session.execute(
+                select(
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
+                                    1,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("today_appointments_booked"),
+                    func.coalesce(
+                        func.sum(case((Call.is_new_patient.is_(True), 1), else_=0)),
+                        0,
+                    ).label("today_new_patients"),
+                    func.coalesce(
+                        func.sum(func.coalesce(Call.call_duration_seconds, 0)), 0
+                    ).label("today_duration"),
+                ).where(
+                    Call.institution_id == institution_id,
+                    Call.call_date == today,
+                    *extra_conditions,
+                )
+            )
+        ).one()
+
         # ── Tag counts (by primary call_status) ───────────────────────────
         # Scoped to month-to-date so the breakdown agrees with the KPI
         # cards (also month-to-date). Mixing all-time tags with
@@ -694,6 +776,34 @@ async def get_dashboard_summary(
         month_total = int(rollup_row.month_total or 0) + today_count
         all_time_total = int(rollup_row.all_time_total or 0) + today_count
 
+        # ── KPI cards ─────────────────────────────────────────────────────
+        # Same rollup + today-live overlay pattern the aggregate endpoint
+        # uses, scoped to the same extra_conditions as the rest of this
+        # response so location-pinned roles see numbers for their location.
+        appointments_booked_month = int(rollup_row.appointments_booked_month or 0) + int(
+            today_kpi_row.today_appointments_booked or 0
+        )
+        new_patients_month = int(rollup_row.new_patients_month or 0) + int(
+            today_kpi_row.today_new_patients or 0
+        )
+        booking_rate_month = (
+            round((appointments_booked_month / month_total) * 100, 2)
+            if month_total
+            else 0.0
+        )
+        avg_call_duration_seconds = (
+            round(
+                (
+                    int(rollup_row.all_time_duration or 0)
+                    + int(today_kpi_row.today_duration or 0)
+                )
+                / all_time_total,
+                2,
+            )
+            if all_time_total
+            else 0.0
+        )
+
         response = DashboardSummary(
             call_volume=CallVolume(
                 today=today_count,
@@ -704,6 +814,10 @@ async def get_dashboard_summary(
             tag_counts=tag_counts,
             callback_queue=callback_queue,
             as_of=now.isoformat(),
+            appointments_booked_month=appointments_booked_month,
+            new_patients_month=new_patients_month,
+            booking_rate_month=booking_rate_month,
+            avg_call_duration_seconds=avg_call_duration_seconds,
         )
         log_audit_background(
             actor=AuditActor.ADMIN,
