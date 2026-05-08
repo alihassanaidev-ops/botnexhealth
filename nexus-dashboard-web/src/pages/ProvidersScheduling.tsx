@@ -21,9 +21,11 @@ import {
     triggerSync,
 } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
+import { useSelectedLocationId } from "@/context/LocationContext"
 
 export default function ProvidersScheduling() {
     const { user } = useAuth()
+    const locationId = useSelectedLocationId()
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [providers, setProviders] = useState<CachedProvider[]>([])
     const [availabilities, setAvailabilities] = useState<CachedAvailability[]>([])
@@ -60,13 +62,14 @@ export default function ProvidersScheduling() {
 
     // Load providers + appointment types once on mount
     const fetchData = useCallback(async () => {
+        if (!locationId) return
         setLoading(true)
         setError(null)
         try {
             const [p, at, ops] = await Promise.all([
-                listProviders(),
-                listAppointmentTypes(),
-                listOperatories(),
+                listProviders(locationId),
+                listAppointmentTypes(locationId),
+                listOperatories(locationId),
             ])
             setProviders(p)
             setAppointmentTypes(at)
@@ -83,14 +86,14 @@ export default function ProvidersScheduling() {
         } finally {
             setLoading(false)
         }
-    }, [])
+    }, [locationId])
 
     // Fetch availabilities when provider changes
     const fetchAvailabilities = useCallback(async () => {
-        if (!selectedProviderId) return
+        if (!selectedProviderId || !locationId) return
         setLoadingAvailabilities(true)
         try {
-            const data = await listAvailabilities(undefined, selectedProviderId)
+            const data = await listAvailabilities(locationId, selectedProviderId)
             setAvailabilities(data)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load availabilities"
@@ -98,7 +101,7 @@ export default function ProvidersScheduling() {
         } finally {
             setLoadingAvailabilities(false)
         }
-    }, [selectedProviderId])
+    }, [selectedProviderId, locationId])
 
     useEffect(() => {
         fetchData()
@@ -121,10 +124,10 @@ export default function ProvidersScheduling() {
     const selectedProvider = providers.find((p) => p.source_id === selectedProviderId)
 
     const handleSync = async () => {
-        if (!canManage) return
+        if (!canManage || !locationId) return
         setSyncing(true)
         try {
-            const result = await triggerSync()
+            const result = await triggerSync(locationId)
             if (result.success) {
                 toast.success(
                     `Synced: ${result.providers_synced} providers, ${result.appointment_types_synced} appointment types`
@@ -156,7 +159,7 @@ export default function ProvidersScheduling() {
                 same_day_cutoff_time: cutoffTime || null,
                 min_age: minAge === "" ? null : minAge,
                 max_age: maxAge === "" ? null : maxAge,
-            })
+            }, locationId)
             toast.success("Provider settings saved")
             await fetchData()
         } catch (err: unknown) {
@@ -193,7 +196,7 @@ export default function ProvidersScheduling() {
         try {
             await updateAvailability(editTarget.source_id, {
                 appointment_type_ids: editTypeIds,
-            })
+            }, locationId)
             toast.success("Work window updated")
             setEditTarget(null)
             await fetchAvailabilities()
@@ -230,7 +233,7 @@ export default function ProvidersScheduling() {
             await createAvailability({
                 provider_id: selectedProviderId,
                 ...newWindow
-            })
+            }, locationId)
             toast.success("Work window created successfully")
             setCreateDialogOpen(false)
             // Reset form

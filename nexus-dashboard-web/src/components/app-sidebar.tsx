@@ -19,6 +19,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { LocationSelector } from "@/components/location-selector"
 import {
     Home,
     Users,
@@ -248,6 +249,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </SidebarMenu>
             </SidebarHeader>
             <SidebarContent>
+                {isInstitution && (
+                    <SidebarGroup className="pt-2">
+                        <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
+                            Active Location
+                        </SidebarGroupLabel>
+                        <SidebarGroupContent className="px-2">
+                            <LocationSelector />
+                        </SidebarGroupContent>
+                    </SidebarGroup>
+                )}
                 <SidebarGroup>
                     <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1 mt-2">
                         Menu
@@ -279,7 +290,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     <NavItem
                                         key={item.title}
                                         item={item}
-                                        isActive={location.pathname === item.url || location.pathname.startsWith(item.url + "/")}
+                                        isActive={
+                                            item.exact
+                                                ? location.pathname === item.url
+                                                : location.pathname === item.url || location.pathname.startsWith(item.url + "/")
+                                        }
                                     />
                                 ))}
                             </SidebarMenu>

@@ -7,18 +7,21 @@ import { RefreshCcw } from "lucide-react"
 import type { CachedOperatory } from "@/types"
 import { listOperatories, triggerSync } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
+import { useSelectedLocationId } from "@/context/LocationContext"
 
 export default function Operatories() {
     const { user } = useAuth()
+    const locationId = useSelectedLocationId()
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [operatories, setOperatories] = useState<CachedOperatory[]>([])
     const [loading, setLoading] = useState(true)
     const [syncing, setSyncing] = useState(false)
 
     const fetchData = useCallback(async () => {
+        if (!locationId) return
         setLoading(true)
         try {
-            const data = await listOperatories()
+            const data = await listOperatories(locationId)
             setOperatories(data)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load operatories"
@@ -26,17 +29,17 @@ export default function Operatories() {
         } finally {
             setLoading(false)
         }
-    }, [])
+    }, [locationId])
 
     useEffect(() => {
         fetchData()
     }, [fetchData])
 
     const handleSync = async () => {
-        if (!canManage) return
+        if (!canManage || !locationId) return
         setSyncing(true)
         try {
-            const result = await triggerSync()
+            const result = await triggerSync(locationId)
             if (result.success) {
                 toast.success(`Synced: ${result.operatories_synced} operatories`)
                 await fetchData()

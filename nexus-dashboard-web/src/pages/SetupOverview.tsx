@@ -16,9 +16,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getSetupOverview, listLocations, triggerSync } from "@/lib/tenant-api";
-import type { LocationInfo, SetupOverview as SetupOverviewData } from "@/types";
+import { getSetupOverview, triggerSync } from "@/lib/tenant-api";
+import type { SetupOverview as SetupOverviewData } from "@/types";
 import { useAuth } from "@/context/AuthContext";
+import { useLocationContext } from "@/context/LocationContext";
 
 type StepDefinition = {
     key: string;
@@ -41,11 +42,15 @@ const EMPTY_COUNTS = {
 
 export default function SetupOverview() {
     const { user } = useAuth();
+    const {
+        locations,
+        selectedLocationId: ctxLocationId,
+        setSelectedLocationId,
+        isLoading: loadingLocations,
+    } = useLocationContext();
     const canSync = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN";
-    const [locations, setLocations] = useState<LocationInfo[]>([]);
-    const [selectedLocationId, setSelectedLocationId] = useState<string>("");
+    const selectedLocationId = ctxLocationId ?? "";
     const [overview, setOverview] = useState<SetupOverviewData | null>(null);
-    const [loadingLocations, setLoadingLocations] = useState(true);
     const [loadingOverview, setLoadingOverview] = useState(false);
     const [syncing, setSyncing] = useState(false);
 
@@ -63,46 +68,8 @@ export default function SetupOverview() {
     }, []);
 
     useEffect(() => {
-        let active = true;
-
-        const loadLocations = async () => {
-            setLoadingLocations(true);
-            try {
-                const data = await listLocations();
-                if (!active) {
-                    return;
-                }
-
-                setLocations(data);
-                if (data.length === 0) {
-                    setSelectedLocationId("");
-                    setOverview(null);
-                    return;
-                }
-
-                setSelectedLocationId((current) => current || data[0].id);
-            } catch (error: unknown) {
-                if (!active) {
-                    return;
-                }
-                const message = error instanceof Error ? error.message : "Failed to load locations";
-                toast.error(message);
-            } finally {
-                if (active) {
-                    setLoadingLocations(false);
-                }
-            }
-        };
-
-        void loadLocations();
-
-        return () => {
-            active = false;
-        };
-    }, []);
-
-    useEffect(() => {
         if (!selectedLocationId) {
+            setOverview(null);
             return;
         }
         void loadOverview(selectedLocationId);

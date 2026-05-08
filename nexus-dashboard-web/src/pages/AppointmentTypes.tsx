@@ -17,9 +17,11 @@ import {
     triggerSync,
 } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
+import { useSelectedLocationId } from "@/context/LocationContext"
 
 export default function AppointmentTypes() {
     const { user } = useAuth()
+    const locationId = useSelectedLocationId()
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [types, setTypes] = useState<CachedAppointmentType[]>([])
     const [descriptors, setDescriptors] = useState<CachedDescriptor[]>([])
@@ -48,11 +50,12 @@ export default function AppointmentTypes() {
     const [deleting, setDeleting] = useState(false)
 
     const fetchData = useCallback(async () => {
+        if (!locationId) return
         setLoading(true)
         try {
             const [typesData, descriptorsData] = await Promise.all([
-                listAppointmentTypes(),
-                listDescriptors(),
+                listAppointmentTypes(locationId),
+                listDescriptors(locationId),
             ])
             setTypes(typesData)
             setDescriptors(descriptorsData)
@@ -62,17 +65,17 @@ export default function AppointmentTypes() {
         } finally {
             setLoading(false)
         }
-    }, [])
+    }, [locationId])
 
     useEffect(() => {
         fetchData()
     }, [fetchData])
 
     const handleSync = async () => {
-        if (!canManage) return
+        if (!canManage || !locationId) return
         setSyncing(true)
         try {
-            const result = await triggerSync()
+            const result = await triggerSync(locationId)
             if (result.success) {
                 toast.success(
                     `Synced: ${result.appointment_types_synced} appointment types, ${result.descriptors_synced} descriptors`
@@ -101,7 +104,7 @@ export default function AppointmentTypes() {
                 name: newName.trim(),
                 duration_minutes: newDuration,
                 descriptor_ids: selectedDescriptorIds,
-            })
+            }, locationId)
             toast.success(`Created appointment type "${newName.trim()}"`)
             setCreateOpen(false)
             resetCreateForm()
@@ -152,7 +155,7 @@ export default function AppointmentTypes() {
 
         setEditing(true)
         try {
-            await updateAppointmentType(editTarget.source_id, payload)
+            await updateAppointmentType(editTarget.source_id, payload, locationId)
             toast.success(`Updated "${trimmedName}"`)
             setEditOpen(false)
             resetEditForm()
@@ -170,7 +173,7 @@ export default function AppointmentTypes() {
         if (!deleteTarget) return
         setDeleting(true)
         try {
-            await deleteAppointmentType(deleteTarget.source_id)
+            await deleteAppointmentType(deleteTarget.source_id, locationId)
             toast.success(`Deleted "${deleteTarget.name}"`)
             setDeleteTarget(null)
             await fetchData()
