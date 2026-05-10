@@ -22,6 +22,7 @@ from src.app.models.user import User, UserRole
 PUBLIC = "public"
 SIGNED_WEBHOOK = "signed_webhook"
 TICKET_AUTH = "ticket_auth"
+MFA_TICKET = "mfa_ticket"
 
 SUPER_ADMIN = "get_current_admin"
 SUPER_ADMIN_STRICT = "get_current_super_admin"
@@ -46,6 +47,16 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/auth/refresh",
         "POST /api/auth/logout",
     ),
+    MFA_TICKET: (
+        "POST /api/auth/mfa/webauthn/register/options",
+        "POST /api/auth/mfa/webauthn/register/verify",
+        "POST /api/auth/mfa/webauthn/authenticate/options",
+        "POST /api/auth/mfa/webauthn/authenticate/verify",
+        "POST /api/auth/mfa/totp/setup/options",
+        "POST /api/auth/mfa/totp/setup/verify",
+        "POST /api/auth/mfa/totp/verify",
+        "POST /api/auth/mfa/recovery-code/verify",
+    ),
     SIGNED_WEBHOOK: (
         "POST /api/v1/retell/functions",
         "POST /api/v1/retell/webhook",
@@ -58,6 +69,11 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
     ACTIVE_USER: (
         "GET /api/v1/health",
         "GET /api/auth/users/me",
+        "GET /api/auth/mfa/status",
+        "POST /api/auth/mfa/recovery-codes/regenerate",
+        "GET /api/auth/mfa/webauthn",
+        "DELETE /api/auth/mfa/webauthn/{credential_pk}",
+        "POST /api/auth/mfa/totp/disable",
         "GET /api/institution/setup/overview",
         "GET /api/institution/setup/locations",
         "GET /api/institution/setup/providers",
@@ -174,6 +190,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/setup/appointment-types",
         "PATCH /api/institution/setup/appointment-types/{source_id}",
         "DELETE /api/institution/setup/appointment-types/{source_id}",
+        "POST /api/institution/setup/availabilities",
         "PATCH /api/institution/setup/availabilities/{source_id}",
         "POST /api/institution/setup/sync",
         "PUT /api/institution/setup/operating-hours",

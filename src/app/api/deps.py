@@ -68,10 +68,23 @@ async def get_current_user(
             if user is None:
                 raise credentials_exception
 
+    if current_user_requires_mfa(user) and payload.get("mfa") is not True:
+        raise credentials_exception
+
     set_current_rls_context(RlsContext.for_user(user))
     if request is not None:
         request.state.rls_context = RlsContext.for_user(user)
     return user
+
+
+def current_user_requires_mfa(user: User) -> bool:
+    """Return True for interactive roles that can access app data."""
+    return user.role in (
+        UserRole.SUPER_ADMIN.value,
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
+    )
 
 
 async def get_current_active_user(

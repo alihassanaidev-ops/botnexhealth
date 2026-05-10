@@ -13,6 +13,7 @@ from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.retell.models import RetellCallData
 from src.app.services.custom_field_service import CustomFieldService
+from src.app.services.sms_privacy import hash_for_logging
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,13 @@ def _parse_dob(raw: str | None) -> str | None:
             return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
-    logger.warning("Could not parse DOB string: %r", raw)
+    # DOB is a HIPAA §164.514(b)(2)(i)(C) identifier — log only the keyed
+    # hash and length so operators can correlate without seeing the value.
+    logger.warning(
+        "Could not parse DOB string: dob_hash=%s len=%d",
+        hash_for_logging(raw),
+        len(raw),
+    )
     return None
 
 

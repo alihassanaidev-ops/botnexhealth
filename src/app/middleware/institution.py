@@ -10,6 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.app.database import get_system_db_session
 from src.app.services.institution_service import InstitutionService
+from src.app.services.sms_privacy import safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,10 @@ class InstitutionMiddleware(BaseHTTPMiddleware):
                     request.state.institution = None
                     request.state.location = None
         except Exception as e:
-            logger.error(f"Error resolving institution: {e}")
+            logger.error(
+                "Error resolving institution: %s",
+                safe_error_summary(e),
+            )
             request.state.institution = None
             request.state.location = None
 

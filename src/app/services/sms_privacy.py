@@ -17,6 +17,24 @@ MAX_SMS_BODY_LENGTH = 1600
 
 _PHONE_RE = re.compile(r"(?<!\w)\+?\d[\d\s().-]{6,}\d(?!\w)")
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+# DOB patterns we expect in PMS / vendor error bodies. DOB is a HIPAA
+# §164.514(b)(2)(i)(C) identifier; it must not survive into log lines.
+# Order matters: month-name patterns first so the digit-only fallback
+# doesn't half-match a "March 5, 1972" -> "5, 1972".
+_DATE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # "March 5, 1972" / "Mar. 5 1972"
+    re.compile(
+        r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+        r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|"
+        r"Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{2,4}\b",
+        re.IGNORECASE,
+    ),
+    # ISO 8601 date or datetime (1972-03-05, 1972-03-05T12:00:00)
+    re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?\b"),
+    # MM/DD/YYYY, M/D/YY, MM-DD-YYYY (also DD/MM variants)
+    re.compile(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b"),
+)
 _SAFE_IDENTIFIER_KEYS = {
     "id",
     "messagesid",
@@ -117,15 +135,68 @@ def mask_phone(phone: str | None) -> str:
 
 
 def sanitize_provider_error(error: Exception | str | None, *, max_length: int = 300) -> str:
-    """Remove likely PHI from provider error text before persistence/logging."""
+    """Remove likely PHI from provider error text before persistence/logging.
+
+    Strips phone numbers, emails, and date-of-birth-shaped strings — the
+    HIPAA identifiers that PMS / vendor error bodies most commonly echo
+    back. The result is bounded to ``max_length`` chars and always
+    prefixed by the exception type when given an Exception.
+
+    NOTE: this does NOT strip patient names — names are indistinguishable
+    from ordinary words and cannot be regex-redacted reliably. For
+    PHI-path *logs* (where the exception body itself can carry names)
+    use ``safe_error_summary`` instead, which drops the message entirely.
+    """
     if not error:
         return "Unknown provider error"
     text = str(error)
+    for pattern in _DATE_PATTERNS:
+        text = pattern.sub("[date-redacted]", text)
     text = _PHONE_RE.sub("[phone-redacted]", text)
     text = _EMAIL_RE.sub("[email-redacted]", text)
     text = text.replace("\n", " ").replace("\r", " ")
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_length] if len(text) > max_length else text
+
+
+def safe_error_summary(error: Exception | None) -> str:
+    """Return a strict, body-less summary of an exception for PHI-path logs.
+
+    Provider/PMS exceptions routinely echo the request payload in their
+    message — patient name, DOB, phone, email. ``sanitize_provider_error``
+    can strip phone/email/DOB shapes but cannot tell a person's name from
+    any other word. So the only reliably PHI-safe form for *log lines on
+    PHI surfaces* is the exception class plus, when available, the HTTP
+    status code from the underlying response.
+
+    Examples::
+
+        safe_error_summary(RuntimeError("Patient John Smith not found"))
+        # -> "type=RuntimeError"
+
+        safe_error_summary(httpx.HTTPStatusError("...", response=resp_422))
+        # -> "type=HTTPStatusError status=422"
+    """
+    if error is None:
+        return "type=NoneType"
+
+    parts = [f"type={type(error).__name__}"]
+
+    # httpx.HTTPStatusError, requests.HTTPError, etc all expose .response
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None) if response is not None else None
+    if status_code is None:
+        # Twilio (TwilioRestException) / generic clients sometimes use .status
+        status_code = getattr(error, "status", None) or getattr(error, "status_code", None)
+    if isinstance(status_code, int):
+        parts.append(f"status={status_code}")
+
+    # NexHealth-style structured errors sometimes attach a `.code` enum string.
+    code = getattr(error, "code", None)
+    if isinstance(code, (str, int)) and code != "" and not isinstance(code, bool):
+        parts.append(f"code={code}")
+
+    return " ".join(parts)
 
 
 def redact_payload(payload: Any) -> Any:

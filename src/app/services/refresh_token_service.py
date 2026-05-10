@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import secrets
+from dataclasses import dataclass
 
 from redis.asyncio import Redis, from_url
 
@@ -12,6 +14,14 @@ from src.app.services.password_service import PasswordService
 
 class RefreshTokenReplayError(RuntimeError):
     """Raised when a previously rotated refresh token is presented again."""
+
+
+@dataclass(frozen=True)
+class RefreshSession:
+    user_id: str
+    mfa: bool = False
+    amr: tuple[str, ...] = ()
+    auth_time: int | None = None
 
 
 class RefreshTokenService:
@@ -39,7 +49,7 @@ class RefreshTokenService:
 
     @classmethod
     def _ttl_seconds(cls) -> int:
-        return settings.refresh_token_ttl_days * 24 * 60 * 60
+        return settings.refresh_token_ttl_minutes * 60
 
     @classmethod
     def _redis_url(cls) -> str:
@@ -91,13 +101,51 @@ class RefreshTokenService:
         return f"{cls.ROTATED_PREFIX}:{token_hash}"
 
     @classmethod
-    async def issue_token(cls, user_id: str) -> str:
+    @staticmethod
+    def _encode_session(*, mfa: bool, amr: list[str] | tuple[str, ...] | None, auth_time: int | None) -> str:
+        return json.dumps(
+            {
+                "mfa": bool(mfa),
+                "amr": list(amr or []),
+                "auth_time": auth_time,
+            },
+            separators=(",", ":"),
+        )
+
+    @staticmethod
+    def _decode_session(user_id: str, raw: str | None) -> RefreshSession:
+        if not raw or raw == "1":
+            return RefreshSession(user_id=user_id)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return RefreshSession(user_id=user_id)
+        amr = data.get("amr")
+        if not isinstance(amr, list):
+            amr = []
+        return RefreshSession(
+            user_id=user_id,
+            mfa=bool(data.get("mfa", False)),
+            amr=tuple(str(value) for value in amr),
+            auth_time=data.get("auth_time") if isinstance(data.get("auth_time"), int) else None,
+        )
+
+    @classmethod
+    async def issue_token(
+        cls,
+        user_id: str,
+        *,
+        mfa: bool = False,
+        amr: list[str] | tuple[str, ...] | None = None,
+        auth_time: int | None = None,
+    ) -> str:
         token = secrets.token_urlsafe(cls.TOKEN_BYTES)
         token_hash = cls._token_hash(token)
         ttl = cls._ttl_seconds()
         client = await cls.get_client()
+        payload = cls._encode_session(mfa=mfa, amr=amr, auth_time=auth_time)
 
-        await client.setex(cls._session_key(user_id, token_hash), ttl, "1")
+        await client.setex(cls._session_key(user_id, token_hash), ttl, payload)
         await client.setex(cls._lookup_key(token_hash), ttl, user_id)
         await client.sadd(cls._index_key(user_id), token_hash)
         await client.expire(cls._index_key(user_id), ttl)
@@ -121,6 +169,11 @@ class RefreshTokenService:
 
     @classmethod
     async def get_user_id_for_token(cls, token: str) -> str | None:
+        session = await cls.get_session_for_token(token)
+        return session.user_id if session else None
+
+    @classmethod
+    async def get_session_for_token(cls, token: str) -> RefreshSession | None:
         token_hash = cls._token_hash(token)
         client = await cls.get_client()
 
@@ -132,16 +185,25 @@ class RefreshTokenService:
         if not user_id:
             return None
 
-        exists = await client.exists(cls._session_key(user_id, token_hash))
-        if not exists:
+        session_key = cls._session_key(user_id, token_hash)
+        raw_session = await client.get(session_key)
+        if not raw_session:
             await client.delete(cls._lookup_key(token_hash))
             await client.srem(cls._index_key(user_id), token_hash)
             return None
 
-        return user_id
+        return cls._decode_session(user_id, raw_session)
 
     @classmethod
-    async def rotate_token(cls, user_id: str, token: str) -> str | None:
+    async def rotate_token(
+        cls,
+        user_id: str,
+        token: str,
+        *,
+        mfa: bool | None = None,
+        amr: list[str] | tuple[str, ...] | None = None,
+        auth_time: int | None = None,
+    ) -> str | None:
         old_hash = cls._token_hash(token)
         client = await cls.get_client()
 
@@ -150,8 +212,10 @@ class RefreshTokenService:
         # invokes rotate_token directly.
         await cls._detect_replay_or_none(client, old_hash)
 
-        if not await client.exists(cls._session_key(user_id, old_hash)):
+        old_session_raw = await client.get(cls._session_key(user_id, old_hash))
+        if not old_session_raw:
             return None
+        old_session = cls._decode_session(user_id, old_session_raw)
 
         await client.delete(
             cls._session_key(user_id, old_hash),
@@ -161,7 +225,12 @@ class RefreshTokenService:
         # Remember the rotated hash so any later replay trips detection.
         await client.setex(cls._rotated_key(old_hash), cls.ROTATED_TTL_SECONDS, user_id)
 
-        return await cls.issue_token(user_id)
+        return await cls.issue_token(
+            user_id,
+            mfa=old_session.mfa if mfa is None else mfa,
+            amr=old_session.amr if amr is None else amr,
+            auth_time=old_session.auth_time if auth_time is None else auth_time,
+        )
 
     @classmethod
     async def revoke_token(cls, token: str) -> str | None:

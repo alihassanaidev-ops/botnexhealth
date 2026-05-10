@@ -32,6 +32,7 @@ from src.app.models.user import User, UserRole
 from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.services.audit import log_audit_background
+from src.app.services.sms_privacy import safe_error_summary
 from src.app.services.sync_service import SyncService
 
 logger = logging.getLogger(__name__)
@@ -783,8 +784,14 @@ async def list_availabilities(
         try:
             raw_items = await adapter.list_availabilities(**extra)
         except Exception as e:
-            logger.error(f"Failed to fetch availabilities from PMS: {e}")
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Failed to fetch availabilities: {e}")
+            logger.error(
+                "Failed to fetch availabilities from PMS: %s",
+                safe_error_summary(e),
+            )
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                "Failed to fetch availabilities",
+            )
 
         # Map raw PMS response to the response schema
         results: list[CachedAvailabilityResponse] = []
