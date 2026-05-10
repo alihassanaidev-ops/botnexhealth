@@ -31,10 +31,42 @@ interface AuthSessionResponse {
     token_type: string;
 }
 
+/**
+ * MFA-bound login result — see mfa-api.ts. We keep the shape inline here
+ * to avoid pulling the API module into the context's import graph just
+ * for a type.
+ */
+interface MfaChallengeResult {
+    status: "mfa_required" | "mfa_setup_required";
+    mfa_ticket: string;
+    methods: string[];
+    setup_methods: string[];
+    role: string;
+    email: string;
+}
+
+export type SignInResult =
+    | { kind: "authenticated" }
+    | { kind: "mfa_challenge"; challenge: MfaChallengeResult };
+
 interface AuthContextType {
     user: User | null;
     isLoading: boolean;
-    signIn: (email: string, password: string) => Promise<void>;
+    /**
+     * Initial password step. Returns the resolved outcome so callers can
+     * decide whether to navigate directly (`authenticated`) or render an
+     * MFA setup/verify screen (`mfa_challenge`). Errors are toasted and
+     * thrown so the form can surface them.
+     */
+    signIn: (email: string, password: string) => Promise<SignInResult>;
+    /**
+     * Apply a session returned by an MFA verification endpoint. Same
+     * effect as the post-/login path: store access token, fetch profile,
+     * navigate to the post-login destination.
+     */
+    completeAuthSession: (
+        session: AuthSessionResponse & { recovery_codes?: string[] | null },
+    ) => Promise<void>;
     requestPasswordReset: (email: string) => Promise<void>;
     signOut: () => Promise<void>;
     updatePassword: (password: string, token: string, flow: PasswordFlow) => Promise<void>;
@@ -252,9 +284,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, [clearSessionState, fetchUserProfile, location.pathname, navigate]);
 
     const signIn = useCallback(
-        async (email: string, password: string) => {
+        async (email: string, password: string): Promise<SignInResult> => {
             try {
-                const { data } = await axios.post<AuthSessionResponse>(
+                const { data } = await axios.post<
+                    AuthSessionResponse | MfaChallengeResult
+                >(
                     `${api.defaults.baseURL}/auth/login`,
                     { email, password },
                     {
@@ -264,13 +298,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     },
                 );
 
-                await applyAuthSession(data);
+                if (
+                    "status" in data &&
+                    (data.status === "mfa_required" || data.status === "mfa_setup_required")
+                ) {
+                    return { kind: "mfa_challenge", challenge: data as MfaChallengeResult };
+                }
+
+                await applyAuthSession(data as AuthSessionResponse);
                 navigateAfterSignIn();
+                return { kind: "authenticated" };
             } catch (error) {
                 const message = getErrorMessage(error, "Login failed");
                 toast.error(message);
                 throw error;
             }
+        },
+        [applyAuthSession, navigateAfterSignIn],
+    );
+
+    const completeAuthSession = useCallback(
+        async (
+            session: AuthSessionResponse & { recovery_codes?: string[] | null },
+        ): Promise<void> => {
+            await applyAuthSession(session);
+            navigateAfterSignIn();
         },
         [applyAuthSession, navigateAfterSignIn],
     );
@@ -333,6 +385,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 user,
                 isLoading,
                 signIn,
+                completeAuthSession,
                 requestPasswordReset,
                 signOut,
                 updatePassword,
