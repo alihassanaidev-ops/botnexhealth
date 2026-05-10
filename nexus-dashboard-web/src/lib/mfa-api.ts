@@ -16,6 +16,12 @@
  */
 
 import axios from "axios"
+import type {
+    PublicKeyCredentialCreationOptionsJSON,
+    PublicKeyCredentialRequestOptionsJSON,
+    RegistrationResponseJSON,
+    AuthenticationResponseJSON,
+} from "@simplewebauthn/browser"
 import api from "@/lib/api"
 
 const baseURL = api.defaults.baseURL
@@ -84,6 +90,70 @@ export async function verifyRecoveryCode(mfaTicket: string, code: string): Promi
     const { data } = await axios.post<AuthSession>(
         `${baseURL}/auth/mfa/recovery-code/verify`,
         { mfa_ticket: mfaTicket, code },
+        { headers: { "Content-Type": "application/json" }, withCredentials: true },
+    )
+    return data
+}
+
+// ── WebAuthn (passkeys) ──────────────────────────────────────────────────
+//
+// Backend builds py_webauthn options and serialises them via
+// ``options_to_json``, which produces JSON already shaped to the
+// @simplewebauthn/browser ``*JSON`` types. We type the responses with
+// those upstream types directly so the call sites can pass the options
+// straight into ``startRegistration`` / ``startAuthentication`` without
+// any cast.
+
+export interface WebAuthnRegistrationOptionsResponse {
+    options: PublicKeyCredentialCreationOptionsJSON
+}
+
+export interface WebAuthnAuthenticationOptionsResponse {
+    options: PublicKeyCredentialRequestOptionsJSON
+}
+
+export async function startWebauthnRegistration(
+    mfaTicket: string,
+): Promise<WebAuthnRegistrationOptionsResponse> {
+    const { data } = await axios.post<WebAuthnRegistrationOptionsResponse>(
+        `${baseURL}/auth/mfa/webauthn/register/options`,
+        { mfa_ticket: mfaTicket },
+        { headers: { "Content-Type": "application/json" }, withCredentials: true },
+    )
+    return data
+}
+
+export async function verifyWebauthnRegistration(
+    mfaTicket: string,
+    credential: RegistrationResponseJSON,
+    deviceLabel?: string,
+): Promise<AuthSession> {
+    const { data } = await axios.post<AuthSession>(
+        `${baseURL}/auth/mfa/webauthn/register/verify`,
+        { mfa_ticket: mfaTicket, credential, device_label: deviceLabel ?? null },
+        { headers: { "Content-Type": "application/json" }, withCredentials: true },
+    )
+    return data
+}
+
+export async function startWebauthnAuthentication(
+    mfaTicket: string,
+): Promise<WebAuthnAuthenticationOptionsResponse> {
+    const { data } = await axios.post<WebAuthnAuthenticationOptionsResponse>(
+        `${baseURL}/auth/mfa/webauthn/authenticate/options`,
+        { mfa_ticket: mfaTicket },
+        { headers: { "Content-Type": "application/json" }, withCredentials: true },
+    )
+    return data
+}
+
+export async function verifyWebauthnAuthentication(
+    mfaTicket: string,
+    credential: AuthenticationResponseJSON,
+): Promise<AuthSession> {
+    const { data } = await axios.post<AuthSession>(
+        `${baseURL}/auth/mfa/webauthn/authenticate/verify`,
+        { mfa_ticket: mfaTicket, credential },
         { headers: { "Content-Type": "application/json" }, withCredentials: true },
     )
     return data
