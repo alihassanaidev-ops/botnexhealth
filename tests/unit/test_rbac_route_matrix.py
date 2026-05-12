@@ -74,6 +74,24 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/auth/mfa/webauthn",
         "DELETE /api/auth/mfa/webauthn/{credential_pk}",
         "POST /api/auth/mfa/totp/disable",
+        # Step-up flow — gated by an authenticated session plus an
+        # elevated MFA ticket in the body. The active-user dependency
+        # is the outer boundary; the inner step-up consume is checked
+        # by the dedicated tests in test_mfa_step_up.py.
+        "POST /api/auth/mfa/step-up/challenge",
+        "POST /api/auth/mfa/step-up/totp/verify",
+        "POST /api/auth/mfa/step-up/webauthn/authenticate/options",
+        "POST /api/auth/mfa/step-up/webauthn/authenticate/verify",
+        "POST /api/auth/mfa/step-up/recovery-code/verify",
+        # Add-factor flow (Security settings): step-up gates the
+        # /options endpoints; the /verify endpoints consume the
+        # enrollment ticket the /options endpoint returned. RBAC outer
+        # boundary is "must be authenticated"; the step-up validation
+        # happens inside the handler.
+        "POST /api/auth/mfa/factors/webauthn/register/options",
+        "POST /api/auth/mfa/factors/webauthn/register/verify",
+        "POST /api/auth/mfa/factors/totp/setup/options",
+        "POST /api/auth/mfa/factors/totp/setup/verify",
         "GET /api/institution/setup/overview",
         "GET /api/institution/setup/locations",
         "GET /api/institution/setup/providers",
@@ -227,6 +245,13 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/sms/logs/{sms_id}",
         "POST /api/institution/sms/logs/{sms_id}/reveal-phone",
         "POST /api/institution/sms/logs/{sms_id}/reveal-body",
+    ),
+    SUPER_ADMIN_STRICT: (
+        # Break-glass MFA reset — strictly SUPER_ADMIN, not the broader
+        # ``get_current_admin`` boundary used elsewhere. Resetting another
+        # user's MFA is the rare operation where the
+        # institution-admin-as-acceptable-admin shortcut does not apply.
+        "POST /api/auth/admin/users/{user_id}/mfa/reset",
     ),
 }
 

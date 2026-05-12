@@ -67,6 +67,39 @@ class MfaTicket:
     challenge: str | None = None
     challenge_type: str | None = None
     pending_totp_secret: str | None = None
+    # `elevated=True` on a `purpose='step_up'` ticket marks that the user
+    # has freshly re-verified their MFA factor and the ticket may be
+    # presented to a sensitive factor-management endpoint exactly once.
+    # See MfaTicketService.consume_step_up.
+    elevated: bool = False
+
+
+# Purposes are stamped on a ticket at creation and locked thereafter. They
+# fence each MFA-protected flow off from the others — a step-up ticket
+# (proves fresh verification for a sensitive operation) must not be
+# usable to log in, and a login ticket must not be usable to authorise a
+# passkey deletion.
+MFA_PURPOSE_LOGIN = "login"
+MFA_PURPOSE_RESET_PASSWORD = "reset_password"
+MFA_PURPOSE_SET_PASSWORD = "set_password"
+MFA_PURPOSE_STEP_UP = "step_up"
+
+# Add-factor enrollment tickets. After a step-up ticket is consumed,
+# the add-factor endpoints issue one of these to carry the in-progress
+# WebAuthn challenge (or pending TOTP secret) across the two HTTP round
+# trips needed to enrol a new factor. Short TTL (5 min) and single-use
+# at the verify call; the user is already authenticated and step-up'd
+# so leaking one only enables a credential the user themselves was
+# about to register.
+MFA_PURPOSE_ADD_FACTOR_WEBAUTHN = "add_factor_webauthn"
+MFA_PURPOSE_ADD_FACTOR_TOTP = "add_factor_totp"
+
+ADD_FACTOR_TICKET_TTL_SECONDS = 5 * 60
+
+# Step-up tickets shorten the freshness window once verified; the
+# elevated form is single-use and short-lived to bound replay risk after
+# the user finishes verifying.
+STEP_UP_ELEVATED_TTL_SECONDS = 90
 
 
 @dataclass(frozen=True)
@@ -128,6 +161,7 @@ class MfaTicketService:
             challenge=data.get("challenge"),
             challenge_type=data.get("challenge_type"),
             pending_totp_secret=data.get("pending_totp_secret"),
+            elevated=bool(data.get("elevated", False)),
         )
 
     @classmethod
@@ -141,9 +175,20 @@ class MfaTicketService:
         audit_request_id: str,
         revoke_existing: bool = False,
         post_password_action: str | None = None,
+        ttl_seconds: int | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> str:
+        """Create a short-lived MFA ticket.
+
+        ``ttl_seconds`` defaults to TTL_SECONDS (10 min — the long
+        login-flow window). Callers issuing tickets for tighter flows
+        (add-factor enrollment, step-up elevation) can pass a shorter
+        TTL. ``extra`` carries flow-specific fields (e.g. a pending
+        WebAuthn challenge or TOTP secret) that ``_ticket_from_data``
+        reads back into the typed MfaTicket.
+        """
         token = secrets.token_urlsafe(32)
-        payload = {
+        payload: dict[str, Any] = {
             "user_id": str(user.id),
             "purpose": purpose,
             "role": user.role,
@@ -154,9 +199,15 @@ class MfaTicketService:
             "post_password_action": post_password_action,
             **cls._request_hashes(client_ip=client_ip, user_agent=user_agent),
         }
+        if extra:
+            payload.update(extra)
         try:
             client = await RefreshTokenService.get_client()
-            await client.setex(cls._key(token), cls.TTL_SECONDS, json.dumps(payload))
+            await client.setex(
+                cls._key(token),
+                ttl_seconds if ttl_seconds is not None else cls.TTL_SECONDS,
+                json.dumps(payload),
+            )
         except Exception as exc:  # noqa: BLE001
             raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
         return token
@@ -215,6 +266,139 @@ class MfaTicketService:
         except Exception as exc:  # noqa: BLE001
             raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
 
+    @classmethod
+    async def mark_step_up_elevated(cls, ticket: MfaTicket) -> MfaTicket:
+        """Mark a step-up ticket as freshly verified.
+
+        Called from the step-up verify endpoints after the user proves a
+        factor. The same ticket token is then accepted exactly once by a
+        factor-management endpoint within ``STEP_UP_ELEVATED_TTL_SECONDS``.
+        """
+        if ticket.purpose != MFA_PURPOSE_STEP_UP:
+            raise MfaTicketInvalid("Only step-up tickets can be elevated")
+        try:
+            client = await RefreshTokenService.get_client()
+            raw = await client.get(cls._key(ticket.token))
+            if not raw:
+                raise MfaTicketInvalid("Invalid or expired MFA ticket")
+            data = json.loads(raw)
+            data["elevated"] = True
+            await client.setex(
+                cls._key(ticket.token),
+                STEP_UP_ELEVATED_TTL_SECONDS,
+                json.dumps(data),
+            )
+        except MfaError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
+        return cls._ticket_from_data(ticket.token, data)
+
+    @classmethod
+    async def _atomic_take(cls, token: str) -> dict[str, Any]:
+        """Atomic GETDEL on the ticket's Redis key.
+
+        Returns the decoded payload exactly once across all callers —
+        the second observer sees a deleted key and raises
+        MfaTicketInvalid. All subsequent validation happens against the
+        in-memory dict, so even a bad-validation request still consumes
+        the ticket. Single-use semantics for every flow that uses this
+        helper.
+        """
+        try:
+            client = await RefreshTokenService.get_client()
+            raw = await client.getdel(cls._key(token))
+        except Exception as exc:  # noqa: BLE001
+            raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
+        if not raw:
+            raise MfaTicketInvalid("Invalid or expired MFA ticket")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise MfaTicketInvalid("Invalid MFA ticket") from exc
+
+    @classmethod
+    async def consume_enrollment_ticket(
+        cls,
+        token: str,
+        *,
+        user_id: str,
+        expected_purpose: str,
+        client_ip: str | None,
+        user_agent: str | None,
+    ) -> MfaTicket:
+        """Atomically validate and consume an add-factor enrollment ticket.
+
+        Same Redis pattern as ``consume_step_up`` but enforces the
+        add-factor purpose family rather than ``step_up``. Used by
+        ``/auth/mfa/factors/{webauthn,totp}/*/verify`` to ensure the
+        challenge-bound enrollment ticket issued by the matching
+        ``/options`` endpoint can only be presented once.
+        """
+        data = await cls._atomic_take(token)
+        expected_hashes = cls._request_hashes(client_ip=client_ip, user_agent=user_agent)
+        if (
+            data.get("client_ip_hash") != expected_hashes["client_ip_hash"]
+            or data.get("user_agent_hash") != expected_hashes["user_agent_hash"]
+        ):
+            raise MfaTicketInvalid("MFA ticket does not match this request")
+        if data.get("purpose") != expected_purpose:
+            raise MfaTicketInvalid("MFA ticket has the wrong purpose")
+        if data.get("user_id") != str(user_id):
+            raise MfaTicketInvalid("Enrollment ticket does not match the current user")
+        return cls._ticket_from_data(token, data)
+
+    @classmethod
+    async def consume_step_up(
+        cls,
+        token: str,
+        *,
+        user_id: str,
+        client_ip: str | None,
+        user_agent: str | None,
+    ) -> MfaTicket:
+        """Atomically validate-and-consume a step-up ticket.
+
+        Used at the entry point of every factor-management endpoint. The
+        ticket must be:
+
+          - bound to ``user_id`` (the currently-authenticated user),
+          - issued with ``purpose=MFA_PURPOSE_STEP_UP``,
+          - already through the step-up verify flow (``elevated=True``),
+          - still within its TTL,
+          - matching the request's IP+UA fingerprint.
+
+        Atomicity matters: a naive ``GET`` + Python check + ``DEL`` lets
+        two concurrent destructive requests both read the elevated
+        ticket before either ``DEL`` lands, and both proceed. Redis
+        ``GETDEL`` (server-side) returns the value and deletes the key
+        in a single round-trip, so exactly one caller observes a
+        non-nil payload. We fail-closed on every other branch: a
+        ``GETDEL`` that returns a payload but fails downstream
+        validation still consumes the ticket — the user retries the
+        flow from the challenge step, which is the right UX for a
+        suspected-tampering case.
+        """
+        data = await cls._atomic_take(token)
+
+        # All subsequent validation happens on the in-memory payload —
+        # the Redis side already proved exclusivity by deleting the
+        # key. Each predicate fails closed; we never re-write the
+        # ticket on failure.
+        expected_hashes = cls._request_hashes(client_ip=client_ip, user_agent=user_agent)
+        if (
+            data.get("client_ip_hash") != expected_hashes["client_ip_hash"]
+            or data.get("user_agent_hash") != expected_hashes["user_agent_hash"]
+        ):
+            raise MfaTicketInvalid("MFA ticket does not match this request")
+        if data.get("purpose") != MFA_PURPOSE_STEP_UP:
+            raise MfaTicketInvalid("MFA ticket has the wrong purpose")
+        if data.get("user_id") != str(user_id):
+            raise MfaTicketInvalid("Step-up ticket does not match the current user")
+        if not data.get("elevated"):
+            raise MfaTicketInvalid("Step-up verification has not been completed")
+        return cls._ticket_from_data(token, data)
+
 
 class MfaService:
     RECOVERY_CODE_COUNT = 10
@@ -254,6 +438,16 @@ class MfaService:
         user: User,
     ) -> tuple[dict[str, Any], str]:
         credentials = await self.webauthn_credentials(str(user.id))
+        # UV strictness is config-driven so deployments with older
+        # non-UV-capable security keys can opt down. Default is
+        # REQUIRED — the authenticator must prove inherence (biometric
+        # or PIN) before signing, which collapses the "passkey is a
+        # full factor" promise back to "something you have" if relaxed.
+        uv_requirement = (
+            UserVerificationRequirement.REQUIRED
+            if settings.webauthn_user_verification_strict
+            else UserVerificationRequirement.PREFERRED
+        )
         options = generate_registration_options(
             rp_id=settings.effective_webauthn_rp_id,
             rp_name=settings.webauthn_rp_name,
@@ -263,7 +457,7 @@ class MfaService:
             attestation=AttestationConveyancePreference.NONE,
             authenticator_selection=AuthenticatorSelectionCriteria(
                 resident_key=ResidentKeyRequirement.PREFERRED,
-                user_verification=UserVerificationRequirement.PREFERRED,
+                user_verification=uv_requirement,
             ),
             exclude_credentials=[
                 PublicKeyCredentialDescriptor(id=base64url_to_bytes(credential.credential_id))
@@ -286,7 +480,7 @@ class MfaService:
                 expected_challenge=base64url_to_bytes(expected_challenge),
                 expected_rp_id=settings.effective_webauthn_rp_id,
                 expected_origin=settings.effective_webauthn_allowed_origins,
-                require_user_verification=False,
+                require_user_verification=settings.webauthn_user_verification_strict,
             )
         except Exception as exc:  # noqa: BLE001
             raise MfaVerificationFailed("Passkey registration failed") from exc
@@ -336,10 +530,21 @@ class MfaService:
                     transports=transports,
                 )
             )
+        # Pair the authentication-side UV setting with the same config
+        # the registration path uses so a key enrolled with UV must
+        # also use UV to authenticate (and vice versa for the relaxed
+        # mode). Mixing strict registration with relaxed authentication
+        # would let a stolen security key authenticate without UV
+        # despite the user thinking they enrolled a "real" passkey.
+        uv_requirement = (
+            UserVerificationRequirement.REQUIRED
+            if settings.webauthn_user_verification_strict
+            else UserVerificationRequirement.PREFERRED
+        )
         options = generate_authentication_options(
             rp_id=settings.effective_webauthn_rp_id,
             allow_credentials=descriptors,
-            user_verification=UserVerificationRequirement.PREFERRED,
+            user_verification=uv_requirement,
         )
         return json.loads(options_to_json(options)), bytes_to_base64url(options.challenge)
 
@@ -368,7 +573,7 @@ class MfaService:
                 expected_origin=settings.effective_webauthn_allowed_origins,
                 credential_public_key=base64url_to_bytes(row.public_key),
                 credential_current_sign_count=row.sign_count,
-                require_user_verification=False,
+                require_user_verification=settings.webauthn_user_verification_strict,
             )
         except Exception as exc:  # noqa: BLE001
             raise MfaVerificationFailed("Passkey verification failed") from exc
@@ -534,3 +739,44 @@ class MfaService:
         await self.session.delete(row)
         await self.session.flush()
         return True
+
+    async def wipe_all_factors(self, *, user_id: str) -> dict[str, int]:
+        """Break-glass: remove every MFA factor for a user.
+
+        Returns a per-factor counter so the audit row can record exactly
+        what was destroyed. Intended for super-admin recovery when a
+        user has lost every authenticator AND every recovery code —
+        otherwise the user uses the normal Security UI which only
+        removes one factor at a time and demands step-up.
+        """
+        webauthn_count = await self.session.scalar(
+            select(func.count(WebAuthnCredential.id)).where(
+                WebAuthnCredential.user_id == user_id,
+            )
+        )
+        totp_count = await self.session.scalar(
+            select(func.count(UserTotpFactor.id)).where(
+                UserTotpFactor.user_id == user_id,
+            )
+        )
+        recovery_count = await self.session.scalar(
+            select(func.count(MfaRecoveryCode.id)).where(
+                MfaRecoveryCode.user_id == user_id,
+                MfaRecoveryCode.used_at.is_(None),
+            )
+        )
+        await self.session.execute(
+            delete(WebAuthnCredential).where(WebAuthnCredential.user_id == user_id)
+        )
+        await self.session.execute(
+            delete(UserTotpFactor).where(UserTotpFactor.user_id == user_id)
+        )
+        await self.session.execute(
+            delete(MfaRecoveryCode).where(MfaRecoveryCode.user_id == user_id)
+        )
+        await self.session.flush()
+        return {
+            "webauthn": int(webauthn_count or 0),
+            "totp": int(totp_count or 0),
+            "recovery_codes": int(recovery_count or 0),
+        }

@@ -12,7 +12,7 @@ from jose import JWTError
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from src.app.api.deps import get_current_active_user, get_current_admin
+from src.app.api.deps import get_current_active_user, get_current_admin, get_current_super_admin
 from src.app.config import settings
 from src.app.database import RlsContext, get_db_session, use_rls_context
 from src.app.models.user import User, InviteStatus, UserRole
@@ -25,6 +25,14 @@ from src.app.services.refresh_token_service import (
     RefreshTokenService,
 )
 from src.app.services.mfa import (
+    ADD_FACTOR_TICKET_TTL_SECONDS,
+    MFA_PURPOSE_ADD_FACTOR_TOTP,
+    MFA_PURPOSE_ADD_FACTOR_WEBAUTHN,
+    MFA_PURPOSE_LOGIN,
+    MFA_PURPOSE_RESET_PASSWORD,
+    MFA_PURPOSE_SET_PASSWORD,
+    MFA_PURPOSE_STEP_UP,
+    STEP_UP_ELEVATED_TTL_SECONDS,
     MfaError,
     MfaService,
     MfaStatus,
@@ -133,6 +141,102 @@ class WebAuthnCredentialListResponse(BaseModel):
 
 class RecoveryCodesResponse(BaseModel):
     recovery_codes: list[str]
+
+
+class StepUpChallengeResponse(BaseModel):
+    """Returned by ``POST /auth/mfa/step-up/challenge`` for an
+    authenticated user about to perform a sensitive factor-management
+    operation. Same shape as the login MfaChallengeResponse so the
+    frontend can render the same verification UI."""
+
+    status: Literal["step_up_required"] = "step_up_required"
+    mfa_ticket: str
+    methods: list[str] = []
+    expires_in_seconds: int = MfaTicketService.TTL_SECONDS
+    role: str
+    email: str
+
+
+class StepUpElevatedResponse(BaseModel):
+    """Returned by the step-up verify endpoints when the user has
+    successfully re-proven their factor. The same ``mfa_ticket`` is now
+    elevated and may be presented to a factor-management endpoint once
+    within ``expires_in_seconds``."""
+
+    status: Literal["step_up_complete"] = "step_up_complete"
+    mfa_ticket: str
+    expires_in_seconds: int = STEP_UP_ELEVATED_TTL_SECONDS
+
+
+class StepUpRequest(MfaTicketRequest):
+    """Body type for factor-management endpoints: the elevated step-up
+    ticket the user obtained from ``POST /auth/mfa/step-up/*/verify``."""
+
+    pass
+
+
+class FactorRemoveRequest(StepUpRequest):
+    pass
+
+
+class TotpDisableRequest(StepUpRequest):
+    pass
+
+
+class RecoveryCodesRegenerateRequest(StepUpRequest):
+    pass
+
+
+# Add-factor (enroll an additional passkey / authenticator while already
+# signed in). The flow takes two HTTP round trips, so the /options
+# endpoint returns an enrollment ticket that the matching /verify
+# endpoint consumes.
+
+
+class AddFactorOptionsRequest(BaseModel):
+    """Body for the /factors/*/options endpoints. ``mfa_ticket`` here is
+    an elevated step-up ticket; it's consumed atomically and traded for
+    an enrollment ticket bound to the WebAuthn challenge or TOTP secret.
+    """
+
+    mfa_ticket: str
+
+
+class AddPasskeyOptionsResponse(BaseModel):
+    enrollment_ticket: str
+    options: dict[str, Any]
+    expires_in_seconds: int = ADD_FACTOR_TICKET_TTL_SECONDS
+
+
+class AddPasskeyVerifyRequest(BaseModel):
+    enrollment_ticket: str
+    credential: dict[str, Any]
+    device_label: str | None = None
+
+
+class AddPasskeyResponse(BaseModel):
+    """Summary of the newly-registered credential — no AuthSession,
+    since the caller already has one."""
+
+    status: Literal["registered"] = "registered"
+    credential: WebAuthnCredentialSummary
+
+
+class AddTotpOptionsResponse(BaseModel):
+    enrollment_ticket: str
+    secret: str
+    provisioning_uri: str
+    expires_in_seconds: int = ADD_FACTOR_TICKET_TTL_SECONDS
+
+
+class AddTotpVerifyRequest(BaseModel):
+    enrollment_ticket: str
+    code: str
+
+
+class AddTotpResponse(BaseModel):
+    status: Literal["enrolled"] = "enrolled"
+    totp_enabled: Literal[True] = True
 
 
 class LoginRequest(BaseModel):
@@ -332,6 +436,24 @@ async def _create_mfa_ticket_response(
     except MfaError as exc:
         raise _mfa_exception_to_http(exc) from exc
     return _mfa_response(user=user, ticket=ticket, mfa_status=mfa_status)
+
+
+async def _load_mfa_status_for_user(user: User) -> MfaStatus:
+    """Read MFA factor state for a freshly-resolved user.
+
+    Opens a dedicated session under the ``auth_mfa`` RLS context with
+    ``user_id`` set to the resolved user's id, so the MFA-table RLS
+    policy can enforce ``mfa_table.user_id = app_rls_user_id()`` —
+    closing the previous defence-in-depth gap where the
+    ``auth_email`` / ``auth_reset_token`` / ``auth_invite_token``
+    lookup contexts were granted unscoped SELECT access to the entire
+    MFA tables. Application code already filtered by user_id, but a
+    query bug or SQL injection inside a lookup context could have
+    leaked another user's MFA state. With this split, RLS itself
+    binds the read to the resolved user.
+    """
+    async with _auth_db_session(user_id=str(user.id)) as session:
+        return await MfaService(session).status_for_user(str(user.id))
 
 
 async def _ticket_from_request(
@@ -588,6 +710,16 @@ async def _complete_mfa_auth(
     recovery_codes: list[str] | None = None,
     enrolled: bool = False,
 ) -> AuthSession:
+    # Defence in depth: a step-up ticket must never be redeemed for a new
+    # session. It only confirms that the *already-authenticated* user just
+    # re-verified for a sensitive operation. The dedicated step-up verify
+    # endpoints handle the elevation flow; if a step-up ticket reached
+    # this helper, the caller routed it incorrectly.
+    if ticket.purpose == MFA_PURPOSE_STEP_UP:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Step-up MFA tickets cannot be used to start a session",
+        )
     client_ip = _client_ip(request)
     await log_audit(
         actor=AuditActor.ADMIN,
@@ -790,14 +922,17 @@ async def login(request: Request, response: Response, data: LoginRequest) -> Aut
             user.password_hash = PasswordService.hash_password(data.password)
             user.password_set_at = datetime.now(timezone.utc)
 
-        mfa_status = await MfaService(session).status_for_user(str(user.id))
-        return await _create_mfa_ticket_response(
-            request=request,
-            user=user,
-            mfa_status=mfa_status,
-            audit_request_id=audit_request_id,
-            purpose="login",
-        )
+    # Exit the lookup session before reading MFA state so the MFA-table
+    # RLS policy runs under a user-bound context (auth_mfa with
+    # user_id = user.id), not the broader auth_email lookup context.
+    mfa_status = await _load_mfa_status_for_user(user)
+    return await _create_mfa_ticket_response(
+        request=request,
+        user=user,
+        mfa_status=mfa_status,
+        audit_request_id=audit_request_id,
+        purpose=MFA_PURPOSE_LOGIN,
+    )
 
 
 @router.post("/token", response_model=AuthResult)
@@ -941,16 +1076,18 @@ async def reset_password(
             user_id=_audit_user_id(user),
             location_id=_audit_location_id(user),
         )
-        mfa_status = await MfaService(session).status_for_user(str(user.id))
-        return await _create_mfa_ticket_response(
-            request=request,
-            user=user,
-            mfa_status=mfa_status,
-            audit_request_id=str(uuid4()),
-            purpose="reset_password",
-            revoke_existing=True,
-            post_password_action="reset_password",
-        )
+    # Exit auth_reset_token session before reading MFA state; the
+    # tighter MFA-table RLS policy requires a user-bound context.
+    mfa_status = await _load_mfa_status_for_user(user)
+    return await _create_mfa_ticket_response(
+        request=request,
+        user=user,
+        mfa_status=mfa_status,
+        audit_request_id=str(uuid4()),
+        purpose=MFA_PURPOSE_RESET_PASSWORD,
+        revoke_existing=True,
+        post_password_action="reset_password",
+    )
 
 
 @router.post("/set-password", response_model=AuthResult)
@@ -1005,16 +1142,17 @@ async def set_password(
             user_id=_audit_user_id(user),
             location_id=_audit_location_id(user),
         )
-        mfa_status = await MfaService(session).status_for_user(str(user.id))
-        return await _create_mfa_ticket_response(
-            request=request,
-            user=user,
-            mfa_status=mfa_status,
-            audit_request_id=str(uuid4()),
-            purpose="set_password",
-            revoke_existing=True,
-            post_password_action="set_password",
-        )
+    # Exit auth_invite_token session before reading MFA state.
+    mfa_status = await _load_mfa_status_for_user(user)
+    return await _create_mfa_ticket_response(
+        request=request,
+        user=user,
+        mfa_status=mfa_status,
+        audit_request_id=str(uuid4()),
+        purpose=MFA_PURPOSE_SET_PASSWORD,
+        revoke_existing=True,
+        post_password_action="set_password",
+    )
 
 
 @router.post("/mfa/webauthn/register/options", response_model=WebAuthnOptionsResponse)
@@ -1355,12 +1493,568 @@ async def mfa_status(
     )
 
 
+# =============================================================================
+# Step-up MFA — required for any sensitive factor-management operation.
+#
+# The pattern: an already-authenticated user calls /mfa/step-up/challenge,
+# completes one of /mfa/step-up/{totp,webauthn,recovery-code}/verify, then
+# presents the now-elevated mfa_ticket to the factor-management endpoint
+# below. Step-up tickets are short-lived (~10 min unverified, 90 s after
+# elevation), bound to client IP+UA, single-use, and rejected outright
+# by the login verify endpoints (_complete_mfa_auth guard) so they can
+# never start a new session.
+# =============================================================================
+
+
+async def _require_step_up(
+    request: Request,
+    *,
+    ticket_token: str,
+    current_user: User,
+) -> MfaTicket:
+    """Consume a step-up ticket at the top of a sensitive endpoint.
+
+    Returns the validated ticket so the audit row can carry its
+    ``audit_request_id`` and tie back to the original step-up
+    challenge.
+    """
+    try:
+        return await MfaTicketService.consume_step_up(
+            ticket_token,
+            user_id=str(current_user.id),
+            client_ip=_client_ip(request),
+            user_agent=_user_agent(request),
+        )
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+
+
+@router.post("/mfa/step-up/challenge", response_model=StepUpChallengeResponse)
+@limiter.limit(RATE_AUTH)
+async def mfa_step_up_challenge(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> StepUpChallengeResponse:
+    """Open a fresh step-up MFA flow for a sensitive operation.
+
+    Requires an enrolled MFA factor: if the user has none we 400 instead
+    of issuing an unverifiable ticket. The factor-management endpoints
+    that consume this ticket only mutate factor state, so demanding a
+    factor here is a no-regression — anyone who could call them already
+    had one.
+    """
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        mfa_status = await MfaService(session).status_for_user(str(current_user.id))
+        if not mfa_status.enrolled_for_role(current_user.role):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No MFA factor is enrolled; nothing to verify",
+            )
+
+    audit_request_id = str(uuid4())
+    try:
+        token = await MfaTicketService.create(
+            user=current_user,
+            purpose=MFA_PURPOSE_STEP_UP,
+            client_ip=_client_ip(request),
+            user_agent=_user_agent(request),
+            audit_request_id=audit_request_id,
+        )
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.MFA_CHALLENGE,
+        target_resource=f"user:{current_user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={"phase": "step_up_challenge"},
+        institution_id=current_user.institution_id,
+        user_id=_audit_user_id(current_user),
+        location_id=_audit_location_id(current_user),
+        request_id=audit_request_id,
+    )
+    return StepUpChallengeResponse(
+        mfa_ticket=token,
+        methods=mfa_status.available_methods_for_role(current_user.role),
+        role=current_user.role,
+        email=current_user.email,
+    )
+
+
+def _require_step_up_ticket_matches_user(ticket: MfaTicket, current_user: User) -> None:
+    """Authorize a step-up ticket against the current session before any
+    factor state is touched.
+
+    Without this gate, the verify endpoints below would call
+    ``MfaService.verify_*`` against ``current_user`` first, and only
+    then notice the ticket was issued for a different user inside
+    ``_elevate_step_up_ticket``. By that point a TOTP timestep has
+    been consumed, a recovery code marked used_at, or a passkey's
+    sign_count + last_used_at bumped — small mutations that
+    nonetheless give an attacker (or a careless caller) the ability
+    to grief another user's factor state.
+
+    The MFA ticket store already binds tickets to the issuer's
+    IP+UA fingerprint, so this only matters when an attacker shares
+    that fingerprint with the victim (NAT, VPN, internal proxy) —
+    but the bar should still be "no state mutation until the
+    request is authorized".
+    """
+    if ticket.user_id != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Step-up ticket does not match the current user",
+        )
+
+
+async def _elevate_step_up_ticket(
+    *,
+    request: Request,
+    ticket: MfaTicket,
+    current_user: User,
+    method: str,
+) -> StepUpElevatedResponse:
+    """Shared tail of every step-up verify endpoint. The user-binding
+    check has already been enforced by the caller via
+    ``_require_step_up_ticket_matches_user`` — this helper only marks
+    the ticket elevated and writes the success audit row.
+    """
+    _require_step_up_ticket_matches_user(ticket, current_user)  # defensive
+    try:
+        elevated = await MfaTicketService.mark_step_up_elevated(ticket)
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.MFA_VERIFY,
+        target_resource=f"user:{current_user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "phase": "step_up_verify",
+            "method": method,
+            "ip_address": _client_ip(request),
+        },
+        institution_id=current_user.institution_id,
+        user_id=_audit_user_id(current_user),
+        location_id=_audit_location_id(current_user),
+        request_id=ticket.audit_request_id,
+    )
+    return StepUpElevatedResponse(mfa_ticket=elevated.token)
+
+
+@router.post("/mfa/step-up/totp/verify", response_model=StepUpElevatedResponse)
+@limiter.limit(RATE_AUTH)
+async def mfa_step_up_totp_verify(
+    request: Request,
+    data: TotpVerifyRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> StepUpElevatedResponse:
+    ticket = await _ticket_from_request(request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP)
+    # Authorize the ticket BEFORE touching factor state — verify_totp
+    # consumes a timestep (writes ``last_accepted_time_step``), which
+    # we must not do on behalf of another user even if the request
+    # would later be rejected as a mismatch.
+    _require_step_up_ticket_matches_user(ticket, current_user)
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        try:
+            await MfaService(session).verify_totp(user_id=str(current_user.id), code=data.code)
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=current_user, ticket=ticket,
+                method="totp", phase="step_up_verify",
+                error=exc,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+    return await _elevate_step_up_ticket(
+        request=request, ticket=ticket, current_user=current_user, method="totp",
+    )
+
+
+@router.post(
+    "/mfa/step-up/webauthn/authenticate/options",
+    response_model=WebAuthnOptionsResponse,
+)
+@limiter.limit(RATE_AUTH)
+async def mfa_step_up_webauthn_options(
+    request: Request,
+    data: MfaTicketRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> WebAuthnOptionsResponse:
+    ticket = await _ticket_from_request(request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP)
+    _require_step_up_ticket_matches_user(ticket, current_user)
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        options, challenge = await MfaService(session).generate_webauthn_authentication_options(
+            user_id=str(current_user.id),
+        )
+        await MfaTicketService.update(
+            ticket,
+            challenge=challenge,
+            challenge_type="step_up_webauthn",
+        )
+    return WebAuthnOptionsResponse(options=options)
+
+
+@router.post("/mfa/step-up/webauthn/authenticate/verify", response_model=StepUpElevatedResponse)
+@limiter.limit(RATE_AUTH)
+async def mfa_step_up_webauthn_verify(
+    request: Request,
+    data: WebAuthnAuthenticationVerifyRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> StepUpElevatedResponse:
+    ticket = await _ticket_from_request(request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP)
+    # Order matters: user-binding check before any state mutation. The
+    # webauthn verify call below bumps ``sign_count`` and
+    # ``last_used_at`` on a credential row, which we must not do
+    # against the current user when the ticket was issued for someone
+    # else.
+    _require_step_up_ticket_matches_user(ticket, current_user)
+    if ticket.challenge_type != "step_up_webauthn" or not ticket.challenge:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passkey step-up challenge is missing or expired",
+        )
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        try:
+            await MfaService(session).verify_webauthn_authentication(
+                user_id=str(current_user.id),
+                credential=data.credential,
+                expected_challenge=ticket.challenge,
+            )
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=current_user, ticket=ticket,
+                method="webauthn", phase="step_up_verify",
+                error=exc,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+    return await _elevate_step_up_ticket(
+        request=request, ticket=ticket, current_user=current_user, method="webauthn",
+    )
+
+
+@router.post("/mfa/step-up/recovery-code/verify", response_model=StepUpElevatedResponse)
+@limiter.limit(RATE_AUTH)
+async def mfa_step_up_recovery_code_verify(
+    request: Request,
+    data: RecoveryCodeVerifyRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> StepUpElevatedResponse:
+    ticket = await _ticket_from_request(request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP)
+    # Recovery codes are the most consumable factor (10 total, single-
+    # use each). Refuse a mismatched ticket before ``use_recovery_code``
+    # marks one ``used_at``.
+    _require_step_up_ticket_matches_user(ticket, current_user)
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        try:
+            await MfaService(session).use_recovery_code(
+                user_id=str(current_user.id), code=data.code,
+            )
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=current_user, ticket=ticket,
+                method="recovery_code", phase="step_up_verify",
+                error=exc,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+    return await _elevate_step_up_ticket(
+        request=request, ticket=ticket, current_user=current_user, method="recovery_code",
+    )
+
+
+# =============================================================================
+# Add additional MFA factor — for the Security settings page where a
+# user with an existing factor wants to register a second passkey,
+# enable TOTP, or swap their authenticator without going through the
+# initial-setup login path. Every endpoint here demands an *elevated*
+# step-up ticket; the existing initial-setup endpoints
+# (/auth/mfa/{webauthn,totp}/{register,setup}/*) intentionally refuse
+# to add a second factor so that flow can't be used to silently
+# escalate a stolen login ticket.
+#
+# Two-step shape per factor:
+#   1. /factors/<type>/.../options  — consumes the step-up ticket,
+#      generates the WebAuthn challenge / TOTP secret, returns a new
+#      short-lived enrollment ticket carrying it.
+#   2. /factors/<type>/.../verify   — consumes the enrollment ticket,
+#      finalises the registration. Idempotent only insofar as the
+#      ticket is single-use.
+# =============================================================================
+
+
+@router.post(
+    "/mfa/factors/webauthn/register/options",
+    response_model=AddPasskeyOptionsResponse,
+)
+@limiter.limit(RATE_AUTH)
+async def mfa_factors_webauthn_register_options(
+    request: Request,
+    data: AddFactorOptionsRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> AddPasskeyOptionsResponse:
+    """Trade an elevated step-up ticket for a passkey enrollment ticket."""
+    # Step-up ticket is consumed here atomically; if anything fails
+    # later the user has to start the step-up flow over (correct UX
+    # for a tampering-suspected case).
+    await _require_step_up(
+        request, ticket_token=data.mfa_ticket, current_user=current_user,
+    )
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        mfa = MfaService(session)
+        options, challenge = await mfa.generate_webauthn_registration_options(
+            user=current_user,
+        )
+
+    try:
+        enrollment_ticket = await MfaTicketService.create(
+            user=current_user,
+            purpose=MFA_PURPOSE_ADD_FACTOR_WEBAUTHN,
+            client_ip=_client_ip(request),
+            user_agent=_user_agent(request),
+            audit_request_id=str(uuid4()),
+            ttl_seconds=ADD_FACTOR_TICKET_TTL_SECONDS,
+            extra={"challenge": challenge, "challenge_type": "add_factor_webauthn"},
+        )
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.MFA_CHALLENGE,
+        target_resource=f"user:{current_user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={"method": "webauthn", "phase": "add_factor_options"},
+        institution_id=current_user.institution_id,
+        user_id=_audit_user_id(current_user),
+        location_id=_audit_location_id(current_user),
+    )
+    return AddPasskeyOptionsResponse(
+        enrollment_ticket=enrollment_ticket,
+        options=options,
+    )
+
+
+@router.post(
+    "/mfa/factors/webauthn/register/verify",
+    response_model=AddPasskeyResponse,
+)
+@limiter.limit(RATE_AUTH)
+async def mfa_factors_webauthn_register_verify(
+    request: Request,
+    data: AddPasskeyVerifyRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> AddPasskeyResponse:
+    try:
+        ticket = await MfaTicketService.consume_enrollment_ticket(
+            data.enrollment_ticket,
+            user_id=str(current_user.id),
+            expected_purpose=MFA_PURPOSE_ADD_FACTOR_WEBAUTHN,
+            client_ip=_client_ip(request),
+            user_agent=_user_agent(request),
+        )
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+    if ticket.challenge_type != "add_factor_webauthn" or not ticket.challenge:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Passkey enrollment challenge is missing",
+        )
+
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        mfa = MfaService(session)
+        try:
+            credential = await mfa.verify_webauthn_registration(
+                user=current_user,
+                credential=data.credential,
+                expected_challenge=ticket.challenge,
+                device_label=data.device_label,
+            )
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=current_user, ticket=ticket,
+                method="webauthn", phase="add_factor_verify",
+                error=exc, enrolled=True,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.MFA_ENROLL,
+        target_resource=f"user:{current_user.id}/webauthn:{credential.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "method": "webauthn",
+            "phase": "add_factor",
+            "device_label": credential.device_label,
+            "ip_address": _client_ip(request),
+        },
+        institution_id=current_user.institution_id,
+        user_id=_audit_user_id(current_user),
+        location_id=_audit_location_id(current_user),
+    )
+    return AddPasskeyResponse(
+        credential=WebAuthnCredentialSummary(
+            id=credential.id,
+            device_label=credential.device_label,
+            aaguid=credential.aaguid,
+            credential_device_type=credential.credential_device_type,
+            credential_backed_up=credential.credential_backed_up,
+            transports=credential.transports,
+            created_at=credential.created_at,
+            last_used_at=credential.last_used_at,
+        )
+    )
+
+
+@router.post(
+    "/mfa/factors/totp/setup/options",
+    response_model=AddTotpOptionsResponse,
+)
+@limiter.limit(RATE_AUTH)
+async def mfa_factors_totp_setup_options(
+    request: Request,
+    data: AddFactorOptionsRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> AddTotpOptionsResponse:
+    if current_user.role == UserRole.SUPER_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super admin accounts must enroll a passkey",
+        )
+    await _require_step_up(
+        request, ticket_token=data.mfa_ticket, current_user=current_user,
+    )
+    # Disallow stacking — TOTP factors are 1-per-user.
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        mfa_status = await MfaService(session).status_for_user(str(current_user.id))
+    if mfa_status.totp_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An authenticator app is already enabled; remove it before adding another",
+        )
+
+    secret = MfaService.new_totp_secret()
+    try:
+        enrollment_ticket = await MfaTicketService.create(
+            user=current_user,
+            purpose=MFA_PURPOSE_ADD_FACTOR_TOTP,
+            client_ip=_client_ip(request),
+            user_agent=_user_agent(request),
+            audit_request_id=str(uuid4()),
+            ttl_seconds=ADD_FACTOR_TICKET_TTL_SECONDS,
+            extra={
+                "pending_totp_secret": secret,
+                "challenge_type": "add_factor_totp",
+            },
+        )
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+
+    return AddTotpOptionsResponse(
+        enrollment_ticket=enrollment_ticket,
+        secret=secret,
+        provisioning_uri=MfaService.totp_uri(secret=secret, email=current_user.email),
+    )
+
+
+@router.post(
+    "/mfa/factors/totp/setup/verify",
+    response_model=AddTotpResponse,
+)
+@limiter.limit(RATE_AUTH)
+async def mfa_factors_totp_setup_verify(
+    request: Request,
+    data: AddTotpVerifyRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> AddTotpResponse:
+    if current_user.role == UserRole.SUPER_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super admin accounts must enroll a passkey",
+        )
+    try:
+        ticket = await MfaTicketService.consume_enrollment_ticket(
+            data.enrollment_ticket,
+            user_id=str(current_user.id),
+            expected_purpose=MFA_PURPOSE_ADD_FACTOR_TOTP,
+            client_ip=_client_ip(request),
+            user_agent=_user_agent(request),
+        )
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+    if ticket.challenge_type != "add_factor_totp" or not ticket.pending_totp_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="TOTP enrollment secret is missing",
+        )
+
+    async with _auth_db_session(user_id=str(current_user.id)) as session:
+        mfa = MfaService(session)
+        # Re-check inside verify so a concurrent enrollment via the
+        # initial-setup login flow can't get silently overwritten.
+        # /options enforces the same predicate, but the user could
+        # have completed setup in another tab between /options and
+        # /verify; verify_and_store_totp_setup updates an existing
+        # row rather than failing, so this guard is the only place
+        # left to refuse the overwrite.
+        status_now = await mfa.status_for_user(str(current_user.id))
+        if status_now.totp_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Authenticator app is already enabled; remove the existing one before adding another",
+            )
+        try:
+            await mfa.verify_and_store_totp_setup(
+                user_id=str(current_user.id),
+                secret=ticket.pending_totp_secret,
+                code=data.code,
+            )
+        except MfaError as exc:
+            await _audit_mfa_failure(
+                request=request, user=current_user, ticket=ticket,
+                method="totp", phase="add_factor_verify",
+                error=exc, enrolled=True,
+            )
+            raise _mfa_exception_to_http(exc) from exc
+
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.MFA_ENROLL,
+        target_resource=f"user:{current_user.id}/totp",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "method": "totp",
+            "phase": "add_factor",
+            "ip_address": _client_ip(request),
+        },
+        institution_id=current_user.institution_id,
+        user_id=_audit_user_id(current_user),
+        location_id=_audit_location_id(current_user),
+    )
+    return AddTotpResponse()
+
+
+# =============================================================================
+# Factor management — for lost / stolen / swapped authenticators.
+# Removing a factor never bricks the account: if the user ends up with zero
+# factors, the next login returns mfa_setup_required and re-enrolls them.
+# Every destructive operation here REQUIRES a step-up ticket — see the
+# /mfa/step-up/ section above. Without that gate, a stolen access token
+# alone would be enough to remove every MFA factor.
+# =============================================================================
+
+
 @router.post("/mfa/recovery-codes/regenerate", response_model=RecoveryCodesResponse)
 @limiter.limit("10/minute")
 async def mfa_recovery_codes_regenerate(
     request: Request,
+    data: RecoveryCodesRegenerateRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> RecoveryCodesResponse:
+    step_up = await _require_step_up(
+        request, ticket_token=data.mfa_ticket, current_user=current_user,
+    )
     async with _auth_db_session(user_id=str(current_user.id)) as session:
         codes = await MfaService(session).replace_recovery_codes(user_id=str(current_user.id))
 
@@ -1373,15 +2067,10 @@ async def mfa_recovery_codes_regenerate(
         institution_id=current_user.institution_id,
         user_id=_audit_user_id(current_user),
         location_id=_audit_location_id(current_user),
+        request_id=step_up.audit_request_id,
     )
     return RecoveryCodesResponse(recovery_codes=codes)
 
-
-# =============================================================================
-# Factor management — for lost / stolen / swapped authenticators.
-# Removing a factor never bricks the account: if the user ends up with zero
-# factors, the next login returns mfa_setup_required and re-enrolls them.
-# =============================================================================
 
 @router.get("/mfa/webauthn", response_model=WebAuthnCredentialListResponse)
 @limiter.limit("30/minute")
@@ -1389,7 +2078,13 @@ async def mfa_webauthn_list(
     request: Request,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> WebAuthnCredentialListResponse:
-    """List the user's registered passkeys (metadata only, never the key)."""
+    """List the user's registered passkeys (metadata only, never the key).
+
+    Read-only listing does NOT require step-up — surfaces the same
+    metadata the user already saw at registration time, doesn't change
+    the security posture of the account, and the management UI needs it
+    to render before the step-up modal can run.
+    """
     async with _auth_db_session(user_id=str(current_user.id)) as session:
         rows = await MfaService(session).webauthn_credentials(str(current_user.id))
     return WebAuthnCredentialListResponse(
@@ -1414,9 +2109,19 @@ async def mfa_webauthn_list(
 async def mfa_webauthn_remove(
     request: Request,
     credential_pk: str,
+    data: FactorRemoveRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> MessageResponse:
-    """Remove a passkey owned by the current user. §164.312(b) audited."""
+    """Remove a passkey owned by the current user. §164.312(b) audited.
+
+    Body carries the elevated step-up ticket — RFC 9110 explicitly
+    allows DELETE to have a body, FastAPI / Starlette honour it, and
+    embedding the ticket here keeps the credential identifier in the
+    URL where REST clients expect it.
+    """
+    step_up = await _require_step_up(
+        request, ticket_token=data.mfa_ticket, current_user=current_user,
+    )
     async with _auth_db_session(user_id=str(current_user.id)) as session:
         removed = await MfaService(session).remove_webauthn_credential(
             user_id=str(current_user.id),
@@ -1429,9 +2134,6 @@ async def mfa_webauthn_remove(
             detail="Passkey not found",
         )
 
-    # Durable: factor removal is a security-relevant credential change.
-    # The 401-on-no-factors case is handled at next login; here we only
-    # need a clean audit trail of "user X removed credential Y at time T".
     await log_audit(
         actor=AuditActor.ADMIN,
         action=AuditAction.MFA_FACTOR_REMOVE,
@@ -1445,6 +2147,7 @@ async def mfa_webauthn_remove(
         institution_id=current_user.institution_id,
         user_id=_audit_user_id(current_user),
         location_id=_audit_location_id(current_user),
+        request_id=step_up.audit_request_id,
     )
     return MessageResponse(message="Passkey removed")
 
@@ -1453,18 +2156,18 @@ async def mfa_webauthn_remove(
 @limiter.limit("10/minute")
 async def mfa_totp_disable(
     request: Request,
+    data: TotpDisableRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> MessageResponse:
     """Disable the current user's TOTP authenticator. Idempotent."""
+    step_up = await _require_step_up(
+        request, ticket_token=data.mfa_ticket, current_user=current_user,
+    )
     async with _auth_db_session(user_id=str(current_user.id)) as session:
         was_enabled = await MfaService(session).disable_totp(
             user_id=str(current_user.id)
         )
 
-    # Audit only the state-changing case so a quiet retry doesn't generate
-    # noise rows. Idempotent no-op (already disabled) is not a security
-    # event worth logging — the existing MFA_FACTOR_DISABLE row from the
-    # original disable is the durable record.
     if was_enabled:
         await log_audit(
             actor=AuditActor.ADMIN,
@@ -1478,6 +2181,7 @@ async def mfa_totp_disable(
             institution_id=current_user.institution_id,
             user_id=_audit_user_id(current_user),
             location_id=_audit_location_id(current_user),
+            request_id=step_up.audit_request_id,
         )
     return MessageResponse(
         message="Authenticator app disabled" if was_enabled else "Authenticator app was not enabled"
@@ -1745,6 +2449,98 @@ async def unlock_user_account(
     return UnlockResponse(
         message="Account unlocked successfully",
         user_id=user_id,
+    )
+
+
+class AdminMfaResetResponse(BaseModel):
+    message: str
+    user_id: str
+    removed: dict[str, int]
+
+
+@router.post("/admin/users/{user_id}/mfa/reset", response_model=AdminMfaResetResponse)
+@limiter.limit("5/minute")
+async def admin_reset_user_mfa(
+    request: Request,
+    user_id: str,
+    data: StepUpRequest,
+    admin: Annotated[User, Depends(get_current_super_admin)],
+) -> AdminMfaResetResponse:
+    """Break-glass: wipe every MFA factor for a target user.
+
+    HIPAA-relevant operations need a recovery path for the case where a
+    user has lost every authenticator AND every recovery code — without
+    this, the only fallback is direct DB surgery, which leaves no audit
+    row and gives whoever has DB access an unaudited privilege
+    escalation path.
+
+    Locked down hard:
+      * Caller must be SUPER_ADMIN (the unlock endpoint above is
+        ``get_current_admin`` — broader; this one is stricter).
+      * Caller must complete a step-up MFA verification first, so a
+        stolen super-admin session can't silently wipe a user's
+        factors.
+      * Target user_id is logged in the §164.312(b) audit row along
+        with how many of each factor was destroyed.
+
+    After reset the target user lands on ``mfa_setup_required`` at
+    their next login and enrols fresh factors.
+    """
+    step_up = await _require_step_up(
+        request, ticket_token=data.mfa_ticket, current_user=admin,
+    )
+
+    async with get_db_session() as session:
+        target = (
+            await session.execute(
+                select(User).where(
+                    User.id == user_id, User.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if not target:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+        removed = await MfaService(session).wipe_all_factors(user_id=str(target.id))
+
+    # Forcibly end every live session for the target. Without this the
+    # response message "user will re-enrol on next sign-in" is a lie:
+    # any access token + refresh cookie issued before the wipe stays
+    # valid until natural expiry, and `/auth/refresh` would happily
+    # rotate them. Revoking now means the very next request from any
+    # surviving session 401s, the user lands on /login, and MFA enrol
+    # is genuinely required before they get back in.
+    revoked_refresh = await RefreshTokenService.revoke_all_for_user(str(target.id))
+    revoked_access = await RefreshTokenService.revoke_all_access_tokens_for_user(
+        str(target.id)
+    )
+
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.MFA_FACTOR_REMOVE,
+        target_resource=f"user:{target.id}/mfa",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "admin_id": str(admin.id),
+            "target_user_id": str(target.id),
+            "reason": "admin_break_glass_reset",
+            "removed": removed,
+            "revoked_refresh_tokens": revoked_refresh,
+            "revoked_access_tokens": revoked_access,
+            "ip_address": _client_ip(request),
+        },
+        institution_id=target.institution_id,
+        user_id=_audit_user_id(admin),
+        location_id=_audit_location_id(target),
+        request_id=step_up.audit_request_id,
+    )
+
+    return AdminMfaResetResponse(
+        message="All MFA factors removed and active sessions revoked; user will re-enrol on next sign-in.",
+        user_id=str(target.id),
+        removed=removed,
     )
 
 

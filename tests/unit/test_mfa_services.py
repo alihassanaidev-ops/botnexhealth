@@ -33,6 +33,12 @@ class _FakeRedis:
     async def delete(self, key: str) -> int:
         return 1 if self.values.pop(key, None) is not None else 0
 
+    async def getdel(self, key: str) -> str | None:
+        # Single-round-trip atomic read-and-delete. Mirrors Redis 6.2+
+        # GETDEL — used by MfaTicketService.consume_step_up to make
+        # step-up ticket consumption single-winner under concurrency.
+        return self.values.pop(key, None)
+
 
 class _ScalarResult:
     def __init__(self, rows):
@@ -216,4 +222,250 @@ async def test_webauthn_authentication_rejects_sign_counter_rollback(
             user_id=stored.user_id,
             credential={"id": credential_id},
             expected_challenge=bytes_to_base64url(b"challenge"),
+        )
+
+
+# =============================================================================
+# Step-up ticket lifecycle — separate purpose, single-use elevation, user
+# binding, and the freshness window after verification.
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_step_up_ticket_must_be_elevated_before_consumption(
+    fake_redis: _FakeRedis,
+) -> None:
+    """A step-up ticket that the user hasn't verified yet is not yet
+    elevated — consuming it before the verify step fails closed."""
+    from src.app.services.mfa import MFA_PURPOSE_STEP_UP
+
+    user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="user@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+    )
+    token = await MfaTicketService.create(
+        user=user,
+        purpose=MFA_PURPOSE_STEP_UP,
+        client_ip="203.0.113.10",
+        user_agent="ua",
+        audit_request_id="aud-1",
+    )
+
+    with pytest.raises(MfaTicketInvalid) as exc:
+        await MfaTicketService.consume_step_up(
+            token, user_id=user.id, client_ip="203.0.113.10", user_agent="ua",
+        )
+    assert "not been completed" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_step_up_ticket_is_consumed_after_first_use(
+    fake_redis: _FakeRedis,
+) -> None:
+    from src.app.services.mfa import MFA_PURPOSE_STEP_UP
+
+    user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="user@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+    )
+    token = await MfaTicketService.create(
+        user=user,
+        purpose=MFA_PURPOSE_STEP_UP,
+        client_ip="203.0.113.10",
+        user_agent="ua",
+        audit_request_id="aud-1",
+    )
+    # Move the ticket to elevated state, then consume it once.
+    ticket = await MfaTicketService.get(
+        token, client_ip="203.0.113.10", user_agent="ua", purpose=MFA_PURPOSE_STEP_UP,
+    )
+    await MfaTicketService.mark_step_up_elevated(ticket)
+    consumed = await MfaTicketService.consume_step_up(
+        token, user_id=user.id, client_ip="203.0.113.10", user_agent="ua",
+    )
+    assert consumed.elevated is True
+
+    # Second presentation must fail — the ticket no longer exists.
+    with pytest.raises(MfaTicketInvalid):
+        await MfaTicketService.consume_step_up(
+            token, user_id=user.id, client_ip="203.0.113.10", user_agent="ua",
+        )
+
+
+@pytest.mark.asyncio
+async def test_step_up_ticket_rejects_user_mismatch(fake_redis: _FakeRedis) -> None:
+    """An attacker who stole an elevated ticket from user A must not be
+    able to use it on their own account B."""
+    from src.app.services.mfa import MFA_PURPOSE_STEP_UP
+
+    user_a = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="a@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+    )
+    token = await MfaTicketService.create(
+        user=user_a,
+        purpose=MFA_PURPOSE_STEP_UP,
+        client_ip="203.0.113.10",
+        user_agent="ua",
+        audit_request_id="aud-1",
+    )
+    ticket = await MfaTicketService.get(
+        token, client_ip="203.0.113.10", user_agent="ua", purpose=MFA_PURPOSE_STEP_UP,
+    )
+    await MfaTicketService.mark_step_up_elevated(ticket)
+
+    with pytest.raises(MfaTicketInvalid) as exc:
+        await MfaTicketService.consume_step_up(
+            token,
+            user_id="99999999-9999-9999-9999-999999999999",
+            client_ip="203.0.113.10",
+            user_agent="ua",
+        )
+    assert "current user" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_step_up_elevation_rejects_login_purpose_ticket(
+    fake_redis: _FakeRedis,
+) -> None:
+    """A login-purpose ticket must never be promotable to elevated —
+    that's the boundary that stops a stolen login ticket from being
+    used to delete a passkey."""
+    user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="user@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+    )
+    token = await MfaTicketService.create(
+        user=user,
+        purpose="login",
+        client_ip="203.0.113.10",
+        user_agent="ua",
+        audit_request_id="aud-1",
+    )
+    ticket = await MfaTicketService.get(
+        token, client_ip="203.0.113.10", user_agent="ua", purpose="login",
+    )
+    with pytest.raises(MfaTicketInvalid) as exc:
+        await MfaTicketService.mark_step_up_elevated(ticket)
+    assert "Only step-up" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_consume_step_up_rejects_non_step_up_ticket(
+    fake_redis: _FakeRedis,
+) -> None:
+    """Even if a login ticket somehow flagged itself elevated (it
+    can't, but defence in depth), consume_step_up still enforces
+    purpose=='step_up' via the get() purpose check."""
+    user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="user@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+    )
+    token = await MfaTicketService.create(
+        user=user,
+        purpose="login",
+        client_ip="203.0.113.10",
+        user_agent="ua",
+        audit_request_id="aud-1",
+    )
+
+    with pytest.raises(MfaTicketInvalid):
+        await MfaTicketService.consume_step_up(
+            token, user_id=user.id, client_ip="203.0.113.10", user_agent="ua",
+        )
+
+
+@pytest.mark.asyncio
+async def test_step_up_consume_is_atomic_under_concurrent_callers(
+    fake_redis: _FakeRedis,
+) -> None:
+    """Two concurrent factor-management requests presenting the same
+    elevated ticket must result in exactly one winner. GETDEL on the
+    Redis side guarantees this — without it a get/check/delete sequence
+    would let both callers proceed before either delete landed."""
+    import asyncio
+    from src.app.services.mfa import MFA_PURPOSE_STEP_UP
+
+    user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="user@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+    )
+    token = await MfaTicketService.create(
+        user=user,
+        purpose=MFA_PURPOSE_STEP_UP,
+        client_ip="203.0.113.10",
+        user_agent="ua",
+        audit_request_id="aud-1",
+    )
+    ticket = await MfaTicketService.get(
+        token, client_ip="203.0.113.10", user_agent="ua", purpose=MFA_PURPOSE_STEP_UP,
+    )
+    await MfaTicketService.mark_step_up_elevated(ticket)
+
+    async def attempt():
+        try:
+            return await MfaTicketService.consume_step_up(
+                token, user_id=user.id, client_ip="203.0.113.10", user_agent="ua",
+            )
+        except MfaTicketInvalid:
+            return None
+
+    # Fire two concurrent consume calls. Exactly one should resolve to
+    # a ticket — the other must observe the deletion and fail.
+    results = await asyncio.gather(attempt(), attempt())
+    winners = [r for r in results if r is not None]
+    losers = [r for r in results if r is None]
+    assert len(winners) == 1
+    assert len(losers) == 1
+
+
+@pytest.mark.asyncio
+async def test_step_up_consume_burns_ticket_even_on_validation_failure(
+    fake_redis: _FakeRedis,
+) -> None:
+    """If a step-up ticket is presented with a mismatched user/IP/UA,
+    consume_step_up still GETDEL'd it — the next attempt fails closed.
+    Fail-safe behaviour: a leaked ticket can never be reused even by
+    the legitimate owner once tampering has been detected."""
+    from src.app.services.mfa import MFA_PURPOSE_STEP_UP
+
+    user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="user@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+    )
+    token = await MfaTicketService.create(
+        user=user,
+        purpose=MFA_PURPOSE_STEP_UP,
+        client_ip="203.0.113.10",
+        user_agent="ua",
+        audit_request_id="aud-1",
+    )
+    ticket = await MfaTicketService.get(
+        token, client_ip="203.0.113.10", user_agent="ua", purpose=MFA_PURPOSE_STEP_UP,
+    )
+    await MfaTicketService.mark_step_up_elevated(ticket)
+
+    # First attempt with wrong IP — fails validation, but burns ticket.
+    with pytest.raises(MfaTicketInvalid):
+        await MfaTicketService.consume_step_up(
+            token, user_id=user.id, client_ip="203.0.113.99", user_agent="ua",
+        )
+    # Legitimate retry with correct IP also fails — ticket is gone.
+    with pytest.raises(MfaTicketInvalid):
+        await MfaTicketService.consume_step_up(
+            token, user_id=user.id, client_ip="203.0.113.10", user_agent="ua",
         )

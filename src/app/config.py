@@ -127,6 +127,14 @@ class Settings(BaseSettings):
     webauthn_rp_id: str | None = None
     webauthn_rp_name: str = "NexHealth Dashboard"
     webauthn_allowed_origins: str = ""
+    # WebAuthn user-verification strictness. Default REQUIRED demands
+    # the authenticator prove inherence (biometric or PIN) at every
+    # touch — a passkey behaves as a full factor. Set to False on
+    # deployments that must accommodate older non-UV-capable security
+    # keys; in that mode the platform falls back to UserVerification=
+    # PREFERRED, which accepts a bare presence tap. Keep True for any
+    # environment with modern devices.
+    webauthn_user_verification_strict: bool = True
 
     # CORS — comma-separated allowed origins; defaults to "*" for local dev only
     cors_allowed_origins: str = "*"

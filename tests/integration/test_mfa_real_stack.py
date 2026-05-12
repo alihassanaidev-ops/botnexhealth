@@ -199,6 +199,30 @@ async def _seed_user(email: str, *, role: str, location_id: str | None = None) -
     return user_id, institution_id, location
 
 
+async def _step_up_with_recovery_code(
+    client: AsyncClient,
+    *,
+    access_token: str,
+    recovery_code: str,
+) -> str:
+    auth_headers = {"Authorization": f"Bearer {access_token}"}
+    challenge = await client.post(
+        "/api/auth/mfa/step-up/challenge",
+        headers=auth_headers,
+    )
+    assert challenge.status_code == 200, challenge.text
+    elevated = await client.post(
+        "/api/auth/mfa/step-up/recovery-code/verify",
+        headers=auth_headers,
+        json={
+            "mfa_ticket": challenge.json()["mfa_ticket"],
+            "code": recovery_code,
+        },
+    )
+    assert elevated.status_code == 200, elevated.text
+    return elevated.json()["mfa_ticket"]
+
+
 @pytest.mark.asyncio
 async def test_login_totp_setup_users_me_and_refresh_with_real_postgres_redis(real_stack):
     user_id, _, _ = await _seed_user("mfa-real@example.com", role=UserRole.INSTITUTION_ADMIN.value)
@@ -415,7 +439,10 @@ async def test_totp_disable_round_trip_with_real_postgres(real_stack):
             json={"mfa_ticket": ticket, "code": pyotp.TOTP(secret).now()},
         )
         assert verify.status_code == 200, verify.text
-        access_token = verify.json()["access_token"]
+        session = verify.json()
+        access_token = session["access_token"]
+        recovery_codes = session["recovery_codes"]
+        assert recovery_codes and len(recovery_codes) >= 2
 
         # Sanity: TOTP factor row exists.
         async with get_system_db_session("user", role=UserRole.SUPER_ADMIN.value, user_id=user_id) as session:
@@ -425,9 +452,20 @@ async def test_totp_disable_round_trip_with_real_postgres(real_stack):
             assert existing.scalars().first() is not None
 
         # 2. Call /mfa/totp/disable.
+        elevated_ticket = await _step_up_with_recovery_code(
+            client,
+            access_token=access_token,
+            recovery_code=recovery_codes[0],
+        )
+        idempotent_retry_ticket = await _step_up_with_recovery_code(
+            client,
+            access_token=access_token,
+            recovery_code=recovery_codes[1],
+        )
         disable = await client.post(
             "/api/auth/mfa/totp/disable",
             headers={"Authorization": f"Bearer {access_token}"},
+            json={"mfa_ticket": elevated_ticket},
         )
         assert disable.status_code == 200
         assert disable.json() == {"message": "Authenticator app disabled"}
@@ -436,6 +474,7 @@ async def test_totp_disable_round_trip_with_real_postgres(real_stack):
         disable_again = await client.post(
             "/api/auth/mfa/totp/disable",
             headers={"Authorization": f"Bearer {access_token}"},
+            json={"mfa_ticket": idempotent_retry_ticket},
         )
         assert disable_again.status_code == 200
         assert disable_again.json() == {"message": "Authenticator app was not enabled"}
