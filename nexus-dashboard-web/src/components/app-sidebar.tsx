@@ -395,6 +395,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     </div>
                                 </DropdownMenuLabel>
                                 <DropdownMenuSeparator />
+                                <DropdownMenuItem asChild className="gap-2">
+                                    <Link to="/security">
+                                        <Shield className="h-4 w-4" />
+                                        Security
+                                    </Link>
+                                </DropdownMenuItem>
                                 <DropdownMenuItem
                                     onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
                                     className="gap-2"

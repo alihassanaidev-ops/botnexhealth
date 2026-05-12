@@ -32,18 +32,12 @@ interface AuthSessionResponse {
 }
 
 /**
- * MFA-bound login result — see mfa-api.ts. We keep the shape inline here
- * to avoid pulling the API module into the context's import graph just
- * for a type.
+ * MFA-bound login result. Source-of-truth shape lives in mfa-api.ts;
+ * re-imported here so that signIn/updatePassword consumers (Login,
+ * SetPassword, the step-up modal) all hold the same type and can pass
+ * the challenge straight into <MfaFlow />.
  */
-interface MfaChallengeResult {
-    status: "mfa_required" | "mfa_setup_required";
-    mfa_ticket: string;
-    methods: string[];
-    setup_methods: string[];
-    role: string;
-    email: string;
-}
+import type { MfaChallengeResponse as MfaChallengeResult } from "@/lib/mfa-api";
 
 export type SignInResult =
     | { kind: "authenticated" }
@@ -69,7 +63,18 @@ interface AuthContextType {
     ) => Promise<void>;
     requestPasswordReset: (email: string) => Promise<void>;
     signOut: () => Promise<void>;
-    updatePassword: (password: string, token: string, flow: PasswordFlow) => Promise<void>;
+    /**
+     * Consume an invite (`set`) or reset (`reset`) token plus a new
+     * password. Returns the same shape as signIn — the backend may
+     * return an MfaChallengeResponse here too, in which case the caller
+     * renders the MFA setup/verify UI. Errors are thrown for the form
+     * to display.
+     */
+    updatePassword: (
+        password: string,
+        token: string,
+        flow: PasswordFlow,
+    ) => Promise<SignInResult>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -351,11 +356,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     const updatePassword = useCallback(
-        async (password: string, token: string, flow: PasswordFlow) => {
+        async (
+            password: string,
+            token: string,
+            flow: PasswordFlow,
+        ): Promise<SignInResult> => {
             try {
-                const endpoint = flow === "reset" ? "/auth/reset-password" : "/auth/set-password";
+                const endpoint =
+                    flow === "reset" ? "/auth/reset-password" : "/auth/set-password";
 
-                const { data } = await axios.post<AuthSessionResponse>(
+                const { data } = await axios.post<
+                    AuthSessionResponse | MfaChallengeResult
+                >(
                     `${api.defaults.baseURL}${endpoint}`,
                     { token, password },
                     {
@@ -365,13 +377,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     },
                 );
 
-                await applyAuthSession(data);
+                // Backend may return MFA challenge here too (the
+                // password-reset and invite-acceptance flows now go
+                // through MFA before issuing a session). Hand the
+                // challenge back to the form so it can render the
+                // setup/verify UI; only finish the success toast +
+                // navigate when an actual session lands.
+                if (
+                    "status" in data &&
+                    (data.status === "mfa_required" || data.status === "mfa_setup_required")
+                ) {
+                    return { kind: "mfa_challenge", challenge: data as MfaChallengeResult };
+                }
+
+                await applyAuthSession(data as AuthSessionResponse);
                 toast.success(
                     flow === "reset"
                         ? "Password reset successfully"
                         : "Password set successfully",
                 );
                 navigate("/", { replace: true });
+                return { kind: "authenticated" };
             } catch (error) {
                 throw new Error(getErrorMessage(error, "Failed to update password"));
             }

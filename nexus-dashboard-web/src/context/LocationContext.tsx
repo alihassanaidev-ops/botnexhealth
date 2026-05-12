@@ -141,6 +141,14 @@ export function LocationProvider({ children }: { children: ReactNode }) {
     return <LocationContext.Provider value={value}>{children}</LocationContext.Provider>
 }
 
+// The two hooks below are deliberately co-located with the provider —
+// they're the public API of this context module. Fast Refresh would
+// rather hooks live in a sibling file, but splitting them adds
+// indirection without changing the runtime contract; the cost in HMR
+// (component-level full reload instead of state-preserving refresh
+// for this one module) is acceptable.
+
+// eslint-disable-next-line react-refresh/only-export-components
 export function useLocationContext(): LocationContextValue {
     const ctx = useContext(LocationContext)
     if (!ctx) {
@@ -153,6 +161,7 @@ export function useLocationContext(): LocationContextValue {
  * Convenience hook used by setup pages: returns the id to thread into
  * API helpers, or `undefined` when the context isn't ready yet.
  */
+// eslint-disable-next-line react-refresh/only-export-components
 export function useSelectedLocationId(): string | undefined {
     const { selectedLocationId } = useLocationContext()
     return selectedLocationId ?? undefined

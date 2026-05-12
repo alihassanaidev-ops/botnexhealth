@@ -31,6 +31,7 @@ const InstitutionSettings = lazy(() => import("./pages/InstitutionSettings"));
 const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
+const Security = lazy(() => import("./pages/Security"));
 
 function LazyFallback() {
     return (
@@ -118,6 +119,17 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <S><NotificationPreferences /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Personal security settings. Available to every
+                        // signed-in role since the operations are all
+                        // scoped to the user's own factors.
+                        path: "security",
+                        element: (
+                            <RoleGuard allowed={["SUPER_ADMIN", "INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <S><Security /></S>
                             </RoleGuard>
                         ),
                     },
