@@ -111,13 +111,28 @@ async def test_mfa_ticket_is_bound_to_purpose_ip_and_user_agent(fake_redis: _Fak
             purpose="reset_password",
         )
 
+    # Cross-/24 IP change rejects (e.g., ISP/AS swap, ticket replayed
+    # from elsewhere): 203.0.113.10 -> 203.0.114.10 crosses the /24
+    # boundary, so the network-prefix hashes diverge and validation 401s.
     with pytest.raises(MfaTicketInvalid):
         await MfaTicketService.get(
             token,
-            client_ip="203.0.113.99",
+            client_ip="203.0.114.10",
             user_agent="test-agent",
             purpose="login",
         )
+
+    # Same-/24 IP rotation accepts (e.g., corporate VPN / cloud-NAT pool
+    # round-robins egress within a single /24 between back-to-back
+    # requests). The original 203.0.113.10 ticket must still validate
+    # when retried from 203.0.113.99 — same /24, same hash.
+    same_subnet_ticket = await MfaTicketService.get(
+        token,
+        client_ip="203.0.113.99",
+        user_agent="test-agent",
+        purpose="login",
+    )
+    assert same_subnet_ticket.user_id == user.id
 
     await MfaTicketService.consume(ticket)
     assert fake_redis.values == {}

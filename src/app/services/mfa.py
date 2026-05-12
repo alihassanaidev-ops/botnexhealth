@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import secrets
@@ -148,9 +149,29 @@ class MfaTicketService:
         return PasswordService.hash_token(token)[:12]
 
     @staticmethod
-    def _request_hashes(*, client_ip: str | None, user_agent: str | None) -> dict[str, str]:
+    def _network_prefix(client_ip: str | None) -> str:
+        """Reduce a client IP to its network prefix for ticket binding.
+
+        Binds to /24 for IPv4 and /64 for IPv6 instead of the full
+        address. Catches cross-network ticket replay (different ISP, AS,
+        or country) while tolerating same-network NAT-pool egress
+        rotation, which is common behind corporate VPNs / proxies hosted
+        on cloud providers (AWS/GCP/Azure outbound NAT round-robins
+        across multiple egress IPs in the same /24).
+        """
+        if not client_ip:
+            return ""
+        try:
+            addr = ipaddress.ip_address(client_ip)
+        except ValueError:
+            return client_ip
+        prefix = 24 if isinstance(addr, ipaddress.IPv4Address) else 64
+        return str(ipaddress.ip_network(f"{client_ip}/{prefix}", strict=False))
+
+    @classmethod
+    def _request_hashes(cls, *, client_ip: str | None, user_agent: str | None) -> dict[str, str]:
         return {
-            "client_ip_hash": keyed_hash(client_ip or "", purpose="mfa-ticket-ip"),
+            "client_ip_hash": keyed_hash(cls._network_prefix(client_ip), purpose="mfa-ticket-ip"),
             "user_agent_hash": keyed_hash(user_agent or "", purpose="mfa-ticket-ua"),
         }
 
