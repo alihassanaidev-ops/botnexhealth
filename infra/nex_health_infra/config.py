@@ -79,6 +79,13 @@ class EnvironmentConfig:
     network: NetworkConfig
     cors_allowed_origins: list[str]
     auth_frontend_base_url: str | None
+    # WebAuthn Relying Party id — the host the browser binds passkeys to.
+    # Must equal or be a registrable suffix of every webauthn_allowed_origins
+    # entry; passkeys registered against one RP id cannot be presented to a
+    # different one. Without this set the runtime falls back to "localhost"
+    # and the browser rejects registration with "RP ID is invalid".
+    webauthn_rp_id: str | None
+    webauthn_allowed_origins: list[str]
     recordings_bucket_name: str
     # CIDRs whose direct peers are trusted to set X-Forwarded-For. Behind an
     # ALB this should at minimum cover the ALB subnet ranges; RFC1918 is a
@@ -135,6 +142,8 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         ),
         cors_allowed_origins=list(raw.get("corsAllowedOrigins", [])),
         auth_frontend_base_url=raw.get("authFrontendBaseUrl"),
+        webauthn_rp_id=raw.get("webauthnRpId"),
+        webauthn_allowed_origins=list(raw.get("webauthnAllowedOrigins", [])),
         recordings_bucket_name=raw["recordingsBucketName"],
         trusted_proxy_cidrs=list(
             raw.get(

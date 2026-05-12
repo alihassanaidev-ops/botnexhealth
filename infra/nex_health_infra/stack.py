@@ -885,6 +885,21 @@ class NexHealthPlatformStack(Stack):
             environment["AUTH_FRONTEND_BASE_URL"] = frontend_base_url
         if self.config.trusted_proxy_cidrs:
             environment["TRUSTED_PROXY_CIDRS"] = ",".join(self.config.trusted_proxy_cidrs)
+        # WebAuthn — falls back to frontend host / origin when the config
+        # didn't override. Required: without these the container resolves
+        # rp_id = "localhost" and the browser rejects passkey registration
+        # for any non-localhost origin.
+        rp_id = self.config.webauthn_rp_id
+        if not rp_id and frontend_base_url:
+            from urllib.parse import urlparse
+            rp_id = urlparse(frontend_base_url).hostname
+        if rp_id:
+            environment["WEBAUTHN_RP_ID"] = rp_id
+        allowed_origins = list(self.config.webauthn_allowed_origins)
+        if not allowed_origins and frontend_base_url:
+            allowed_origins = [frontend_base_url.rstrip("/")]
+        if allowed_origins:
+            environment["WEBAUTHN_ALLOWED_ORIGINS"] = ",".join(allowed_origins)
         return environment
 
     def _build_app_runtime_secrets(
