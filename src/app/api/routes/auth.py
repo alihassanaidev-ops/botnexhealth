@@ -270,10 +270,20 @@ class UserRead(BaseModel):
 
 
 def _client_ip(request: Request) -> str | None:
-    return get_client_ip(
-        forwarded_for=request.headers.get("x-forwarded-for"),
-        direct_host=request.client.host if request.client else None,
-    )
+    xff = request.headers.get("x-forwarded-for")
+    direct = request.client.host if request.client else None
+    resolved = get_client_ip(forwarded_for=xff, direct_host=direct)
+    if request.url.path.startswith("/api/auth/"):
+        logger.info(
+            "client_ip_resolved path=%s method=%s xff=%r direct=%r resolved=%r ua=%r",
+            request.url.path,
+            request.method,
+            xff,
+            direct,
+            resolved,
+            request.headers.get("user-agent"),
+        )
+    return resolved
 
 
 def _allowed_origin_set() -> frozenset[str]:

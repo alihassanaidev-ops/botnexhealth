@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import pyotp
 from sqlalchemy import delete, func, select
@@ -139,6 +142,11 @@ class MfaTicketService:
     def _key(cls, token: str) -> str:
         return f"{cls.TICKET_PREFIX}:{PasswordService.hash_token(token)}"
 
+    @classmethod
+    def _kid(cls, token: str) -> str:
+        # Short, non-reversible ticket identifier safe for log correlation.
+        return PasswordService.hash_token(token)[:12]
+
     @staticmethod
     def _request_hashes(*, client_ip: str | None, user_agent: str | None) -> dict[str, str]:
         return {
@@ -188,6 +196,7 @@ class MfaTicketService:
         reads back into the typed MfaTicket.
         """
         token = secrets.token_urlsafe(32)
+        hashes = cls._request_hashes(client_ip=client_ip, user_agent=user_agent)
         payload: dict[str, Any] = {
             "user_id": str(user.id),
             "purpose": purpose,
@@ -197,7 +206,7 @@ class MfaTicketService:
             "audit_request_id": audit_request_id,
             "revoke_existing": revoke_existing,
             "post_password_action": post_password_action,
-            **cls._request_hashes(client_ip=client_ip, user_agent=user_agent),
+            **hashes,
         }
         if extra:
             payload.update(extra)
@@ -210,6 +219,21 @@ class MfaTicketService:
             )
         except Exception as exc:  # noqa: BLE001
             raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
+        logger.info(
+            "mfa_ticket_created kid=%s purpose=%s user_id=%s role=%s "
+            "ttl=%s client_ip=%r user_agent=%r ip_hash=%s ua_hash=%s "
+            "has_challenge=%s",
+            cls._kid(token),
+            purpose,
+            str(user.id),
+            user.role,
+            ttl_seconds if ttl_seconds is not None else cls.TTL_SECONDS,
+            client_ip,
+            user_agent,
+            hashes["client_ip_hash"][:12],
+            hashes["user_agent_hash"][:12],
+            bool(extra and extra.get("challenge")),
+        )
         return token
 
     @classmethod
@@ -221,16 +245,23 @@ class MfaTicketService:
         user_agent: str | None,
         purpose: str | None = None,
     ) -> MfaTicket:
+        kid = cls._kid(token)
         try:
             client = await RefreshTokenService.get_client()
             raw = await client.get(cls._key(token))
         except Exception as exc:  # noqa: BLE001
             raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
         if not raw:
+            logger.warning(
+                "mfa_ticket_invalid reason=missing_or_expired kid=%s "
+                "got_ip=%r got_ua=%r expected_purpose=%s",
+                kid, client_ip, user_agent, purpose,
+            )
             raise MfaTicketInvalid("Invalid or expired MFA ticket")
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
+            logger.error("mfa_ticket_invalid reason=malformed_json kid=%s", kid)
             raise MfaTicketInvalid("Invalid MFA ticket") from exc
 
         expected_hashes = cls._request_hashes(client_ip=client_ip, user_agent=user_agent)
@@ -238,24 +269,55 @@ class MfaTicketService:
             data.get("client_ip_hash") != expected_hashes["client_ip_hash"]
             or data.get("user_agent_hash") != expected_hashes["user_agent_hash"]
         ):
+            logger.warning(
+                "mfa_ticket_invalid reason=fingerprint_mismatch kid=%s purpose=%s "
+                "user_id=%s got_ip=%r got_ua=%r "
+                "stored_ip_hash=%s expected_ip_hash=%s ip_match=%s "
+                "stored_ua_hash=%s expected_ua_hash=%s ua_match=%s",
+                kid, data.get("purpose"), data.get("user_id"),
+                client_ip, user_agent,
+                (data.get("client_ip_hash") or "")[:12],
+                expected_hashes["client_ip_hash"][:12],
+                data.get("client_ip_hash") == expected_hashes["client_ip_hash"],
+                (data.get("user_agent_hash") or "")[:12],
+                expected_hashes["user_agent_hash"][:12],
+                data.get("user_agent_hash") == expected_hashes["user_agent_hash"],
+            )
             raise MfaTicketInvalid("MFA ticket does not match this request")
         if purpose is not None and data.get("purpose") != purpose:
+            logger.warning(
+                "mfa_ticket_invalid reason=wrong_purpose kid=%s "
+                "expected_purpose=%s got_purpose=%s user_id=%s",
+                kid, purpose, data.get("purpose"), data.get("user_id"),
+            )
             raise MfaTicketInvalid("MFA ticket has the wrong purpose")
 
+        logger.info(
+            "mfa_ticket_validated kid=%s purpose=%s user_id=%s via=get",
+            kid, data.get("purpose"), data.get("user_id"),
+        )
         return cls._ticket_from_data(token, data)
 
     @classmethod
     async def update(cls, ticket: MfaTicket, **fields: Any) -> MfaTicket:
+        kid = cls._kid(ticket.token)
         try:
             client = await RefreshTokenService.get_client()
             raw = await client.get(cls._key(ticket.token))
         except Exception as exc:  # noqa: BLE001
             raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
         if not raw:
+            logger.warning(
+                "mfa_ticket_invalid reason=missing_or_expired kid=%s via=update", kid,
+            )
             raise MfaTicketInvalid("Invalid or expired MFA ticket")
         data = json.loads(raw)
         data.update(fields)
         await client.setex(cls._key(ticket.token), cls.TTL_SECONDS, json.dumps(data))
+        logger.info(
+            "mfa_ticket_updated kid=%s purpose=%s user_id=%s fields=%s",
+            kid, data.get("purpose"), data.get("user_id"), list(fields.keys()),
+        )
         return cls._ticket_from_data(ticket.token, data)
 
     @classmethod
@@ -274,12 +336,21 @@ class MfaTicketService:
         factor. The same ticket token is then accepted exactly once by a
         factor-management endpoint within ``STEP_UP_ELEVATED_TTL_SECONDS``.
         """
+        kid = cls._kid(ticket.token)
         if ticket.purpose != MFA_PURPOSE_STEP_UP:
+            logger.warning(
+                "mfa_ticket_invalid reason=cannot_elevate kid=%s purpose=%s",
+                kid, ticket.purpose,
+            )
             raise MfaTicketInvalid("Only step-up tickets can be elevated")
         try:
             client = await RefreshTokenService.get_client()
             raw = await client.get(cls._key(ticket.token))
             if not raw:
+                logger.warning(
+                    "mfa_ticket_invalid reason=missing_or_expired kid=%s via=mark_elevated",
+                    kid,
+                )
                 raise MfaTicketInvalid("Invalid or expired MFA ticket")
             data = json.loads(raw)
             data["elevated"] = True
@@ -292,6 +363,10 @@ class MfaTicketService:
             raise
         except Exception as exc:  # noqa: BLE001
             raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
+        logger.info(
+            "mfa_ticket_elevated kid=%s user_id=%s ttl=%s",
+            kid, data.get("user_id"), STEP_UP_ELEVATED_TTL_SECONDS,
+        )
         return cls._ticket_from_data(ticket.token, data)
 
     @classmethod
@@ -305,16 +380,22 @@ class MfaTicketService:
         the ticket. Single-use semantics for every flow that uses this
         helper.
         """
+        kid = cls._kid(token)
         try:
             client = await RefreshTokenService.get_client()
             raw = await client.getdel(cls._key(token))
         except Exception as exc:  # noqa: BLE001
             raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
         if not raw:
+            logger.warning(
+                "mfa_ticket_invalid reason=missing_or_already_consumed kid=%s via=atomic_take",
+                kid,
+            )
             raise MfaTicketInvalid("Invalid or expired MFA ticket")
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
+            logger.error("mfa_ticket_invalid reason=malformed_json kid=%s via=atomic_take", kid)
             raise MfaTicketInvalid("Invalid MFA ticket") from exc
 
     @classmethod
@@ -335,17 +416,46 @@ class MfaTicketService:
         challenge-bound enrollment ticket issued by the matching
         ``/options`` endpoint can only be presented once.
         """
+        kid = cls._kid(token)
         data = await cls._atomic_take(token)
         expected_hashes = cls._request_hashes(client_ip=client_ip, user_agent=user_agent)
         if (
             data.get("client_ip_hash") != expected_hashes["client_ip_hash"]
             or data.get("user_agent_hash") != expected_hashes["user_agent_hash"]
         ):
+            logger.warning(
+                "mfa_ticket_invalid reason=fingerprint_mismatch kid=%s via=consume_enrollment "
+                "expected_purpose=%s got_purpose=%s user_id=%s got_ip=%r got_ua=%r "
+                "stored_ip_hash=%s expected_ip_hash=%s ip_match=%s "
+                "stored_ua_hash=%s expected_ua_hash=%s ua_match=%s",
+                kid, expected_purpose, data.get("purpose"), data.get("user_id"),
+                client_ip, user_agent,
+                (data.get("client_ip_hash") or "")[:12],
+                expected_hashes["client_ip_hash"][:12],
+                data.get("client_ip_hash") == expected_hashes["client_ip_hash"],
+                (data.get("user_agent_hash") or "")[:12],
+                expected_hashes["user_agent_hash"][:12],
+                data.get("user_agent_hash") == expected_hashes["user_agent_hash"],
+            )
             raise MfaTicketInvalid("MFA ticket does not match this request")
         if data.get("purpose") != expected_purpose:
+            logger.warning(
+                "mfa_ticket_invalid reason=wrong_purpose kid=%s via=consume_enrollment "
+                "expected_purpose=%s got_purpose=%s user_id=%s",
+                kid, expected_purpose, data.get("purpose"), data.get("user_id"),
+            )
             raise MfaTicketInvalid("MFA ticket has the wrong purpose")
         if data.get("user_id") != str(user_id):
+            logger.warning(
+                "mfa_ticket_invalid reason=user_mismatch kid=%s via=consume_enrollment "
+                "ticket_user_id=%s session_user_id=%s",
+                kid, data.get("user_id"), str(user_id),
+            )
             raise MfaTicketInvalid("Enrollment ticket does not match the current user")
+        logger.info(
+            "mfa_ticket_validated kid=%s purpose=%s user_id=%s via=consume_enrollment",
+            kid, data.get("purpose"), data.get("user_id"),
+        )
         return cls._ticket_from_data(token, data)
 
     @classmethod
@@ -379,6 +489,7 @@ class MfaTicketService:
         flow from the challenge step, which is the right UX for a
         suspected-tampering case.
         """
+        kid = cls._kid(token)
         data = await cls._atomic_take(token)
 
         # All subsequent validation happens on the in-memory payload —
@@ -390,13 +501,44 @@ class MfaTicketService:
             data.get("client_ip_hash") != expected_hashes["client_ip_hash"]
             or data.get("user_agent_hash") != expected_hashes["user_agent_hash"]
         ):
+            logger.warning(
+                "mfa_ticket_invalid reason=fingerprint_mismatch kid=%s via=consume_step_up "
+                "user_id=%s got_ip=%r got_ua=%r "
+                "stored_ip_hash=%s expected_ip_hash=%s ip_match=%s "
+                "stored_ua_hash=%s expected_ua_hash=%s ua_match=%s",
+                kid, data.get("user_id"), client_ip, user_agent,
+                (data.get("client_ip_hash") or "")[:12],
+                expected_hashes["client_ip_hash"][:12],
+                data.get("client_ip_hash") == expected_hashes["client_ip_hash"],
+                (data.get("user_agent_hash") or "")[:12],
+                expected_hashes["user_agent_hash"][:12],
+                data.get("user_agent_hash") == expected_hashes["user_agent_hash"],
+            )
             raise MfaTicketInvalid("MFA ticket does not match this request")
         if data.get("purpose") != MFA_PURPOSE_STEP_UP:
+            logger.warning(
+                "mfa_ticket_invalid reason=wrong_purpose kid=%s via=consume_step_up "
+                "expected_purpose=%s got_purpose=%s user_id=%s",
+                kid, MFA_PURPOSE_STEP_UP, data.get("purpose"), data.get("user_id"),
+            )
             raise MfaTicketInvalid("MFA ticket has the wrong purpose")
         if data.get("user_id") != str(user_id):
+            logger.warning(
+                "mfa_ticket_invalid reason=user_mismatch kid=%s via=consume_step_up "
+                "ticket_user_id=%s session_user_id=%s",
+                kid, data.get("user_id"), str(user_id),
+            )
             raise MfaTicketInvalid("Step-up ticket does not match the current user")
         if not data.get("elevated"):
+            logger.warning(
+                "mfa_ticket_invalid reason=not_elevated kid=%s via=consume_step_up user_id=%s",
+                kid, data.get("user_id"),
+            )
             raise MfaTicketInvalid("Step-up verification has not been completed")
+        logger.info(
+            "mfa_ticket_validated kid=%s purpose=step_up user_id=%s via=consume_step_up",
+            kid, data.get("user_id"),
+        )
         return cls._ticket_from_data(token, data)
 
 
