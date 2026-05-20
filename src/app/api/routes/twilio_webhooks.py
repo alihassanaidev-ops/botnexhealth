@@ -91,9 +91,13 @@ async def inbound_sms(request: Request) -> Response:
                 keyword=keyword,
                 reason=f"Twilio inbound keyword: {keyword}",
             )
-            await _audit_keyword(location, from_number, AuditAction.SMS_SUPPRESSION_CREATE, keyword)
+            await _audit_keyword(
+                location, from_number, AuditAction.SMS_SUPPRESSION_CREATE, keyword
+            )
             await session.commit()
-            return _twiml(f"You have been opted out of SMS from {location.name}. Reply START to opt back in.")
+            return _twiml(
+                f"You have been opted out of SMS from {location.name}. Reply START to opt back in."
+            )
 
         if intent == "START":
             await compliance.release_suppression(
@@ -103,16 +107,20 @@ async def inbound_sms(request: Request) -> Response:
                 source=ConsentSource.TWILIO_KEYWORD,
                 reason=f"Twilio inbound keyword: {keyword}",
             )
-            await _audit_keyword(location, from_number, AuditAction.SMS_SUPPRESSION_RELEASE, keyword)
+            await _audit_keyword(
+                location, from_number, AuditAction.SMS_SUPPRESSION_RELEASE, keyword
+            )
             await session.commit()
-            return _twiml(f"You have been opted in to SMS from {location.name}. Reply STOP to opt out.")
+            return _twiml(
+                f"You have been opted in to SMS from {location.name}. Reply STOP to opt out."
+            )
 
         if intent == "HELP":
             await session.commit()
             return _twiml(_help_text(location))
 
         logger.info(
-            "Inbound SMS ignored: from=%s to=%s location=%s keyword=%s",
+            "Inbound SMS ignored: from_hash=%s to_hash=%s location_hash=%s keyword=%s",
             hash_for_logging(from_number),
             hash_for_logging(to_number),
             hash_for_logging(str(location.id)),
@@ -129,7 +137,10 @@ async def sms_status(request: Request) -> dict[str, str]:
     provider_status = _field(form, "MessageStatus") or _field(form, "SmsStatus")
     provider_error = _field(form, "ErrorMessage") or _field(form, "ErrorCode")
     if not message_sid or not provider_status:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Twilio status fields")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing Twilio status fields",
+        )
 
     async with get_system_db_session(
         "twilio_status",
@@ -159,27 +170,40 @@ async def _verified_form(request: Request) -> dict[str, Any]:
     form = {str(k): str(v) for k, v in form_data.multi_items()}
 
     if not settings.twillio_api_secret:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Twilio auth token is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Twilio auth token is not configured",
+        )
 
     signature = request.headers.get("X-Twilio-Signature")
     validator = RequestValidator(settings.twillio_api_secret)
     if not signature or not validator.validate(str(request.url), form, signature):
-        logger.warning("Invalid Twilio webhook signature: payload=%s", redact_payload(form))
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Twilio signature")
+        logger.warning(
+            "Invalid Twilio webhook signature: payload=%s", redact_payload(form)
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Twilio signature"
+        )
     return form
 
 
-async def _location_for_twilio_number(session, number: str | None) -> InstitutionLocation | None:
+async def _location_for_twilio_number(
+    session, number: str | None
+) -> InstitutionLocation | None:
     if not number:
         return None
     return (
-        await session.execute(
-            select(InstitutionLocation).where(
-                InstitutionLocation.twilio_from_number == number,
-                InstitutionLocation.is_active.is_(True),
+        (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.twilio_from_number == number,
+                    InstitutionLocation.is_active.is_(True),
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
 
 async def _audit_keyword(

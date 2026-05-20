@@ -68,7 +68,9 @@ async def fetch_all_pages(
                     break
 
         if not isinstance(data, list):
-            logger.warning(f"fetch_all_pages: unexpected data type {type(data)}, stopping")
+            logger.warning(
+                f"fetch_all_pages: unexpected data type {type(data)}, stopping"
+            )
             break
 
         all_items.extend(data)
@@ -79,7 +81,9 @@ async def fetch_all_pages(
 
         # Safety limit
         if len(all_items) >= max_items:
-            logger.warning(f"fetch_all_pages: hit max_items limit ({max_items}), stopping")
+            logger.warning(
+                f"fetch_all_pages: hit max_items limit ({max_items}), stopping"
+            )
             break
 
         # Check if this was the last page
@@ -146,7 +150,9 @@ async def handle_nexhealth_request(
         correlation = uuid.uuid4().hex[:12]
         logger.error(
             "PMS API error correlation=%s path=%s error_count=%s",
-            correlation, path, len(e.errors or []),
+            correlation,
+            path,
+            len(e.errors or []),
         )
         raise HTTPException(
             status_code=502,
@@ -157,7 +163,10 @@ async def handle_nexhealth_request(
         body_len = len(e.response.content) if e.response.content else 0
         logger.warning(
             "Upstream HTTP error correlation=%s status=%s body_bytes=%s path=%s",
-            correlation, e.response.status_code, body_len, path,
+            correlation,
+            e.response.status_code,
+            body_len,
+            path,
         )
         raise HTTPException(
             status_code=e.response.status_code,
@@ -167,8 +176,9 @@ async def handle_nexhealth_request(
         correlation = uuid.uuid4().hex[:12]
         logger.error(
             "Unexpected upstream error correlation=%s path=%s type=%s",
-            correlation, path, type(e).__name__,
-            exc_info=True,
+            correlation,
+            path,
+            type(e).__name__,
         )
         raise HTTPException(
             status_code=500,

@@ -18,6 +18,7 @@ from src.app.services.event_bus import (
     redeem_sse_ticket,
     subscribe_events,
 )
+from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +76,11 @@ async def stream_institution_events(
                     await queue.put(event)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 logger.warning(
-                    "SSE subscription unavailable for institution=%s",
-                    institution_id,
-                    exc_info=True,
+                    "SSE subscription unavailable for institution_hash=%s error=%s",
+                    hash_for_logging(institution_id),
+                    safe_error_summary(exc),
                 )
             finally:
                 reader_failed.set()

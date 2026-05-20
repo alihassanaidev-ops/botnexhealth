@@ -69,13 +69,23 @@ class NexHealthPlatformStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
             auto_delete_objects=False,
             lifecycle_rules=[
-                # Recordings cost is otherwise unbounded. Move warm-rare data
-                # off Standard quickly (call recordings are accessed at most
-                # a handful of times via the audited reveal endpoint, then
-                # almost never). Net saving — no upfront cost.
+                # Default uploaded recordings are short-retention PHI and are
+                # deleted automatically after the app policy window.
                 s3.LifecycleRule(
-                    id="recordings-tiering",
+                    id="short-recording-expiration",
                     enabled=True,
+                    tag_filters={"retention_class": "short_recording"},
+                    expiration=Duration.days(config.retention.recording_days),
+                    abort_incomplete_multipart_upload_after=Duration.days(7),
+                    noncurrent_version_expiration=Duration.days(30),
+                ),
+                # If a clinic explicitly keeps a recording as part of the
+                # medical record, tier it down and still expire it at the
+                # clinical-record window instead of retaining forever.
+                s3.LifecycleRule(
+                    id="clinical-recording-tiering",
+                    enabled=True,
+                    tag_filters={"retention_class": "clinical_recording"},
                     transitions=[
                         s3.Transition(
                             storage_class=s3.StorageClass.INFREQUENT_ACCESS,
@@ -86,6 +96,7 @@ class NexHealthPlatformStack(Stack):
                             transition_after=Duration.days(365),
                         ),
                     ],
+                    expiration=Duration.days(config.retention.clinical_record_days),
                     abort_incomplete_multipart_upload_after=Duration.days(7),
                     noncurrent_version_expiration=Duration.days(30),
                 ),
@@ -738,6 +749,25 @@ class NexHealthPlatformStack(Stack):
             schedule=events.Schedule.cron(hour="3", minute="0"),
         )
 
+        # Apply PHI retention once a day after the idempotency cleanup. This
+        # clears expired recordings, message bodies, in-app notifications, and
+        # stale replay payloads without touching append-only audit logs.
+        apply_retention_policy_task = self._build_scheduled_admin_task(
+            id_prefix="ApplyRetentionPolicy",
+            command=["python", "-m", "src.app.scripts.apply_retention_policy"],
+            log_group=scheduled_jobs_log_group,
+            log_stream_prefix="retention-policy",
+            image=app_image,
+            environment=migration_environment,
+            secrets=migration_secrets,
+            vpc=vpc,
+            cluster=cluster,
+            db_security_group=db_security_group,
+            private_subnets=private_subnets,
+            schedule=events.Schedule.cron(hour="3", minute="30"),
+        )
+        recordings_bucket.grant_read_write(apply_retention_policy_task.task_role)
+
         CfnOutput(
             self,
             "RecomputeDashboardRollupTaskArn",
@@ -752,6 +782,11 @@ class NexHealthPlatformStack(Stack):
             self,
             "CleanupIdempotencyTaskArn",
             value=cleanup_idempotency_task.task_definition_arn,
+        )
+        CfnOutput(
+            self,
+            "ApplyRetentionPolicyTaskArn",
+            value=apply_retention_policy_task.task_definition_arn,
         )
 
         if db_proxy_security_group is not None:
@@ -876,6 +911,26 @@ class NexHealthPlatformStack(Stack):
             "DATABASE_POOL_RECYCLE_SECONDS": str(
                 self.config.database.app_pool_recycle_seconds
             ),
+            "RETENTION_CLINICAL_RECORD_DAYS": str(
+                self.config.retention.clinical_record_days
+            ),
+            "RETENTION_MINOR_RECORD_AGE_YEARS": str(
+                self.config.retention.minor_record_age_years
+            ),
+            "RETENTION_RECORDING_DAYS": str(self.config.retention.recording_days),
+            "RETENTION_SMS_BODY_DAYS": str(self.config.retention.sms_body_days),
+            "RETENTION_SMS_METADATA_DAYS": str(
+                self.config.retention.sms_metadata_days
+            ),
+            "RETENTION_NOTIFICATION_DAYS": str(
+                self.config.retention.notification_days
+            ),
+            "RETENTION_DEAD_LETTER_RAW_DAYS": str(
+                self.config.retention.dead_letter_raw_days
+            ),
+            "RETENTION_IDEMPOTENCY_DAYS": str(
+                self.config.retention.idempotency_days
+            ),
         }
         if self.config.api.web_concurrency:
             environment["WEB_CONCURRENCY"] = str(self.config.api.web_concurrency)
@@ -900,6 +955,8 @@ class NexHealthPlatformStack(Stack):
             allowed_origins = [frontend_base_url.rstrip("/")]
         if allowed_origins:
             environment["WEBAUTHN_ALLOWED_ORIGINS"] = ",".join(allowed_origins)
+        if self.config.webauthn_rp_name:
+            environment["WEBAUTHN_RP_NAME"] = self.config.webauthn_rp_name
         return environment
 
     def _build_app_runtime_secrets(

@@ -41,11 +41,12 @@ logger = logging.getLogger(__name__)
 
 # Default retention windows. The Retell idempotency tables only need to
 # guard against retries within Retell's own delivery window (minutes,
-# stretched generously to a day to cover backlog + clock skew). The
-# dead-letter table is ops forensic data, so it lives longer by default.
+# stretched to the configured policy window to cover backlog + clock skew).
+# The dead-letter table is ops forensic data, so it lives longer by default;
+# raw replay payloads are purged earlier by apply_retention_policy.
 _DEFAULT_RETENTION_DAYS: dict[str, int] = {
-    "retell_function_invocations": 30,
-    "retell_webhook_events": 30,
+    "retell_function_invocations": settings.retention_idempotency_days,
+    "retell_webhook_events": settings.retention_idempotency_days,
     "dead_letter_events": 90,
 }
 

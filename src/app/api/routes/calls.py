@@ -29,6 +29,7 @@ from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.custom_field_service import CustomFieldService
 from src.app.services.event_bus import publish_event
+from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class CallRecord(BaseModel):
     id: str
     call_direction: str | None
     call_status: str | None
-    call_tags: list[str]          # all normalized tags for this call
+    call_tags: list[str]  # all normalized tags for this call
     patient_status: str | None
     summary: str | None
     patient_sentiment: str | None
@@ -67,6 +68,7 @@ class CallRecord(BaseModel):
 
 class CustomFieldValueOut(BaseModel):
     """A single custom field value for a call."""
+
     field_key: str
     field_name: str
     field_type: str
@@ -82,6 +84,7 @@ class CallDetail(CallRecord):
     only via the audited reveal endpoints — the detail response carries
     only availability flags and scoped metadata.
     """
+
     transcript_available: bool = False
     recording_available: bool = False
     custom_fields: list[CustomFieldValueOut] = []
@@ -233,18 +236,21 @@ async def _get_scoped_call(
 ) -> Call:
     """Load a call the current institution/location user is allowed to access."""
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution"
+        )
 
-    conditions = [Call.id == call_id, Call.institution_id == current_user.institution_id]
+    conditions = [
+        Call.id == call_id,
+        Call.institution_id == current_user.institution_id,
+    ]
     location_id = _location_scope_id(current_user)
     if location_id:
         conditions.append(Call.location_id == location_id)
 
     call = (
         await session.execute(
-            select(Call)
-            .where(*conditions)
-            .options(selectinload(Call.contact))
+            select(Call).where(*conditions).options(selectinload(Call.contact))
         )
     ).scalar_one_or_none()
 
@@ -263,7 +269,9 @@ async def _get_scoped_call(
                 user_id=str(current_user.id),
                 location_id=current_user.location_id,
             )
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Call not found"
+        )
     return call
 
 
@@ -435,7 +443,9 @@ async def list_calls(
                 q = q.where(
                     or_(
                         Contact.full_name.ilike(f"%{search}%"),
-                        Contact.phone_hash.isnot(None),  # joined — phone filter via app layer below
+                        Contact.phone_hash.isnot(
+                            None
+                        ),  # joined — phone filter via app layer below
                     )
                 )
             return q
@@ -457,17 +467,23 @@ async def list_calls(
         ).scalar_one()
 
         rows = (
-            await session.execute(
-                _with_name_search(
-                    select(Call)
-                    .where(*conditions)
-                    .options(selectinload(Call.contact))
-                    .order_by(nullslast(desc(Call.call_date)), desc(Call.created_at))
-                    .limit(limit)
-                    .offset(offset)
+            (
+                await session.execute(
+                    _with_name_search(
+                        select(Call)
+                        .where(*conditions)
+                        .options(selectinload(Call.contact))
+                        .order_by(
+                            nullslast(desc(Call.call_date)), desc(Call.created_at)
+                        )
+                        .limit(limit)
+                        .offset(offset)
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         items = [_call_to_record(c, redact_phi=True) for c in rows]
         response = CallsListResponse(
@@ -476,9 +492,8 @@ async def list_calls(
             offset=offset,
             items=items,
         )
-        # Log which contact IDs were in the result set for PHI audit trail
-        contact_ids = [
-            c.contact_id for c in rows if c.contact_id
+        contact_id_hashes = [
+            hash_for_logging(c.contact_id) for c in rows if c.contact_id
         ]
         log_audit_background(
             actor=AuditActor.ADMIN,
@@ -491,7 +506,7 @@ async def list_calls(
                 "institution_id": current_user.institution_id,
                 "location_id": current_user.location_id,
                 "result_count": len(response.items),
-                "contact_ids": contact_ids,
+                "contact_id_hashes": contact_id_hashes,
             },
             institution_id=current_user.institution_id,
         )
@@ -516,7 +531,9 @@ async def get_call(
     reveal endpoints for clinic users in the circle of care.
     """
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution"
+        )
 
     async with get_db_session() as session:
         call = await _get_scoped_call(session, call_id, current_user)
@@ -524,7 +541,9 @@ async def get_call(
         # Load custom field values
         cf_svc = CustomFieldService(session)
         cf_pairs = await cf_svc.get_values_for_entity(
-            current_user.institution_id, "call", call.id,
+            current_user.institution_id,
+            "call",
+            call.id,
         )
         custom_fields = [_custom_field_response(defn, val) for defn, val in cf_pairs]
 
@@ -575,7 +594,9 @@ async def reveal_transcript(
     )
     async with get_db_session() as session:
         call = await _get_scoped_call(
-            session, call_id, current_user,
+            session,
+            call_id,
+            current_user,
             audit_on_miss=AuditAction.VIEW_FULL_TRANSCRIPT,
         )
         async with _phi_reveal_audit_for_call(
@@ -605,7 +626,9 @@ async def reveal_recording(
     )
     async with get_db_session() as session:
         call = await _get_scoped_call(
-            session, call_id, current_user,
+            session,
+            call_id,
+            current_user,
             audit_on_miss=AuditAction.VIEW_CALL_RECORDING,
         )
         async with _phi_reveal_audit_for_call(
@@ -619,7 +642,9 @@ async def reveal_recording(
             from src.app.tasks.recordings import generate_presigned_url
 
             signed_recording_url = (
-                generate_presigned_url(call.recording_url) if call.recording_url else None
+                generate_presigned_url(call.recording_url)
+                if call.recording_url
+                else None
             )
             return RecordingRevealResponse(
                 call_id=call.id, recording_url=signed_recording_url
@@ -645,7 +670,9 @@ async def reveal_custom_phi_field(
     )
     async with get_db_session() as session:
         call = await _get_scoped_call(
-            session, call_id, current_user,
+            session,
+            call_id,
+            current_user,
             audit_on_miss=AuditAction.VIEW_CUSTOM_PHI_FIELD,
         )
 
@@ -676,7 +703,9 @@ async def reveal_custom_phi_field(
                     value=val.get_value(is_phi=True),
                 )
 
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Custom field not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Custom field not found"
+        )
 
 
 # ── Resolve callback ──────────────────────────────────────────────────────────
@@ -696,24 +725,29 @@ async def resolve_callback(
     Idempotent: resolving an already-resolved call updates the note if provided.
     """
     if not current_user.institution_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution"
+        )
 
     async with get_db_session() as session:
-        conditions = [Call.id == call_id, Call.institution_id == current_user.institution_id]
+        conditions = [
+            Call.id == call_id,
+            Call.institution_id == current_user.institution_id,
+        ]
         location_agent_id = await _location_agent_filter(session, current_user)
         if location_agent_id:
             conditions.append(Call.location_id == location_agent_id)
 
         call = (
             await session.execute(
-                select(Call)
-                .where(*conditions)
-                .options(selectinload(Call.contact))
+                select(Call).where(*conditions).options(selectinload(Call.contact))
             )
         ).scalar_one_or_none()
 
         if not call:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Call not found"
+            )
 
         call.callback_resolved = True
         call.callback_resolved_at = datetime.now(timezone.utc)
@@ -723,7 +757,11 @@ async def resolve_callback(
         await session.commit()
         await session.refresh(call)
 
-        logger.info("Callback resolved: call=%s institution=%s", call_id, current_user.institution_id)
+        logger.info(
+            "Callback resolved: call_hash=%s institution_hash=%s",
+            hash_for_logging(call_id),
+            hash_for_logging(current_user.institution_id),
+        )
         log_audit_background(
             actor=AuditActor.ADMIN,
             user_id=str(current_user.id),
@@ -743,11 +781,11 @@ async def resolve_callback(
             publish_event(current_user.institution_id, "callbacks_updated")
             publish_event(current_user.institution_id, "dashboard_updated")
             publish_event(current_user.institution_id, "calls_updated")
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Failed to publish callback-resolution SSE events: call=%s institution=%s",
-                call_id,
-                current_user.institution_id,
-                exc_info=True,
+                "Failed to publish callback-resolution SSE events: call_hash=%s institution_hash=%s error=%s",
+                hash_for_logging(call_id),
+                hash_for_logging(current_user.institution_id),
+                safe_error_summary(exc),
             )
         return _call_to_record(call)

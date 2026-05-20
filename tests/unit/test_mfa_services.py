@@ -474,10 +474,12 @@ async def test_step_up_consume_burns_ticket_even_on_validation_failure(
     )
     await MfaTicketService.mark_step_up_elevated(ticket)
 
-    # First attempt with wrong IP — fails validation, but burns ticket.
+    # First attempt with wrong network — 203.0.114.99 crosses the /24
+    # boundary from the issued 203.0.113.10, so validation fails. The ticket
+    # is still burned (GETDEL) even though validation failed.
     with pytest.raises(MfaTicketInvalid):
         await MfaTicketService.consume_step_up(
-            token, user_id=user.id, client_ip="203.0.113.99", user_agent="ua",
+            token, user_id=user.id, client_ip="203.0.114.99", user_agent="ua",
         )
     # Legitimate retry with correct IP also fails — ticket is gone.
     with pytest.raises(MfaTicketInvalid):

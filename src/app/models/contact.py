@@ -91,6 +91,14 @@ class Contact(Base):
         nullable=False,
     )
 
+    # Retention: set when the retention job has stripped this contact's
+    # identifying fields because all of its calls have been purged. NULL means
+    # the contact still holds patient identity. A returning patient clears this
+    # back to NULL when their record is re-populated from a fresh call.
+    anonymized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+    )
+
     # Relationships
     calls: Mapped[list["Call"]] = relationship(  # noqa: F821
         "Call", back_populates="contact", lazy="selectin",

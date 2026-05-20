@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +38,15 @@ class DeadLetterEvent(Base):
     payload_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     redacted_payload_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_payload_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload_retain_until: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("(now() + interval '30 days')"),
+        nullable=False,
+        index=True,
+    )
+    raw_payload_purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+    )
     institution_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("institutions.id", ondelete="SET NULL"), nullable=True, index=True
     )

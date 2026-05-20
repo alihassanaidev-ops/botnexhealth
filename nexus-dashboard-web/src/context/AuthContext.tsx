@@ -154,10 +154,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
 
     const navigateAfterSignIn = useCallback(() => {
+        // Preserve the query string (e.g. /calls?detail=<id> deep links) so a
+        // login round-trip lands on the originally requested view.
         const from = (
-            location.state as { from?: { pathname?: string } } | null
-        )?.from?.pathname;
-        navigate(from || "/", { replace: true });
+            location.state as
+                | { from?: { pathname?: string; search?: string } }
+                | null
+        )?.from;
+        const dest = from?.pathname
+            ? `${from.pathname}${from.search ?? ""}`
+            : "/";
+        navigate(dest, { replace: true });
     }, [location.state, navigate]);
 
     const signOut = useCallback(async () => {

@@ -17,7 +17,13 @@ from src.app.database import (
     is_database_initialized,
 )
 from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
-from src.app.services.sms_privacy import payload_hash, redact_payload, sanitize_provider_error
+from src.app.services.retention_policy import default_dead_letter_raw_retain_until
+from src.app.services.sms_privacy import (
+    payload_hash,
+    redact_payload,
+    safe_error_summary,
+    sanitize_provider_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +47,7 @@ class DeadLetterService:
         redacted = redact_payload(payload)
         if not isinstance(redacted, dict):
             redacted = {"payload": redacted}
+        now = datetime.now(timezone.utc)
         row = DeadLetterEvent(
             source=source,
             event_type=event_type,
@@ -50,10 +57,13 @@ class DeadLetterService:
             redacted_payload=redacted,
             institution_id=institution_id,
             location_id=location_id,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=now,
+            updated_at=now,
+            raw_payload_retain_until=default_dead_letter_raw_retain_until(now),
         )
-        row.raw_payload = raw_payload if raw_payload is not None else _json_dumps(payload)
+        row.raw_payload = (
+            raw_payload if raw_payload is not None else _json_dumps(payload)
+        )
         self.session.add(row)
         await self.session.flush()
         return row
@@ -68,7 +78,9 @@ class DeadLetterService:
             )
         ).scalar_one_or_none()
 
-    async def mark_discarded(self, row: DeadLetterEvent, *, user_id: str | None) -> None:
+    async def mark_discarded(
+        self, row: DeadLetterEvent, *, user_id: str | None
+    ) -> None:
         row.status = DeadLetterStatus.DISCARDED.value
         row.resolved_by_user_id = user_id
         row.resolved_at = datetime.now(timezone.utc)
@@ -95,7 +107,9 @@ async def capture_dead_letter(
     """Best-effort DLQ capture that can be called from tasks/webhooks."""
     try:
         if not settings.database_url:
-            logger.warning("Skipping DLQ capture because DATABASE_URL is not configured")
+            logger.warning(
+                "Skipping DLQ capture because DATABASE_URL is not configured"
+            )
             return
         if not is_database_initialized():
             init_database(settings.database_url)
@@ -116,8 +130,10 @@ async def capture_dead_letter(
                 location_id=location_id,
             )
             await session.commit()
-    except Exception:
-        logger.warning("Failed to capture dead-letter event", exc_info=True)
+    except Exception as exc:
+        logger.warning(
+            "Failed to capture dead-letter event: %s", safe_error_summary(exc)
+        )
 
 
 def should_retry_vendor_error(error: Exception | str) -> bool:
@@ -136,8 +152,23 @@ def should_retry_vendor_error(error: Exception | str) -> bool:
 
     name = type(error).__name__.lower()
     text = str(error).lower()
-    retry_markers = ("timeout", "temporarily", "connection", "network", "rate limit", "too many requests")
-    non_retry_markers = ("credential", "auth", "forbidden", "invalid", "suppressed", "opted out", "consent")
+    retry_markers = (
+        "timeout",
+        "temporarily",
+        "connection",
+        "network",
+        "rate limit",
+        "too many requests",
+    )
+    non_retry_markers = (
+        "credential",
+        "auth",
+        "forbidden",
+        "invalid",
+        "suppressed",
+        "opted out",
+        "consent",
+    )
     if any(marker in text for marker in non_retry_markers):
         return False
     return any(marker in name or marker in text for marker in retry_markers)

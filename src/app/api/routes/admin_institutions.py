@@ -20,6 +20,7 @@ from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit
 from src.app.services.audit_decorator import audit
 from src.app.services.institution_service import InstitutionService
+from src.app.services.sms_privacy import safe_error_summary
 from src.app.services.user_invite_service import UserInviteService
 from src.app.api.pagination import PaginationQuery, page_count, paginate
 from src.app.api.models import (
@@ -39,6 +40,7 @@ router = APIRouter(prefix="/admin/institutions", tags=["Admin - Institutions"])
 # =============================================================================
 # Retell Agents API
 # =============================================================================
+
 
 @router.get("/retell/agents")
 @audit(
@@ -61,7 +63,7 @@ async def list_retell_agents(
     if not settings.retell_api_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Retell API secret not configured"
+            detail="Retell API secret not configured",
         )
 
     try:
@@ -69,7 +71,7 @@ async def list_retell_agents(
             response = await client.get(
                 "https://api.retellai.com/list-agents",
                 headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
-                timeout=10.0
+                timeout=10.0,
             )
             response.raise_for_status()
             return response.json()
@@ -77,8 +79,9 @@ async def list_retell_agents(
         logger.error(f"Failed to fetch Retell agents: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to communicate with Retell API"
+            detail="Failed to communicate with Retell API",
         )
+
 
 @router.get("/retell/agents/{agent_id}")
 @audit(
@@ -101,7 +104,7 @@ async def verify_retell_agent(
     if not settings.retell_api_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Retell API secret not configured"
+            detail="Retell API secret not configured",
         )
 
     try:
@@ -109,12 +112,11 @@ async def verify_retell_agent(
             response = await client.get(
                 f"https://api.retellai.com/get-agent/{agent_id}",
                 headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
-                timeout=10.0
+                timeout=10.0,
             )
             if response.status_code == 404:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Agent not found"
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found"
                 )
             response.raise_for_status()
             return response.json()
@@ -124,15 +126,18 @@ async def verify_retell_agent(
         logger.error(f"Failed to fetch Retell agent {agent_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to communicate with Retell API"
+            detail="Failed to communicate with Retell API",
         )
+
 
 # =============================================================================
 # Request/Response Models
 # =============================================================================
 
+
 class InstitutionCreate(BaseModel):
     """Request body for creating an institution."""
+
     name: str = Field(..., min_length=1, max_length=255)
     slug: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
 
@@ -141,7 +146,12 @@ class InstitutionCreate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
-    location_limit: int = Field(1, ge=1, le=500, description="Maximum number of locations this institution can have")
+    location_limit: int = Field(
+        1,
+        ge=1,
+        le=500,
+        description="Maximum number of locations this institution can have",
+    )
 
     # Regulatory jurisdiction (ISO 3166-2:CA)
     jurisdiction: Jurisdiction = Field(
@@ -156,6 +166,7 @@ class InstitutionUpdate(BaseModel):
     Uses exclude_unset so that omitted fields are ignored,
     while explicitly sending null clears the value.
     """
+
     name: str | None = None
     is_active: bool | None = None
 
@@ -167,13 +178,10 @@ class InstitutionUpdate(BaseModel):
     jurisdiction: Jurisdiction | None = None
 
 
-
-
-
-
 # =============================================================================
 # Routes
 # =============================================================================
+
 
 @router.get("/nexhealth/locations", response_model=InstitutionBasicListResponse)
 @audit(
@@ -197,12 +205,15 @@ async def list_nexhealth_locations(
 
     return await handle_nexhealth_request(client, "GET", "/locations", params=params)
 
+
 @router.get("/audit-logs", response_model=AuditLogPaginatedResponse)
 async def get_all_audit_logs(
     _: Annotated[User, Depends(get_current_admin)],
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
-    institution_id: str | None = Query(None, description="Optional institution ID to filter logs")
+    institution_id: str | None = Query(
+        None, description="Optional institution ID to filter logs"
+    ),
 ):
     """
     Get audit logs across all institutions (Admin only).
@@ -230,6 +241,7 @@ async def get_all_audit_logs(
             pages=page_count(total, size),
         )
 
+
 @router.get("", response_model=list[InstitutionResponse])
 async def list_institutions(
     include_inactive: bool = True,
@@ -239,7 +251,9 @@ async def list_institutions(
 
     async with get_db_session() as session:
         institution_service = InstitutionService(session)
-        institutions = await institution_service.list_all(include_inactive=include_inactive)
+        institutions = await institution_service.list_all(
+            include_inactive=include_inactive
+        )
 
         # Single query to fetch one user per institution (avoids N+1)
         institution_ids = [t.id for t in institutions]
@@ -260,6 +274,7 @@ async def list_institutions(
                     users_by_institution[u.institution_id] = u
 
             from src.app.models.institution_location import InstitutionLocation
+
             retell_result = await session.execute(
                 select(InstitutionLocation.institution_id)
                 .where(InstitutionLocation.institution_id.in_(institution_ids))
@@ -274,16 +289,22 @@ async def list_institutions(
             retell_institution_ids = set()
 
         return [
-            InstitutionResponse.from_institution(t, user=users_by_institution.get(t.id), has_retell_secret=(t.id in retell_institution_ids))
+            InstitutionResponse.from_institution(
+                t,
+                user=users_by_institution.get(t.id),
+                has_retell_secret=(t.id in retell_institution_ids),
+            )
             for t in institutions
         ]
 
 
-@router.post("", response_model=InstitutionResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=InstitutionResponse, status_code=status.HTTP_201_CREATED
+)
 @audit(
     AuditAction.INSTITUTION_CREATE,
     resource=lambda request, data, _: f"slug:{data.slug}",
-    actor=AuditActor.ADMIN
+    actor=AuditActor.ADMIN,
 )
 async def create_institution(
     request: Request,
@@ -298,11 +319,13 @@ async def create_institution(
 
         # --- Validate uniqueness BEFORE any mutations ---
 
-        existing = await institution_service.get_by_slug(data.slug, include_inactive=True)
+        existing = await institution_service.get_by_slug(
+            data.slug, include_inactive=True
+        )
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Institution with slug '{data.slug}' already exists"
+                detail=f"Institution with slug '{data.slug}' already exists",
             )
 
         existing_user = await session.execute(
@@ -311,7 +334,7 @@ async def create_institution(
         if existing_user.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with email '{email}' already exists"
+                detail=f"User with email '{email}' already exists",
             )
 
         # --- Create institution (flush only, not committed yet) ---
@@ -322,7 +345,7 @@ async def create_institution(
         except IntegrityError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Institution with slug '{data.slug}' already exists (race condition)"
+                detail=f"Institution with slug '{data.slug}' already exists (race condition)",
             )
 
         # --- Create local user and send invite email ---
@@ -333,13 +356,18 @@ async def create_institution(
                 role=UserRole.INSTITUTION_ADMIN.value,
             )
         except Exception as e:
-            logger.error("Initial institution invite failed: %s", e, exc_info=True)
+            logger.error(
+                "Initial institution invite failed: %s",
+                safe_error_summary(e),
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to send invite email",
             )
 
-        return InstitutionResponse.from_institution(institution, user, has_retell_secret=False)
+        return InstitutionResponse.from_institution(
+            institution, user, has_retell_secret=False
+        )
 
 
 @router.get("/{slug}", response_model=InstitutionResponse)
@@ -355,7 +383,7 @@ async def get_institution(
         if not institution:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Institution '{slug}' not found"
+                detail=f"Institution '{slug}' not found",
             )
 
         # Fetch institution's primary user
@@ -372,6 +400,7 @@ async def get_institution(
         institution_user = user_result.scalar_one_or_none()
 
         from src.app.models.institution_location import InstitutionLocation
+
         retell_result = await session.execute(
             select(InstitutionLocation.institution_id)
             .where(InstitutionLocation.institution_id == institution.id)
@@ -381,14 +410,16 @@ async def get_institution(
         )
         has_retell = retell_result.scalar_one_or_none() is not None
 
-        return InstitutionResponse.from_institution(institution, user=institution_user, has_retell_secret=has_retell)
+        return InstitutionResponse.from_institution(
+            institution, user=institution_user, has_retell_secret=has_retell
+        )
 
 
 @router.patch("/{slug}", response_model=InstitutionResponse)
 @audit(
     AuditAction.INSTITUTION_UPDATE,
     resource=lambda request, slug, data, _: f"slug:{slug}",
-    actor=AuditActor.ADMIN
+    actor=AuditActor.ADMIN,
 )
 async def update_institution(
     request: Request,
@@ -404,7 +435,7 @@ async def update_institution(
         if not institution:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Institution '{slug}' not found"
+                detail=f"Institution '{slug}' not found",
             )
 
         # Only update fields that were explicitly sent in the request.
@@ -414,6 +445,7 @@ async def update_institution(
         institution = await institution_service.update(institution, **updates)
 
         from src.app.models.institution_location import InstitutionLocation
+
         retell_result = await session.execute(
             select(InstitutionLocation.institution_id)
             .where(InstitutionLocation.institution_id == institution.id)
@@ -423,14 +455,16 @@ async def update_institution(
         )
         has_retell = retell_result.scalar_one_or_none() is not None
 
-        return InstitutionResponse.from_institution(institution, has_retell_secret=has_retell)
+        return InstitutionResponse.from_institution(
+            institution, has_retell_secret=has_retell
+        )
 
 
 @router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
 @audit(
     AuditAction.INSTITUTION_DELETE,
     resource=lambda request, slug, hard, _: f"slug:{slug}",
-    actor=AuditActor.ADMIN
+    actor=AuditActor.ADMIN,
 )
 async def delete_institution(
     request: Request,
@@ -452,7 +486,7 @@ async def delete_institution(
         if not institution:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Institution '{slug}' not found"
+                detail=f"Institution '{slug}' not found",
             )
 
         await institution_service.delete(institution, hard_delete=hard)
@@ -464,7 +498,9 @@ class ResendInviteRequest(BaseModel):
 
 class TestCallNotificationRequest(BaseModel):
     to_email: str = Field(..., description="Recipient email for the test notification")
-    urgent: bool = Field(False, description="Send with URGENT emergency/complaint styling")
+    urgent: bool = Field(
+        False, description="Send with URGENT emergency/complaint styling"
+    )
     tag: str | None = Field(
         default=None,
         description="Optional normalized call tag (example: appointment_booked, emergency, complaint)",
@@ -489,7 +525,7 @@ async def reinvite_institution_user(
         if not institution:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Institution '{slug}' not found"
+                detail=f"Institution '{slug}' not found",
             )
 
         # Find the local user
@@ -505,16 +541,19 @@ async def reinvite_institution_user(
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User '{email}' not found for institution '{slug}'"
+                detail=f"User '{email}' not found for institution '{slug}'",
             )
 
         try:
             await invite_service.reinvite_user(user)
         except Exception as e:
-            logger.error("Institution reinvite failed: %s", e, exc_info=True)
+            logger.error(
+                "Institution reinvite failed: %s",
+                safe_error_summary(e),
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to re-invite user"
+                detail="Failed to re-invite user",
             )
 
     await log_audit(
@@ -596,8 +635,10 @@ async def send_test_call_notification(
 # Location Schemas
 # =============================================================================
 
+
 class LocationCreate(BaseModel):
     """Request body for creating a location."""
+
     name: str = Field(..., min_length=1, max_length=255)
     slug: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9-]+$")
 
@@ -615,6 +656,7 @@ class LocationCreate(BaseModel):
 
 class LocationUpdate(BaseModel):
     """Request body for updating a location (PATCH)."""
+
     name: str | None = None
     is_active: bool | None = None
 
@@ -632,6 +674,7 @@ class LocationUpdate(BaseModel):
 
 class LocationUserResponse(BaseModel):
     """User assigned to a location."""
+
     id: str
     email: str
     role: str
@@ -640,6 +683,7 @@ class LocationUserResponse(BaseModel):
 
 class LocationResponse(BaseModel):
     """Response model for a location (no secrets)."""
+
     id: str
     institution_id: str
     name: str
@@ -694,7 +738,12 @@ class LocationResponse(BaseModel):
 # Location Routes
 # =============================================================================
 
-@router.post("/{slug}/locations", response_model=LocationResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/{slug}/locations",
+    response_model=LocationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 @audit(
     AuditAction.LOCATION_CREATE,
     resource=lambda request, slug, data, _: f"institution:{slug}/location:{data.slug}",
@@ -712,7 +761,10 @@ async def create_location(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
         existing = await institution_service.find_any_location_by_slug(data.slug)
         if existing:
@@ -723,7 +775,9 @@ async def create_location(
 
         location_data = data.model_dump()
         try:
-            location = await institution_service.create_location(institution.id, **location_data)
+            location = await institution_service.create_location(
+                institution.id, **location_data
+            )
         except IntegrityError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -745,9 +799,14 @@ async def list_locations(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        locations = await institution_service.list_locations(institution.id, include_inactive=include_inactive)
+        locations = await institution_service.list_locations(
+            institution.id, include_inactive=include_inactive
+        )
 
         # Fetch location users in one query (avoids N+1)
         location_ids = [loc.id for loc in locations]
@@ -782,11 +841,19 @@ async def get_location(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         return LocationResponse.from_location(location)
 
@@ -794,7 +861,9 @@ async def get_location(
 @router.patch("/{slug}/locations/{loc_slug}", response_model=LocationResponse)
 @audit(
     AuditAction.LOCATION_UPDATE,
-    resource=lambda request, slug, loc_slug, data, _: f"institution:{slug}/location:{loc_slug}",
+    resource=lambda request, slug, loc_slug, data, _: (
+        f"institution:{slug}/location:{loc_slug}"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def update_location(
@@ -810,11 +879,19 @@ async def update_location(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         updates = data.model_dump(exclude_unset=True)
         location = await institution_service.update_location(location, **updates)
@@ -824,7 +901,9 @@ async def update_location(
 @router.delete("/{slug}/locations/{loc_slug}", status_code=status.HTTP_204_NO_CONTENT)
 @audit(
     AuditAction.LOCATION_DELETE,
-    resource=lambda request, slug, loc_slug, hard, _: f"institution:{slug}/location:{loc_slug}",
+    resource=lambda request, slug, loc_slug, hard, _: (
+        f"institution:{slug}/location:{loc_slug}"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def delete_location(
@@ -840,11 +919,19 @@ async def delete_location(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         await institution_service.delete_location(location, hard=hard)
 
@@ -852,7 +939,9 @@ async def delete_location(
 @router.post("/{slug}/locations/{loc_slug}/sync")
 @audit(
     AuditAction.LOCATION_SYNC,
-    resource=lambda request, slug, loc_slug, _: f"institution:{slug}/location:{loc_slug}",
+    resource=lambda request, slug, loc_slug, _: (
+        f"institution:{slug}/location:{loc_slug}"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def sync_location(
@@ -869,11 +958,19 @@ async def sync_location(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         sync_service = SyncService(session)
         result = await sync_service.sync_location(institution, location)
@@ -891,15 +988,23 @@ async def sync_location(
 # Location User Management
 # =============================================================================
 
+
 class LocationUserInvite(BaseModel):
     """Request body for inviting a location user."""
+
     email: str = Field(..., description="Email for the location user invite")
 
 
-@router.post("/{slug}/locations/{loc_slug}/invite", response_model=LocationResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{slug}/locations/{loc_slug}/invite",
+    response_model=LocationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 @audit(
     AuditAction.LOCATION_USER_CREATE,
-    resource=lambda request, slug, loc_slug, data, _: f"institution:{slug}/location:{loc_slug}/user:{data.email}",
+    resource=lambda request, slug, loc_slug, data, _: (
+        f"institution:{slug}/location:{loc_slug}/user:{data.email}"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def invite_location_user(
@@ -926,12 +1031,20 @@ async def invite_location_user(
         # Validate institution
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
         # Validate location
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         # Check email uniqueness against active users only — soft-deleted
         # rows may share an email per the partial unique index.
@@ -941,7 +1054,7 @@ async def invite_location_user(
         if existing_user.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"User with email '{email}' already exists"
+                detail=f"User with email '{email}' already exists",
             )
 
         # Check if location already has a user
@@ -955,7 +1068,7 @@ async def invite_location_user(
         if existing_loc_user.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Location '{loc_slug}' already has an assigned user"
+                detail=f"Location '{loc_slug}' already has an assigned user",
             )
 
         # Create local user and send invite email
@@ -967,7 +1080,10 @@ async def invite_location_user(
                 location_id=str(location.id),
             )
         except Exception as e:
-            logger.error("Location user invite failed: %s", e, exc_info=True)
+            logger.error(
+                "Location user invite failed: %s",
+                safe_error_summary(e),
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to send invite email",
@@ -976,7 +1092,9 @@ async def invite_location_user(
         return LocationResponse.from_location(location, user=user)
 
 
-@router.get("/{slug}/locations/{loc_slug}/users", response_model=list[LocationUserResponse])
+@router.get(
+    "/{slug}/locations/{loc_slug}/users", response_model=list[LocationUserResponse]
+)
 async def list_location_users(
     slug: str,
     loc_slug: str,
@@ -988,11 +1106,19 @@ async def list_location_users(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         result = await session.execute(
             select(User).where(
@@ -1031,11 +1157,19 @@ async def reinvite_location_user(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         # Find the user
         result = await session.execute(
@@ -1056,7 +1190,10 @@ async def reinvite_location_user(
         try:
             await invite_service.reinvite_user(user)
         except Exception as e:
-            logger.error("Location reinvite failed: %s", e, exc_info=True)
+            logger.error(
+                "Location reinvite failed: %s",
+                safe_error_summary(e),
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to re-invite user",
@@ -1086,8 +1223,10 @@ async def reinvite_location_user(
 # Operating Hours & Breaks Schemas
 # =============================================================================
 
+
 class OperatingHoursEntry(BaseModel):
     """One day's operating hours."""
+
     day_of_week: int = Field(..., ge=0, le=6, description="0=Monday … 6=Sunday")
     is_open: bool = True
     open_time: str | None = Field(None, description="HH:MM format, e.g. '08:00'")
@@ -1118,11 +1257,13 @@ class OperatingHoursResponse(BaseModel):
 
 class BulkOperatingHoursRequest(BaseModel):
     """Bulk-set all 7 days at once."""
+
     hours: list[OperatingHoursEntry] = Field(..., min_length=1, max_length=7)
 
 
 class BreakCreateRequest(BaseModel):
     """Create a new break for a location."""
+
     name: str = Field(..., min_length=1, max_length=100)
     day_of_week: int | None = Field(None, ge=0, le=6, description="NULL = every day")
     start_time: str = Field(..., description="HH:MM format")
@@ -1155,7 +1296,11 @@ class BreakResponse(BaseModel):
 # Operating Hours Routes
 # =============================================================================
 
-@router.get("/{slug}/locations/{loc_slug}/operating-hours", response_model=list[OperatingHoursResponse])
+
+@router.get(
+    "/{slug}/locations/{loc_slug}/operating-hours",
+    response_model=list[OperatingHoursResponse],
+)
 async def get_operating_hours(
     slug: str,
     loc_slug: str,
@@ -1167,13 +1312,22 @@ async def get_operating_hours(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         from src.app.models.location_operating_hours import LocationOperatingHours
+
         result = await session.execute(
             select(LocationOperatingHours)
             .where(LocationOperatingHours.location_id == location.id)
@@ -1182,7 +1336,10 @@ async def get_operating_hours(
         return [OperatingHoursResponse.from_model(h) for h in result.scalars().all()]
 
 
-@router.put("/{slug}/locations/{loc_slug}/operating-hours", response_model=list[OperatingHoursResponse])
+@router.put(
+    "/{slug}/locations/{loc_slug}/operating-hours",
+    response_model=list[OperatingHoursResponse],
+)
 async def set_operating_hours(
     slug: str,
     loc_slug: str,
@@ -1198,11 +1355,19 @@ async def set_operating_hours(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         # Validate no duplicate days
         days_seen = set()
@@ -1216,6 +1381,7 @@ async def set_operating_hours(
 
         # Delete existing hours for this location
         from sqlalchemy import delete
+
         await session.execute(
             delete(LocationOperatingHours).where(
                 LocationOperatingHours.location_id == location.id
@@ -1226,7 +1392,9 @@ async def set_operating_hours(
         new_rows = []
         for entry in data.hours:
             open_t = dt_time.fromisoformat(entry.open_time) if entry.open_time else None
-            close_t = dt_time.fromisoformat(entry.close_time) if entry.close_time else None
+            close_t = (
+                dt_time.fromisoformat(entry.close_time) if entry.close_time else None
+            )
             row = LocationOperatingHours(
                 location_id=location.id,
                 day_of_week=entry.day_of_week,
@@ -1245,6 +1413,7 @@ async def set_operating_hours(
 # Breaks Routes
 # =============================================================================
 
+
 @router.get("/{slug}/locations/{loc_slug}/breaks", response_model=list[BreakResponse])
 async def get_breaks(
     slug: str,
@@ -1257,13 +1426,22 @@ async def get_breaks(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         from src.app.models.location_break import LocationBreak
+
         result = await session.execute(
             select(LocationBreak)
             .where(LocationBreak.location_id == location.id)
@@ -1292,11 +1470,19 @@ async def create_break(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         brk = LocationBreak(
             location_id=location.id,
@@ -1328,11 +1514,19 @@ async def delete_break(
 
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
-        location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+        location = await institution_service.get_location_by_slug(
+            loc_slug, institution.id
+        )
         if not location:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Location '{loc_slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
 
         result = await session.execute(
             select(LocationBreak).where(
@@ -1342,6 +1536,8 @@ async def delete_break(
         )
         brk = result.scalar_one_or_none()
         if not brk:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Break not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Break not found"
+            )
 
         await session.delete(brk)

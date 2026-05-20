@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -58,9 +58,40 @@ class SmsHistoryLog(Base):
 
     # PHI fields — AES-256-GCM encrypted at application level
     to_number_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    body_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    body_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     to_number_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     to_number_masked: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    # Retention controls. SMS defaults to clinical-record treatment because
+    # appointment and care-routing texts can become part of the patient record.
+    retention_class: Mapped[str] = mapped_column(
+        String(32),
+        default="clinical_record",
+        server_default=text("'clinical_record'"),
+        nullable=False,
+        index=True,
+    )
+    retain_until: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("(now() + interval '10 years')"),
+        nullable=False,
+        index=True,
+    )
+    body_retain_until: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("(now() + interval '10 years')"),
+        nullable=False,
+        index=True,
+    )
+    body_purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+    )
+    legal_hold_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+    )
+    purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+    )
 
     # Status of the message delivery
     status: Mapped[str] = mapped_column(
@@ -147,7 +178,7 @@ class SmsHistoryLog(Base):
         if value is not None:
             self.body_encrypted = encrypt_value(value) # type: ignore
         else:
-            raise ValueError("body cannot be None")
+            self.body_encrypted = None
 
     def __repr__(self) -> str:
         return (

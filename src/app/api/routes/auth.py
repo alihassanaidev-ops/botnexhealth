@@ -12,7 +12,11 @@ from jose import JWTError
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from src.app.api.deps import get_current_active_user, get_current_admin, get_current_super_admin
+from src.app.api.deps import (
+    get_current_active_user,
+    get_current_admin,
+    get_current_super_admin,
+)
 from src.app.config import settings
 from src.app.database import RlsContext, get_db_session, use_rls_context
 from src.app.models.user import User, InviteStatus, UserRole
@@ -24,6 +28,7 @@ from src.app.services.refresh_token_service import (
     RefreshSession,
     RefreshTokenService,
 )
+from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
 from src.app.services.mfa import (
     ADD_FACTOR_TICKET_TTL_SECONDS,
     MFA_PURPOSE_ADD_FACTOR_TOTP,
@@ -62,6 +67,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 class AuthSession(BaseModel):
     """Login/refresh response. Refresh token is delivered via HttpOnly cookie."""
+
     status: Literal["authenticated"] = "authenticated"
     access_token: str
     token_type: str
@@ -70,6 +76,7 @@ class AuthSession(BaseModel):
 
 class MfaChallengeResponse(BaseModel):
     """Password accepted; MFA must be completed before session issuance."""
+
     status: Literal["mfa_required", "mfa_setup_required"]
     mfa_ticket: str
     methods: list[str] = []
@@ -125,6 +132,7 @@ class MfaStatusResponse(BaseModel):
 
 class WebAuthnCredentialSummary(BaseModel):
     """Public-facing passkey metadata. Never includes the public key."""
+
     id: str
     device_label: str | None
     aaguid: str | None
@@ -417,7 +425,9 @@ def _mfa_response(
         status="mfa_required" if is_enrolled else "mfa_setup_required",
         mfa_ticket=ticket,
         methods=mfa_status.available_methods_for_role(user.role) if is_enrolled else [],
-        setup_methods=[] if is_enrolled else mfa_status.setup_methods_for_role(user.role),
+        setup_methods=[]
+        if is_enrolled
+        else mfa_status.setup_methods_for_role(user.role),
         role=user.role,
         email=user.email,
     )
@@ -515,7 +525,9 @@ async def _issue_mfa_bound_access_token(
         },
         expires_delta=timedelta(minutes=settings.access_token_ttl_minutes),
     )
-    await RefreshTokenService.register_access_token(user.id, jti, ttl_seconds=ttl_seconds)
+    await RefreshTokenService.register_access_token(
+        user.id, jti, ttl_seconds=ttl_seconds
+    )
     return AuthSession(access_token=access_token, token_type="bearer")
 
 
@@ -544,7 +556,7 @@ async def _issue_auth_session(
             auth_time=issued_auth_time,
         )
     except Exception as e:
-        logger.error("Failed to issue auth session: %s", e, exc_info=True)
+        logger.error("Failed to issue auth session: %s", safe_error_summary(e))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication session store is unavailable",
@@ -962,7 +974,9 @@ async def login_oauth_form(
 
 @router.post("/forgot-password", response_model=MessageResponse)
 @limiter.limit("10/minute")
-async def forgot_password(request: Request, data: ForgotPasswordRequest) -> MessageResponse:
+async def forgot_password(
+    request: Request, data: ForgotPasswordRequest
+) -> MessageResponse:
     """Generate a password reset token and send a reset email if the account exists."""
     email = _normalize_email(data.email)
     client_ip = _client_ip(request)
@@ -1018,8 +1032,9 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest) -> Mess
             )
         except Exception as exc:
             logger.error(
-                "Failed to send password reset email for user_id=%s: %s",
-                user_for_email.id, exc, exc_info=True,
+                "Failed to send password reset email for user_hash=%s: %s",
+                hash_for_logging(str(user_for_email.id)),
+                safe_error_summary(exc),
             )
 
         log_audit_background(
@@ -1235,9 +1250,13 @@ async def mfa_webauthn_register_verify(
             recovery_codes = await mfa.ensure_recovery_codes(user_id=str(user.id))
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=user, ticket=ticket,
-                method="webauthn", phase="register_verify",
-                error=exc, enrolled=True,
+                request=request,
+                user=user,
+                ticket=ticket,
+                method="webauthn",
+                phase="register_verify",
+                error=exc,
+                enrolled=True,
             )
             raise _mfa_exception_to_http(exc) from exc
 
@@ -1252,7 +1271,9 @@ async def mfa_webauthn_register_verify(
     )
 
 
-@router.post("/mfa/webauthn/authenticate/options", response_model=WebAuthnOptionsResponse)
+@router.post(
+    "/mfa/webauthn/authenticate/options", response_model=WebAuthnOptionsResponse
+)
 @limiter.limit(RATE_AUTH)
 async def mfa_webauthn_authenticate_options(
     request: Request,
@@ -1308,8 +1329,11 @@ async def mfa_webauthn_authenticate_verify(
             )
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=user, ticket=ticket,
-                method="webauthn", phase="authenticate_verify",
+                request=request,
+                user=user,
+                ticket=ticket,
+                method="webauthn",
+                phase="authenticate_verify",
                 error=exc,
             )
             raise _mfa_exception_to_http(exc) from exc
@@ -1393,9 +1417,13 @@ async def mfa_totp_setup_verify(
             recovery_codes = await mfa.ensure_recovery_codes(user_id=str(user.id))
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=user, ticket=ticket,
-                method="totp", phase="setup_verify",
-                error=exc, enrolled=True,
+                request=request,
+                user=user,
+                ticket=ticket,
+                method="totp",
+                phase="setup_verify",
+                error=exc,
+                enrolled=True,
             )
             raise _mfa_exception_to_http(exc) from exc
 
@@ -1429,8 +1457,11 @@ async def mfa_totp_verify(
             await MfaService(session).verify_totp(user_id=str(user.id), code=data.code)
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=user, ticket=ticket,
-                method="totp", phase="verify",
+                request=request,
+                user=user,
+                ticket=ticket,
+                method="totp",
+                phase="verify",
                 error=exc,
             )
             raise _mfa_exception_to_http(exc) from exc
@@ -1461,8 +1492,11 @@ async def mfa_recovery_code_verify(
             )
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=user, ticket=ticket,
-                method="recovery_code", phase="verify",
+                request=request,
+                user=user,
+                ticket=ticket,
+                method="recovery_code",
+                phase="verify",
                 error=exc,
             )
             raise _mfa_exception_to_http(exc) from exc
@@ -1661,7 +1695,9 @@ async def mfa_step_up_totp_verify(
     data: TotpVerifyRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> StepUpElevatedResponse:
-    ticket = await _ticket_from_request(request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP)
+    ticket = await _ticket_from_request(
+        request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP
+    )
     # Authorize the ticket BEFORE touching factor state — verify_totp
     # consumes a timestep (writes ``last_accepted_time_step``), which
     # we must not do on behalf of another user even if the request
@@ -1669,16 +1705,24 @@ async def mfa_step_up_totp_verify(
     _require_step_up_ticket_matches_user(ticket, current_user)
     async with _auth_db_session(user_id=str(current_user.id)) as session:
         try:
-            await MfaService(session).verify_totp(user_id=str(current_user.id), code=data.code)
+            await MfaService(session).verify_totp(
+                user_id=str(current_user.id), code=data.code
+            )
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=current_user, ticket=ticket,
-                method="totp", phase="step_up_verify",
+                request=request,
+                user=current_user,
+                ticket=ticket,
+                method="totp",
+                phase="step_up_verify",
                 error=exc,
             )
             raise _mfa_exception_to_http(exc) from exc
     return await _elevate_step_up_ticket(
-        request=request, ticket=ticket, current_user=current_user, method="totp",
+        request=request,
+        ticket=ticket,
+        current_user=current_user,
+        method="totp",
     )
 
 
@@ -1692,10 +1736,14 @@ async def mfa_step_up_webauthn_options(
     data: MfaTicketRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> WebAuthnOptionsResponse:
-    ticket = await _ticket_from_request(request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP)
+    ticket = await _ticket_from_request(
+        request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP
+    )
     _require_step_up_ticket_matches_user(ticket, current_user)
     async with _auth_db_session(user_id=str(current_user.id)) as session:
-        options, challenge = await MfaService(session).generate_webauthn_authentication_options(
+        options, challenge = await MfaService(
+            session
+        ).generate_webauthn_authentication_options(
             user_id=str(current_user.id),
         )
         await MfaTicketService.update(
@@ -1706,14 +1754,18 @@ async def mfa_step_up_webauthn_options(
     return WebAuthnOptionsResponse(options=options)
 
 
-@router.post("/mfa/step-up/webauthn/authenticate/verify", response_model=StepUpElevatedResponse)
+@router.post(
+    "/mfa/step-up/webauthn/authenticate/verify", response_model=StepUpElevatedResponse
+)
 @limiter.limit(RATE_AUTH)
 async def mfa_step_up_webauthn_verify(
     request: Request,
     data: WebAuthnAuthenticationVerifyRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> StepUpElevatedResponse:
-    ticket = await _ticket_from_request(request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP)
+    ticket = await _ticket_from_request(
+        request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP
+    )
     # Order matters: user-binding check before any state mutation. The
     # webauthn verify call below bumps ``sign_count`` and
     # ``last_used_at`` on a credential row, which we must not do
@@ -1734,13 +1786,19 @@ async def mfa_step_up_webauthn_verify(
             )
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=current_user, ticket=ticket,
-                method="webauthn", phase="step_up_verify",
+                request=request,
+                user=current_user,
+                ticket=ticket,
+                method="webauthn",
+                phase="step_up_verify",
                 error=exc,
             )
             raise _mfa_exception_to_http(exc) from exc
     return await _elevate_step_up_ticket(
-        request=request, ticket=ticket, current_user=current_user, method="webauthn",
+        request=request,
+        ticket=ticket,
+        current_user=current_user,
+        method="webauthn",
     )
 
 
@@ -1751,7 +1809,9 @@ async def mfa_step_up_recovery_code_verify(
     data: RecoveryCodeVerifyRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> StepUpElevatedResponse:
-    ticket = await _ticket_from_request(request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP)
+    ticket = await _ticket_from_request(
+        request, data.mfa_ticket, purpose=MFA_PURPOSE_STEP_UP
+    )
     # Recovery codes are the most consumable factor (10 total, single-
     # use each). Refuse a mismatched ticket before ``use_recovery_code``
     # marks one ``used_at``.
@@ -1759,17 +1819,24 @@ async def mfa_step_up_recovery_code_verify(
     async with _auth_db_session(user_id=str(current_user.id)) as session:
         try:
             await MfaService(session).use_recovery_code(
-                user_id=str(current_user.id), code=data.code,
+                user_id=str(current_user.id),
+                code=data.code,
             )
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=current_user, ticket=ticket,
-                method="recovery_code", phase="step_up_verify",
+                request=request,
+                user=current_user,
+                ticket=ticket,
+                method="recovery_code",
+                phase="step_up_verify",
                 error=exc,
             )
             raise _mfa_exception_to_http(exc) from exc
     return await _elevate_step_up_ticket(
-        request=request, ticket=ticket, current_user=current_user, method="recovery_code",
+        request=request,
+        ticket=ticket,
+        current_user=current_user,
+        method="recovery_code",
     )
 
 
@@ -1808,7 +1875,9 @@ async def mfa_factors_webauthn_register_options(
     # later the user has to start the step-up flow over (correct UX
     # for a tampering-suspected case).
     await _require_step_up(
-        request, ticket_token=data.mfa_ticket, current_user=current_user,
+        request,
+        ticket_token=data.mfa_ticket,
+        current_user=current_user,
     )
     async with _auth_db_session(user_id=str(current_user.id)) as session:
         mfa = MfaService(session)
@@ -1882,9 +1951,13 @@ async def mfa_factors_webauthn_register_verify(
             )
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=current_user, ticket=ticket,
-                method="webauthn", phase="add_factor_verify",
-                error=exc, enrolled=True,
+                request=request,
+                user=current_user,
+                ticket=ticket,
+                method="webauthn",
+                phase="add_factor_verify",
+                error=exc,
+                enrolled=True,
             )
             raise _mfa_exception_to_http(exc) from exc
 
@@ -1933,7 +2006,9 @@ async def mfa_factors_totp_setup_options(
             detail="Super admin accounts must enroll a passkey",
         )
     await _require_step_up(
-        request, ticket_token=data.mfa_ticket, current_user=current_user,
+        request,
+        ticket_token=data.mfa_ticket,
+        current_user=current_user,
     )
     # Disallow stacking — TOTP factors are 1-per-user.
     async with _auth_db_session(user_id=str(current_user.id)) as session:
@@ -2022,9 +2097,13 @@ async def mfa_factors_totp_setup_verify(
             )
         except MfaError as exc:
             await _audit_mfa_failure(
-                request=request, user=current_user, ticket=ticket,
-                method="totp", phase="add_factor_verify",
-                error=exc, enrolled=True,
+                request=request,
+                user=current_user,
+                ticket=ticket,
+                method="totp",
+                phase="add_factor_verify",
+                error=exc,
+                enrolled=True,
             )
             raise _mfa_exception_to_http(exc) from exc
 
@@ -2063,10 +2142,14 @@ async def mfa_recovery_codes_regenerate(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> RecoveryCodesResponse:
     step_up = await _require_step_up(
-        request, ticket_token=data.mfa_ticket, current_user=current_user,
+        request,
+        ticket_token=data.mfa_ticket,
+        current_user=current_user,
     )
     async with _auth_db_session(user_id=str(current_user.id)) as session:
-        codes = await MfaService(session).replace_recovery_codes(user_id=str(current_user.id))
+        codes = await MfaService(session).replace_recovery_codes(
+            user_id=str(current_user.id)
+        )
 
     await log_audit(
         actor=AuditActor.ADMIN,
@@ -2130,7 +2213,9 @@ async def mfa_webauthn_remove(
     URL where REST clients expect it.
     """
     step_up = await _require_step_up(
-        request, ticket_token=data.mfa_ticket, current_user=current_user,
+        request,
+        ticket_token=data.mfa_ticket,
+        current_user=current_user,
     )
     async with _auth_db_session(user_id=str(current_user.id)) as session:
         removed = await MfaService(session).remove_webauthn_credential(
@@ -2171,7 +2256,9 @@ async def mfa_totp_disable(
 ) -> MessageResponse:
     """Disable the current user's TOTP authenticator. Idempotent."""
     step_up = await _require_step_up(
-        request, ticket_token=data.mfa_ticket, current_user=current_user,
+        request,
+        ticket_token=data.mfa_ticket,
+        current_user=current_user,
     )
     async with _auth_db_session(user_id=str(current_user.id)) as session:
         was_enabled = await MfaService(session).disable_totp(
@@ -2194,7 +2281,9 @@ async def mfa_totp_disable(
             request_id=step_up.audit_request_id,
         )
     return MessageResponse(
-        message="Authenticator app disabled" if was_enabled else "Authenticator app was not enabled"
+        message="Authenticator app disabled"
+        if was_enabled
+        else "Authenticator app was not enabled"
     )
 
 
@@ -2214,7 +2303,9 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
 
     refresh_session_data: RefreshSession | None
     try:
-        refresh_session_data = await RefreshTokenService.get_session_for_token(refresh_token)
+        refresh_session_data = await RefreshTokenService.get_session_for_token(
+            refresh_token
+        )
     except RefreshTokenReplayError as replay_err:
         # Replay can be detected at first lookup (rotated set hit) — handle
         # the same way as rotate_token's replay branch: audit + 401.
@@ -2222,7 +2313,9 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
         await log_audit(
             actor=AuditActor.API_CLIENT,
             action=AuditAction.LOGIN,
-            target_resource=f"user:{replay_user_id}" if replay_user_id else "auth:refresh",
+            target_resource=f"user:{replay_user_id}"
+            if replay_user_id
+            else "auth:refresh",
             outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
             metadata={
                 "action": "refresh_token_replay_detected",
@@ -2237,7 +2330,7 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
             detail="Refresh token replay detected. Please sign in again.",
         )
     except Exception as e:
-        logger.error("Failed to validate refresh token: %s", e, exc_info=True)
+        logger.error("Failed to validate refresh token: %s", safe_error_summary(e))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication session store is unavailable",
@@ -2323,7 +2416,7 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
             detail="Refresh token replay detected. Please sign in again.",
         )
     except Exception as e:
-        logger.error("Failed to rotate refresh token: %s", e, exc_info=True)
+        logger.error("Failed to rotate refresh token: %s", safe_error_summary(e))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication session store is unavailable",
@@ -2344,7 +2437,7 @@ async def refresh_session(request: Request, response: Response) -> AuthSession:
             or int(datetime.now(timezone.utc).timestamp()),
         )
     except Exception as e:
-        logger.error("Failed to issue access token: %s", e, exc_info=True)
+        logger.error("Failed to issue access token: %s", safe_error_summary(e))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication session store is unavailable",
@@ -2377,7 +2470,7 @@ async def logout(request: Request, response: Response) -> MessageResponse:
             revoked_user_id = await RefreshTokenService.revoke_token(refresh_token)
         await _revoke_access_token_from_request(request)
     except Exception as e:
-        logger.error("Failed to revoke refresh token: %s", e, exc_info=True)
+        logger.error("Failed to revoke refresh token: %s", safe_error_summary(e))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication session store is unavailable",
@@ -2401,6 +2494,7 @@ async def logout(request: Request, response: Response) -> MessageResponse:
 # =============================================================================
 # Admin: Account Unlock
 # =============================================================================
+
 
 class UnlockResponse(BaseModel):
     message: str
@@ -2497,14 +2591,17 @@ async def admin_reset_user_mfa(
     their next login and enrols fresh factors.
     """
     step_up = await _require_step_up(
-        request, ticket_token=data.mfa_ticket, current_user=admin,
+        request,
+        ticket_token=data.mfa_ticket,
+        current_user=admin,
     )
 
     async with get_db_session() as session:
         target = (
             await session.execute(
                 select(User).where(
-                    User.id == user_id, User.deleted_at.is_(None),
+                    User.id == user_id,
+                    User.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -2557,8 +2654,7 @@ async def admin_reset_user_mfa(
 @router.get("/users/me", response_model=UserRead)
 @limiter.limit("30/minute")
 async def read_users_me(
-    request: Request,
-    current_user: Annotated[User, Depends(get_current_active_user)]
+    request: Request, current_user: Annotated[User, Depends(get_current_active_user)]
 ) -> User:
     """
     Get current user profile.

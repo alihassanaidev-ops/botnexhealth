@@ -9,10 +9,15 @@ from typing import Any
 from sqlalchemy import select
 
 from src.app.config import settings
-from src.app.database import get_system_db_session, init_database, is_database_initialized
+from src.app.database import (
+    get_system_db_session,
+    init_database,
+    is_database_initialized,
+)
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_history_log import SmsStatus
 from src.app.services.dead_letter import capture_dead_letter, should_retry_vendor_error
+from src.app.services.sms_privacy import hash_for_logging
 from src.app.services.sms_service import SmsService
 from src.app.worker import celery_app
 
@@ -63,13 +68,17 @@ async def _send_sms_async(
 
         if log_record.status == SmsStatus.SENT.value:
             logger.info(
-                "SMS task sent: sid=%s location=%s call=%s",
-                log_record.message_sid,
-                institution_location_id,
-                call_id,
+                "SMS task sent: sid_hash=%s location_hash=%s call_hash=%s",
+                hash_for_logging(log_record.message_sid),
+                hash_for_logging(institution_location_id),
+                hash_for_logging(call_id),
             )
         elif log_record.status == SmsStatus.SUPPRESSED.value:
-            logger.info("SMS task suppressed: location=%s call=%s", institution_location_id, call_id)
+            logger.info(
+                "SMS task suppressed: location_hash=%s call_hash=%s",
+                hash_for_logging(institution_location_id),
+                hash_for_logging(call_id),
+            )
         return result
 
 
@@ -135,9 +144,14 @@ def send_sms_message(
 
     error_message = result.get("error_message") or "Unknown Twilio failure"
     provider_status = result.get("provider_status") or ""
-    retryable = provider_status.startswith("retryable") or should_retry_vendor_error(error_message)
+    retryable = provider_status.startswith("retryable") or should_retry_vendor_error(
+        error_message
+    )
     if retryable and self.request.retries < self.max_retries:
-        raise self.retry(exc=RuntimeError(error_message), countdown=_retry_countdown(self.request.retries))
+        raise self.retry(
+            exc=RuntimeError(error_message),
+            countdown=_retry_countdown(self.request.retries),
+        )
 
     asyncio.run(
         capture_dead_letter(

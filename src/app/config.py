@@ -92,6 +92,16 @@ class Settings(BaseSettings):
     aws_s3_bucket_name: str | None = None
     aws_region: str = "ca-central-1"
 
+    # PHI retention windows (days unless otherwise noted)
+    retention_clinical_record_days: int = 3650
+    retention_minor_record_age_years: int = 28
+    retention_recording_days: int = 90
+    retention_sms_body_days: int = 3650
+    retention_sms_metadata_days: int = 2190
+    retention_notification_days: int = 180
+    retention_dead_letter_raw_days: int = 30
+    retention_idempotency_days: int = 7
+
 
     # Twilio (SMS / phone numbers)
     twillio_sid: str | None = None          # Account SID (env: TWILLIO_SID)
@@ -125,7 +135,7 @@ class Settings(BaseSettings):
     auth_frontend_base_url: str | None = None
     auth_redirect_allowed_hosts: str = ""
     webauthn_rp_id: str | None = None
-    webauthn_rp_name: str = "NexHealth Dashboard"
+    webauthn_rp_name: str = "ScaleNexus Dashboard"
     webauthn_allowed_origins: str = ""
     # WebAuthn user-verification strictness. Default REQUIRED demands
     # the authenticator prove inherence (biometric or PIN) at every
@@ -235,6 +245,20 @@ class Settings(BaseSettings):
 
         for cidr in self._split_csv(self.trusted_proxy_cidrs):
             ipaddress.ip_network(cidr, strict=False)
+
+        retention_fields = (
+            "retention_clinical_record_days",
+            "retention_minor_record_age_years",
+            "retention_recording_days",
+            "retention_sms_body_days",
+            "retention_sms_metadata_days",
+            "retention_notification_days",
+            "retention_dead_letter_raw_days",
+            "retention_idempotency_days",
+        )
+        for field_name in retention_fields:
+            if getattr(self, field_name) < 1:
+                raise ValueError(f"{field_name.upper()} must be at least 1")
 
         if not self.database_url:
             database_url = build_database_url(

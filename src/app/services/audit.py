@@ -35,6 +35,7 @@ from typing import Any, AsyncGenerator, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
+from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class AuditPersistenceError(RuntimeError):
 # Data Transfer Objects (DTOs)
 # =============================================================================
 
+
 @dataclass(frozen=True)
 class AuditEntry:
     """
@@ -59,6 +61,7 @@ class AuditEntry:
 
     Decouples service layer from database model (DIP).
     """
+
     actor: AuditActor | str
     action: AuditAction | str
     target_resource: str
@@ -74,6 +77,7 @@ class AuditEntry:
 # =============================================================================
 # Repository Interface (ISP + DIP)
 # =============================================================================
+
 
 @runtime_checkable
 class IAuditRepository(Protocol):
@@ -102,6 +106,7 @@ class IAuditRepository(Protocol):
 # =============================================================================
 # Concrete Repository Implementation (LSP)
 # =============================================================================
+
 
 async def _resolve_jurisdiction(session: Any, institution_id: str | None) -> str | None:
     """Look up an institution's jurisdiction for residency-of-record stamping."""
@@ -136,7 +141,9 @@ class PostgresAuditRepository:
         ) as session:
             metadata = {"request_id": entry.request_id, **entry.metadata}
             if "jurisdiction" not in metadata:
-                jurisdiction = await _resolve_jurisdiction(session, entry.institution_id)
+                jurisdiction = await _resolve_jurisdiction(
+                    session, entry.institution_id
+                )
                 if jurisdiction:
                     metadata["jurisdiction"] = jurisdiction
 
@@ -171,9 +178,9 @@ class PostgresAuditRepository:
                 metadata = {"request_id": entry.request_id, **entry.metadata}
                 if "jurisdiction" not in metadata and entry.institution_id:
                     if entry.institution_id not in jurisdiction_cache:
-                        jurisdiction_cache[entry.institution_id] = (
-                            await _resolve_jurisdiction(session, entry.institution_id)
-                        )
+                        jurisdiction_cache[
+                            entry.institution_id
+                        ] = await _resolve_jurisdiction(session, entry.institution_id)
                     cached = jurisdiction_cache[entry.institution_id]
                     if cached:
                         metadata["jurisdiction"] = cached
@@ -222,6 +229,7 @@ class InMemoryAuditRepository:
 # =============================================================================
 # Audit Service (SRP + DIP)
 # =============================================================================
+
 
 class AuditService:
     """
@@ -276,12 +284,14 @@ class AuditService:
             outcome=outcome,
             metadata=metadata or {},
             institution_id=institution_id,
-            user_id=user_id or _coerce_uuid(
+            user_id=user_id
+            or _coerce_uuid(
                 (metadata or {}).get("actor_user_id")
                 or (metadata or {}).get("user_id")
                 or actor
             ),
-            location_id=location_id or _coerce_uuid((metadata or {}).get("location_id")),
+            location_id=location_id
+            or _coerce_uuid((metadata or {}).get("location_id")),
             request_id=request_id or str(uuid4()),
         )
 
@@ -291,19 +301,25 @@ class AuditService:
             # Surface as a typed error so callers can distinguish persistence
             # failure from any business-logic exception.
             logger.critical(
-                "AUDIT WRITE FAILURE action=%s outcome=%s institution=%s "
-                "resource=%s request_id=%s error_type=%s",
-                action, outcome, institution_id, target_resource,
-                entry.request_id, type(e).__name__,
-                exc_info=True,
+                "AUDIT WRITE FAILURE action=%s outcome=%s institution_hash=%s "
+                "resource_hash=%s request_id=%s error_type=%s",
+                action,
+                outcome,
+                hash_for_logging(institution_id),
+                hash_for_logging(target_resource),
+                entry.request_id,
+                type(e).__name__,
             )
             raise AuditPersistenceError(
                 f"Failed to persist audit row for {action}"
             ) from e
 
         logger.debug(
-            "Audit logged: %s on %s by %s => %s",
-            action, target_resource, actor, outcome,
+            "Audit logged: action=%s resource_hash=%s actor=%s outcome=%s",
+            action,
+            hash_for_logging(target_resource),
+            actor,
+            outcome,
         )
 
     # Strong references to background tasks so the event loop's GC cannot
@@ -384,8 +400,11 @@ class AuditService:
             except Exception as e:
                 logger.error(
                     "Background audit log failed action=%s outcome=%s "
-                    "institution=%s error=%s",
-                    action, outcome, institution_id, e,
+                    "institution_hash=%s error=%s",
+                    action,
+                    outcome,
+                    hash_for_logging(institution_id),
+                    safe_error_summary(e),
                 )
 
         try:
@@ -403,6 +422,7 @@ class AuditService:
 # =============================================================================
 # Audit Context Manager (OCP)
 # =============================================================================
+
 
 @asynccontextmanager
 async def phi_reveal_audit(
@@ -526,8 +546,6 @@ async def audit_context(
         # Persist only the structural fields — type, HTTP status, and any
         # structured error code the exception exposes. The audit_metadata
         # JSONB column docs explicitly forbid PHI here.
-        from src.app.services.sms_privacy import safe_error_summary
-
         await service.log(
             actor=actor,
             action=action,
@@ -611,6 +629,7 @@ def set_audit_service(service: AuditService) -> None:
 # =============================================================================
 # Convenience Functions
 # =============================================================================
+
 
 async def log_audit(
     actor: AuditActor | str,

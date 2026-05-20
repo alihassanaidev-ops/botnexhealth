@@ -34,3 +34,11 @@ def test_staging_config_loads_scale_controls() -> None:
 
     assert config.worker.queue_scale_up_depth == 25
     assert config.worker.queue_scale_down_depth == 2
+
+    assert config.retention.clinical_record_days == 3650
+    assert config.retention.minor_record_age_years == 28
+    assert config.retention.recording_days == 90
+    assert config.retention.sms_metadata_days == 2190
+    assert config.retention.notification_days == 180
+    assert config.retention.dead_letter_raw_days == 30
+    assert config.retention.idempotency_days == 7

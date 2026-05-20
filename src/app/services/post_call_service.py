@@ -13,6 +13,10 @@ from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.retell.models import RetellCallData
 from src.app.services.custom_field_service import CustomFieldService
+from src.app.services.retention_policy import (
+    clinical_record_retain_until,
+    default_recording_retain_until,
+)
 from src.app.services.sms_privacy import hash_for_logging
 
 logger = logging.getLogger(__name__)
@@ -94,9 +98,7 @@ class PostCallService:
             return call_data.to_number
         return call_data.from_number or call_data.to_number
 
-    def _parse_call_tags(
-        self, custom: dict[str, Any]
-    ) -> tuple[str | None, str | None]:
+    def _parse_call_tags(self, custom: dict[str, Any]) -> tuple[str | None, str | None]:
         """Parse the 'Call Status' CSV field into (primary_status, all_tags_csv).
 
         Retell sends a comma-separated Title Case string, e.g. "Complaint, FAQ Handled".
@@ -117,7 +119,9 @@ class PostCallService:
             if mapped:
                 tags.append(mapped)
             else:
-                logger.warning("Unrecognized Retell 'Call Status' token: %r — skipping", token)
+                logger.warning(
+                    "Unrecognized Retell 'Call Status' token: %r — skipping", token
+                )
 
         if not tags:
             return None, None
@@ -139,13 +143,11 @@ class PostCallService:
         _nonempty() is applied to each source individually before the `or` so that
         placeholder strings like "None" / "N/A" correctly fall through to the next source.
         """
-        first = (
-            _nonempty(dynamic_vars.get("first_name"))
-            or _nonempty(custom.get("first_name"))
+        first = _nonempty(dynamic_vars.get("first_name")) or _nonempty(
+            custom.get("first_name")
         )
-        last = (
-            _nonempty(dynamic_vars.get("last_name"))
-            or _nonempty(custom.get("last_name"))
+        last = _nonempty(dynamic_vars.get("last_name")) or _nonempty(
+            custom.get("last_name")
         )
 
         if first:
@@ -194,7 +196,9 @@ class PostCallService:
         """
         analysis_dict = analysis or {}
         custom: dict[str, Any] = analysis_dict.get("custom_analysis_data") or {}
-        dynamic_vars: dict[str, Any] = analysis_dict.get("collected_dynamic_variables") or {}
+        dynamic_vars: dict[str, Any] = (
+            analysis_dict.get("collected_dynamic_variables") or {}
+        )
 
         # ── 1. Resolve / create Contact ──────────────────────────────────────
         phone = self._determine_patient_phone(webhook_call)
@@ -230,6 +234,10 @@ class PostCallService:
             if existing:
                 contact = existing
                 contact.last_agent_interaction_id = webhook_call.agent_id
+                # A returning patient reactivates the record: clear the
+                # retention anonymization marker so any PHI re-populated below
+                # is subject to the retention clock again.
+                contact.anonymized_at = None
                 # Always update identity fields from the latest call data
                 if first_name:
                     contact.first_name = first_name
@@ -322,9 +330,10 @@ class PostCallService:
             call_duration_seconds=(duration_ms // 1000) if duration_ms else None,
             is_new_patient=contact.is_new_patient if contact else is_new_patient_flag,
             is_complaint=primary_status == CallStatus.COMPLAINT.value
-                or (all_tags is not None and "complaint" in all_tags),
+            or (all_tags is not None and "complaint" in all_tags),
             is_insurance_billing=(
-                primary_status in (
+                primary_status
+                in (
                     CallStatus.INSURANCE_VERIFIED.value,
                     CallStatus.INSURANCE_UNVERIFIED.value,
                 )
@@ -339,15 +348,25 @@ class PostCallService:
         call.summary = analysis_dict.get("call_summary")
 
         if webhook_call.start_timestamp:
-            start_dt = datetime.fromtimestamp(
+            retention_start = datetime.fromtimestamp(
                 webhook_call.start_timestamp / 1000, tz=timezone.utc
             )
-            call.call_date = start_dt.date()
-            call.call_time = start_dt.timetz()  # keep UTC offset — column is TIME WITH TIME ZONE
+            call.call_date = retention_start.date()
+            call.call_time = (
+                retention_start.timetz()
+            )  # keep UTC offset — column is TIME WITH TIME ZONE
         else:
-            now = datetime.now(timezone.utc)
-            call.call_date = now.date()
-            call.call_time = now.timetz()
+            retention_start = datetime.now(timezone.utc)
+            call.call_date = retention_start.date()
+            call.call_time = retention_start.timetz()
+        call.retain_until = clinical_record_retain_until(
+            retention_start,
+            date_of_birth=patient_dob,
+        )
+        if call.recording_url:
+            call.recording_retain_until = default_recording_retain_until(
+                retention_start
+            )
 
         self.session.add(call)
         await self.session.flush()  # ensure call.id is assigned
@@ -362,9 +381,9 @@ class PostCallService:
         )
 
         logger.info(
-            "Saved Call %s for institution %s (contact=%s, status=%s, tags=%s, custom_fields=%d)",
-            webhook_call.call_id,
-            institution_id,
+            "Saved Call call_hash=%s institution_hash=%s contact=%s status=%s tags=%s custom_fields=%d",
+            hash_for_logging(webhook_call.call_id),
+            hash_for_logging(institution_id),
             "found" if contact and contact.id else "unknown",
             primary_status,
             all_tags,

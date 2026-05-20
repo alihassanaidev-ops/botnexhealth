@@ -194,6 +194,26 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         patients = raw.get("data", {}).get("patients", [])
         return [mappers.to_patient(p) for p in patients]
 
+    async def get_patient(self, patient_id: str) -> UniversalPatient | None:
+        """Fetch a single patient by NexHealth ID.
+
+        Returns ``None`` if the patient cannot be found. Used to read the
+        email address NexHealth has on file (collected at intake) rather than
+        trusting a value transcribed by the voice agent during a call.
+        """
+        params = self._default_params()
+        try:
+            raw = await handle_nexhealth_request(
+                self._client, "GET", f"/patients/{_strip(patient_id)}", params=params
+            )
+        except Exception:
+            return None
+        data = raw.get("data") or {}
+        patient = data.get("user") or data.get("patient") or data
+        if not isinstance(patient, dict) or not patient.get("id"):
+            return None
+        return mappers.to_patient(patient)
+
     async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]:
         from src.app.api.models import (
             CreatePatientBio,

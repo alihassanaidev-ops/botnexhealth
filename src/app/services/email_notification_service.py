@@ -16,7 +16,7 @@ from src.app.services.email_template_service import (
     DEFAULT_TEMPLATES,
     EmailTemplateService,
 )
-from src.app.services.sms_privacy import sanitize_provider_error
+from src.app.services.sms_privacy import hash_for_logging
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +68,22 @@ def resolve_template_type(*, is_urgent: bool, is_appointment_booked: bool) -> st
     return EmailTemplateType.CALL_SUMMARY.value
 
 
-def _build_template_variables(payload: dict[str, Any]) -> dict[str, str]:
-    """Convert raw call payload into template variables."""
+def _build_template_variables(
+    payload: dict[str, Any],
+    *,
+    patient_facing: bool = False,
+) -> dict[str, str]:
+    """Convert raw call payload into template variables.
+
+    When ``patient_facing`` is True the email is addressed to the patient
+    themselves, so the patient name is rendered in full rather than redacted.
+    Staff emails keep the redacted name and masked phone.
+    """
     tags = payload.get("tags") or []
+    if patient_facing:
+        patient_name = payload.get("appointment_patient_name") or "Not provided"
+    else:
+        patient_name = payload.get("appointment_patient_redacted") or "Not provided"
     return {
         "location_name": payload.get("location_name") or "Clinic",
         "caller_phone": payload.get("caller_phone_masked") or "Unknown",
@@ -81,10 +94,13 @@ def _build_template_variables(payload: dict[str, Any]) -> dict[str, str]:
         # call.summary into email; keep details behind authenticated dashboard
         # access where RBAC, tenant scope, and audit controls apply.
         "summary": SAFE_SUMMARY_PLACEHOLDER,
-        "patient_name": payload.get("appointment_patient_redacted") or "Not provided",
+        "patient_name": patient_name,
         "appointment_datetime": payload.get("appointment_datetime") or "Not provided",
         "appointment_provider": payload.get("appointment_provider") or "Not provided",
         "appointment_service": payload.get("appointment_service") or "Not provided",
+        # Deep link to the RBAC-protected call detail; empty string when the
+        # frontend base URL is not configured (template hides the CTA).
+        "dashboard_link": payload.get("dashboard_link") or "",
     }
 
 
@@ -99,20 +115,26 @@ class EmailNotificationService:
         idempotency_key: str,
         template_type: str,
         institution_id: str | None = None,
+        patient_facing: bool = False,
     ) -> None:
         """Send a notification email using the appropriate template.
 
         Attempts to load a custom template from the DB for the institution.
         Falls back to the built-in default if none is found or DB is unavailable.
+
+        When ``patient_facing`` is True the email goes to the patient and
+        appointment details are rendered unredacted.
         """
         api_key = settings.resend_api_key
         sender = settings.resend_from_email
         if not api_key or not sender:
-            raise RuntimeError("Resend is not configured (RESEND_API_KEY / RESEND_FROM_EMAIL)")
+            raise RuntimeError(
+                "Resend is not configured (RESEND_API_KEY / RESEND_FROM_EMAIL)"
+            )
         if not recipients:
             raise RuntimeError("No recipients for call notification")
 
-        variables = _build_template_variables(payload)
+        variables = _build_template_variables(payload, patient_facing=patient_facing)
 
         # Try loading custom template from DB
         subject_tpl: str | None = None
@@ -128,22 +150,25 @@ class EmailNotificationService:
                     institution_id=institution_id,
                 ) as session:
                     svc = EmailTemplateService(session)
-                    template = await svc.get_template_by_type(institution_id, template_type)
+                    template = await svc.get_template_by_type(
+                        institution_id, template_type
+                    )
                     if template and template.is_active:
                         subject_tpl = template.subject_template
                         html_tpl = template.html_body
                         text_tpl = template.text_body
             except Exception:
                 logger.warning(
-                    "Failed to load email template from DB, using default: type=%s institution=%s",
+                    "Failed to load email template from DB, using default: type=%s institution_hash=%s",
                     template_type,
-                    institution_id,
-                    exc_info=True,
+                    hash_for_logging(institution_id),
                 )
 
         # Fall back to defaults
         if not subject_tpl:
-            defaults = DEFAULT_TEMPLATES.get(template_type, DEFAULT_TEMPLATES[EmailTemplateType.CALL_SUMMARY.value])
+            defaults = DEFAULT_TEMPLATES.get(
+                template_type, DEFAULT_TEMPLATES[EmailTemplateType.CALL_SUMMARY.value]
+            )
             subject_tpl = defaults["subject_template"]
             html_tpl = defaults["html_body"]
             text_tpl = defaults["text_body"]
@@ -177,9 +202,9 @@ class EmailNotificationService:
             )
             if response.status_code >= 400:
                 logger.error(
-                    "Resend send failed: status=%s body=%s",
+                    "Resend send failed: status=%s body_hash=%s",
                     response.status_code,
-                    sanitize_provider_error(response.text, max_length=500),
+                    hash_for_logging(response.text),
                 )
                 response.raise_for_status()
 

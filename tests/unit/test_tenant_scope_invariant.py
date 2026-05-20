@@ -45,16 +45,25 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # institution association is recorded on the row only after the handler
     # resolves it. A cross-tenant collision would require two clinics to
     # share the same Retell call_id, which Retell guarantees never happens.
-    ("src/app/retell/idempotency.py", 90, "RetellFunctionInvocation"),
-    ("src/app/retell/idempotency.py", 169, "RetellFunctionInvocation"),
-    ("src/app/retell/webhooks.py", 137, "RetellWebhookEvent"),
-    ("src/app/retell/webhooks.py", 199, "RetellWebhookEvent"),
+    ("src/app/retell/idempotency.py", 96, "RetellFunctionInvocation"),
+    ("src/app/retell/idempotency.py", 182, "RetellFunctionInvocation"),
+    ("src/app/retell/webhooks.py", 150, "RetellWebhookEvent"),
+    ("src/app/retell/webhooks.py", 212, "RetellWebhookEvent"),
 
     # Twilio status callback identifies our row by message_sid (Twilio's
     # globally unique message id). Twilio doesn't know our institution_id.
     # Adding institution_id would require Twilio to send it back, which
     # they won't.
-    ("src/app/services/sms_service.py", 238, "SmsHistoryLog"),
+    ("src/app/services/sms_service.py", 260, "SmsHistoryLog"),
+
+    # The scheduled retention job is an admin task that runs once per day
+    # with DATABASE_ADMIN_URL and intentionally scans expired records across
+    # tenants. It only clears PHI whose retention deadline has passed and
+    # skips rows under legal hold.
+    ("src/app/services/retention_policy.py", 225, "Call"),    # expired recordings
+    ("src/app/services/retention_policy.py", 274, "Call"),    # purged-call CFV cleanup
+    ("src/app/services/retention_policy.py", 291, "Call"),    # retained-call EXISTS
+    ("src/app/services/retention_policy.py", 324, "Contact"), # anonymized-contact CFV
 }
 
 

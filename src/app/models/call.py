@@ -141,6 +141,35 @@ class Call(Base):
     summary_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Retention controls. Clinical call records default to a 10-year
+    # retention clock; recordings have a shorter independent clock unless
+    # explicitly retained as part of the medical record.
+    retention_class: Mapped[str] = mapped_column(
+        String(32),
+        default="clinical_record",
+        server_default=text("'clinical_record'"),
+        nullable=False,
+        index=True,
+    )
+    retain_until: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("(now() + interval '10 years')"),
+        nullable=False,
+        index=True,
+    )
+    recording_retain_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+    )
+    recording_deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    legal_hold_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+    )
+    purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+    )
+
     # Classification
     patient_sentiment: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Primary status (first normalized tag) — indexed for fast single-tag filtering

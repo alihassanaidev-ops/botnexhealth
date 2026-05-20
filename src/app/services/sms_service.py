@@ -21,6 +21,10 @@ from src.app.config import settings
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.services.dead_letter import should_retry_vendor_error
+from src.app.services.retention_policy import (
+    default_sms_body_retain_until,
+    default_sms_row_retain_until,
+)
 from src.app.services.sms_compliance import SmsComplianceService, SmsSendBlockedError
 from src.app.services.sms_privacy import (
     hash_for_logging,
@@ -72,7 +76,9 @@ class SmsService:
         """
         location = (
             await self.session.execute(
-                select(InstitutionLocation).where(InstitutionLocation.id == institution_location_id)
+                select(InstitutionLocation).where(
+                    InstitutionLocation.id == institution_location_id
+                )
             )
         ).scalar_one_or_none()
         if not location:
@@ -92,6 +98,7 @@ class SmsService:
         identity = compliance.identify(to_number)
         from_hash = hash_for_logging(from_number)
         to_hash = hash_for_logging(to_number)
+        now = datetime.now(timezone.utc)
 
         try:
             await compliance.assert_can_send(
@@ -121,14 +128,16 @@ class SmsService:
                 call_id=call_id,
                 to_number_hash=identity.phone_hash,
                 to_number_masked=identity.phone_masked,
-                last_status_at=datetime.now(timezone.utc),
+                last_status_at=now,
+                retain_until=default_sms_row_retain_until(now),
+                body_retain_until=default_sms_body_retain_until(now),
             )
             sms_log.to_number = to_number
             sms_log.body = body
             self.session.add(sms_log)
             await self.session.flush()
             logger.info(
-                "SMS suppressed: from=%s to=%s location=%s reason=%s",
+                "SMS suppressed: from_hash=%s to_hash=%s location_hash=%s reason=%s",
                 from_hash,
                 to_hash,
                 hash_for_logging(str(location.id)),
@@ -147,6 +156,9 @@ class SmsService:
             call_id=call_id,
             to_number_hash=identity.phone_hash,
             to_number_masked=identity.phone_masked,
+            timestamp=now,
+            retain_until=default_sms_row_retain_until(now),
+            body_retain_until=default_sms_body_retain_until(now),
         )
 
         # Set PHI fields using properties to trigger encryption
@@ -168,7 +180,9 @@ class SmsService:
                 "to": to_number,
             }
             if settings.twilio_sms_status_callback_url:
-                create_kwargs["status_callback"] = settings.twilio_sms_status_callback_url
+                create_kwargs["status_callback"] = (
+                    settings.twilio_sms_status_callback_url
+                )
 
             message = await asyncio.to_thread(
                 client.messages.create,
@@ -178,32 +192,38 @@ class SmsService:
             # Update log on success
             sms_log.status = SmsStatus.SENT.value
             sms_log.message_sid = message.sid
-            sms_log.provider_status = getattr(message, "status", None) or SmsStatus.SENT.value
+            sms_log.provider_status = (
+                getattr(message, "status", None) or SmsStatus.SENT.value
+            )
             sms_log.last_status_at = datetime.now(timezone.utc)
             logger.info(
-                "SMS sent successfully: sid=%s from=%s to=%s location=%s",
-                message.sid,
+                "SMS sent successfully: sid_hash=%s from_hash=%s to_hash=%s location_hash=%s",
+                hash_for_logging(message.sid),
                 from_hash,
                 to_hash,
                 hash_for_logging(str(location.id)),
             )
 
         except RuntimeError as cred_err:
-             # Configuration issue
+            # Configuration issue
             sms_log.status = SmsStatus.FAILED.value
             sms_log.provider_status = "config_error"
             sms_log.error_message = sanitize_provider_error(cred_err)
             sms_log.last_status_at = datetime.now(timezone.utc)
-            logger.error("Configuration error sending SMS: %s", sanitize_provider_error(cred_err))
+            logger.error(
+                "Configuration error sending SMS: %s", sanitize_provider_error(cred_err)
+            )
         except TwilioRestException as e:
             sms_log.status = SmsStatus.FAILED.value
             status_code = getattr(e, "status", None) or getattr(e, "code", None)
             retryable = should_retry_vendor_error(e)
-            sms_log.provider_status = f"{'retryable' if retryable else 'failed'}:{status_code or 'twilio'}"
+            sms_log.provider_status = (
+                f"{'retryable' if retryable else 'failed'}:{status_code or 'twilio'}"
+            )
             sms_log.error_message = sanitize_provider_error(e)
             sms_log.last_status_at = datetime.now(timezone.utc)
             logger.error(
-                "Failed to send SMS via Twilio: from=%s to=%s status=%s error=%s",
+                "Failed to send SMS via Twilio: from_hash=%s to_hash=%s status=%s error=%s",
                 from_hash,
                 to_hash,
                 status_code,
@@ -213,11 +233,13 @@ class SmsService:
             # Update log on failure, being careful not to log full body/phone number here
             sms_log.status = SmsStatus.FAILED.value
             retryable = should_retry_vendor_error(e)
-            sms_log.provider_status = "retryable:network" if retryable else "failed:provider"
+            sms_log.provider_status = (
+                "retryable:network" if retryable else "failed:provider"
+            )
             sms_log.error_message = sanitize_provider_error(e)
             sms_log.last_status_at = datetime.now(timezone.utc)
             logger.error(
-                "Failed to send SMS via Twilio: from=%s to=%s error=%s",
+                "Failed to send SMS via Twilio: from_hash=%s to_hash=%s error=%s",
                 from_hash,
                 to_hash,
                 sanitize_provider_error(e),

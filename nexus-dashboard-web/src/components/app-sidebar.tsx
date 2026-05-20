@@ -236,8 +236,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     <SidebarMenuItem>
                         <SidebarMenuButton size="lg" asChild>
                             <Link to="/">
-                                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-600 to-purple-700 text-white shadow-sm shadow-purple-900/30">
-                                    <span className="text-sm font-bold tracking-tight">N</span>
+                                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-white shadow-sm shadow-purple-900/20 overflow-hidden">
+                                    <img
+                                        src="/scalenexuslogo.png"
+                                        alt="ScaleNexus"
+                                        className="size-7 object-contain"
+                                    />
                                 </div>
                                 <div className="flex flex-col gap-0.5 leading-none">
                                     <span className="font-semibold text-sidebar-foreground">Scale Nexus</span>

@@ -34,7 +34,11 @@ from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.pms.base import PMSAdapter, SupportsAvailabilityLinking
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
-from src.app.retell.functions import get_institution_from_call_context, register_function, update_call_context
+from src.app.retell.functions import (
+    get_institution_from_call_context,
+    register_function,
+    update_call_context,
+)
 from src.app.retell.security import hash_for_logging
 from src.app.services.audit import phi_reveal_audit
 from src.app.services.audit_decorator import audit
@@ -135,7 +139,9 @@ async def _validate_appointment_type_for_provider(
     raw_provider_id = provider_id.removeprefix("nh-")
     raw_appt_id = appointment_type_id.removeprefix("nh-")
     try:
-        availabilities = await ctx.adapter.list_availabilities(provider_id=raw_provider_id)
+        availabilities = await ctx.adapter.list_availabilities(
+            provider_id=raw_provider_id
+        )
     except Exception as e:
         logger.error(
             "Failed to validate appointment type: %s",
@@ -280,7 +286,9 @@ async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
         }
 
     # Explicit location_id or no mapped location — fetch from PMS
-    target_id = location_id or (ctx.location.nexhealth_location_id if ctx.location else None)
+    target_id = location_id or (
+        ctx.location.nexhealth_location_id if ctx.location else None
+    )
     if not target_id:
         return {"error": "No location could be resolved."}
 
@@ -323,7 +331,9 @@ def _normalize_dob(value: Any) -> str | None:
     return None
 
 
-def _identity_gate_passes(patient: Any, args: dict[str, Any]) -> tuple[bool, str | None]:
+def _identity_gate_passes(
+    patient: Any, args: dict[str, Any]
+) -> tuple[bool, str | None]:
     """Verify the caller supplied a DOB that matches the matched patient.
 
     A second factor (email exact-match or last 4 digits of phone) is also
@@ -363,9 +373,18 @@ def _identity_gate_passes(patient: Any, args: dict[str, Any]) -> tuple[bool, str
 @register_function("lookup_patient")
 @audit(
     AuditAction.SEARCH_PATIENTS,
-    resource=lambda args: "patient_search:by_" + ",".join(
-        k for k, v in [("name", args.get("name")), ("phone", args.get("phone_number")),
-                        ("email", args.get("email")), ("dob", args.get("date_of_birth"))] if v
+    resource=lambda args: (
+        "patient_search:by_"
+        + ",".join(
+            k
+            for k, v in [
+                ("name", args.get("name")),
+                ("phone", args.get("phone_number")),
+                ("email", args.get("email")),
+                ("dob", args.get("date_of_birth")),
+            ]
+            if v
+        )
     ),
 )
 async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
@@ -466,7 +485,9 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
                     include=full_detail_include,
                 )
                 payload_patients = full_patients or patients
-                simplified = [_to_full_patient_payload(p) for p in payload_patients[:10]]
+                simplified = [
+                    _to_full_patient_payload(p) for p in payload_patients[:10]
+                ]
         except Exception as e:
             logger.error(
                 "Full patient detail lookup failed: %s",
@@ -515,12 +536,18 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(upcoming, list):
                     for appt in upcoming:
                         if isinstance(appt, dict):
-                            appt["start_time_local"] = _to_local_iso(appt.get("start_time"))
+                            appt["start_time_local"] = _to_local_iso(
+                                appt.get("start_time")
+                            )
                             appt["end_time_local"] = _to_local_iso(appt.get("end_time"))
                 last_visit = patient.get("last_visit")
                 if isinstance(last_visit, dict):
-                    last_visit["start_time_local"] = _to_local_iso(last_visit.get("start_time"))
-                    last_visit["end_time_local"] = _to_local_iso(last_visit.get("end_time"))
+                    last_visit["start_time_local"] = _to_local_iso(
+                        last_visit.get("start_time")
+                    )
+                    last_visit["end_time_local"] = _to_local_iso(
+                        last_visit.get("end_time")
+                    )
     else:
         simplified = [_to_basic_patient_payload(p) for p in patients[:10]]
 
@@ -530,10 +557,14 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
         "patients": simplified,
         "match_status": "multiple" if needs_disambiguation else "single",
         "disambiguation_required": needs_disambiguation,
-        "disambiguation_hints": ["date_of_birth", "email"] if needs_disambiguation else [],
+        "disambiguation_hints": ["date_of_birth", "email"]
+        if needs_disambiguation
+        else [],
     }
     if needs_disambiguation:
-        response["message"] = "Multiple patients matched. Please ask for date of birth or email to confirm."
+        response["message"] = (
+            "Multiple patients matched. Please ask for date of birth or email to confirm."
+        )
     elif identity_failure_reason:
         response["identity_gate"] = identity_failure_reason
         response["message"] = (
@@ -552,7 +583,14 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 )
 async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
     """Create a new patient."""
-    required = ["first_name", "last_name", "email", "phone_number", "date_of_birth", "provider_id"]
+    required = [
+        "first_name",
+        "last_name",
+        "email",
+        "phone_number",
+        "date_of_birth",
+        "provider_id",
+    ]
     for field in required:
         if not args.get(field):
             return {"error": f"{field} is required."}
@@ -647,9 +685,7 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             return {"error": "buffer_minutes must be an integer >= 0."}
 
         normalized_provider_id = (
-            str(provider_id).removeprefix("nh-")
-            if provider_id
-            else None
+            str(provider_id).removeprefix("nh-") if provider_id else None
         )
         provider_source_id = (
             f"nh-{normalized_provider_id}" if normalized_provider_id else None
@@ -662,18 +698,22 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
                 institution_id=str(ctx.institution.id),
                 location_id=str(ctx.location.id),
             ) as session:
-                prov = (await session.execute(
-                    select(
-                        InstitutionProvider.buffer_minutes,
-                        InstitutionProvider.same_day_cutoff_time,
-                    ).where(
-                        InstitutionProvider.source_id == provider_source_id,
-                        InstitutionProvider.location_id == str(ctx.location.id),
+                prov = (
+                    await session.execute(
+                        select(
+                            InstitutionProvider.buffer_minutes,
+                            InstitutionProvider.same_day_cutoff_time,
+                        ).where(
+                            InstitutionProvider.source_id == provider_source_id,
+                            InstitutionProvider.location_id == str(ctx.location.id),
+                        )
                     )
-                )).one_or_none()
+                ).one_or_none()
                 if prov:
                     provider_buffer = max(0, int(prov.buffer_minutes or 0))
-                    buffer_minutes = merge_buffer_minutes(buffer_minutes, provider_buffer)
+                    buffer_minutes = merge_buffer_minutes(
+                        buffer_minutes, provider_buffer
+                    )
                     provider_cutoff = prov.same_day_cutoff_time
 
         if buffer_minutes > 0:
@@ -697,7 +737,10 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         def keyfunc(s):
             return s.provider_id
 
-        grouped = {pid: list(group) for pid, group in groupby(sorted(slots, key=keyfunc), key=keyfunc)}
+        grouped = {
+            pid: list(group)
+            for pid, group in groupby(sorted(slots, key=keyfunc), key=keyfunc)
+        }
         provider_ids = list(grouped.keys())
         random.shuffle(provider_ids)
         slots = [slot for pid in provider_ids for slot in grouped[pid]]
@@ -723,7 +766,9 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
 @register_function("book_appointment")
 @audit(
     AuditAction.BOOK_APPOINTMENT,
-    resource=lambda args: f"appt_for:{hash_for_logging(str(args.get('patient_id'))) if args.get('patient_id') else 'unknown'}",
+    resource=lambda args: (
+        f"appt_for:{hash_for_logging(str(args.get('patient_id'))) if args.get('patient_id') else 'unknown'}"
+    ),
 )
 async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """Book a new appointment."""
@@ -770,7 +815,9 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
 @register_function("cancel_appointment")
 @audit(
     AuditAction.CANCEL_APPOINTMENT,
-    resource=lambda args: f"appointment:{hash_for_logging(str(args.get('appointment_id'))) if args.get('appointment_id') else 'unknown'}",
+    resource=lambda args: (
+        f"appointment:{hash_for_logging(str(args.get('appointment_id'))) if args.get('appointment_id') else 'unknown'}"
+    ),
 )
 async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """Cancel an existing appointment."""
@@ -797,7 +844,9 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
 @register_function("reschedule_appointment")
 @audit(
     AuditAction.RESCHEDULE_APPOINTMENT,
-    resource=lambda args: f"reschedule:old={hash_for_logging(str(args.get('old_appointment_id'))) if args.get('old_appointment_id') else 'unknown'}",
+    resource=lambda args: (
+        f"reschedule:old={hash_for_logging(str(args.get('old_appointment_id'))) if args.get('old_appointment_id') else 'unknown'}"
+    ),
 )
 async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
     """Reschedule an appointment (cancel old + book new)."""
@@ -915,11 +964,14 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
                 dob = date.fromisoformat(patient_dob)
                 today = date.today()
                 patient_age = (
-                    today.year - dob.year
+                    today.year
+                    - dob.year
                     - ((today.month, today.day) < (dob.month, dob.day))
                 )
             except (ValueError, TypeError):
-                logger.warning(f"Invalid date_of_birth format: {hash_for_logging(patient_dob)}")
+                logger.warning(
+                    f"Invalid date_of_birth format: {hash_for_logging(patient_dob)}"
+                )
 
         if patient_age is not None and ctx.location:
             # Look up age-group rules from local cache
@@ -1006,18 +1058,23 @@ async def list_insurance_plans_handler(args: dict[str, Any]) -> dict[str, Any]:
             location_id=str(ctx.location.id),
         ) as session:
             plans = (
-                await session.execute(
-                    select(InsurancePlan).where(
-                        InsurancePlan.location_id == str(ctx.location.id),
-                        InsurancePlan.institution_id == str(ctx.institution.id),
-                        InsurancePlan.is_active.is_(True),
-                    ).order_by(InsurancePlan.name)
+                (
+                    await session.execute(
+                        select(InsurancePlan)
+                        .where(
+                            InsurancePlan.location_id == str(ctx.location.id),
+                            InsurancePlan.institution_id == str(ctx.institution.id),
+                            InsurancePlan.is_active.is_(True),
+                        )
+                        .order_by(InsurancePlan.name)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
             simplified = [
-                {"name": p.name, "description": p.description or ""}
-                for p in plans
+                {"name": p.name, "description": p.description or ""} for p in plans
             ]
 
             if not simplified:
@@ -1065,7 +1122,11 @@ async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
             try:
                 tz = ZoneInfo(timezone)
             except ZoneInfoNotFoundError:
-                logger.warning(f"Invalid timezone for location {ctx.location.id}: {timezone!r}. Falling back to UTC.")
+                logger.warning(
+                    "Invalid timezone for location_hash=%s: timezone=%r. Falling back to UTC.",
+                    hash_for_logging(ctx.location.id),
+                    timezone,
+                )
                 timezone = "UTC"
                 tz = ZoneInfo(timezone)
 
@@ -1074,18 +1135,24 @@ async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
             now_time = local_now.time()
 
             rows = (
-                await session.execute(
-                    select(InstitutionLocationTransferNumber)
-                    .where(
-                        InstitutionLocationTransferNumber.location_id == str(ctx.location.id),
-                        InstitutionLocationTransferNumber.institution_id == str(ctx.institution.id),
-                    )
-                    .order_by(
-                        InstitutionLocationTransferNumber.department,
-                        InstitutionLocationTransferNumber.phone_number,
+                (
+                    await session.execute(
+                        select(InstitutionLocationTransferNumber)
+                        .where(
+                            InstitutionLocationTransferNumber.location_id
+                            == str(ctx.location.id),
+                            InstitutionLocationTransferNumber.institution_id
+                            == str(ctx.institution.id),
+                        )
+                        .order_by(
+                            InstitutionLocationTransferNumber.department,
+                            InstitutionLocationTransferNumber.phone_number,
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
             simplified = [
                 {"phone_number": r.phone_number, "department": r.department}
@@ -1093,20 +1160,28 @@ async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
             ]
 
             hours_rows = (
-                await session.execute(
-                    select(LocationOperatingHours).where(
-                        LocationOperatingHours.location_id == str(ctx.location.id)
+                (
+                    await session.execute(
+                        select(LocationOperatingHours).where(
+                            LocationOperatingHours.location_id == str(ctx.location.id)
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
             breaks_rows = (
-                await session.execute(
-                    select(LocationBreak).where(
-                        LocationBreak.location_id == str(ctx.location.id)
+                (
+                    await session.execute(
+                        select(LocationBreak).where(
+                            LocationBreak.location_id == str(ctx.location.id)
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
             opens_at = None
             closes_at = None
@@ -1118,21 +1193,35 @@ async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
                 day_hours = hours_by_day.get(local_day)
 
                 if day_hours:
-                    opens_at = day_hours.open_time.strftime("%H:%M") if day_hours.open_time else None
-                    closes_at = day_hours.close_time.strftime("%H:%M") if day_hours.close_time else None
+                    opens_at = (
+                        day_hours.open_time.strftime("%H:%M")
+                        if day_hours.open_time
+                        else None
+                    )
+                    closes_at = (
+                        day_hours.close_time.strftime("%H:%M")
+                        if day_hours.close_time
+                        else None
+                    )
 
                     if day_hours.is_open:
                         if day_hours.open_time and day_hours.close_time:
-                            is_open = day_hours.open_time <= now_time < day_hours.close_time
+                            is_open = (
+                                day_hours.open_time <= now_time < day_hours.close_time
+                            )
                         else:
                             is_open = True
 
                         if is_open and breaks_rows:
                             breaks_by_day: dict[int | None, list[LocationBreak]] = {}
                             for brk in breaks_rows:
-                                breaks_by_day.setdefault(brk.day_of_week, []).append(brk)
+                                breaks_by_day.setdefault(brk.day_of_week, []).append(
+                                    brk
+                                )
 
-                            applicable_breaks = breaks_by_day.get(local_day, []) + breaks_by_day.get(None, [])
+                            applicable_breaks = breaks_by_day.get(
+                                local_day, []
+                            ) + breaks_by_day.get(None, [])
                             for brk in applicable_breaks:
                                 if brk.start_time <= now_time < brk.end_time:
                                     on_lunch_break = True
@@ -1178,8 +1267,7 @@ async def list_operatories(args: dict[str, Any]) -> dict[str, Any]:
     try:
         ops = await ctx.adapter.list_operatories()
         simplified = [
-            {"id": op.id, "name": op.name, "active": op.is_active}
-            for op in ops
+            {"id": op.id, "name": op.name, "active": op.is_active} for op in ops
         ]
         return {
             "count": len(simplified),

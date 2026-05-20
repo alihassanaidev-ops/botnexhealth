@@ -31,13 +31,13 @@ class AuthEmailService:
         )
         await self._send_email(
             to=email,
-            subject="Set up your NexHealth account",
+            subject="Set up your ScaleNexus account",
             html=(
-                "<p>You were invited to NexHealth.</p>"
+                "<p>You were invited to ScaleNexus.</p>"
                 f"<p><a href=\"{link}\">Set your password</a></p>"
             ),
             text=(
-                "You were invited to NexHealth.\n\n"
+                "You were invited to ScaleNexus.\n\n"
                 f"Set your password: {link}\n"
             ),
         )
@@ -57,7 +57,7 @@ class AuthEmailService:
         )
         await self._send_email(
             to=email,
-            subject="Reset your NexHealth password",
+            subject="Reset your ScaleNexus password",
             html=(
                 "<p>You requested a password reset.</p>"
                 f"<p><a href=\"{link}\">Reset your password</a></p>"

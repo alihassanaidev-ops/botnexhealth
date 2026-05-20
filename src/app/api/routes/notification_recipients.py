@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/institution/notification-recipients", tags=["Notification Recipients"])
 
-_VALID_TYPES = {t.value for t in EmailTemplateType}
+# External recipients are CC'd onto staff alerts; the patient confirmation
+# template addresses the patient directly and is excluded here.
+_VALID_TYPES = {t.value for t in EmailTemplateType} - {
+    EmailTemplateType.PATIENT_APPOINTMENT_CONFIRMATION.value
+}
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 

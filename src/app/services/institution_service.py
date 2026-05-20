@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
+from src.app.services.sms_privacy import hash_for_logging
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,9 @@ class InstitutionService:
         )
         return result.scalar_one_or_none()
 
-    async def get_by_slug(self, slug: str, include_inactive: bool = False) -> Institution | None:
+    async def get_by_slug(
+        self, slug: str, include_inactive: bool = False
+    ) -> Institution | None:
         """Get institution by slug."""
         query = select(Institution).where(Institution.slug == slug)
         if not include_inactive:
@@ -75,14 +78,14 @@ class InstitutionService:
         await self.session.flush()
         await self.session.refresh(institution)
 
-        logger.info(f"Created institution: {institution.slug} (id={institution.id})")
+        logger.info(
+            "Created institution: slug=%s institution_hash=%s",
+            institution.slug,
+            hash_for_logging(str(institution.id)),
+        )
         return institution
 
-    async def update(
-        self,
-        institution: Institution,
-        **updates: Any
-    ) -> Institution:
+    async def update(self, institution: Institution, **updates: Any) -> Institution:
         """Update institution fields."""
         # Fields that use encryption setters
         encrypted_fields = {
@@ -106,7 +109,9 @@ class InstitutionService:
     # Location CRUD
     # =========================================================================
 
-    async def create_location(self, institution_id: str, **data: Any) -> InstitutionLocation:
+    async def create_location(
+        self, institution_id: str, **data: Any
+    ) -> InstitutionLocation:
         """Create a new location for an institution."""
         location = InstitutionLocation(institution_id=institution_id)
 
@@ -117,10 +122,16 @@ class InstitutionService:
         self.session.add(location)
         await self.session.flush()
         await self.session.refresh(location)
-        logger.info(f"Created location: {location.slug} for institution {institution_id}")
+        logger.info(
+            "Created location: slug=%s institution_hash=%s",
+            location.slug,
+            hash_for_logging(institution_id),
+        )
         return location
 
-    async def update_location(self, location: InstitutionLocation, **updates: Any) -> InstitutionLocation:
+    async def update_location(
+        self, location: InstitutionLocation, **updates: Any
+    ) -> InstitutionLocation:
         """Update location fields."""
         for key, value in updates.items():
             if hasattr(location, key):
@@ -131,7 +142,9 @@ class InstitutionService:
         logger.info(f"Updated location: {location.slug}")
         return location
 
-    async def delete_location(self, location: InstitutionLocation, hard: bool = False) -> None:
+    async def delete_location(
+        self, location: InstitutionLocation, hard: bool = False
+    ) -> None:
         """Delete a location (soft or hard)."""
         if hard:
             await self.session.delete(location)
@@ -141,9 +154,13 @@ class InstitutionService:
             await self.session.flush()
             logger.info(f"Soft deleted location: {location.slug}")
 
-    async def list_locations(self, institution_id: str, include_inactive: bool = False) -> list[InstitutionLocation]:
+    async def list_locations(
+        self, institution_id: str, include_inactive: bool = False
+    ) -> list[InstitutionLocation]:
         """List locations for an institution."""
-        query = select(InstitutionLocation).where(InstitutionLocation.institution_id == institution_id)
+        query = select(InstitutionLocation).where(
+            InstitutionLocation.institution_id == institution_id
+        )
         if not include_inactive:
             query = query.where(InstitutionLocation.is_active.is_(True))
         query = query.order_by(InstitutionLocation.name)
@@ -183,7 +200,9 @@ class InstitutionService:
         )
         return result.scalar_one_or_none()
 
-    async def get_location_by_retell_agent_id(self, agent_id: str) -> tuple[InstitutionLocation, Institution] | None:
+    async def get_location_by_retell_agent_id(
+        self, agent_id: str
+    ) -> tuple[InstitutionLocation, Institution] | None:
         """Get location and its parent institution by Retell agent ID."""
         result = await self.session.execute(
             select(InstitutionLocation, Institution)
@@ -217,6 +236,7 @@ class InstitutionService:
         """
         if hard_delete:
             from src.app.models.user import User
+
             result = await self.session.execute(
                 select(User).where(User.institution_id == institution.id)
             )
@@ -224,7 +244,11 @@ class InstitutionService:
 
             for user in users:
                 await self.session.delete(user)
-                logger.info(f"Deleted user {user.id} associated with institution {institution.slug}")
+                logger.info(
+                    "Deleted user associated with institution: user_hash=%s institution_slug=%s",
+                    hash_for_logging(str(user.id)),
+                    institution.slug,
+                )
 
             # Flush to ensure user deletes are committed before institution delete
             await self.session.flush()

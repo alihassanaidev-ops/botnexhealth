@@ -57,10 +57,16 @@ class TwilioPhoneNumber(BaseModel):
 
 
 class SendSmsRequest(BaseModel):
-    from_number: str = Field(..., description="Twilio phone number to send from (E.164)")
+    from_number: str = Field(
+        ..., description="Twilio phone number to send from (E.164)"
+    )
     to_number: str = Field(..., description="Recipient phone number (E.164)")
-    body: str = Field(..., min_length=1, max_length=1600, description="SMS message body")
-    institution_location_id: str = Field(..., description="Location UUID associated with this message")
+    body: str = Field(
+        ..., min_length=1, max_length=1600, description="SMS message body"
+    )
+    institution_location_id: str = Field(
+        ..., description="Location UUID associated with this message"
+    )
 
 
 class SendSmsResponse(BaseModel):
@@ -131,7 +137,7 @@ async def send_sms(
     from src.app.models.sms_history_log import SmsStatus
     from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
     from src.app.services.audit import log_audit
-    from src.app.services.sms_privacy import hash_for_logging
+    from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
 
     try:
         async with get_db_session() as session:
@@ -140,7 +146,7 @@ async def send_sms(
                 from_number=body.from_number,
                 to_number=body.to_number,
                 body=body.body,
-                institution_location_id=body.institution_location_id
+                institution_location_id=body.institution_location_id,
             )
 
             # Commit the SMS history log regardless of Twilio success/failure
@@ -148,7 +154,11 @@ async def send_sms(
 
             if log_record.status == SmsStatus.FAILED.value:
                 # If it's a configuration error throw 503, otherwise 502
-                code = status.HTTP_503_SERVICE_UNAVAILABLE if "credentials" in str(log_record.error_message) else status.HTTP_502_BAD_GATEWAY
+                code = (
+                    status.HTTP_503_SERVICE_UNAVAILABLE
+                    if "credentials" in str(log_record.error_message)
+                    else status.HTTP_502_BAD_GATEWAY
+                )
                 raise HTTPException(
                     status_code=code,
                     detail=f"Failed to send SMS: {log_record.error_message}",
@@ -182,13 +192,13 @@ async def send_sms(
     except HTTPException:
         raise
     except ValueError as e:
-        logger.warning("Invalid SMS send request: %s", e)
+        logger.warning("Invalid SMS send request: %s", safe_error_summary(e))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
     except Exception as e:
-        logger.error("Failed to send SMS via Twilio: %s", e)
+        logger.error("Failed to send SMS via Twilio: %s", safe_error_summary(e))
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to send SMS",

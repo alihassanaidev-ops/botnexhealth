@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import and_, case, func, or_, select, update
@@ -11,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.models.call import Call, CallStatus
 from src.app.models.notification import Notification, NotificationType
 from src.app.models.user import InviteStatus, User, UserRole
+from src.app.services.retention_policy import default_notification_retain_until
+from src.app.services.sms_privacy import hash_for_logging
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,14 @@ def _split_csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _notification_retention_fields() -> dict[str, datetime]:
+    now = datetime.now(timezone.utc)
+    return {
+        "created_at": now,
+        "retain_until": default_notification_retain_until(now),
+    }
 
 
 def _determine_notification_type(
@@ -36,11 +47,17 @@ def _determine_notification_type(
         return NotificationType.URGENT
 
     # Appointment booked
-    if call_status == CallStatus.APPOINTMENT_BOOKED.value or CallStatus.APPOINTMENT_BOOKED.value in tags:
+    if (
+        call_status == CallStatus.APPOINTMENT_BOOKED.value
+        or CallStatus.APPOINTMENT_BOOKED.value in tags
+    ):
         return NotificationType.APPOINTMENT_BOOKED
 
     # Needs callback
-    if call_status == CallStatus.NEEDS_CALLBACK.value or CallStatus.NEEDS_CALLBACK.value in tags:
+    if (
+        call_status == CallStatus.NEEDS_CALLBACK.value
+        or CallStatus.NEEDS_CALLBACK.value in tags
+    ):
         return NotificationType.CALLBACK_ITEM
 
     # Default: new call
@@ -109,9 +126,9 @@ class NotificationService:
 
         if not recipients:
             logger.warning(
-                "No notification recipients for call=%s institution=%s",
-                call.id,
-                institution_id,
+                "No notification recipients for call_hash=%s institution_hash=%s",
+                hash_for_logging(call.id),
+                hash_for_logging(institution_id),
             )
             return 0
 
@@ -141,17 +158,18 @@ class NotificationService:
                 title=title,
                 message=message,
                 data=data_payload,
+                **_notification_retention_fields(),
             )
             self.session.add(notification)
 
         await self.session.flush()
         count = len(recipients)
         logger.info(
-            "Created %d in-app notifications: call=%s type=%s institution=%s",
+            "Created %d in-app notifications: call_hash=%s type=%s institution_hash=%s",
             count,
-            call.id,
+            hash_for_logging(call.id),
             notification_type.value,
-            institution_id,
+            hash_for_logging(institution_id),
         )
         return count
 
@@ -173,6 +191,7 @@ class NotificationService:
             title=title,
             message=message,
             data=data,
+            **_notification_retention_fields(),
         )
         self.session.add(notification)
         await self.session.flush()
@@ -207,6 +226,7 @@ class NotificationService:
                 title=title,
                 message=message,
                 data=data,
+                **_notification_retention_fields(),
             )
             self.session.add(notification)
 
@@ -231,14 +251,18 @@ class NotificationService:
         ).scalar_one()
 
         rows = (
-            await self.session.execute(
-                select(Notification)
-                .where(*conditions)
-                .order_by(Notification.created_at.desc())
-                .limit(limit)
-                .offset(offset)
+            (
+                await self.session.execute(
+                    select(Notification)
+                    .where(*conditions)
+                    .order_by(Notification.created_at.desc())
+                    .limit(limit)
+                    .offset(offset)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         return list(rows), total
 
@@ -259,28 +283,40 @@ class NotificationService:
                 func.count(Notification.id).label("total"),
                 func.count(
                     case(
-                        (Notification.type == NotificationType.NEW_CALL.value, Notification.id),
+                        (
+                            Notification.type == NotificationType.NEW_CALL.value,
+                            Notification.id,
+                        ),
                     )
                 ).label("new_calls"),
                 func.count(
                     case(
                         (
-                            Notification.type.in_([
-                                NotificationType.CALLBACK_ITEM.value,
-                                NotificationType.CALLBACK_RESOLVED.value,
-                            ]),
+                            Notification.type.in_(
+                                [
+                                    NotificationType.CALLBACK_ITEM.value,
+                                    NotificationType.CALLBACK_RESOLVED.value,
+                                ]
+                            ),
                             Notification.id,
                         ),
                     )
                 ).label("callbacks"),
                 func.count(
                     case(
-                        (Notification.type == NotificationType.APPOINTMENT_BOOKED.value, Notification.id),
+                        (
+                            Notification.type
+                            == NotificationType.APPOINTMENT_BOOKED.value,
+                            Notification.id,
+                        ),
                     )
                 ).label("appointments"),
                 func.count(
                     case(
-                        (Notification.type == NotificationType.URGENT.value, Notification.id),
+                        (
+                            Notification.type == NotificationType.URGENT.value,
+                            Notification.id,
+                        ),
                     )
                 ).label("urgent"),
             ).where(*conditions)

@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -84,6 +84,18 @@ class Notification(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+    retain_until: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("(now() + interval '180 days')"),
+        nullable=False,
+        index=True,
+    )
+    legal_hold_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
+    )
+    purged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True,
     )
 
     @property

@@ -17,8 +17,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from src.app.retell.security import get_retell_secret, get_signature_dependency, hash_for_logging
-from src.app.services.sms_privacy import sanitize_provider_error
+from src.app.retell.security import (
+    get_retell_secret,
+    get_signature_dependency,
+    hash_for_logging,
+)
+from src.app.services.sms_privacy import safe_error_summary, sanitize_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,7 @@ verify_webhook_signature = get_signature_dependency(get_retell_secret)
 
 class CallAnalysisData(BaseModel):
     """Scrubbed analysis data extracted by Retell."""
+
     call_summary: str | None = Field(None, alias="call_summary")
     in_voicemail: bool | None = None
     user_sentiment: str | None = None
@@ -48,6 +53,7 @@ class RetellCallWebhook(BaseModel):
     Only the scrubbed variants of recording, transcript, and analysis are
     consumed. Raw fields received in the payload are ignored.
     """
+
     model_config = ConfigDict(extra="ignore")
 
     call_id: str
@@ -71,6 +77,7 @@ class RetellCallWebhook(BaseModel):
 
 class RetellWebhookEvent(BaseModel):
     """Retell webhook event envelope."""
+
     event: str
     call: RetellCallWebhook
 
@@ -104,11 +111,14 @@ async def _resolve_institution_location_from_agent(agent_id: str | None):
                 location, institution = result
                 return location, institution
     except Exception as exc:
-        logger.exception(
-            "Retell agent lookup failed; webhook will be marked retryable: agent=%s",
+        logger.error(
+            "Retell agent lookup failed; webhook will be marked retryable: agent_hash=%s error=%s",
             hash_for_logging(agent_id),
+            safe_error_summary(exc),
         )
-        raise RetellAgentLookupError("Retell agent lookup failed; retry webhook") from exc
+        raise RetellAgentLookupError(
+            "Retell agent lookup failed; retry webhook"
+        ) from exc
 
     logger.warning(
         "Retell webhook agent has no active location mapping; call will not be persisted: agent=%s",
@@ -129,7 +139,10 @@ async def _begin_webhook_processing(call_id: str, event_type: str) -> tuple[bool
         (can_process, reason)
     """
     from src.app.database import get_system_db_session
-    from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
+    from src.app.models.retell_webhook_event import (
+        RetellWebhookEvent,
+        RetellWebhookStatus,
+    )
 
     async with get_system_db_session("retell", external_id=call_id) as session:
         existing = (
@@ -242,14 +255,14 @@ async def handle_retell_webhook(
         payload = json.loads(body)
         event = RetellWebhookEvent.model_validate(payload)
     except Exception as parse_err:
-        logger.exception("Retell webhook parse error: %s", sanitize_provider_error(parse_err))
+        logger.error("Retell webhook parse error: %s", safe_error_summary(parse_err))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid Retell webhook payload",
         )
 
     logger.info(
-        "Received Retell webhook: event=%s call_id=%s",
+        "Received Retell webhook: event=%s call_id_hash=%s",
         event.event,
         hash_for_logging(event.call.call_id),
     )
@@ -257,18 +270,23 @@ async def handle_retell_webhook(
     # Drop event types we don't process before they take a queue slot.
     if event.event != "call_analyzed":
         logger.info("Ignoring event type: %s", event.event)
-        return {"status": "ignored", "reason": f"Event type {event.event} not processed"}
+        return {
+            "status": "ignored",
+            "reason": f"Event type {event.event} not processed",
+        }
 
     # Idempotency claim happens HERE in the request thread so the
     # handler can return a deterministic ``duplicate`` response without
     # spending a worker round-trip. The claim is committed before this
     # call returns; if the task crashes mid-processing the row stays
     # PROCESSING and Celery's autoretry picks it back up.
-    can_process, reason = await _begin_webhook_processing(event.call.call_id, event.event)
+    can_process, reason = await _begin_webhook_processing(
+        event.call.call_id, event.event
+    )
     if not can_process:
         logger.info(
-            "Skipping duplicate Retell webhook: call_id=%s event=%s reason=%s",
-            event.call.call_id,
+            "Skipping duplicate Retell webhook: call_id_hash=%s event=%s reason=%s",
+            hash_for_logging(event.call.call_id),
             event.event,
             reason,
         )
@@ -327,7 +345,9 @@ async def process_retell_call_analyzed_event(
         # Resolve institution + location from agent_id. A no-match is a
         # configuration no-op; lookup exceptions are retryable and must not be
         # converted into a COMPLETED idempotency row.
-        location, institution = await _resolve_institution_location_from_agent(event.call.agent_id)
+        location, institution = await _resolve_institution_location_from_agent(
+            event.call.agent_id
+        )
 
         # NOTE: the audit row for this webhook is written ONCE at the bottom
         # of this function — either the success path (after processing
@@ -356,9 +376,12 @@ async def process_retell_call_analyzed_event(
                 )
                 # Merge top-level collected_dynamic_variables so the service can use them
                 # as a source for name/email when custom_analysis_data fields are missing.
-                analysis_dict["collected_dynamic_variables"] = event.call.collected_dynamic_variables or {}
+                analysis_dict["collected_dynamic_variables"] = (
+                    event.call.collected_dynamic_variables or {}
+                )
 
                 from src.app.retell.models import RetellCallData
+
                 mapped_call_data = RetellCallData(
                     call_id=event.call.call_id,
                     call_type=event.call.call_type,
@@ -398,9 +421,9 @@ async def process_retell_call_analyzed_event(
                     )
                 except Exception as rec_enqueue_err:
                     logger.error(
-                        "Failed to enqueue recording upload: call=%s error=%s",
+                        "Failed to enqueue recording upload: call_hash=%s error=%s",
                         hash_for_logging(event.call.call_id),
-                        rec_enqueue_err,
+                        safe_error_summary(rec_enqueue_err),
                     )
 
             # ── Email notification: enqueue after DB commit (durable via Celery) ──
@@ -414,20 +437,28 @@ async def process_retell_call_analyzed_event(
                     call_status=saved_call.call_status,
                     call_tags_csv=saved_call.call_tags,
                     analysis_snapshot={
-                        "custom_analysis_data": analysis_dict.get("custom_analysis_data") or {},
-                        "collected_dynamic_variables": analysis_dict.get("collected_dynamic_variables") or {},
+                        "custom_analysis_data": analysis_dict.get(
+                            "custom_analysis_data"
+                        )
+                        or {},
+                        "collected_dynamic_variables": analysis_dict.get(
+                            "collected_dynamic_variables"
+                        )
+                        or {},
                     },
                 )
             except Exception as email_enqueue_err:
                 logger.error(
-                    "Failed to enqueue call email notification: call=%s error=%s",
+                    "Failed to enqueue call email notification: call_hash=%s error=%s",
                     hash_for_logging(event.call.call_id),
-                    email_enqueue_err,
+                    safe_error_summary(email_enqueue_err),
                 )
 
             # ── In-app notification: enqueue after DB commit (durable via Celery) ──
             try:
-                from src.app.tasks.in_app_notifications import enqueue_in_app_notifications
+                from src.app.tasks.in_app_notifications import (
+                    enqueue_in_app_notifications,
+                )
 
                 enqueue_in_app_notifications(
                     call_id=saved_call.id,
@@ -438,9 +469,9 @@ async def process_retell_call_analyzed_event(
                 )
             except Exception as in_app_enqueue_err:
                 logger.error(
-                    "Failed to enqueue in-app notification: call=%s error=%s",
+                    "Failed to enqueue in-app notification: call_hash=%s error=%s",
                     hash_for_logging(event.call.call_id),
-                    in_app_enqueue_err,
+                    safe_error_summary(in_app_enqueue_err),
                 )
 
             # ── Auto-SMS: enqueue after commit (durable via Celery) ────────
@@ -474,9 +505,7 @@ async def process_retell_call_analyzed_event(
             patient_phone_hash = (
                 hash_for_logging(_patient_phone) if _patient_phone else None
             )
-            location_id_hash = (
-                hash_for_logging(str(location.id)) if location else None
-            )
+            location_id_hash = hash_for_logging(str(location.id)) if location else None
             missing_reasons: list[str] = []
             if not _sms_body:
                 missing_reasons.append("missing_send_sms")
@@ -487,7 +516,12 @@ async def process_retell_call_analyzed_event(
             elif not location.twilio_from_number:
                 missing_reasons.append("missing_twilio_from_number")
 
-            if _sms_body and _patient_phone and location and location.twilio_from_number:
+            if (
+                _sms_body
+                and _patient_phone
+                and location
+                and location.twilio_from_number
+            ):
                 try:
                     from src.app.tasks.sms import enqueue_auto_sms
 
@@ -500,7 +534,7 @@ async def process_retell_call_analyzed_event(
                         call_id=saved_call.id,
                     )
                     logger.info(
-                        "Auto-SMS enqueued: call=%s to=%s from=%s location=%s sms_len=%s",
+                        "Auto-SMS enqueued: call_hash=%s to_hash=%s from_hash=%s location_hash=%s sms_len=%s",
                         hash_for_logging(event.call.call_id),
                         patient_phone_hash or "none",
                         hash_for_logging(location.twilio_from_number),
@@ -509,14 +543,14 @@ async def process_retell_call_analyzed_event(
                     )
                 except Exception as sms_enqueue_err:
                     logger.error(
-                        "Failed to enqueue auto-SMS: call=%s error=%s",
+                        "Failed to enqueue auto-SMS: call_hash=%s error=%s",
                         hash_for_logging(event.call.call_id),
-                        sms_enqueue_err,
+                        safe_error_summary(sms_enqueue_err),
                     )
 
             else:
                 logger.info(
-                    "Auto-SMS skipped: call=%s reasons=%s sms_body=%s sms_len=%s patient_phone=%s location=%s twilio_from=%s direction=%s",
+                    "Auto-SMS skipped: call_hash=%s reasons=%s sms_body=%s sms_len=%s patient_phone_hash=%s location_hash=%s twilio_from_configured=%s direction=%s",
                     hash_for_logging(event.call.call_id),
                     ",".join(missing_reasons) if missing_reasons else "unknown",
                     sms_body_present,
@@ -539,7 +573,13 @@ async def process_retell_call_analyzed_event(
         # branch below. We carry location_id forward because each Retell
         # agent maps 1:1 to a location, so call audits should be scoped at
         # that level (compliance reports filter by location).
-        from src.app.services.audit import log_audit_background, AuditAction, AuditActor, AuditOutcome
+        from src.app.services.audit import (
+            log_audit_background,
+            AuditAction,
+            AuditActor,
+            AuditOutcome,
+        )
+
         log_audit_background(
             actor=AuditActor.RETELL_AGENT,
             action=AuditAction.WEBHOOK_RECEIVED,
@@ -561,7 +601,7 @@ async def process_retell_call_analyzed_event(
 
     except Exception as e:
         safe_error = sanitize_provider_error(e)
-        logger.exception("Retell call_analyzed processing error: %s", safe_error)
+        logger.error("Retell call_analyzed processing error: %s", safe_error)
 
         # Audit webhook failure — include the institution_id (and call_id
         # hash) when we resolved them before the crash, so the failure row
@@ -593,10 +633,13 @@ async def process_retell_call_analyzed_event(
                 institution_id=institution.id if institution else None,
                 location_id=str(location.id) if location else None,
             )
-        except Exception:
+        except Exception as audit_err:
             # Audit-write failure must not mask the original exception —
             # Celery's autoretry needs to see it.
-            logger.warning("Failed to write FAILURE_INTERNAL audit", exc_info=True)
+            logger.warning(
+                "Failed to write FAILURE_INTERNAL audit: %s",
+                safe_error_summary(audit_err),
+            )
 
         try:
             from src.app.services.dead_letter import capture_dead_letter
@@ -609,8 +652,11 @@ async def process_retell_call_analyzed_event(
                 raw_payload=None,
                 attempts=1,
             )
-        except Exception:
-            logger.warning("Failed to capture Retell webhook DLQ event", exc_info=True)
+        except Exception as dlq_err:
+            logger.warning(
+                "Failed to capture Retell webhook DLQ event: %s",
+                safe_error_summary(dlq_err),
+            )
 
         if processing_call_id and processing_event_type:
             try:

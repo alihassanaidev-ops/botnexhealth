@@ -69,6 +69,18 @@ class FrontendConfig:
 
 
 @dataclass(frozen=True)
+class RetentionConfig:
+    clinical_record_days: int = 3650
+    minor_record_age_years: int = 28
+    recording_days: int = 90
+    sms_body_days: int = 3650
+    sms_metadata_days: int = 2190
+    notification_days: int = 180
+    dead_letter_raw_days: int = 30
+    idempotency_days: int = 7
+
+
+@dataclass(frozen=True)
 class EnvironmentConfig:
     app_name: str
     environment_name: str
@@ -86,6 +98,11 @@ class EnvironmentConfig:
     # and the browser rejects registration with "RP ID is invalid".
     webauthn_rp_id: str | None
     webauthn_allowed_origins: list[str]
+    # Display name shown in authenticator apps (TOTP issuer) and passkey
+    # consent prompts (WebAuthn rp.name). Leave None to use the code default
+    # in src/app/config.py. Existing TOTP enrollments embed this string in
+    # the otpauth URI at scan time and won't reflect changes until re-enroll.
+    webauthn_rp_name: str | None
     recordings_bucket_name: str
     # CIDRs whose direct peers are trusted to set X-Forwarded-For. Behind an
     # ALB this should at minimum cover the ALB subnet ranges; RFC1918 is a
@@ -96,6 +113,7 @@ class EnvironmentConfig:
     api: ServiceConfig
     worker: ServiceConfig
     frontend: FrontendConfig
+    retention: RetentionConfig
     external_secrets: dict[str, str]
     optional_secrets: dict[str, str]
     # Optional email for CloudWatch alarm notifications (RDS metrics, audit
@@ -127,6 +145,7 @@ def load_config(path: str | Path) -> EnvironmentConfig:
     api = raw["api"]
     worker = raw["worker"]
     frontend = raw.get("frontend", {})
+    retention = raw.get("retention", {})
 
     return EnvironmentConfig(
         app_name=raw["appName"],
@@ -144,6 +163,7 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         auth_frontend_base_url=raw.get("authFrontendBaseUrl"),
         webauthn_rp_id=raw.get("webauthnRpId"),
         webauthn_allowed_origins=list(raw.get("webauthnAllowedOrigins", [])),
+        webauthn_rp_name=raw.get("webauthnRpName"),
         recordings_bucket_name=raw["recordingsBucketName"],
         trusted_proxy_cidrs=list(
             raw.get(
@@ -204,6 +224,16 @@ def load_config(path: str | Path) -> EnvironmentConfig:
             domain_name=frontend.get("domainName"),
             certificate_arn=frontend.get("certificateArn"),
             hosted_zone_name=frontend.get("hostedZoneName"),
+        ),
+        retention=RetentionConfig(
+            clinical_record_days=int(retention.get("clinicalRecordDays", 3650)),
+            minor_record_age_years=int(retention.get("minorRecordAgeYears", 28)),
+            recording_days=int(retention.get("recordingDays", 90)),
+            sms_body_days=int(retention.get("smsBodyDays", 3650)),
+            sms_metadata_days=int(retention.get("smsMetadataDays", 2190)),
+            notification_days=int(retention.get("notificationDays", 180)),
+            dead_letter_raw_days=int(retention.get("deadLetterRawDays", 30)),
+            idempotency_days=int(retention.get("idempotencyDays", 7)),
         ),
         external_secrets=dict(raw.get("externalSecrets", {})),
         optional_secrets=dict(raw.get("optionalSecrets", {})),

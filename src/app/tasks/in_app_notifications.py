@@ -10,11 +10,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from src.app.config import settings
-from src.app.database import get_system_db_session, init_database, is_database_initialized
+from src.app.database import (
+    get_system_db_session,
+    init_database,
+    is_database_initialized,
+)
 from src.app.models.call import Call, CallStatus
 from src.app.models.notification import NotificationType
 from src.app.services.event_bus import publish_event
 from src.app.services.notification_service import NotificationService
+from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -60,9 +65,15 @@ def _resolve_notification_type(
     tags = _split_csv(call_tags_csv)
     if _is_urgent(call_status, tags):
         return NotificationType.URGENT.value
-    if call_status == CallStatus.APPOINTMENT_BOOKED.value or CallStatus.APPOINTMENT_BOOKED.value in tags:
+    if (
+        call_status == CallStatus.APPOINTMENT_BOOKED.value
+        or CallStatus.APPOINTMENT_BOOKED.value in tags
+    ):
         return NotificationType.APPOINTMENT_BOOKED.value
-    if call_status == CallStatus.NEEDS_CALLBACK.value or CallStatus.NEEDS_CALLBACK.value in tags:
+    if (
+        call_status == CallStatus.NEEDS_CALLBACK.value
+        or CallStatus.NEEDS_CALLBACK.value in tags
+    ):
         return NotificationType.CALLBACK_ITEM.value
     return NotificationType.NEW_CALL.value
 
@@ -117,16 +128,16 @@ async def _send_in_app_notifications_async(
                     call_tags_csv=call_tags_csv,
                 )
                 logger.info(
-                    "In-app notifications created via call: call=%s count=%d institution=%s",
-                    call_id,
+                    "In-app notifications created via call: call_hash=%s count=%d institution_hash=%s",
+                    hash_for_logging(call_id),
                     notifications_created,
-                    institution_id,
+                    hash_for_logging(institution_id),
                 )
             else:
                 logger.warning(
-                    "Call not found for in-app notification: call_id=%s institution=%s",
-                    call_id,
-                    institution_id,
+                    "Call not found for in-app notification: call_hash=%s institution_hash=%s",
+                    hash_for_logging(call_id),
+                    hash_for_logging(institution_id),
                 )
 
         # Fallback: create bulk notifications using provided title/message
@@ -141,16 +152,16 @@ async def _send_in_app_notifications_async(
                 data=data,
             )
             logger.info(
-                "Bulk in-app notifications created: type=%s count=%d institution=%s",
+                "Bulk in-app notifications created: type=%s count=%d institution_hash=%s",
                 notification_type,
                 notifications_created,
-                institution_id,
+                hash_for_logging(institution_id),
             )
         elif notifications_created == 0:
             logger.warning(
-                "Insufficient data for in-app notification: call_id=%s title=%s",
-                call_id,
-                title,
+                "Insufficient data for in-app notification: call_hash=%s title_present=%s",
+                hash_for_logging(call_id),
+                bool(title),
             )
 
         if notifications_created > 0:
@@ -168,12 +179,12 @@ async def _send_in_app_notifications_async(
                     "notification_type": resolved_notification_type,
                 },
             )
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Failed to publish notification SSE event: institution=%s type=%s",
-                institution_id,
+                "Failed to publish notification SSE event: institution_hash=%s type=%s error=%s",
+                hash_for_logging(institution_id),
                 resolved_notification_type,
-                exc_info=True,
+                safe_error_summary(exc),
             )
 
 
@@ -228,11 +239,17 @@ def enqueue_in_app_notifications(
 ) -> None:
     """Queue an in-app notification background task."""
     if not settings.celery_broker_url:
-        logger.warning("CELERY_BROKER_URL is not set. Skipping in-app notification enqueue.")
+        logger.warning(
+            "CELERY_BROKER_URL is not set. Skipping in-app notification enqueue."
+        )
         return
 
     tags = _split_csv(call_tags_csv)
-    queue_name = "notifications_high" if _is_urgent(call_status, tags) else "notifications_default"
+    queue_name = (
+        "notifications_high"
+        if _is_urgent(call_status, tags)
+        else "notifications_default"
+    )
 
     send_in_app_notifications.apply_async(
         kwargs={

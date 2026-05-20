@@ -17,7 +17,18 @@
     "192.168.0.0/16"
   ],
   "authFrontendBaseUrl": "https://dashboard.example.com",
+  "webauthnRpName": "ScaleNexus Dashboard",
   "recordingsBucketName": "nex-health-production-recordings",
+  "retention": {
+    "clinicalRecordDays": 3650,
+    "minorRecordAgeYears": 28,
+    "recordingDays": 90,
+    "smsBodyDays": 3650,
+    "smsMetadataDays": 2190,
+    "notificationDays": 180,
+    "deadLetterRawDays": 30,
+    "idempotencyDays": 7
+  },
   "database": {
     "name": "nexhealth",
     "username": "nexhealth_admin",

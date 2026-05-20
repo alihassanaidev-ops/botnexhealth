@@ -13,6 +13,7 @@ from src.app.models.user import InviteStatus, User
 from src.app.services.auth_email_service import AuthEmailService
 from src.app.services.password_service import PasswordService
 from src.app.services.refresh_token_service import RefreshTokenService
+from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,9 @@ class UserInviteService:
             await RefreshTokenService.revoke_all_for_user(user.id)
             await RefreshTokenService.revoke_all_access_tokens_for_user(user.id)
         except Exception as e:
-            logger.warning("Failed to revoke sessions during reinvite for %s: %s", user.id, e)
+            logger.warning(
+                "Failed to revoke sessions during reinvite for %s: %s", user.id, e
+            )
         return user
 
     async def _prepare_and_send_invite(
@@ -107,7 +110,9 @@ class UserInviteService:
             )
         except Exception as e:
             logger.error(
-                "send_invite_email failed for user_id=%s email=%s — invite "
+                "send_invite_email failed for user_hash=%s email_hash=%s; invite "
                 "token persisted, admin should /reinvite. error=%s",
-                user.id, user.email, e, exc_info=True,
+                hash_for_logging(user.id),
+                hash_for_logging(user.email),
+                safe_error_summary(e),
             )

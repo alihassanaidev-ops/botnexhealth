@@ -56,13 +56,24 @@ const TEMPLATE_META: Record<string, { label: string; description: string; icon: 
     },
     appointment_confirmation: {
         label: "Appointment Confirmation",
-        description: "Sent when AI books an appointment for a patient",
+        description: "Sent to staff when AI books an appointment for a patient",
         icon: CalendarCheck,
         color: "bg-green-500/10 text-green-500",
     },
+    patient_appointment_confirmation: {
+        label: "Patient Appointment Confirmation",
+        description: "Sent to the patient's email when AI books their appointment. Disabled by default — enable to start sending.",
+        icon: Mail,
+        color: "bg-purple-500/10 text-purple-500",
+    },
 }
 
-const TEMPLATE_ORDER = ["call_summary", "urgent_alert", "appointment_confirmation"]
+const TEMPLATE_ORDER = [
+    "call_summary",
+    "urgent_alert",
+    "appointment_confirmation",
+    "patient_appointment_confirmation",
+]
 
 export default function EmailTemplates() {
     const [templates, setTemplates] = useState<EmailTemplate[]>([])

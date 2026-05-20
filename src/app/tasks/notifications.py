@@ -12,12 +12,20 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
 
 from src.app.config import settings
-from src.app.database import get_system_db_session, init_database, is_database_initialized
+from src.app.database import (
+    get_system_db_session,
+    init_database,
+    is_database_initialized,
+)
 from src.app.models.call import Call, CallStatus
+from src.app.models.email_template import EmailTemplateType
+from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import InviteStatus, User, UserRole
 from src.app.models.external_notification_recipient import ExternalNotificationRecipient
-from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
+from src.app.models.user_email_notification_preference import (
+    UserEmailNotificationPreference,
+)
 from src.app.services.event_bus import publish_event
 from src.app.services.dead_letter import capture_dead_letter, should_retry_vendor_error
 from src.app.services.email_notification_service import (
@@ -26,6 +34,7 @@ from src.app.services.email_notification_service import (
     redact_patient_name,
     resolve_template_type,
 )
+from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -118,7 +127,9 @@ def _extract_appointment_data(
     if not appt_datetime and (appt_date or appt_time):
         appt_datetime = f"{appt_date or ''} {appt_time or ''}".strip()
     if not appt_datetime:
-        appt_datetime = _pick_any(custom, ["Appointment Detail", "appointment_detail", "next_action"])
+        appt_datetime = _pick_any(
+            custom, ["Appointment Detail", "appointment_detail", "next_action"]
+        )
 
     provider = _pick_any(
         custom,
@@ -135,6 +146,118 @@ def _extract_appointment_data(
         "appointment_provider": provider,
         "appointment_service": service,
     }
+
+
+def _build_dashboard_link(call_id: str) -> str:
+    """Build a deep link to the RBAC-protected call detail in the dashboard.
+
+    Returns an empty string when the frontend base URL is not configured, in
+    which case the email template hides the CTA.
+    """
+    base = (settings.auth_frontend_base_url or "").rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/calls?detail={call_id}"
+
+
+async def _send_patient_appointment_email(
+    session,
+    *,
+    institution_id: str,
+    location: InstitutionLocation | None,
+    call: Call,
+    appt: dict[str, str | None],
+) -> None:
+    """Send an unredacted appointment confirmation to the patient.
+
+    Best-effort and gated. It runs only when:
+      - the institution has activated the patient confirmation template,
+      - the contact is linked to a NexHealth patient, and
+      - that patient has an email on file in the PMS.
+
+    The address is read from the PMS (collected at intake) rather than from a
+    value transcribed by the voice agent during the call, so PHI is never sent
+    to an unverified, possibly mistranscribed address.
+    """
+    contact = call.contact
+    pms_patient_id = contact.nexhealth_patient_id if contact else None
+    if not pms_patient_id or location is None:
+        return
+
+    patient_template_type = EmailTemplateType.PATIENT_APPOINTMENT_CONFIRMATION.value
+
+    # Gate on the clinic having explicitly enabled the patient template.
+    from src.app.services.email_template_service import EmailTemplateService
+
+    template = await EmailTemplateService(session).get_template_by_type(
+        institution_id, patient_template_type
+    )
+    if not template or not template.is_active:
+        logger.info(
+            "Patient confirmation template inactive; skipping patient email: institution_hash=%s",
+            hash_for_logging(institution_id),
+        )
+        return
+
+    institution = (
+        await session.execute(
+            select(Institution).where(Institution.id == institution_id)
+        )
+    ).scalar_one_or_none()
+    if not institution:
+        return
+
+    from src.app.pms.nexhealth.adapter import NexHealthAdapter
+
+    try:
+        adapter = await NexHealthAdapter.create(institution, location)
+    except (ValueError, RuntimeError) as exc:
+        logger.warning(
+            "Cannot build PMS adapter for patient email: error=%s",
+            safe_error_summary(exc),
+        )
+        return
+
+    patient = await adapter.get_patient(pms_patient_id)
+    patient_email = (patient.email or "").strip() if patient and patient.email else ""
+    if not patient_email:
+        logger.info(
+            "No PMS email on file; skipping patient confirmation: call_hash=%s",
+            hash_for_logging(call.id),
+        )
+        return
+
+    # Prefer the name NexHealth has on file (same vetted source as the email)
+    # over the call-transcribed name in ``appt``.
+    pms_name = " ".join(p for p in (patient.first_name, patient.last_name) if p).strip()
+    patient_name = (
+        pms_name
+        or appt.get("patient_name")
+        or (contact.full_name if contact else None)
+        or "there"
+    )
+    payload = {
+        "location_name": location.name,
+        "appointment_patient_name": patient_name,
+        # NOTE: appointment_datetime is the raw webhook string as transcribed
+        # by the voice agent (e.g. "March 28th around 2:30pm"). Normalizing it
+        # to a clean display format is out of scope here.
+        "appointment_datetime": appt.get("appointment_datetime"),
+        "appointment_provider": appt.get("appointment_provider"),
+        "appointment_service": appt.get("appointment_service"),
+    }
+    await EmailNotificationService().send_notification(
+        recipients=[patient_email],
+        payload=payload,
+        idempotency_key=f"call-notification:patient:{call.id}",
+        template_type=patient_template_type,
+        institution_id=institution_id,
+        patient_facing=True,
+    )
+    logger.info(
+        "Patient appointment confirmation sent: call_hash=%s",
+        hash_for_logging(call.id),
+    )
 
 
 async def _resolve_recipients(
@@ -219,6 +342,7 @@ async def _send_call_notification_async(
             raise RuntimeError(f"Call not found for notification: {call_id}")
 
         location_name: str | None = None
+        location: InstitutionLocation | None = None
         if location_id:
             location = (
                 await session.execute(
@@ -236,11 +360,18 @@ async def _send_call_notification_async(
         urgent = _is_urgent(call.call_status, tags)
         primary_tag = (call.call_status or "").lower().replace(" ", "_")
         is_appointment = primary_tag == "appointment_booked"
-        template_type = resolve_template_type(is_urgent=urgent, is_appointment_booked=is_appointment)
+        template_type = resolve_template_type(
+            is_urgent=urgent, is_appointment_booked=is_appointment
+        )
 
-        recipients = await _resolve_recipients(session, institution_id, location_id, template_type)
+        recipients = await _resolve_recipients(
+            session, institution_id, location_id, template_type
+        )
         if not recipients:
-            logger.warning("No recipients configured for call notification (institution=%s)", institution_id)
+            logger.warning(
+                "No recipients configured for call notification: institution_hash=%s",
+                hash_for_logging(institution_id),
+            )
             return
 
         analysis = analysis_snapshot or {}
@@ -256,15 +387,20 @@ async def _send_call_notification_async(
             "call_id": call.id,
             "institution_id": institution_id,
             "location_name": location_name,
-            "caller_phone_masked": mask_phone(call.contact.phone if call.contact else None),
+            "caller_phone_masked": mask_phone(
+                call.contact.phone if call.contact else None
+            ),
             "duration_seconds": call.call_duration_seconds,
             "primary_tag": call.call_status,
             "tags": tags,
             "is_urgent": urgent,
-            "appointment_patient_redacted": redact_patient_name(appt.get("patient_name")),
+            "appointment_patient_redacted": redact_patient_name(
+                appt.get("patient_name")
+            ),
             "appointment_datetime": appt.get("appointment_datetime"),
             "appointment_provider": appt.get("appointment_provider"),
             "appointment_service": appt.get("appointment_service"),
+            "dashboard_link": _build_dashboard_link(call.id),
         }
 
         idempotency_key = f"call-notification:{call.id}"
@@ -278,23 +414,42 @@ async def _send_call_notification_async(
         )
 
         logger.info(
-            "Call notification sent: call=%s institution=%s recipients=%d urgent=%s",
-            call.id,
-            institution_id,
+            "Call notification sent: call_hash=%s institution_hash=%s recipients=%d urgent=%s",
+            hash_for_logging(call.id),
+            hash_for_logging(institution_id),
             len(recipients),
             urgent,
         )
 
+        # Patient-facing confirmation — best-effort, gated, never blocks the
+        # staff alert above (which has already been sent successfully).
+        if is_appointment:
+            try:
+                await _send_patient_appointment_email(
+                    session,
+                    institution_id=institution_id,
+                    location=location,
+                    call=call,
+                    appt=appt,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Patient appointment confirmation failed: call_hash=%s institution_hash=%s error=%s",
+                    hash_for_logging(call.id),
+                    hash_for_logging(institution_id),
+                    safe_error_summary(exc),
+                )
+
     for event_type in _sse_events_for_new_call(call.call_status):
         try:
             publish_event(institution_id, event_type)
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Failed to publish %s SSE event: call=%s institution=%s",
+                "Failed to publish %s SSE event: call_hash=%s institution_hash=%s error=%s",
                 event_type,
-                call_id,
-                institution_id,
-                exc_info=True,
+                hash_for_logging(call_id),
+                hash_for_logging(institution_id),
+                safe_error_summary(exc),
             )
 
 
@@ -327,7 +482,9 @@ def send_call_notification(
         )
     except Exception as exc:
         if should_retry_vendor_error(exc) and self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=min(600, 2 ** max(self.request.retries, 0)))
+            raise self.retry(
+                exc=exc, countdown=min(600, 2 ** max(self.request.retries, 0))
+            )
         asyncio.run(
             capture_dead_letter(
                 source="notification_task",
@@ -352,11 +509,17 @@ def enqueue_call_notification(
 ) -> None:
     """Queue a background call-notification email task."""
     if not settings.celery_broker_url:
-        logger.warning("CELERY_BROKER_URL is not set. Skipping call notification enqueue.")
+        logger.warning(
+            "CELERY_BROKER_URL is not set. Skipping call notification enqueue."
+        )
         return
 
     tags = _split_csv(call_tags_csv)
-    queue_name = "notifications_high" if _is_urgent(call_status, tags) else "notifications_default"
+    queue_name = (
+        "notifications_high"
+        if _is_urgent(call_status, tags)
+        else "notifications_default"
+    )
 
     send_call_notification.apply_async(
         kwargs={
@@ -386,7 +549,9 @@ def send_test_call_notification(
     async def _run() -> None:
         sender = EmailNotificationService()
         normalized_tag = ((tag or "").strip().lower().replace(" ", "_")) or (
-            CallStatus.EMERGENCY.value if urgent else CallStatus.APPOINTMENT_BOOKED.value
+            CallStatus.EMERGENCY.value
+            if urgent
+            else CallStatus.APPOINTMENT_BOOKED.value
         )
         payload = {
             "location_name": institution_slug,
@@ -403,14 +568,15 @@ def send_test_call_notification(
         await sender.send_call_created_notification(
             recipients=recipients,
             payload=payload,
-            idempotency_key=idempotency_key or f"test-call:{institution_slug}:{uuid4()}",
+            idempotency_key=idempotency_key
+            or f"test-call:{institution_slug}:{uuid4()}",
         )
         logger.info(
-            "Test call notification sent: institution=%s recipients=%d urgent=%s requested_by=%s",
-            institution_slug,
+            "Test call notification sent: institution_hash=%s recipients=%d urgent=%s requested_by_hash=%s",
+            hash_for_logging(institution_slug),
             len(recipients),
             urgent,
-            requested_by,
+            hash_for_logging(requested_by),
         )
 
     payload = {
@@ -425,7 +591,9 @@ def send_test_call_notification(
         asyncio.run(_run())
     except Exception as exc:
         if should_retry_vendor_error(exc) and self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=min(300, 2 ** max(self.request.retries, 0)))
+            raise self.retry(
+                exc=exc, countdown=min(300, 2 ** max(self.request.retries, 0))
+            )
         asyncio.run(
             capture_dead_letter(
                 source="notification_task",

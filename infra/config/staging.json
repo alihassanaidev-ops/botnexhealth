@@ -14,12 +14,23 @@
     "https://staging.wortholic.com"
   ],
   "authFrontendBaseUrl": "https://staging.scalenexus.ai",
+  "webauthnRpName": "ScaleNexus Dashboard",
   "trustedProxyCidrs": [
     "10.0.0.0/8",
     "172.16.0.0/12",
     "192.168.0.0/16"
   ],
   "recordingsBucketName": "nex-health-staging-recordings",
+  "retention": {
+    "clinicalRecordDays": 3650,
+    "minorRecordAgeYears": 28,
+    "recordingDays": 90,
+    "smsBodyDays": 3650,
+    "smsMetadataDays": 2190,
+    "notificationDays": 180,
+    "deadLetterRawDays": 30,
+    "idempotencyDays": 7
+  },
   "database": {
     "name": "nexhealth",
     "username": "nexhealth_admin",

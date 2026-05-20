@@ -26,7 +26,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/institution/notification-preferences", tags=["Notification Preferences"])
 
-_VALID_TYPES = {t.value for t in EmailTemplateType}
+# Per-user opt-out preferences apply only to staff-facing alerts. The patient
+# confirmation template is addressed to the patient, not a platform user, so
+# it is excluded from this list.
+_VALID_TYPES = {t.value for t in EmailTemplateType} - {
+    EmailTemplateType.PATIENT_APPOINTMENT_CONFIRMATION.value
+}
 _ALL_TYPES = sorted(_VALID_TYPES)
 
 

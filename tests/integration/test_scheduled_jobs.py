@@ -436,6 +436,7 @@ async def test_cleanup_idempotency_prunes_old_rows_keeps_recent(
     [
         "src.app.scripts.recompute_dashboard_rollup",
         "src.app.scripts.cleanup_idempotency",
+        "src.app.scripts.apply_retention_policy",
     ],
 )
 def test_scheduled_job_module_imports_cleanly(module: str):
@@ -473,4 +474,12 @@ def test_cleanup_script_module_has_main_entrypoint():
 
     assert callable(getattr(cleanup_idempotency, "main", None)), (
         "cleanup_idempotency.main() is missing"
+    )
+
+
+def test_apply_retention_policy_script_module_has_main_entrypoint():
+    from src.app.scripts import apply_retention_policy
+
+    assert callable(getattr(apply_retention_policy, "main", None)), (
+        "apply_retention_policy.main() is missing"
     )

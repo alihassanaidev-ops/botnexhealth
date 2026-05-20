@@ -38,6 +38,12 @@ IDEMPOTENT_FUNCTIONS: frozenset[str] = frozenset(
 _MISSING_CALL_ID = "unknown_call_id"
 
 
+def _hash_for_logging(value: str | None) -> str:
+    if not value:
+        return "none"
+    return keyed_hash(value, purpose="retell-log-hash-v1", truncate_hex=16)
+
+
 def canonical_args_hash(args: dict[str, Any]) -> str:
     """Stable, key-order-independent HMAC hash of function args."""
     if not isinstance(args, dict):
@@ -224,9 +230,7 @@ async def run_with_idempotency(
                 status_code=400,
                 detail=f"call_id is required for {function_name}",
             )
-        logger.info(
-            "Skipping idempotency for %s: no usable call_id", function_name
-        )
+        logger.info("Skipping idempotency for %s: no usable call_id", function_name)
         return await handler(args)
 
     args_hash = canonical_args_hash(args)
@@ -234,17 +238,17 @@ async def run_with_idempotency(
 
     if action == "replay_completed":
         logger.info(
-            "Idempotent replay served from cache: function=%s call_id=%s",
+            "Idempotent replay served from cache: function=%s call_id_hash=%s",
             function_name,
-            call_id,
+            _hash_for_logging(call_id),
         )
         return cached  # type: ignore[return-value]
 
     if action == "in_flight":
         logger.info(
-            "Idempotent duplicate in flight: function=%s call_id=%s",
+            "Idempotent duplicate in flight: function=%s call_id_hash=%s",
             function_name,
-            call_id,
+            _hash_for_logging(call_id),
         )
         return _processing_response()
 

@@ -23,6 +23,11 @@ class EmailTemplateType(str, Enum):
     CALL_SUMMARY = "call_summary"
     URGENT_ALERT = "urgent_alert"
     APPOINTMENT_CONFIRMATION = "appointment_confirmation"
+    # Patient-facing confirmation sent to the patient's own email. Unlike the
+    # staff templates above, this one carries unredacted appointment details
+    # because it goes only to the patient. Seeded inactive — a clinic must
+    # explicitly enable it before any patient email is sent.
+    PATIENT_APPOINTMENT_CONFIRMATION = "patient_appointment_confirmation"
 
 
 class EmailTemplate(Base):

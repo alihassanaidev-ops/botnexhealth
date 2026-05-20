@@ -38,6 +38,7 @@ TEMPLATE_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"key": "appointment_datetime", "label": "Appointment Date/Time", "sample": "2026-03-28 2:30 PM"},
         {"key": "appointment_provider", "label": "Appointment Provider", "sample": "Dr. Smith"},
         {"key": "appointment_service", "label": "Appointment Service", "sample": "Routine Cleaning"},
+        {"key": "dashboard_link", "label": "Dashboard Link", "sample": "https://app.example.com/calls?detail=abc123"},
     ],
     EmailTemplateType.URGENT_ALERT.value: [
         {"key": "location_name", "label": "Location Name", "sample": "Downtown Dental"},
@@ -50,6 +51,7 @@ TEMPLATE_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"key": "appointment_datetime", "label": "Appointment Date/Time", "sample": "Not provided"},
         {"key": "appointment_provider", "label": "Appointment Provider", "sample": "Not provided"},
         {"key": "appointment_service", "label": "Appointment Service", "sample": "Emergency Visit"},
+        {"key": "dashboard_link", "label": "Dashboard Link", "sample": "https://app.example.com/calls?detail=abc123"},
     ],
     EmailTemplateType.APPOINTMENT_CONFIRMATION.value: [
         {"key": "location_name", "label": "Location Name", "sample": "Downtown Dental"},
@@ -62,6 +64,14 @@ TEMPLATE_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"key": "appointment_datetime", "label": "Appointment Date/Time", "sample": "2026-03-28 2:30 PM"},
         {"key": "appointment_provider", "label": "Appointment Provider", "sample": "Dr. Smith"},
         {"key": "appointment_service", "label": "Appointment Service", "sample": "Follow-up Consultation"},
+        {"key": "dashboard_link", "label": "Dashboard Link", "sample": "https://app.example.com/calls?detail=abc123"},
+    ],
+    EmailTemplateType.PATIENT_APPOINTMENT_CONFIRMATION.value: [
+        {"key": "location_name", "label": "Location Name", "sample": "Downtown Dental"},
+        {"key": "patient_name", "label": "Patient Name", "sample": "Jane Doe"},
+        {"key": "appointment_datetime", "label": "Appointment Date/Time", "sample": "2026-03-28 2:30 PM"},
+        {"key": "appointment_provider", "label": "Appointment Provider", "sample": "Dr. Smith"},
+        {"key": "appointment_service", "label": "Appointment Service", "sample": "Routine Cleaning"},
     ],
 }
 
@@ -181,6 +191,45 @@ def _urgent_banner() -> str:
     )
 
 
+def _dashboard_button() -> str:
+    """CTA linking to the RBAC-protected call detail view in the dashboard.
+
+    Rendered only when a ``dashboard_link`` variable is supplied. This lets
+    staff emails keep PHI redacted in the body while still offering one-click
+    access to the full detail behind authentication.
+    """
+    return (
+        "{% if dashboard_link %}"
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+        '<tr><td align="center" style="padding-top:24px;">'
+        f'<a href="{{{{ dashboard_link }}}}" '
+        f'style="display:inline-block;background:{_STYLES["accent"]};color:#ffffff;'
+        "text-decoration:none;font-size:14px;font-weight:600;padding:12px 28px;"
+        'border-radius:8px;">View full details in dashboard</a>'
+        "</td></tr></table>"
+        "{% endif %}"
+    )
+
+
+def _patient_appointment_section() -> str:
+    """Unredacted appointment details for the patient-facing confirmation."""
+    return (
+        f'<div style="padding:20px;background:{_STYLES["body_bg"]};border:1px solid {_STYLES["border"]};'
+        'border-radius:8px;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+        ' style="border-collapse:collapse;">'
+        f'<tr><td style="{_LABEL_STYLE}">Patient</td>'
+        f'<td style="{_VALUE_STYLE}">{{{{ patient_name }}}}</td></tr>'
+        f'<tr><td style="{_LABEL_STYLE}">Date/Time</td>'
+        f'<td style="{_VALUE_STYLE}">{{{{ appointment_datetime }}}}</td></tr>'
+        f'<tr><td style="{_LABEL_STYLE}">Provider</td>'
+        f'<td style="{_VALUE_STYLE}">{{{{ appointment_provider }}}}</td></tr>'
+        f'<tr><td style="{_LABEL_STYLE}border-bottom:none;">Service</td>'
+        f'<td style="{_VALUE_STYLE}border-bottom:none;">{{{{ appointment_service }}}}</td></tr>'
+        "</table></div>"
+    )
+
+
 # --- Default templates ---
 
 DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
@@ -190,7 +239,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
         "html_body": _wrap_email(
             "Call Summary",
             "A call has been processed and classified.",
-            _call_details_table() + _appointment_section(),
+            _call_details_table() + _appointment_section() + _dashboard_button(),
         ),
         "text_body": (
             "Call Summary\n\n"
@@ -204,6 +253,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             "Date/Time: {{ appointment_datetime }}\n"
             "Provider: {{ appointment_provider }}\n"
             "Service: {{ appointment_service }}\n"
+            "{% if dashboard_link %}\nView full details: {{ dashboard_link }}\n{% endif %}"
         ),
     },
     EmailTemplateType.URGENT_ALERT.value: {
@@ -212,7 +262,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
         "html_body": _wrap_email(
             "Urgent Call Alert",
             "An urgent call requires immediate attention.",
-            _urgent_banner() + _call_details_table() + _appointment_section(),
+            _urgent_banner() + _call_details_table() + _appointment_section() + _dashboard_button(),
         ),
         "text_body": (
             "URGENT: Call Alert\n\n"
@@ -226,6 +276,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             "Date/Time: {{ appointment_datetime }}\n"
             "Provider: {{ appointment_provider }}\n"
             "Service: {{ appointment_service }}\n"
+            "{% if dashboard_link %}\nView full details: {{ dashboard_link }}\n{% endif %}"
         ),
     },
     EmailTemplateType.APPOINTMENT_CONFIRMATION.value: {
@@ -244,7 +295,8 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
                 f'<tr><td style="{_LABEL_STYLE}">Duration</td>'
                 f'<td style="{_VALUE_STYLE}">{{{{ duration }}}}</td></tr>'
                 "</table></div>"
-            ),
+            )
+            + _dashboard_button(),
         ),
         "text_body": (
             "Appointment Booked\n\n"
@@ -256,9 +308,41 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             "Caller Phone: {{ caller_phone }}\n"
             "Duration: {{ duration }}\n"
             "Details: {{ summary }}\n"
+            "{% if dashboard_link %}\nView full details: {{ dashboard_link }}\n{% endif %}"
+        ),
+    },
+    EmailTemplateType.PATIENT_APPOINTMENT_CONFIRMATION.value: {
+        "name": "Patient Appointment Confirmation",
+        "subject_template": "Your appointment at {{ location_name }} is confirmed",
+        "html_body": _wrap_email(
+            "Appointment Confirmed",
+            "We look forward to seeing you. Here are your appointment details.",
+            _patient_appointment_section()
+            + (
+                f'<p style="margin:20px 0 0;font-size:13px;color:{_STYLES["text_muted"]};">'
+                "Need to reschedule or have questions? Please call us and we'll be "
+                "happy to help.</p>"
+            ),
+        ),
+        "text_body": (
+            "Appointment Confirmed\n\n"
+            "We look forward to seeing you. Here are your appointment details:\n\n"
+            "Patient: {{ patient_name }}\n"
+            "Date/Time: {{ appointment_datetime }}\n"
+            "Provider: {{ appointment_provider }}\n"
+            "Service: {{ appointment_service }}\n\n"
+            "Need to reschedule or have questions? Please call us and we'll be "
+            "happy to help.\n"
         ),
     },
 }
+
+# Template types seeded inactive — a clinic must opt in before they are used.
+# The patient-facing confirmation emails the patient directly, so it stays off
+# until a clinic explicitly enables it in the email template editor.
+DEFAULT_INACTIVE_TYPES: frozenset[str] = frozenset(
+    {EmailTemplateType.PATIENT_APPOINTMENT_CONFIRMATION.value}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -280,8 +364,13 @@ class EmailTemplateService:
         )
         templates = list(result.scalars().all())
 
-        if not templates:
+        # Seed any missing types — covers both brand-new institutions and ones
+        # seeded before a new template type (e.g. patient confirmation) was
+        # added. _seed_defaults is idempotent and returns the full set.
+        known_types = {t.value for t in EmailTemplateType}
+        if known_types - {t.template_type for t in templates}:
             templates = await self._seed_defaults(institution_id)
+            templates.sort(key=lambda t: t.template_type)
 
         return templates
 
@@ -357,9 +446,29 @@ class EmailTemplateService:
         )
 
     async def _seed_defaults(self, institution_id: str) -> list[EmailTemplate]:
-        """Create default templates for an institution."""
-        templates: list[EmailTemplate] = []
+        """Create any missing default templates for an institution.
+
+        Idempotent: institutions seeded before a new template type was added
+        already have rows for the older types, so we only insert the types
+        that are absent. Inserting all types unconditionally would violate the
+        unique ``(institution_id, template_type)`` index. Returns the full set
+        of templates (pre-existing and newly created).
+        """
+        existing = list(
+            (
+                await self._session.execute(
+                    select(EmailTemplate).where(
+                        EmailTemplate.institution_id == institution_id
+                    )
+                )
+            ).scalars().all()
+        )
+        existing_types = {t.template_type for t in existing}
+
+        created: list[EmailTemplate] = []
         for ttype, defaults in DEFAULT_TEMPLATES.items():
+            if ttype in existing_types:
+                continue
             template = EmailTemplate(
                 id=str(uuid4()),
                 institution_id=institution_id,
@@ -368,13 +477,14 @@ class EmailTemplateService:
                 subject_template=defaults["subject_template"],
                 html_body=defaults["html_body"],
                 text_body=defaults["text_body"],
-                is_active=True,
+                is_active=ttype not in DEFAULT_INACTIVE_TYPES,
             )
             self._session.add(template)
-            templates.append(template)
+            created.append(template)
 
-        await self._session.flush()
-        return templates
+        if created:
+            await self._session.flush()
+        return existing + created
 
     # -- Rendering -----------------------------------------------------------
 

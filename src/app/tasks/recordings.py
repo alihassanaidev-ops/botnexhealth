@@ -9,6 +9,12 @@ import httpx
 
 from src.app.config import settings
 from src.app.services.event_bus import publish_event
+from src.app.services.retention_policy import (
+    S3_SHORT_RECORDING_TAGGING,
+    default_recording_retain_until,
+    utc_now,
+)
+from src.app.services.sms_privacy import hash_for_logging
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -76,12 +82,17 @@ async def _upload_recording_async(
         Key=key,
         Body=audio_bytes,
         ContentType=content_type,
+        Tagging=S3_SHORT_RECORDING_TAGGING,
     )
 
     s3_url = f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{key}"
 
     # Update the call record with the S3 URL
-    from src.app.database import get_system_db_session, init_database, is_database_initialized
+    from src.app.database import (
+        get_system_db_session,
+        init_database,
+        is_database_initialized,
+    )
     from src.app.models.call import Call
     from sqlalchemy import select
 
@@ -104,23 +115,26 @@ async def _upload_recording_async(
 
         if call:
             call.recording_url = s3_url
+            call.recording_retain_until = default_recording_retain_until(
+                call.created_at or utc_now()
+            )
             await session.commit()
 
     logger.info(
-        "Recording uploaded to S3: call=%s key=%s size=%d bytes",
-        call_id,
-        key,
+        "Recording uploaded to S3: call_hash=%s institution_hash=%s size=%d bytes",
+        hash_for_logging(call_id),
+        hash_for_logging(institution_id),
         len(audio_bytes),
     )
 
     try:
         publish_event(institution_id, "calls_updated")
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "Failed to publish calls_updated SSE event: call=%s institution=%s",
-            call_id,
-            institution_id,
-            exc_info=True,
+            "Failed to publish calls_updated SSE event: call_hash=%s institution_hash=%s error=%s",
+            hash_for_logging(call_id),
+            hash_for_logging(institution_id),
+            type(exc).__name__,
         )
 
 
@@ -141,7 +155,7 @@ def generate_presigned_url(s3_url: str, expires_in: int = 3600) -> str | None:
         prefix = f"https://{settings.aws_s3_bucket_name}.s3.{settings.aws_region}.amazonaws.com/"
         if not s3_url.startswith(prefix):
             return None
-        key = s3_url[len(prefix):]
+        key = s3_url[len(prefix) :]
 
         s3 = _get_s3_client()
         return s3.generate_presigned_url(
@@ -150,7 +164,10 @@ def generate_presigned_url(s3_url: str, expires_in: int = 3600) -> str | None:
             ExpiresIn=expires_in,
         )
     except Exception:
-        logger.exception("Failed to generate presigned URL for %s", s3_url)
+        logger.warning(
+            "Failed to generate presigned URL for s3_url_hash=%s",
+            hash_for_logging(s3_url),
+        )
         return None
 
 
