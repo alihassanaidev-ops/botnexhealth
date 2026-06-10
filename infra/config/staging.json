@@ -10,8 +10,7 @@
     "natGateways": 1
   },
   "corsAllowedOrigins": [
-    "https://staging.scalenexus.ai",
-    "https://staging.wortholic.com"
+    "https://staging.scalenexus.ai"
   ],
   "authFrontendBaseUrl": "https://staging.scalenexus.ai",
   "webauthnRpName": "ScaleNexus Dashboard",
