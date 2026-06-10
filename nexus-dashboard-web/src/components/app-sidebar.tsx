@@ -65,6 +65,11 @@ const adminNav: NavItemDef[] = [
         icon: Users,
     },
     {
+        title: "Users",
+        url: "/admin/users",
+        icon: UserCog,
+    },
+    {
         title: "Phone Numbers",
         url: "/admin/twilio",
         icon: MessageSquare,

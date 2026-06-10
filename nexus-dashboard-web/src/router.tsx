@@ -23,6 +23,7 @@ const Calls = lazy(() => import("./pages/Calls"));
 const Callbacks = lazy(() => import("./pages/Callbacks"));
 const AuditLogs = lazy(() => import("./pages/AuditLogs"));
 const AdminAuditLogs = lazy(() => import("./pages/AdminAuditLogs"));
+const AdminUserManagement = lazy(() => import("./pages/AdminUserManagement"));
 const TwilioPhoneNumbers = lazy(() => import("./pages/TwilioPhoneNumbers"));
 const InstitutionAdminPanel = lazy(() => import("./pages/InstitutionAdminPanel"));
 const LocationAdminPanel = lazy(() => import("./pages/LocationAdminPanel"));
@@ -171,6 +172,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["SUPER_ADMIN"]}>
                                 <S><AdminAuditLogs /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "admin/users",
+                        element: (
+                            <RoleGuard allowed={["SUPER_ADMIN"]}>
+                                <S><AdminUserManagement /></S>
                             </RoleGuard>
                         ),
                     },

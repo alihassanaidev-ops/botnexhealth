@@ -195,24 +195,31 @@ def test_contact_anonymize_strips_identity_for_fully_purged_contacts() -> None:
     # Idempotent (skips already-anonymized) and activity-based: anonymize only
     # when no retained (non-purged) call exists for the contact.
     assert "contacts.anonymized_at IS NULL" in where_clause
-    assert "contacts.created_at <= " in where_clause
+    # Per-tenant cutoff: created_at + the institution's clinical window <= now,
+    # joined to institutions (override column, global default fallback).
+    assert "make_interval" in where_clause
+    assert "institutions.retention_clinical_record_days" in where_clause
     assert "NOT (EXISTS" in where_clause
     assert "calls.contact_id = contacts.id" in where_clause
     assert "calls.purged_at IS NULL" in where_clause
 
 
-def test_contact_anonymize_cutoff_uses_clinical_record_window(
+def test_contact_anonymize_cutoff_uses_per_tenant_clinical_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The created_at cutoff is now minus the clinical-record window, so a
-    freshly-created contact with no calls is never anonymized early."""
+    """The cutoff is per-institution: created_at + the institution's clinical
+    window <= now, where the window is the per-tenant override when set and the
+    global default otherwise. So a freshly-created contact is never anonymized
+    early, and a tenant on a shorter contractual window ages out sooner."""
     monkeypatch.setattr(settings, "retention_clinical_record_days", 3650)
     sql = _compile(build_contact_anonymize_update(_NOW), literal_binds=True)
-    # The cutoff date is now minus the clinical-record window (rendered as a
-    # SQL timestamp literal — match the date component, format-agnostic).
-    expected_cutoff_date = (_NOW - timedelta(days=3650)).date().isoformat()
-
-    assert expected_cutoff_date in sql
+    assert "make_interval" in sql
+    # The override column is consulted first …
+    assert "institutions.retention_clinical_record_days" in sql
+    # … with the global default as the fallback.
+    assert "3650" in sql
+    # Compared against the literal "now".
+    assert _NOW.date().isoformat() in sql
 
 
 # ── apply(): full wiring + ordering ──────────────────────────────────────────

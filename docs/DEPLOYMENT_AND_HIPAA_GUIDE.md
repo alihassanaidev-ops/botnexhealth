@@ -100,6 +100,23 @@ HIPAA requires that stored ePHI cannot be read if physical access to the drives 
 
 ## 5. Quick Troubleshooting
 
+- **Migration task exits 1 with `StringDataRightTruncationError`:**
+  Alembic's `alembic_version.version_num` column is `varchar(32)` — a revision
+  ID longer than 32 characters fails at the final version-table update and
+  rolls the migration back. Keep revision IDs short (`YYYYMMDD_short_slug`).
+- **Fixed a migration but the task still fails the same way:**
+  The migration task runs the *deployed* image, not your working tree. Run
+  `make cdk-deploy-staging` to rebuild/push the image first, then re-run
+  `make cdk-run-migrations-staging`. Migration logs are in the
+  `/nex-health/staging/migrations` CloudWatch log group.
+- **Stack update fails on the recordings bucket
+  (`AbortIncompleteMultipartUpload cannot be specified with Tags`):**
+  S3 rejects lifecycle rules that combine tag filters with multipart-upload
+  cleanup. Keep `abort_incomplete_multipart_upload_after` in its own
+  bucket-wide rule (see the `abort-incomplete-multipart` rule in
+  `infra/nex_health_infra/stack.py`); never add it to a tag-filtered rule.
+- **`cdk` fails with `ModuleNotFoundError: No module named 'aws_cdk'`:**
+  Activate the infra venv first: `source infra/.venv/bin/activate`.
 - **ECS Task Fails to Start (Pending -> Stopped):**
   99% of the time, this is an IAM permission issue pulling the Docker image or reading an AWS Secret. Check the `StoppedReason` in the ECS Console. Verify the secret ARNs in `staging.json` / `production.json`.
 - **Database Connection Timeouts:**

@@ -54,16 +54,16 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # globally unique message id). Twilio doesn't know our institution_id.
     # Adding institution_id would require Twilio to send it back, which
     # they won't.
-    ("src/app/services/sms_service.py", 260, "SmsHistoryLog"),
+    ("src/app/services/sms_service.py", 278, "SmsHistoryLog"),
 
     # The scheduled retention job is an admin task that runs once per day
     # with DATABASE_ADMIN_URL and intentionally scans expired records across
     # tenants. It only clears PHI whose retention deadline has passed and
     # skips rows under legal hold.
-    ("src/app/services/retention_policy.py", 225, "Call"),    # expired recordings
-    ("src/app/services/retention_policy.py", 274, "Call"),    # purged-call CFV cleanup
-    ("src/app/services/retention_policy.py", 291, "Call"),    # retained-call EXISTS
-    ("src/app/services/retention_policy.py", 324, "Contact"), # anonymized-contact CFV
+    ("src/app/services/retention_policy.py", 282, "Call"),    # expired recordings
+    ("src/app/services/retention_policy.py", 331, "Call"),    # purged-call CFV cleanup
+    ("src/app/services/retention_policy.py", 356, "Call"),    # retained-call EXISTS
+    ("src/app/services/retention_policy.py", 390, "Contact"), # anonymized-contact CFV
 }
 
 

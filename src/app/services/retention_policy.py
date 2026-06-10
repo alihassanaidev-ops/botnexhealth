@@ -15,12 +15,13 @@ from enum import Enum
 from typing import Any
 from urllib.parse import urlparse
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.config import Settings, settings
 from src.app.models.call import Call
 from src.app.models.contact import Contact
+from src.app.models.institution import Institution
 from src.app.models.custom_field import CustomFieldValue, EntityType
 from src.app.models.dead_letter_event import DeadLetterEvent
 from src.app.models.notification import Notification
@@ -71,6 +72,49 @@ class RetentionSummary:
         }
 
 
+@dataclass
+class RetentionProfile:
+    """Effective retention windows (in days) for one institution.
+
+    Decouples retention *length* from compliance *safeguards* — encryption,
+    audit and anonymization are identical regardless of profile. Resolution
+    order: per-institution override → global config.
+    """
+
+    clinical_record_days: int
+    recording_days: int
+    sms_body_days: int
+    sms_metadata_days: int
+    apply_minor_extension: bool = True
+
+
+def global_retention_profile(config: Settings = settings) -> RetentionProfile:
+    return RetentionProfile(
+        clinical_record_days=config.retention_clinical_record_days,
+        recording_days=config.retention_recording_days,
+        sms_body_days=config.retention_sms_body_days,
+        sms_metadata_days=config.retention_sms_metadata_days,
+        apply_minor_extension=True,
+    )
+
+
+def retention_profile_for(institution: Any, *, config: Settings = settings) -> RetentionProfile:
+    """Resolve the effective retention profile for an institution.
+
+    ``institution`` may be a model or any object exposing the optional
+    ``retention_clinical_record_days`` / ``retention_recording_days`` override
+    attributes (both nullable; ``None`` means "use the global default").
+    """
+    profile = global_retention_profile(config)
+    cr_override = getattr(institution, "retention_clinical_record_days", None)
+    rec_override = getattr(institution, "retention_recording_days", None)
+    if cr_override is not None:
+        profile.clinical_record_days = cr_override
+    if rec_override is not None:
+        profile.recording_days = rec_override
+    return profile
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -84,18 +128,24 @@ def clinical_record_retain_until(
     created_at: datetime,
     *,
     date_of_birth: date | str | None = None,
+    days: int | None = None,
+    apply_minor_extension: bool = True,
     config: Settings = settings,
 ) -> datetime:
     """Compute the clinical record deadline.
 
-    Baseline is 10 years from record creation. If a DOB is known, the
-    deadline is extended until the patient turns the configured minor age
-    threshold (28 by default), which covers the common PHIPA/CPSO-style
-    "adult age plus 10 years" requirement.
+    Baseline is ``days`` (default: the global 10-year clinical window). If a DOB
+    is known AND ``apply_minor_extension`` is set, the deadline is extended until
+    the patient turns the configured minor age threshold (28 by default), which
+    covers the common PHIPA/CPSO-style "adult age plus 10 years" requirement.
+
+    Per-tenant policies pass ``days`` (and may disable the minor extension via
+    ``apply_minor_extension=False`` where the records are non-clinical).
     """
-    deadline = retention_deadline(created_at, config.retention_clinical_record_days)
+    window_days = days if days is not None else config.retention_clinical_record_days
+    deadline = retention_deadline(created_at, window_days)
     dob = _coerce_date(date_of_birth)
-    if dob is None:
+    if dob is None or not apply_minor_extension:
         return deadline
 
     minor_deadline = datetime.combine(
@@ -109,28 +159,35 @@ def clinical_record_retain_until(
 def default_recording_retain_until(
     created_at: datetime,
     *,
+    days: int | None = None,
     config: Settings = settings,
 ) -> datetime:
-    return retention_deadline(created_at, config.retention_recording_days)
+    window_days = days if days is not None else config.retention_recording_days
+    return retention_deadline(created_at, window_days)
 
 
 def default_sms_body_retain_until(
     created_at: datetime,
     *,
+    days: int | None = None,
     config: Settings = settings,
 ) -> datetime:
-    return retention_deadline(created_at, config.retention_sms_body_days)
+    window_days = days if days is not None else config.retention_sms_body_days
+    return retention_deadline(created_at, window_days)
 
 
 def default_sms_row_retain_until(
     created_at: datetime,
     *,
+    metadata_days: int | None = None,
+    body_days: int | None = None,
     config: Settings = settings,
 ) -> datetime:
+    meta_days = metadata_days if metadata_days is not None else config.retention_sms_metadata_days
     # The row must survive at least as long as any retained body content.
     return max(
-        retention_deadline(created_at, config.retention_sms_metadata_days),
-        default_sms_body_retain_until(created_at, config=config),
+        retention_deadline(created_at, meta_days),
+        default_sms_body_retain_until(created_at, days=body_days, config=config),
     )
 
 
@@ -280,13 +337,21 @@ def build_contact_anonymize_update(now: datetime, *, config: Settings = settings
     """Strip identifying fields from contacts whose calls are all purged.
 
     A contact is anonymized when it has no remaining retained call (every
-    linked call is purged, or it has no calls) and is older than the
-    clinical-record window. This is activity-based: a returning patient with
-    any non-purged call — including one held back by a legal hold — keeps
-    their identity record intact. The contact row and its NexHealth patient
-    link are preserved so analytics survive and a future call re-populates it.
+    linked call is purged, or it has no calls) and is older than its
+    institution's clinical-record window — the per-tenant override when set,
+    the global default otherwise. This is activity-based: a returning patient
+    with any non-purged call — including one held back by a legal hold — keeps
+    their identity record intact. The contact row and its patient link are
+    preserved so analytics survive and a future call re-populates it.
     """
-    cutoff = now - timedelta(days=config.retention_clinical_record_days)
+    # Effective per-institution clinical-record days: override → global config.
+    # Compared as an interval added to created_at so each tenant's contacts age
+    # out on their own clock in a single set-based UPDATE.
+    effective_days = func.coalesce(
+        Institution.retention_clinical_record_days,
+        config.retention_clinical_record_days,
+    )
+    deadline = Contact.created_at + func.make_interval(0, 0, 0, effective_days)
     has_retained_call = (
         select(Call.id)
         .where(Call.contact_id == Contact.id, Call.purged_at.is_(None))
@@ -295,8 +360,9 @@ def build_contact_anonymize_update(now: datetime, *, config: Settings = settings
     return (
         update(Contact)
         .where(
+            Contact.institution_id == Institution.id,
             Contact.anonymized_at.is_(None),
-            Contact.created_at <= cutoff,
+            deadline <= now,
             ~has_retained_call,
         )
         .values(

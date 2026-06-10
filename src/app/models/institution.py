@@ -185,6 +185,12 @@ class Institution(Base):
         server_default=DEFAULT_JURISDICTION.value,
     )
 
+    # Per-tenant retention overrides (days). NULL = use the global config
+    # defaults. Lets a clinic with a contractual or jurisdictional retention
+    # requirement diverge from the platform's 10-year clinical default.
+    retention_clinical_record_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retention_recording_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # ROI configuration (institution-configurable)
     roi_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

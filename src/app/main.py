@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from src.app.api.routes import router as api_router
 from src.app.api.routes import public_router
 from src.app.api.routes.admin_institutions import router as institutions_router
+from src.app.api.routes.admin_users import router as admin_users_router
 from src.app.config import settings
 from src.app.retell.functions import router as retell_router
 from src.app.retell.webhooks import router as retell_webhook_router
@@ -237,6 +238,7 @@ def create_app() -> FastAPI:
     # Admin routes
     app.include_router(auth_router, prefix="/api")
     app.include_router(institutions_router, prefix="/api")
+    app.include_router(admin_users_router, prefix="/api")
 
     # Institution portal routes (authenticated institution users)
     app.include_router(institution_portal_router, prefix="/api")

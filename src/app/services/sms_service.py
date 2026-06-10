@@ -24,6 +24,7 @@ from src.app.services.dead_letter import should_retry_vendor_error
 from src.app.services.retention_policy import (
     default_sms_body_retain_until,
     default_sms_row_retain_until,
+    retention_profile_for,
 )
 from src.app.services.sms_compliance import SmsComplianceService, SmsSendBlockedError
 from src.app.services.sms_privacy import (
@@ -100,6 +101,19 @@ class SmsService:
         to_hash = hash_for_logging(to_number)
         now = datetime.now(timezone.utc)
 
+        # Per-tenant retention: resolve the institution's SMS windows once and
+        # reuse for both the suppressed-log and pending-log rows below.
+        from src.app.models.institution import Institution
+
+        institution = (
+            await self.session.execute(
+                select(Institution).where(Institution.id == location.institution_id)
+            )
+        ).scalar_one_or_none()
+        _profile = retention_profile_for(institution) if institution else None
+        _sms_body_days = _profile.sms_body_days if _profile else None
+        _sms_meta_days = _profile.sms_metadata_days if _profile else None
+
         try:
             await compliance.assert_can_send(
                 institution_id=location.institution_id,
@@ -129,8 +143,10 @@ class SmsService:
                 to_number_hash=identity.phone_hash,
                 to_number_masked=identity.phone_masked,
                 last_status_at=now,
-                retain_until=default_sms_row_retain_until(now),
-                body_retain_until=default_sms_body_retain_until(now),
+                retain_until=default_sms_row_retain_until(
+                    now, metadata_days=_sms_meta_days, body_days=_sms_body_days
+                ),
+                body_retain_until=default_sms_body_retain_until(now, days=_sms_body_days),
             )
             sms_log.to_number = to_number
             sms_log.body = body
@@ -157,8 +173,10 @@ class SmsService:
             to_number_hash=identity.phone_hash,
             to_number_masked=identity.phone_masked,
             timestamp=now,
-            retain_until=default_sms_row_retain_until(now),
-            body_retain_until=default_sms_body_retain_until(now),
+            retain_until=default_sms_row_retain_until(
+                now, metadata_days=_sms_meta_days, body_days=_sms_body_days
+            ),
+            body_retain_until=default_sms_body_retain_until(now, days=_sms_body_days),
         )
 
         # Set PHI fields using properties to trigger encryption

@@ -16,6 +16,7 @@ from src.app.services.custom_field_service import CustomFieldService
 from src.app.services.retention_policy import (
     clinical_record_retain_until,
     default_recording_retain_until,
+    retention_profile_for,
 )
 from src.app.services.sms_privacy import hash_for_logging
 
@@ -359,13 +360,27 @@ class PostCallService:
             retention_start = datetime.now(timezone.utc)
             call.call_date = retention_start.date()
             call.call_time = retention_start.timetz()
+        # Per-tenant retention: use the institution's override windows when
+        # set, the global clinical defaults otherwise.
+        from src.app.models.institution import Institution
+
+        institution = (
+            await self.session.execute(
+                select(Institution).where(Institution.id == institution_id)
+            )
+        ).scalar_one_or_none()
+        profile = retention_profile_for(institution) if institution else None
+
         call.retain_until = clinical_record_retain_until(
             retention_start,
             date_of_birth=patient_dob,
+            days=profile.clinical_record_days if profile else None,
+            apply_minor_extension=profile.apply_minor_extension if profile else True,
         )
         if call.recording_url:
             call.recording_retain_until = default_recording_retain_until(
-                retention_start
+                retention_start,
+                days=profile.recording_days if profile else None,
             )
 
         self.session.add(call)

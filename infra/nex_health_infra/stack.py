@@ -76,7 +76,6 @@ class NexHealthPlatformStack(Stack):
                     enabled=True,
                     tag_filters={"retention_class": "short_recording"},
                     expiration=Duration.days(config.retention.recording_days),
-                    abort_incomplete_multipart_upload_after=Duration.days(7),
                     noncurrent_version_expiration=Duration.days(30),
                 ),
                 # If a clinic explicitly keeps a recording as part of the
@@ -97,8 +96,15 @@ class NexHealthPlatformStack(Stack):
                         ),
                     ],
                     expiration=Duration.days(config.retention.clinical_record_days),
-                    abort_incomplete_multipart_upload_after=Duration.days(7),
                     noncurrent_version_expiration=Duration.days(30),
+                ),
+                # S3 rejects AbortIncompleteMultipartUpload on tag-filtered
+                # rules, so abandoned multipart uploads are cleaned up by this
+                # separate bucket-wide rule.
+                s3.LifecycleRule(
+                    id="abort-incomplete-multipart",
+                    enabled=True,
+                    abort_incomplete_multipart_upload_after=Duration.days(7),
                 ),
             ],
         )

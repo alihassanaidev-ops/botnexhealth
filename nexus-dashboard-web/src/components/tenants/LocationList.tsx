@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, RefreshCw, Pencil, Trash2, Loader2, MessageSquare, UserPlus, MailPlus, Clock } from "lucide-react";
+import { Plus, RefreshCw, Pencil, Trash2, Loader2, MessageSquare, UserPlus, MailPlus, UserMinus, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,6 +25,7 @@ import { LocationForm } from "./LocationForm";
 import { LocationHoursDialog } from "./LocationHoursDialog";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { removeAdminUser } from "@/lib/admin-api";
 import type { Location, SyncResult } from "@/types";
 import { useCooldown, useCooldownMap } from "@/hooks/use-cooldown";
 
@@ -50,6 +51,10 @@ export function LocationList({ institutionSlug }: LocationListProps) {
     const [isInviting, setIsInviting] = useState(false);
     const inviteCooldown = useCooldown(INVITE_COOLDOWN_SECONDS);
     const reinviteCooldowns = useCooldownMap(INVITE_COOLDOWN_SECONDS);
+
+    // Remove-user state
+    const [removeUserTarget, setRemoveUserTarget] = useState<Location | null>(null);
+    const [isRemovingUser, setIsRemovingUser] = useState(false);
 
     const fetchLocations = useCallback(async () => {
         setIsLoading(true);
@@ -160,6 +165,22 @@ export function LocationList({ institutionSlug }: LocationListProps) {
         }
     }
 
+    async function handleRemoveUser() {
+        if (!removeUserTarget?.user) return;
+        setIsRemovingUser(true);
+        try {
+            await removeAdminUser(removeUserTarget.user.id);
+            toast.success(`Removed ${removeUserTarget.user.email}`);
+            setRemoveUserTarget(null);
+            fetchLocations();
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to remove user");
+        } finally {
+            setIsRemovingUser(false);
+        }
+    }
+
     return (
         <div className="space-y-4">
             {viewMode === "list" && (
@@ -262,6 +283,15 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                                                     disabled={reinviteRemaining > 0}
                                                 >
                                                     <MailPlus className="h-3.5 w-3.5" />
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-6 w-6 shrink-0"
+                                                    onClick={() => setRemoveUserTarget(loc)}
+                                                    title="Remove user (frees the email for re-invite)"
+                                                >
+                                                    <UserMinus className="h-3.5 w-3.5 text-destructive" />
                                                 </Button>
                                             </div>
                                         ) : (
@@ -419,6 +449,28 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                         </Button>
                         <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
                             {isDeleting ? "Deleting..." : "Delete"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* Remove User Confirmation Dialog */}
+            <Dialog open={!!removeUserTarget} onOpenChange={(open) => !open && setRemoveUserTarget(null)}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Remove Location User</DialogTitle>
+                        <DialogDescription>
+                            Remove <strong>{removeUserTarget?.user?.email}</strong> from{" "}
+                            <strong>{removeUserTarget?.name}</strong>? They lose access immediately and the
+                            email is freed so you can invite a different user to this location.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setRemoveUserTarget(null)} disabled={isRemovingUser}>
+                            Cancel
+                        </Button>
+                        <Button variant="destructive" onClick={handleRemoveUser} disabled={isRemovingUser}>
+                            {isRemovingUser ? "Removing..." : "Remove User"}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
