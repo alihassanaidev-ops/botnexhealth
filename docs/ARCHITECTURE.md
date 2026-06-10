@@ -25,6 +25,8 @@ under the ScaleNexus brand.
 
 ## System context
 
+![Platform architecture](architecture.png)
+
 ```
   caller ──phone──> Retell (voice agent, LLM)
                        │ function calls + post-call webhooks (HMAC-signed)
