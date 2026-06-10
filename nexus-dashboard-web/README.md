@@ -1,73 +1,33 @@
-# React + TypeScript + Vite
+# Dashboard (nexus-dashboard-web)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Clinic-staff web app: call list with transcripts/summaries/tags, callback
+queue, daily metrics, institution/location administration, and account
+security (MFA enrollment). Vite + React 19 + TypeScript, Tailwind + Radix UI,
+React Router v7.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev        # API expected on http://localhost:8000 (set VITE_API_URL to override)
+npm run test       # Vitest + testing-library
+npm run build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## How it hangs together
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- **Routing** — `src/router.tsx`. Lazy-loaded pages, role-gated routes
+  (SUPER_ADMIN / INSTITUTION_ADMIN / LOCATION_ADMIN / STAFF).
+- **Auth** — `src/context/AuthContext.tsx` + `src/lib/token-manager.ts`.
+  Access token held in memory, refresh token in an HttpOnly cookie
+  (`withCredentials` axios client in `src/lib/api.ts`, interceptor-driven
+  refresh). 15-minute inactivity logout with a 60-second warning.
+- **MFA** — login may return an MFA challenge instead of tokens; the flow
+  handles TOTP and passkeys (`@simplewebauthn/browser`), plus a step-up dialog
+  for sensitive actions. Factor management lives on the `/security` page.
+- **Live updates** — SSE subscription; events are PHI-free hints
+  (`calls_updated` etc.) and the app refetches through the API.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## Branding and deployment
+
+Branding (HTML title, logo in `public/`) and the API target (`VITE_API_URL`)
+are fixed at build time. The built app is published to S3 + CloudFront with
+`make cdk-publish-frontend-staging` from the repo root.

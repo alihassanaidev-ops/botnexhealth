@@ -23,8 +23,9 @@ production CFN template contains the EventBridge rule we expect."
 | `recompute_dashboard_rollup` | every 5 min | Rebuilds `call_metrics_daily` rollup so dashboard volume cards stay sub-millisecond as `calls` grows. Excludes today (live) so the lag is bounded to one window. | DB master role |
 | `ensure_audit_partitions` | daily at 02:30 UTC | Pre-creates the next 6 monthly partitions on `audit_logs`. Without this, INSERTs whose timestamps fall outside any explicit partition land in the DEFAULT partition where queries lose pruning and INSERT throughput degrades. | DB master role |
 | `cleanup_idempotency` | daily at 03:00 UTC | Prunes `retell_function_invocations`, `retell_webhook_events`, `dead_letter_events` past their retention windows (30/30/90 days). Without it these grow unbounded and INSERT performance degrades. | DB master role |
+| `apply_retention_policy` | daily at 03:30 UTC | Enforces the PHI retention schedule: purges expired transcripts/summaries, deletes expired S3 recordings, clears SMS bodies, prunes notifications and dead-letter raw payloads, anonymizes contacts whose calls are all purged. Skips records under legal hold; never touches audit logs. Windows documented in `docs/compliance/policies/retention-destruction-legal-hold.md`. | DB master role |
 
-Both run as the database master role (`nexhealth_admin`), not the
+All of these run as the database master role (`nexhealth_admin`), not the
 runtime `nexhealth_app` role — they perform cross-tenant work that
 must bypass row-level security. The CDK injects the same migration
 secrets they would for the alembic migration task.
