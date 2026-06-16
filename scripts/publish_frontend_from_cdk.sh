@@ -42,6 +42,19 @@ aws s3 sync \
   "s3://${FRONTEND_BUCKET_NAME}/" \
   --delete
 
+# index.html must never be browser-cached: it points at content-hashed JS/CSS
+# chunks that change every deploy. If a stale index.html is cached, it requests
+# old chunks that the sync above deleted, the SPA fallback serves HTML in their
+# place, and the browser errors until a hard refresh. no-cache (revalidate via
+# ETag, cheap 304s) makes deploys pick up automatically on the next navigation.
+echo "Re-uploading index.html with no-cache ..."
+aws s3 cp \
+  --profile "${AWS_PROFILE_NAME}" \
+  nexus-dashboard-web/dist/index.html \
+  "s3://${FRONTEND_BUCKET_NAME}/index.html" \
+  --cache-control "no-cache" \
+  --content-type "text/html"
+
 echo "Invalidating CloudFront distribution ${FRONTEND_DISTRIBUTION_ID} ..."
 aws cloudfront create-invalidation \
   --profile "${AWS_PROFILE_NAME}" \
