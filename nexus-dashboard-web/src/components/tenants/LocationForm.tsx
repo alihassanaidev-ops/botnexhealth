@@ -83,6 +83,8 @@ type LocationFormValues = z.infer<typeof locationSchema>;
 interface LocationFormProps {
     institutionSlug: string;
     location?: Location;
+    /** False for call-intelligence-only tenants — hides the NexHealth fields. */
+    hasPms?: boolean;
     onSuccess: () => void;
     onCancel: () => void;
 }
@@ -119,7 +121,7 @@ function FieldHint({ text }: { text: string }) {
     );
 }
 
-export function LocationForm({ institutionSlug, location, onSuccess, onCancel }: LocationFormProps) {
+export function LocationForm({ institutionSlug, location, hasPms = true, onSuccess, onCancel }: LocationFormProps) {
     const isEditing = !!location;
     const [nexHealthInstitutions, setNexHealthInstitutions] = useState<InstitutionBasic[]>([]);
     const [isLoadingNH, setIsLoadingNH] = useState(false);
@@ -255,6 +257,7 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5 pb-24">
 
                     {/* NexHealth Autofill Picker */}
+                    {hasPms && (
                     <FormField
                         control={form.control}
                         name="nexhealth_location_id"
@@ -293,6 +296,7 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
                             </FormItem>
                         )}
                     />
+                    )}
 
                     {/* Section: Location Info */}
                     <SectionCard title="Location Info" description="Core details about this location.">
@@ -330,6 +334,7 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
                     </SectionCard>
 
                     {/* Section: NexHealth Integration */}
+                    {hasPms && (
                     <SectionCard title="NexHealth Integration" description="Connect this location to your NexHealth PMS account.">
                         <FormField
                             control={form.control}
@@ -348,6 +353,7 @@ export function LocationForm({ institutionSlug, location, onSuccess, onCancel }:
                             )}
                         />
                     </SectionCard>
+                    )}
 
                     {/* Section: Retell AI Integration */}
                     <SectionCard title="Retell AI Integration" description="Link the voice agent assigned to this location.">

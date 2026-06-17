@@ -30,6 +30,15 @@ async def get_adapter_for_institution_location(
     """
     from src.app.config import settings
 
+    # Call-intelligence-only tenants have no PMS. This is the single chokepoint
+    # for every booking/availability/provider/sync route (all depend on
+    # get_institution_pms), so guarding here blocks them all with one clean 409.
+    if getattr(institution, "pms_type", "nexhealth") == "none":
+        raise HTTPException(
+            status_code=409,
+            detail="This institution does not use a PMS; booking and scheduling are unavailable.",
+        )
+
     if not settings.nexhealth_api_key:
         raise ValueError("NEXHEALTH_API_KEY is not configured")
 

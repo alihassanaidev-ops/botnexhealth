@@ -31,9 +31,11 @@ import { useCooldown, useCooldownMap } from "@/hooks/use-cooldown";
 
 interface LocationListProps {
     institutionSlug: string;
+    /** False for call-intelligence-only tenants — hides PMS sync + NexHealth fields. */
+    hasPms?: boolean;
 }
 
-export function LocationList({ institutionSlug }: LocationListProps) {
+export function LocationList({ institutionSlug, hasPms = true }: LocationListProps) {
     const INVITE_COOLDOWN_SECONDS = 30;
     const [locations, setLocations] = useState<Location[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -224,7 +226,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                             <TableRow>
                                 <TableHead>Name</TableHead>
                                 <TableHead>Slug</TableHead>
-                                <TableHead>NexHealth Loc ID</TableHead>
+                                {hasPms && <TableHead>NexHealth Loc ID</TableHead>}
                                 <TableHead>Retell Agent</TableHead>
                                 <TableHead>SMS Number</TableHead>
                                 <TableHead>User</TableHead>
@@ -235,7 +237,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                         <TableBody>
                             {locations.length === 0 && !isLoading && (
                                 <TableRow>
-                                    <TableCell colSpan={8} className="h-24 text-center">
+                                    <TableCell colSpan={hasPms ? 8 : 7} className="h-24 text-center">
                                         No locations found. Add one to get started.
                                     </TableCell>
                                 </TableRow>
@@ -246,9 +248,11 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                                 <TableRow key={loc.id}>
                                     <TableCell className="font-medium">{loc.name}</TableCell>
                                     <TableCell className="font-mono text-sm">{loc.slug}</TableCell>
-                                    <TableCell className="font-mono text-sm">
-                                        {loc.nexhealth_location_id || <span className="text-muted-foreground">-</span>}
-                                    </TableCell>
+                                    {hasPms && (
+                                        <TableCell className="font-mono text-sm">
+                                            {loc.nexhealth_location_id || <span className="text-muted-foreground">-</span>}
+                                        </TableCell>
+                                    )}
                                     <TableCell className="font-mono text-sm">
                                         {loc.retell_agent_id
                                             ? <span title={loc.retell_agent_id}>{loc.retell_agent_id.slice(0, 12)}...</span>
@@ -321,19 +325,21 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <div className="flex items-center justify-end gap-1">
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                onClick={() => handleSync(loc.slug)}
-                                                disabled={syncingSlug === loc.slug}
-                                                title="Sync PMS data"
-                                            >
-                                                {syncingSlug === loc.slug ? (
-                                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                                ) : (
-                                                    <RefreshCw className="h-4 w-4" />
-                                                )}
-                                            </Button>
+                                            {hasPms && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    onClick={() => handleSync(loc.slug)}
+                                                    disabled={syncingSlug === loc.slug}
+                                                    title="Sync PMS data"
+                                                >
+                                                    {syncingSlug === loc.slug ? (
+                                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                                    ) : (
+                                                        <RefreshCw className="h-4 w-4" />
+                                                    )}
+                                                </Button>
+                                            )}
                                             <Button
                                                 variant="ghost"
                                                 size="icon"
@@ -373,6 +379,7 @@ export function LocationList({ institutionSlug }: LocationListProps) {
                     <LocationForm
                         institutionSlug={institutionSlug}
                         location={editingLocation}
+                        hasPms={hasPms}
                         onSuccess={handleFormSuccess}
                         onCancel={() => setViewMode("list")}
                     />

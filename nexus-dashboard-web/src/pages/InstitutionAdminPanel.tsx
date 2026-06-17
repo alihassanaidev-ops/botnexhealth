@@ -2,13 +2,21 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
     ArrowDown,
     ArrowUp,
+    CalendarCheck,
+    Clock,
+    CreditCard,
+    DollarSign,
     Loader2,
     MapPin,
+    Phone,
     RefreshCcw,
     Settings2,
     TrendingUp,
+    UserPlus,
 } from "lucide-react"
-import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from "recharts"
+import { Cell, Label, Pie, PieChart } from "recharts"
+import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
+import { lastNDaysRange, type DateRangeValue } from "@/lib/date-range"
 
 import { toast } from "sonner"
 
@@ -196,21 +204,42 @@ const COMPARISON_METRICS = [
 
 type ComparisonMetricKey = (typeof COMPARISON_METRICS)[number]["key"]
 
+const COMPARISON_COLORS = [
+    "hsl(var(--chart-1))",
+    "hsl(var(--chart-2))",
+    "hsl(var(--chart-3))",
+    "hsl(var(--chart-4))",
+    "hsl(var(--chart-5))",
+]
+
 function ClinicComparisonChart({ rows, loading }: { rows: ClinicComparisonRow[]; loading: boolean }) {
     const [activeMetric, setActiveMetric] = useState<ComparisonMetricKey>("booking_rate_month")
     const activeDef = COMPARISON_METRICS.find((m) => m.key === activeMetric)!
 
-    const chartConfig = useMemo<ChartConfig>(() => ({
-        value: { label: activeDef.label, color: "hsl(var(--primary))" },
-        label: { color: "hsl(var(--primary-foreground))" },
-    }), [activeDef.label])
-
     const chartData = useMemo(() =>
-        rows.map((row) => ({
+        rows.map((row, i) => ({
             location: row.location_name,
-            value: row[activeMetric],
+            value: Number(row[activeMetric]) || 0,
+            fill: COMPARISON_COLORS[i % COMPARISON_COLORS.length],
         })),
     [rows, activeMetric])
+
+    const chartConfig = useMemo<ChartConfig>(() => {
+        const cfg: ChartConfig = { value: { label: activeDef.label } }
+        rows.forEach((row, i) => {
+            cfg[row.location_name] = {
+                label: row.location_name,
+                color: COMPARISON_COLORS[i % COMPARISON_COLORS.length],
+            }
+        })
+        return cfg
+    }, [rows, activeDef.label])
+
+    const isRate = activeDef.suffix === "%"
+    const total = useMemo(() => chartData.reduce((s, d) => s + d.value, 0), [chartData])
+    const centerValue = isRate
+        ? Math.round(total / (chartData.length || 1))
+        : total
 
     return (
         <Card className="border-border shadow-sm flex-1 flex flex-col">
@@ -245,45 +274,63 @@ function ClinicComparisonChart({ rows, loading }: { rows: ClinicComparisonRow[];
                         <p className="text-sm text-muted-foreground">No location data yet.</p>
                     </div>
                 ) : (
-                    <ChartContainer config={chartConfig} className="w-full" style={{ height: 300 }}>
-                        <BarChart
-                            accessibilityLayer
-                            data={chartData}
-                            margin={{ top: 20, bottom: 40 }}
-                        >
-                            <CartesianGrid vertical={false} />
-                            <XAxis
-                                dataKey="location"
-                                tickLine={false}
-                                axisLine={false}
-                                tickMargin={8}
-                                tickFormatter={(v: string) => v.length > 10 ? v.slice(0, 10) + "…" : v}
-                                fontSize={11}
-                                angle={-30}
-                                textAnchor="end"
-                            />
-                            <YAxis hide />
-                            <ChartTooltip
-                                cursor={false}
-                                content={<ChartTooltipContent indicator="line" />}
-                            />
-                            <Bar
-                                dataKey="value"
-                                fill="var(--color-value)"
-                                radius={[4, 4, 0, 0]}
-                                minPointSize={2}
-                            >
-                                <LabelList
-                                    dataKey="value"
-                                    position="top"
-                                    offset={6}
-                                    className="fill-foreground"
-                                    fontSize={12}
-                                    formatter={(v: number) => `${v}${activeDef.suffix}`}
+                    <div className="flex flex-col items-center gap-6 py-2 sm:flex-row sm:justify-center sm:gap-10">
+                        <ChartContainer config={chartConfig} className="aspect-square h-[230px] shrink-0">
+                            <PieChart>
+                                <ChartTooltip
+                                    cursor={false}
+                                    content={<ChartTooltipContent nameKey="location" hideLabel />}
                                 />
-                            </Bar>
-                        </BarChart>
-                    </ChartContainer>
+                                <Pie
+                                    data={chartData}
+                                    dataKey="value"
+                                    nameKey="location"
+                                    innerRadius={62}
+                                    outerRadius={95}
+                                    paddingAngle={chartData.length > 1 ? 3 : 0}
+                                    strokeWidth={2}
+                                >
+                                    {chartData.map((entry) => (
+                                        <Cell key={entry.location} fill={entry.fill} />
+                                    ))}
+                                    <Label
+                                        content={({ viewBox }) => {
+                                            if (viewBox && "cx" in viewBox && "cy" in viewBox) {
+                                                const cx = viewBox.cx ?? 0
+                                                const cy = viewBox.cy ?? 0
+                                                return (
+                                                    <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle">
+                                                        <tspan x={cx} y={cy} className="fill-foreground text-2xl font-bold tabular-nums">
+                                                            {centerValue}{activeDef.suffix}
+                                                        </tspan>
+                                                        <tspan x={cx} y={cy + 20} className="fill-muted-foreground text-[11px]">
+                                                            {isRate ? "average" : "total"}
+                                                        </tspan>
+                                                    </text>
+                                                )
+                                            }
+                                            return null
+                                        }}
+                                    />
+                                </Pie>
+                            </PieChart>
+                        </ChartContainer>
+
+                        {/* Value legend */}
+                        <div className="grid w-full max-w-[220px] gap-2.5">
+                            {chartData.map((entry) => (
+                                <div key={entry.location} className="flex items-center justify-between gap-3 text-sm">
+                                    <span className="flex min-w-0 items-center gap-2">
+                                        <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: entry.fill }} />
+                                        <span className="truncate text-muted-foreground">{entry.location}</span>
+                                    </span>
+                                    <span className="shrink-0 font-semibold tabular-nums">
+                                        {entry.value}{activeDef.suffix}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                 )}
             </CardContent>
         </Card>
@@ -303,12 +350,14 @@ export default function InstitutionAdminPanel() {
     const [roiCalculation, setRoiCalculation] = useState<ROICalculation | null>(null)
     const [roiLoading, setRoiLoading] = useState(false)
 
+    const [range, setRange] = useState<DateRangeValue>(() => lastNDaysRange(30))
+
     const loadData = useCallback(async () => {
         setLoading(true)
         try {
             const [locationRows, aggregateData] = await Promise.all([
                 listInstitutionPortalLocations(),
-                getAggregateDashboard(),
+                getAggregateDashboard(range),
             ])
 
             setLocations(locationRows)
@@ -319,7 +368,7 @@ export default function InstitutionAdminPanel() {
         } finally {
             setLoading(false)
         }
-    }, [])
+    }, [range])
 
     const fetchROI = useCallback(async () => {
         setRoiLoading(true)
@@ -394,15 +443,18 @@ export default function InstitutionAdminPanel() {
                         Aggregate performance across all locations with location-level operations controls.
                     </p>
                 </div>
-                <Button variant="outline" onClick={loadData} disabled={loading}>
-                    {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-                    Refresh
-                </Button>
+                <div className="flex items-center gap-2">
+                    <DateRangePicker value={range} onChange={setRange} />
+                    <Button onClick={loadData} disabled={loading}>
+                        {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                        Refresh
+                    </Button>
+                </div>
             </div>
 
 
             {/* Chart + ROI side by side (chart goes full-width when ROI has no data) */}
-            <div className={`grid gap-6 items-start ${roiConfig && roiCalculation ? "lg:grid-cols-2" : ""}`}>
+            <div className={`grid gap-6 items-stretch ${roiConfig && roiCalculation ? "lg:grid-cols-[2fr_3fr]" : ""}`}>
                 {/* Clinic Comparison Chart */}
                 <ClinicComparisonChart rows={comparisonRows} loading={loading} />
 
@@ -447,24 +499,29 @@ export default function InstitutionAdminPanel() {
                                     {/* Metrics grid */}
                                     <div className="grid grid-cols-2 gap-3">
                                         {[
-                                            { label: "Calls Handled", value: roiCalculation.total_calls_month },
-                                            { label: "Bookings", value: roiCalculation.appointments_booked_month },
-                                            { label: "Booking Revenue", value: `$${roiCalculation.revenue_from_bookings.toLocaleString()}`, up: true },
-                                            { label: "New Patient Rev.", value: `$${roiCalculation.revenue_from_new_patients.toLocaleString()}`, up: true },
-                                            { label: "Staff Saved", value: `${roiCalculation.staff_time_saved_hours}h`, up: true, sub: `$${roiCalculation.staff_cost_saved.toLocaleString()}` },
-                                            { label: "Sub. Cost", value: `$${roiCalculation.monthly_cost.toLocaleString()}`, up: false },
+                                            { label: "Calls Handled", value: roiCalculation.total_calls_month, icon: Phone },
+                                            { label: "Bookings", value: roiCalculation.appointments_booked_month, icon: CalendarCheck },
+                                            { label: "Booking Revenue", value: `$${roiCalculation.revenue_from_bookings.toLocaleString()}`, up: true, icon: DollarSign },
+                                            { label: "New Patient Rev.", value: `$${roiCalculation.revenue_from_new_patients.toLocaleString()}`, up: true, icon: UserPlus },
+                                            { label: "Staff Saved", value: `${roiCalculation.staff_time_saved_hours}h`, up: true, sub: `$${roiCalculation.staff_cost_saved.toLocaleString()}`, icon: Clock },
+                                            { label: "Sub. Cost", value: `$${roiCalculation.monthly_cost.toLocaleString()}`, up: false, icon: CreditCard },
                                         ].map((m) => (
-                                            <div key={m.label} className="rounded-xl border border-border p-3">
-                                                <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">{m.label}</p>
-                                                <div className="flex items-center gap-1 mt-1">
-                                                    {m.up !== undefined && (
-                                                        m.up
-                                                            ? <ArrowUp className="h-3 w-3 text-emerald-600" />
-                                                            : <ArrowDown className="h-3 w-3 text-rose-600" />
-                                                    )}
-                                                    <span className="text-sm font-semibold tabular-nums text-foreground">{m.value}</span>
+                                            <div key={m.label} className="flex items-center gap-3 rounded-xl border border-border p-3">
+                                                <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-foreground shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
+                                                    <m.icon className="size-5 text-background" />
                                                 </div>
-                                                {m.sub && <p className="text-[10px] text-muted-foreground/70 mt-0.5">{m.sub} saved</p>}
+                                                <div className="min-w-0">
+                                                    <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">{m.label}</p>
+                                                    <div className="flex items-center gap-1 mt-0.5">
+                                                        {m.up !== undefined && (
+                                                            m.up
+                                                                ? <ArrowUp className="h-3 w-3 text-emerald-600" />
+                                                                : <ArrowDown className="h-3 w-3 text-rose-600" />
+                                                        )}
+                                                        <span className="text-sm font-semibold tabular-nums text-foreground">{m.value}</span>
+                                                    </div>
+                                                    {m.sub && <p className="text-[10px] text-muted-foreground/70 mt-0.5">{m.sub} saved</p>}
+                                                </div>
                                             </div>
                                         ))}
                                     </div>

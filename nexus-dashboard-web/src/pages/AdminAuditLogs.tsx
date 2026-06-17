@@ -151,7 +151,7 @@ export default function AdminAuditLogs() {
                             </div>
 
                             {/* Pagination Controls */}
-                            <div className="flex items-center justify-between px-2">
+                            <div className="flex flex-col gap-3 border-t border-border px-2 pt-4 sm:flex-row sm:items-center sm:justify-between">
                                 <div className="text-sm text-muted-foreground">
                                     {total > 0
                                         ? `Showing ${(page - 1) * pageSize + 1} to ${Math.min(page * pageSize, total)} of ${total} entries`

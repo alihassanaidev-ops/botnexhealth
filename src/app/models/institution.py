@@ -197,6 +197,17 @@ class Institution(Base):
     # Billing email for invoices
     billing_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # PMS integration mode. "nexhealth" = backed by the NexHealth PMS (sync,
+    # booking, providers, etc.). "none" = call-intelligence-only tenant that
+    # lives solely on our platform — no PMS sync, no booking/availability; the
+    # Retell agent only collects call data. See has_pms / the PMS adapter guard.
+    pms_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="nexhealth",
+        server_default="nexhealth",
+    )
+
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -216,6 +227,15 @@ class Institution(Base):
     # =========================================================================
     # Encrypted field properties
     # =========================================================================
+
+    @property
+    def has_pms(self) -> bool:
+        """True if this institution is backed by a PMS (vs call-intelligence-only).
+
+        Drives the PMS adapter guard and all booking/sync/setup gating. A
+        ``pms_type == "none"`` tenant never reaches PMS code paths.
+        """
+        return self.pms_type != "none"
 
     @property
     def nexhealth_api_key(self) -> str | None:

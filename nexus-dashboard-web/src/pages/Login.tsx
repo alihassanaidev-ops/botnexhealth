@@ -38,7 +38,9 @@ import {
 } from "@/lib/mfa-api"
 
 const credentialsSchema = z.object({
-    email: z.string().email({ message: "Invalid email address" }),
+    // Trim before validating so a copy-pasted email with stray surrounding
+    // spaces is cleaned (and passes) instead of failing "Invalid email address".
+    email: z.string().trim().email({ message: "Invalid email address" }),
     password: z.string().min(6, { message: "Password must be at least 6 characters" }),
 })
 
@@ -333,7 +335,15 @@ export default function Login() {
             <div className="fixed inset-0 overflow-hidden pointer-events-none">
                 <div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" />
             </div>
-            <Card className="w-full max-w-md border-border bg-gradient-to-b from-card to-accent/20 shadow-lg">
+            <div className="relative flex w-full max-w-md flex-col items-center">
+                {/* Brand: logo mark + gradient wordmark beneath */}
+                <div className="mb-6 flex flex-col items-center gap-3">
+                    <img src="/scalenexuslogo.svg" alt="ScaleNexus" className="h-16 w-16 object-contain" />
+                    <span className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 bg-clip-text text-2xl font-bold tracking-tight text-transparent">
+                        ScaleNexus.AI
+                    </span>
+                </div>
+                <Card className="w-full border-border bg-gradient-to-b from-card to-accent/20 shadow-lg">
                 {step.kind === "credentials" && (
                     <>
                         <CardHeader>
@@ -760,7 +770,8 @@ export default function Login() {
                         </CardContent>
                     </>
                 )}
-            </Card>
+                </Card>
+            </div>
         </div>
     )
 }

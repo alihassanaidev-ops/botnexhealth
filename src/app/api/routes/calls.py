@@ -29,7 +29,7 @@ from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.custom_field_service import CustomFieldService
 from src.app.services.event_bus import publish_event
-from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
+from src.app.services.sms_privacy import hash_for_logging, mask_phone, safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,10 @@ class CallRecord(BaseModel):
     callback_resolved: bool
     created_at: str
     contact: ContactSummary | None
+    # Callback number, masked to the last 4 digits. The full value is served
+    # only via the audited POST /{call_id}/reveal/phone endpoint.
+    phone_masked: str | None = None
+    phone_reveal_available: bool = False
 
 
 class CustomFieldValueOut(BaseModel):
@@ -109,6 +113,11 @@ class TranscriptRevealResponse(BaseModel):
 class RecordingRevealResponse(BaseModel):
     call_id: str
     recording_url: str | None
+
+
+class PhoneRevealResponse(BaseModel):
+    call_id: str
+    phone: str | None
 
 
 class CustomFieldRevealResponse(BaseModel):
@@ -162,7 +171,14 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
             ``redact_phi=False`` for authorised roles.
     """
     contact_out: ContactSummary | None = None
+    phone_masked: str | None = None
+    phone_reveal_available = False
     if call.contact:
+        # Phone is always masked here regardless of redact_phi — the full
+        # number is only ever served via the audited reveal endpoint.
+        phone_reveal_available = call.contact.phone_encrypted is not None
+        if phone_reveal_available:
+            phone_masked = mask_phone(call.contact.phone)
         if redact_phi:
             contact_out = ContactSummary(
                 id=call.contact.id,
@@ -195,6 +211,8 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         callback_resolved=call.callback_resolved,
         created_at=call.created_at.isoformat(),
         contact=contact_out,
+        phone_masked=phone_masked,
+        phone_reveal_available=phone_reveal_available,
     )
 
 
@@ -648,6 +666,43 @@ async def reveal_recording(
             )
             return RecordingRevealResponse(
                 call_id=call.id, recording_url=signed_recording_url
+            )
+
+
+@router.post("/{call_id}/reveal/phone", response_model=PhoneRevealResponse)
+@limiter.limit(RATE_READ)
+async def reveal_phone(
+    request: Request,
+    call_id: str,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> PhoneRevealResponse:
+    """Reveal the caller's full phone number for a scoped clinic user and audit it.
+
+    The callback number is stored encrypted; list/detail views only carry the
+    last-4 masked form. Clinic users in the circle of care can reveal the full
+    number here (e.g. to call a patient back); platform SUPER_ADMIN is blocked.
+    """
+    _ensure_phi_reveal_allowed(
+        current_user,
+        action=AuditAction.VIEW_FULL_PHONE,
+        target_resource=f"call:{call_id}/phone",
+    )
+    async with get_db_session() as session:
+        call = await _get_scoped_call(
+            session,
+            call_id,
+            current_user,
+            audit_on_miss=AuditAction.VIEW_FULL_PHONE,
+        )
+        async with _phi_reveal_audit_for_call(
+            current_user,
+            call,
+            action=AuditAction.VIEW_FULL_PHONE,
+            target_suffix="phone",
+        ):
+            return PhoneRevealResponse(
+                call_id=call.id,
+                phone=call.contact.phone if call.contact else None,
             )
 
 

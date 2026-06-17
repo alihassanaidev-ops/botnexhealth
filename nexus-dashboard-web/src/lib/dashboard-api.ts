@@ -9,15 +9,35 @@ import api from "@/lib/api";
 import type { DashboardSummary } from "@/types";
 import type { AggregateDashboardResponse } from "./institution-portal-api";
 
-export async function getDashboardSummary(locationSlug?: string): Promise<DashboardSummary> {
+/** Inclusive date range as ISO `yyyy-MM-dd` strings. */
+export interface DashboardDateRange {
+    startDate?: string;
+    endDate?: string;
+}
+
+function appendRange(params: URLSearchParams, range?: DashboardDateRange): void {
+    if (range?.startDate) params.set("start_date", range.startDate);
+    if (range?.endDate) params.set("end_date", range.endDate);
+}
+
+export async function getDashboardSummary(
+    locationSlug?: string,
+    range?: DashboardDateRange,
+): Promise<DashboardSummary> {
     const params = new URLSearchParams();
     if (locationSlug) params.set("location_slug", locationSlug);
+    appendRange(params, range);
     const q = params.toString() ? `?${params.toString()}` : "";
     const { data } = await api.get<DashboardSummary>(`/institution/dashboard/summary${q}`);
     return data;
 }
 
-export async function getAggregateDashboard(): Promise<AggregateDashboardResponse> {
-    const { data } = await api.get<AggregateDashboardResponse>("/institution/dashboard/aggregate");
+export async function getAggregateDashboard(
+    range?: DashboardDateRange,
+): Promise<AggregateDashboardResponse> {
+    const params = new URLSearchParams();
+    appendRange(params, range);
+    const q = params.toString() ? `?${params.toString()}` : "";
+    const { data } = await api.get<AggregateDashboardResponse>(`/institution/dashboard/aggregate${q}`);
     return data;
 }

@@ -18,7 +18,8 @@ import {
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
+import { RevealablePhone } from "@/components/RevealablePhone"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -611,14 +612,24 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                 ) : detail ? (
                     <div className="space-y-4 text-sm">
                         {/* Contact */}
-                        <div className="font-medium text-base">
-                            {detail.contact?.full_name ?? (
-                                <span className="text-muted-foreground">Unknown caller</span>
-                            )}
-                            {detail.is_new_patient && (
-                                <span className="ml-2 inline-flex items-center gap-1 text-xs text-indigo-600 font-normal">
-                                    <UserPlus className="h-3.5 w-3.5" /> New Patient
-                                </span>
+                        <div>
+                            <div className="font-medium text-base">
+                                {detail.contact?.full_name ?? (
+                                    <span className="text-muted-foreground">Unknown caller</span>
+                                )}
+                                {detail.is_new_patient && (
+                                    <span className="ml-2 inline-flex items-center gap-1 text-xs text-indigo-600 font-normal">
+                                        <UserPlus className="h-3.5 w-3.5" /> New Patient
+                                    </span>
+                                )}
+                            </div>
+                            {detail.phone_reveal_available && (
+                                <RevealablePhone
+                                    callId={detail.id}
+                                    masked={detail.phone_masked}
+                                    available={detail.phone_reveal_available}
+                                    className="mt-1 text-sm"
+                                />
                             )}
                         </div>
 
@@ -709,8 +720,15 @@ function SkeletonRows() {
         <>
             {Array.from({ length: 8 }).map((_, i) => (
                 <tr key={i} className="border-b border-border/50">
-                    <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
-                    <td className="px-4 py-3"><Skeleton className="h-4 w-24" /></td>
+                    <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                            <Skeleton className="h-8 w-8 rounded-full" />
+                            <div className="space-y-1.5">
+                                <Skeleton className="h-4 w-24" />
+                                <Skeleton className="h-3 w-16" />
+                            </div>
+                        </div>
+                    </td>
                     <td className="px-4 py-3"><Skeleton className="h-4 w-16" /></td>
                     <td className="px-4 py-3"><div className="flex gap-1"><Skeleton className="h-5 w-20 rounded-full" /><Skeleton className="h-5 w-16 rounded-full" /></div></td>
                     <td className="px-4 py-3"><Skeleton className="h-5 w-14 rounded-full" /></td>
@@ -898,23 +916,11 @@ export default function Calls() {
 
             {/* Table */}
             <Card>
-                <CardHeader className="pb-0">
-                    <CardTitle className="text-base font-medium text-muted-foreground">
-                        {loading ? (
-                            <Skeleton className="h-4 w-40" />
-                        ) : (
-                            total > 0
-                                ? `Showing ${from}–${to} of ${total.toLocaleString()} calls`
-                                : "No calls found"
-                        )}
-                    </CardTitle>
-                </CardHeader>
                 <CardContent className="p-0">
                     <div className="overflow-x-auto">
                         <Table className="w-full text-sm">
                             <TableHeader className="border-b border-border bg-muted">
                                 <TableRow>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Date & Time</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Direction</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Tags</TableHead>
@@ -928,7 +934,7 @@ export default function Calls() {
                                     <SkeletonRows />
                                 ) : !data || data.items.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={7} className="px-4 py-16 text-center">
+                                        <TableCell colSpan={6} className="px-4 py-16 text-center">
                                             <div className="flex flex-col items-center gap-3 text-muted-foreground">
                                                 <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
                                                     <Phone className="h-6 w-6 opacity-40" />
@@ -956,25 +962,31 @@ export default function Calls() {
                             </TableBody>
                         </Table>
                     </div>
+
+                    {/* Footer: result count (left) + pagination (right) */}
+                    {!loading && total > 0 && (
+                        <div className="flex flex-col gap-3 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-sm text-muted-foreground">
+                                Showing <span className="font-medium text-foreground">{from}–{to}</span> of{" "}
+                                <span className="font-medium text-foreground">{total.toLocaleString()}</span> calls
+                            </p>
+                            {pageCount > 1 && (
+                                <div className="flex items-center gap-2">
+                                    <span className="mr-1 text-sm tabular-nums text-muted-foreground">
+                                        Page {page + 1} of {pageCount}
+                                    </span>
+                                    <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="gap-1">
+                                        <ChevronLeft className="h-4 w-4" /> Previous
+                                    </Button>
+                                    <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)} className="gap-1">
+                                        Next <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </CardContent>
             </Card>
-
-            {/* Pagination */}
-            {!loading && pageCount > 1 && (
-                <div className="flex items-center justify-between">
-                    <p className="text-sm text-muted-foreground">
-                        Page {page + 1} of {pageCount}
-                    </p>
-                    <div className="flex gap-2">
-                        <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="gap-1">
-                            <ChevronLeft className="h-4 w-4" /> Previous
-                        </Button>
-                        <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)} className="gap-1">
-                            Next <ChevronRight className="h-4 w-4" />
-                        </Button>
-                    </div>
-                </div>
-            )}
 
             {/* Detail dialog */}
             <CallDetailDialog
@@ -988,29 +1000,50 @@ export default function Calls() {
 
 // ── Call row ──────────────────────────────────────────────────────────────────
 
+/** "Ashley Bentley" → "AB"; single word → first two letters; empty → "?". */
+function getInitials(name: string | null | undefined): string {
+    const parts = (name ?? "").trim().split(/\s+/).filter(Boolean)
+    if (parts.length === 0) return "?"
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
 interface CallRowProps {
     call: CallRecord
     onClick: () => void
 }
 
 function CallRow({ call, onClick }: CallRowProps) {
+    const name = call.contact?.full_name
     return (
         <TableRow
             className="cursor-pointer hover:bg-muted/50 transition-colors"
             onClick={onClick}
         >
-            <TableCell className="whitespace-nowrap text-muted-foreground">
-                {formatDateTime(call.call_date, call.call_time)}
-            </TableCell>
-
             <TableCell>
-                <div className="flex items-center gap-1.5">
-                    <span className={call.contact?.full_name ? "font-medium" : "text-muted-foreground"}>
-                        {call.contact?.full_name ?? "Unknown"}
-                    </span>
-                    {call.is_new_patient && (
-                        <UserPlus className="h-3.5 w-3.5 text-indigo-500 shrink-0" aria-label="New patient" />
+                <div className="flex items-center gap-3">
+                    {name ? (
+                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-purple-600 text-[11px] font-semibold text-white">
+                            {getInitials(name)}
+                        </div>
+                    ) : (
+                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">
+                            ?
+                        </div>
                     )}
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                            <span className={name ? "font-medium" : "italic text-muted-foreground"}>
+                                {name ?? "Unknown caller"}
+                            </span>
+                            {call.is_new_patient && (
+                                <UserPlus className="h-3.5 w-3.5 text-indigo-500 shrink-0" aria-label="New patient" />
+                            )}
+                        </div>
+                        <p className="whitespace-nowrap text-xs text-muted-foreground">
+                            {formatDateTime(call.call_date, call.call_time)}
+                        </p>
+                    </div>
                 </div>
             </TableCell>
 

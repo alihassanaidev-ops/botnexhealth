@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +18,7 @@ from src.app.services.retention_policy import (
     default_recording_retain_until,
     retention_profile_for,
 )
-from src.app.services.sms_privacy import hash_for_logging
+from src.app.services.sms_privacy import hash_for_logging, hash_phone
 
 logger = logging.getLogger(__name__)
 
@@ -189,11 +189,17 @@ class PostCallService:
         webhook_call: RetellCallData,
         analysis: dict[str, Any] | None,
         location_id: str | None = None,
+        has_pms: bool = True,
     ) -> Call:
         """
         Process a call_analyzed event: upsert Contact and create Call.
 
         Idempotency: retell_call_id is UNIQUE — duplicate webhooks are safe.
+
+        ``has_pms`` controls contact identity when there's no PMS patient ID:
+        PMS tenants create a new Contact per call (can't disambiguate against
+        the PMS); no-PMS tenants auto-match on phone + name so repeat callers
+        collapse into one patient record (see the fallback branch below).
         """
         analysis_dict = analysis or {}
         custom: dict[str, Any] = analysis_dict.get("custom_analysis_data") or {}
@@ -270,26 +276,65 @@ class PostCallService:
                 self.session.add(contact)
                 await self.session.flush()
         else:
-            # ── Fallback: no PMS ID — create a new Contact per call ──────
-            # We intentionally do NOT reuse by phone_hash here because
-            # we cannot know which patient is calling from a shared phone.
-            # Example: Mother (Jane) calling for her son (Timmy).
-            contact = Contact(
-                institution_id=institution_id,
-                first_name=first_name,
-                last_name=last_name,
-                full_name=full_name,
-                is_new_patient=is_new_patient_flag,
-                last_agent_interaction_id=webhook_call.agent_id,
-            )
-            if phone:
-                contact.phone = phone
-            if patient_email:
-                contact.email = patient_email
-            if patient_dob:
-                contact.date_of_birth = patient_dob
-            self.session.add(contact)
-            await self.session.flush()
+            # ── Fallback: no PMS ID ───────────────────────────────────────
+            existing_no_pms = None
+            if has_pms:
+                # PMS tenant: we intentionally do NOT reuse by phone here —
+                # we can't know which patient is calling from a shared phone,
+                # and the authoritative identity is the PMS patient ID.
+                # Example: Mother (Jane) calling for her son (Timmy).
+                pass
+            elif phone and full_name:
+                # No-PMS tenant: auto-match on phone + name so a repeat caller
+                # collapses into one patient record. We require BOTH to agree —
+                # same phone with a DIFFERENT name (parent calling for child)
+                # stays a separate Contact, and a call with no name never merges.
+                # Only match PRIMARY contacts (merged_into_id IS NULL) that
+                # still hold identity (not retention-anonymized).
+                existing_no_pms = (
+                    await self.session.execute(
+                        select(Contact).where(
+                            Contact.institution_id == institution_id,
+                            Contact.phone_hash == hash_phone(phone),
+                            func.lower(func.trim(Contact.full_name)) == full_name.strip().lower(),
+                            Contact.merged_into_id.is_(None),
+                            Contact.anonymized_at.is_(None),
+                        )
+                    )
+                ).scalars().first()
+
+            if existing_no_pms is not None:
+                contact = existing_no_pms
+                contact.last_agent_interaction_id = webhook_call.agent_id
+                contact.anonymized_at = None
+                # Refresh identity fields from the latest call.
+                if first_name:
+                    contact.first_name = first_name
+                    contact.last_name = last_name
+                    contact.full_name = full_name
+                if patient_email:
+                    contact.email = patient_email
+                if patient_dob:
+                    contact.date_of_birth = patient_dob
+                if phone:
+                    contact.phone = phone
+            else:
+                contact = Contact(
+                    institution_id=institution_id,
+                    first_name=first_name,
+                    last_name=last_name,
+                    full_name=full_name,
+                    is_new_patient=is_new_patient_flag,
+                    last_agent_interaction_id=webhook_call.agent_id,
+                )
+                if phone:
+                    contact.phone = phone
+                if patient_email:
+                    contact.email = patient_email
+                if patient_dob:
+                    contact.date_of_birth = patient_dob
+                self.session.add(contact)
+                await self.session.flush()
 
         if contact and location_id:
             await self.session.execute(

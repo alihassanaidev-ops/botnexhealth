@@ -9,8 +9,6 @@ import {
     RefreshCcw,
     ArrowRight,
     CalendarDays,
-    TrendingUp,
-    Infinity as InfinityIcon,
     Clock,
     Users,
     Percent,
@@ -37,6 +35,9 @@ import type { DashboardSummary, CallbackQueueItem } from "@/types"
 import { getDashboardSummary, getAggregateDashboard } from "@/lib/dashboard-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
+import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
+import { RevealablePhone } from "@/components/RevealablePhone"
+import { lastNDaysRange, type DateRangeValue } from "@/lib/date-range"
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -65,35 +66,12 @@ function formatDuration(seconds: number | null): string {
 
 // ── Volume Card Configs ──────────────────────────────────────────────────────
 
-const VOLUME_CARD_CONFIG = [
-    {
-        label: "Today",
-        key: "today" as const,
-        icon: CalendarDays,
-        accentColor: "violet",
-        glowRgb: "139,92,246",
-    },
-    {
-        label: "This Week",
-        key: "this_week" as const,
-        icon: TrendingUp,
-        accentColor: "blue",
-        glowRgb: "59,130,246",
-    },
-    {
-        label: "This Month",
-        key: "this_month" as const,
-        icon: Phone,
-        accentColor: "cyan",
-        glowRgb: "6,182,212",
-    },
-    {
-        label: "All Time",
-        key: "all_time" as const,
-        icon: InfinityIcon,
-        accentColor: "fuchsia",
-        glowRgb: "217,70,239",
-    },
+// Range-scoped cards — driven by the date-range picker, sourced from summary.range.
+const RANGE_CARD_CONFIG = [
+    { label: "Total Calls", key: "total_calls" as const, icon: Phone, accentColor: "violet", glowRgb: "139,92,246" },
+    { label: "Appointments Booked", key: "appointments_booked" as const, icon: CalendarDays, accentColor: "emerald", glowRgb: "16,185,129" },
+    { label: "New Patients", key: "new_patients" as const, icon: Users, accentColor: "sky", glowRgb: "14,165,233" },
+    { label: "Booking Rate", key: "booking_rate" as const, icon: Percent, accentColor: "amber", glowRgb: "245,158,11", suffix: "%" },
 ]
 
 const METRIC_CARDS_CONFIG = [
@@ -240,8 +218,8 @@ function GlassCard({
             <div className="relative p-6">
                 <div className="flex items-center justify-between mb-5">
                     <span className="text-sm font-medium text-muted-foreground">{label}</span>
-                    <div className="rounded-xl p-2.5 bg-primary/10">
-                        <Icon className="h-4 w-4 text-primary" />
+                    <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
+                        <Icon className="h-4 w-4 text-background" />
                     </div>
                 </div>
                 <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground animate-count-fade">
@@ -297,6 +275,14 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                             {formatDate(item.call_date)} · {formatTime(item.call_time)}
                             {item.call_duration_seconds ? ` · ${formatDuration(item.call_duration_seconds)}` : ""}
                         </p>
+                        {item.phone_reveal_available && (
+                            <RevealablePhone
+                                callId={item.call_id}
+                                masked={item.phone_masked}
+                                available={item.phone_reveal_available}
+                                className="mt-1 text-xs"
+                            />
+                        )}
                     </div>
                 </div>
                 <Button
@@ -396,10 +382,12 @@ export default function Dashboard() {
         avg_call_duration_seconds: number
     } | null>(null)
 
+    const [range, setRange] = useState<DateRangeValue>(() => lastNDaysRange(7))
+
     const fetchSummary = useCallback(async () => {
         try {
             const locationSlug = selectedLocationSlug === "all" ? undefined : selectedLocationSlug
-            const summaryData = await getDashboardSummary(locationSlug)
+            const summaryData = await getDashboardSummary(locationSlug, range)
             setSummary(summaryData)
 
             // KPI cards are now sourced from /summary for ALL roles. The
@@ -441,7 +429,7 @@ export default function Dashboard() {
         } finally {
             setLoading(false)
         }
-    }, [selectedLocationSlug, user?.role])
+    }, [selectedLocationSlug, user?.role, range])
 
     useEffect(() => {
         fetchSummary()
@@ -495,6 +483,7 @@ export default function Dashboard() {
                                 </SelectContent>
                             </Select>
                         )}
+                        <DateRangePicker value={range} onChange={setRange} />
                         <Button
                             variant="outline"
                             size="sm"
@@ -508,16 +497,17 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                {/* Volume cards */}
+                {/* Range-scoped cards (driven by the date-range picker) */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    {VOLUME_CARD_CONFIG.map(({ label, key, icon, accentColor, glowRgb }) => (
+                    {RANGE_CARD_CONFIG.map(({ label, key, icon, accentColor, glowRgb, suffix }) => (
                         <GlassCard
                             key={key}
                             label={label}
-                            value={summary?.call_volume[key]}
+                            value={summary?.range?.[key]}
                             icon={icon}
                             accentColor={accentColor}
                             glowRgb={glowRgb}
+                            suffix={suffix}
                             loading={loading}
                         />
                     ))}

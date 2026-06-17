@@ -10,6 +10,7 @@ import type {
     CallRecord,
     CallsListResponse,
     CustomFieldRevealResponse,
+    PhoneRevealResponse,
     RecordingRevealResponse,
     TranscriptRevealResponse,
 } from "@/types";
@@ -58,6 +59,13 @@ export async function revealTranscript(callId: string): Promise<TranscriptReveal
 export async function revealRecording(callId: string): Promise<RecordingRevealResponse> {
     const { data } = await api.post<RecordingRevealResponse>(
         `/institution/calls/${callId}/reveal/recording`,
+    );
+    return data;
+}
+
+export async function revealPhone(callId: string): Promise<PhoneRevealResponse> {
+    const { data } = await api.post<PhoneRevealResponse>(
+        `/institution/calls/${callId}/reveal/phone`,
     );
     return data;
 }

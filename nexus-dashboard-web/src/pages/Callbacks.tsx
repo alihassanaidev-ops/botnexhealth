@@ -14,7 +14,8 @@ import {
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
+import { RevealablePhone } from "@/components/RevealablePhone"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -243,6 +244,7 @@ function SkeletonRows() {
                 <TableRow key={i}>
                     <TableCell className="px-4 py-3"><Skeleton className="h-4 w-6" /></TableCell>
                     <TableCell className="px-4 py-3"><Skeleton className="h-4 w-28" /></TableCell>
+                    <TableCell className="px-4 py-3"><Skeleton className="h-4 w-24" /></TableCell>
                     <TableCell className="px-4 py-3"><Skeleton className="h-4 w-32" /></TableCell>
                     <TableCell className="px-4 py-3"><Skeleton className="h-4 w-12" /></TableCell>
                     <TableCell className="px-4 py-3"><Skeleton className="h-4 w-48" /></TableCell>
@@ -277,6 +279,14 @@ function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
                 <span className={item.contact_name || item.contact?.full_name ? "font-medium" : "text-muted-foreground"}>
                     {item.contact_name ?? item.contact?.full_name ?? "Unknown"}
                 </span>
+            </TableCell>
+
+            <TableCell className="whitespace-nowrap px-4 text-sm">
+                <RevealablePhone
+                    callId={item.call_id}
+                    masked={item.phone_masked}
+                    available={item.phone_reveal_available}
+                />
             </TableCell>
 
             <TableCell className="whitespace-nowrap text-muted-foreground px-4">
@@ -504,17 +514,6 @@ export default function Callbacks() {
 
             {/* Table */}
             <Card>
-                <CardHeader className="pb-0">
-                    <CardTitle className="text-base font-medium text-muted-foreground">
-                        {loading ? (
-                            <Skeleton className="h-4 w-40" />
-                        ) : (
-                            total > 0
-                                ? `Showing ${from}–${to} of ${total.toLocaleString()} callbacks`
-                                : "No callbacks found"
-                        )}
-                    </CardTitle>
-                </CardHeader>
                 <CardContent className="p-0">
                     <div className="overflow-x-auto">
                         <Table className="w-full text-sm">
@@ -522,6 +521,7 @@ export default function Callbacks() {
                                 <TableRow>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide w-10">Status</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Phone</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Date & Time</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Duration</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Summary</TableHead>
@@ -534,7 +534,7 @@ export default function Callbacks() {
                                     <SkeletonRows />
                                 ) : !data || data.items.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={7} className="px-4 py-16 text-center">
+                                        <TableCell colSpan={8} className="px-4 py-16 text-center">
                                             <div className="flex flex-col items-center gap-3 text-muted-foreground">
                                                 <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
                                                     <PhoneForwarded className="h-6 w-6 opacity-40" />
@@ -569,25 +569,31 @@ export default function Callbacks() {
                             </TableBody>
                         </Table>
                     </div>
+
+                    {/* Footer: result count (left) + pagination (right) */}
+                    {!loading && total > 0 && (
+                        <div className="flex flex-col gap-3 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-sm text-muted-foreground">
+                                Showing <span className="font-medium text-foreground">{from}–{to}</span> of{" "}
+                                <span className="font-medium text-foreground">{total.toLocaleString()}</span> callbacks
+                            </p>
+                            {pageCount > 1 && (
+                                <div className="flex items-center gap-2">
+                                    <span className="mr-1 text-sm tabular-nums text-muted-foreground">
+                                        Page {page + 1} of {pageCount}
+                                    </span>
+                                    <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="gap-1">
+                                        <ChevronLeft className="h-4 w-4" /> Previous
+                                    </Button>
+                                    <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)} className="gap-1">
+                                        Next <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </CardContent>
             </Card>
-
-            {/* Pagination */}
-            {!loading && pageCount > 1 && (
-                <div className="flex items-center justify-between">
-                    <p className="text-sm text-muted-foreground">
-                        Page {page + 1} of {pageCount}
-                    </p>
-                    <div className="flex gap-2">
-                        <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="gap-1">
-                            <ChevronLeft className="h-4 w-4" /> Previous
-                        </Button>
-                        <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)} className="gap-1">
-                            Next <ChevronRight className="h-4 w-4" />
-                        </Button>
-                    </div>
-                </div>
-            )}
 
             {/* Resolve dialog */}
             <ResolveDialog

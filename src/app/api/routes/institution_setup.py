@@ -287,6 +287,8 @@ class SetupOverviewResponse(BaseModel):
     can_create_appointment_types: bool = False
     can_link_availability: bool = False
     counts: dict[str, int] = {}
+    # False for call-intelligence-only tenants — the UI hides Practice Setup.
+    has_pms: bool = True
 
 
 # ── Request schemas ──────────────────────────────────────────────────────
@@ -333,6 +335,18 @@ async def get_setup_overview(
     """Get setup overview: location info, PMS capabilities, and cached data counts."""
     async with get_db_session() as session:
         institution, location = await _resolve_institution_location(current_user, session, location_id)
+
+        # Call-intelligence-only tenant: no PMS adapter, nothing to sync.
+        if not institution.has_pms:
+            return SetupOverviewResponse(
+                location=LocationInfoResponse.model_validate(location),
+                pms_source=None,
+                can_create_appointment_types=False,
+                can_link_availability=False,
+                counts={"providers": 0, "appointment_types": 0, "operatories": 0, "descriptors": 0},
+                has_pms=False,
+            )
+
         adapter = await _get_adapter(institution, location)
 
         # Counts from cache
@@ -355,6 +369,7 @@ async def get_setup_overview(
             can_create_appointment_types=isinstance(adapter, SupportsAppointmentTypeCreation),
             can_link_availability=isinstance(adapter, SupportsAvailabilityLinking),
             counts=counts,
+            has_pms=True,
         )
 
 
@@ -913,6 +928,11 @@ async def trigger_sync(
     """Trigger a fresh sync from PMS for the institution location."""
     async with get_db_session() as session:
         institution, location = await _resolve_institution_location(current_user, session, location_id)
+        if not institution.has_pms:
+            raise HTTPException(
+                status_code=400,
+                detail="This institution does not use a PMS; there is nothing to sync.",
+            )
         sync_svc = SyncService(session)
         result = await sync_svc.sync_location(institution, location)
         loc_slug = location.slug

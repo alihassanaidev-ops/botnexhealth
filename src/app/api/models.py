@@ -596,6 +596,8 @@ class InstitutionResponse(BaseModel):
     location_limit: int = 1
     jurisdiction: str
 
+    # PMS integration mode: "nexhealth" or "none" (call-intelligence-only).
+    pms_type: str = "nexhealth"
 
     # Credential presence indicators
     has_nexhealth_key: bool
@@ -633,6 +635,7 @@ class InstitutionResponse(BaseModel):
             is_active=institution.is_active,
             location_limit=getattr(institution, "location_limit", 1),
             jurisdiction=getattr(institution, "jurisdiction", DEFAULT_JURISDICTION.value),
+            pms_type=getattr(institution, "pms_type", "nexhealth"),
             has_nexhealth_key=institution.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
             has_retell_secret=has_retell_secret,

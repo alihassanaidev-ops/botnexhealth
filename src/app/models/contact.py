@@ -40,6 +40,8 @@ class Contact(Base):
         Index("ix_contact_institution", "institution_id"),
         Index("ix_contact_institution_nexhealth", "institution_id", "nexhealth_patient_id"),
         Index("ix_contact_institution_phone", "institution_id", "phone_hash"),
+        # Supports the no-PMS phone+name auto-match lookup in PostCallService.
+        Index("ix_contact_institution_phone_name", "institution_id", "phone_hash", "full_name"),
     )
 
     # Primary key
@@ -72,6 +74,19 @@ class Contact(Base):
 
     # PMS link
     nexhealth_patient_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Manual identity linking (no-PMS tenants). When set, this Contact is an
+    # *alias* of the primary Contact it points at: a staff member merged two
+    # records that auto-match couldn't (e.g. same person on two phones, or a
+    # transcription typo in the name). Primary contacts have merged_into_id
+    # NULL. Merge is pure linking — Calls are never reassigned — so unmerge is
+    # lossless (just clear this column).
+    merged_into_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("contacts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Interaction tracking
     chat_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

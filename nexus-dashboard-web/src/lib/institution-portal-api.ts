@@ -8,6 +8,10 @@ export interface InstitutionPortalMe {
     role: string
     institution_id: string | null
     location_id: string | null
+    // PMS integration mode. has_pms === false for call-intelligence-only
+    // tenants — the UI hides Practice Setup and surfaces the Patients page.
+    pms_type?: string
+    has_pms?: boolean
 }
 
 export interface InstitutionPortalLocation {
@@ -135,8 +139,14 @@ export async function deleteTransferNumber(
     await api.delete(`/institution/locations/${locSlug}/transfer-numbers/${transferId}`)
 }
 
-export async function getAggregateDashboard(): Promise<AggregateDashboardResponse> {
-    const { data } = await api.get<AggregateDashboardResponse>("/institution/dashboard/aggregate")
+export async function getAggregateDashboard(
+    range?: { startDate?: string; endDate?: string },
+): Promise<AggregateDashboardResponse> {
+    const params = new URLSearchParams()
+    if (range?.startDate) params.set("start_date", range.startDate)
+    if (range?.endDate) params.set("end_date", range.endDate)
+    const q = params.toString() ? `?${params.toString()}` : ""
+    const { data } = await api.get<AggregateDashboardResponse>(`/institution/dashboard/aggregate${q}`)
     return data
 }
 

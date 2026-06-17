@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from src.app.api.deps import get_current_active_user
 from src.app.api.rate_limit import RATE_READ, limiter
 from src.app.api.routes.calls import ContactSummary, _location_agent_filter
+from src.app.services.sms_privacy import mask_phone
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call import Call, CallStatus
@@ -48,6 +49,9 @@ class CallbackItem(BaseModel):
     preferred_callback_datetime: str | None
     created_at: str
     contact: ContactSummary | None
+    # Masked callback number; full value via POST /institution/calls/{id}/reveal/phone.
+    phone_masked: str | None = None
+    phone_reveal_available: bool = False
 
 
 class CallbacksListResponse(BaseModel):
@@ -62,6 +66,8 @@ class CallbacksListResponse(BaseModel):
 
 def _call_to_callback_item(call: Call) -> CallbackItem:
     contact_out: ContactSummary | None = None
+    phone_masked: str | None = None
+    phone_reveal_available = False
     if call.contact:
         contact_out = ContactSummary(
             id=call.contact.id,
@@ -69,6 +75,9 @@ def _call_to_callback_item(call: Call) -> CallbackItem:
             first_name=call.contact.first_name,
             last_name=call.contact.last_name,
         )
+        phone_reveal_available = call.contact.phone_encrypted is not None
+        if phone_reveal_available:
+            phone_masked = mask_phone(call.contact.phone)
     return CallbackItem(
         call_id=call.id,
         contact_name=call.contact.full_name if call.contact else None,
@@ -83,6 +92,8 @@ def _call_to_callback_item(call: Call) -> CallbackItem:
         preferred_callback_datetime=call.preferred_callback_datetime.isoformat() if call.preferred_callback_datetime else None,
         created_at=call.created_at.isoformat(),
         contact=contact_out,
+        phone_masked=phone_masked,
+        phone_reveal_available=phone_reveal_available,
     )
 
 

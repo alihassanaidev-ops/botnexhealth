@@ -451,7 +451,7 @@ export default function InstitutionDetailPage() {
 
                 {/* Locations Tab */}
                 <TabsContent value="locations" className="space-y-4">
-                    <LocationList institutionSlug={institution.slug} />
+                    <LocationList institutionSlug={institution.slug} hasPms={institution.pms_type !== "none"} />
                 </TabsContent>
             </Tabs>
 

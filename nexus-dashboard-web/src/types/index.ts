@@ -34,6 +34,8 @@ export interface InstitutionDetail {
     slug: string;
     is_active: boolean;
 
+    // "nexhealth" | "none" (call-intelligence-only). Absent on older payloads.
+    pms_type?: string;
 
     has_nexhealth_key: boolean;
     has_system_nexhealth_key: boolean;
@@ -265,6 +267,9 @@ export interface CallRecord {
     callback_resolved: boolean;
     created_at: string;
     contact: ContactSummary | null;
+    /** Callback number masked to the last 4 digits; full value via revealPhone(). */
+    phone_masked: string | null;
+    phone_reveal_available: boolean;
 }
 
 export interface CustomFieldValue {
@@ -327,6 +332,11 @@ export interface TranscriptRevealResponse {
 export interface RecordingRevealResponse {
     call_id: string;
     recording_url: string | null;
+}
+
+export interface PhoneRevealResponse {
+    call_id: string;
+    phone: string | null;
 }
 
 export interface CustomFieldRevealResponse {
@@ -456,6 +466,19 @@ export interface CallbackQueueItem {
     call_duration_seconds: number | null;
     summary: string | null;
     next_action: string | null;
+    phone_masked: string | null;
+    phone_reveal_available: boolean;
+}
+
+/** Metrics scoped to a caller-selected date range (present when start/end passed). */
+export interface RangeMetrics {
+    start_date: string;
+    end_date: string;
+    total_calls: number;
+    appointments_booked: number;
+    new_patients: number;
+    booking_rate: number;
+    avg_call_duration_seconds: number;
 }
 
 export interface DashboardSummary {
@@ -467,6 +490,7 @@ export interface DashboardSummary {
     new_patients_month?: number;
     booking_rate_month?: number;
     avg_call_duration_seconds?: number;
+    range?: RangeMetrics | null;
 }
 
 // ── Callbacks Page ──────────────────────────────────────────────────────
@@ -485,6 +509,8 @@ export interface CallbackListItem {
     preferred_callback_datetime: string | null;
     created_at: string;
     contact: ContactSummary | null;
+    phone_masked: string | null;
+    phone_reveal_available: boolean;
 }
 
 export interface CallbacksListResponse {

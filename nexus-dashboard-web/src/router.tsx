@@ -4,6 +4,7 @@ import { createBrowserRouter } from "react-router-dom";
 import DashboardWrapper from "./components/DashboardWrapper";
 import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
+import PmsGuard from "./components/PmsGuard";
 import AppLayout from "./components/AppLayout";
 
 // Auth pages — eagerly loaded (small, needed immediately)
@@ -33,6 +34,7 @@ const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
 const Security = lazy(() => import("./pages/Security"));
+const Patients = lazy(() => import("./pages/Patients"));
 
 function LazyFallback() {
     return (
@@ -186,8 +188,8 @@ export const router = createBrowserRouter([
                     {
                         path: "setup",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <S><SetupOverview /></S>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <PmsGuard><S><SetupOverview /></S></PmsGuard>
                             </RoleGuard>
                         ),
                     },
@@ -195,7 +197,7 @@ export const router = createBrowserRouter([
                         path: "setup/appointment-types",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <S><AppointmentTypes /></S>
+                                <PmsGuard><S><AppointmentTypes /></S></PmsGuard>
                             </RoleGuard>
                         ),
                     },
@@ -203,7 +205,7 @@ export const router = createBrowserRouter([
                         path: "setup/providers",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <S><ProvidersScheduling /></S>
+                                <PmsGuard><S><ProvidersScheduling /></S></PmsGuard>
                             </RoleGuard>
                         ),
                     },
@@ -211,7 +213,7 @@ export const router = createBrowserRouter([
                         path: "setup/operatories",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <S><Operatories /></S>
+                                <PmsGuard><S><Operatories /></S></PmsGuard>
                             </RoleGuard>
                         ),
                     },
@@ -219,7 +221,7 @@ export const router = createBrowserRouter([
                         path: "setup/insurance-plans",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <S><InsurancePlans /></S>
+                                <PmsGuard><S><InsurancePlans /></S></PmsGuard>
                             </RoleGuard>
                         ),
                     },
@@ -244,6 +246,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <S><Callbacks /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "patients",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <S><Patients /></S>
                             </RoleGuard>
                         ),
                     },

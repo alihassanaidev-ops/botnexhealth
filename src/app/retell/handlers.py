@@ -60,14 +60,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ResolvedContext:
-    """Resolved institution, location, and PMS adapter from call context."""
+    """Resolved institution, location, and PMS adapter from call context.
+
+    ``adapter`` is None for call-intelligence-only tenants (``pms_type == "none"``);
+    such handlers should be resolved with ``require_pms=False`` and must not touch
+    ``adapter``. PMS handlers resolve with the default ``require_pms=True``, which
+    raises before returning when there is no PMS.
+    """
 
     institution: Institution
     location: InstitutionLocation
-    adapter: PMSAdapter
+    adapter: PMSAdapter | None
 
 
-async def _resolve_context() -> ResolvedContext:
+async def _resolve_context(require_pms: bool = True) -> ResolvedContext:
     """Resolve PMS adapter and location from current Retell call context.
 
     Each Retell agent is mapped 1:1 to an InstitutionLocation; the location is
@@ -76,8 +82,16 @@ async def _resolve_context() -> ResolvedContext:
     resolve a location for the agent, we fail closed rather than silently
     routing to whichever clinic happens to be the global default.
 
+    Args:
+        require_pms: When True (default), booking/scheduling/patient handlers
+            get a real adapter, and a no-PMS tenant raises ValueError so the
+            caller returns a graceful tool error. Read-only handlers that only
+            need institution/location (locations, FAQs, transfer numbers,
+            insurance plans) pass False so they keep working without a PMS.
+
     Raises:
-        ValueError: If no institution or location can be resolved from agent_id.
+        ValueError: If no institution/location can be resolved, or if the
+            tenant has no PMS and ``require_pms`` is True.
     """
     institution, location = await get_institution_from_call_context()
     if not institution or not location:
@@ -86,14 +100,22 @@ async def _resolve_context() -> ResolvedContext:
             "Each Retell agent must be mapped 1:1 to an active InstitutionLocation."
         )
 
-    adapter = await get_adapter_for_institution_location(institution, location)
-
     # Stash resolved IDs in the call context so the audit decorator can scope
-    # log entries to the correct institution/location.
+    # log entries to the correct institution/location (including the no-PMS
+    # error path below).
     update_call_context(
         institution_id=str(institution.id),
         location_id=str(location.id),
     )
+
+    adapter: PMSAdapter | None = None
+    if institution.has_pms:
+        adapter = await get_adapter_for_institution_location(institution, location)
+    elif require_pms:
+        raise ValueError(
+            "This clinic does not use a practice-management system, so booking, "
+            "scheduling, and patient lookup are not available."
+        )
 
     return ResolvedContext(institution=institution, location=location, adapter=adapter)
 
@@ -214,7 +236,7 @@ async def list_locations(args: dict[str, Any]) -> dict[str, Any]:
     exactly one location — no PMS API call needed.
     """
     try:
-        ctx = await _resolve_context()
+        ctx = await _resolve_context(require_pms=False)
     except ValueError as e:
         return {"error": str(e)}
 
@@ -263,7 +285,7 @@ async def get_location_details(args: dict[str, Any]) -> dict[str, Any]:
     location_id is optional — defaults to the auto-resolved location.
     """
     try:
-        ctx = await _resolve_context()
+        ctx = await _resolve_context(require_pms=False)
     except ValueError as e:
         return {"error": str(e)}
 
@@ -1044,7 +1066,7 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
 async def list_insurance_plans_handler(args: dict[str, Any]) -> dict[str, Any]:
     """List accepted insurance plans for this location."""
     try:
-        ctx = await _resolve_context()
+        ctx = await _resolve_context(require_pms=False)
     except ValueError as e:
         return {"error": str(e)}
 
@@ -1105,7 +1127,7 @@ async def list_insurance_plans_handler(args: dict[str, Any]) -> dict[str, Any]:
 async def list_transfer_numbers(args: dict[str, Any]) -> dict[str, Any]:
     """List transfer numbers for this location."""
     try:
-        ctx = await _resolve_context()
+        ctx = await _resolve_context(require_pms=False)
     except ValueError as e:
         return {"error": str(e)}
 

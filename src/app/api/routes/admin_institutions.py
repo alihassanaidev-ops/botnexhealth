@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Annotated
+from typing import Any, Annotated, Literal
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -143,6 +143,13 @@ class InstitutionCreate(BaseModel):
 
     # Initial Institution User (Mandatory)
     email: str = Field(..., description="Email for the initial institution user invite")
+
+    # PMS integration mode: "nexhealth" (synced PMS) or "none"
+    # (call-intelligence-only — no booking/sync/providers).
+    pms_type: Literal["nexhealth", "none"] = Field(
+        default="nexhealth",
+        description="PMS integration: 'nexhealth' or 'none' (call-intelligence-only)",
+    )
 
     # NexHealth
     nexhealth_api_key: str | None = None
@@ -970,6 +977,12 @@ async def sync_location(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Location '{loc_slug}' not found",
+            )
+
+        if not institution.has_pms:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This institution does not use a PMS; there is nothing to sync.",
             )
 
         sync_service = SyncService(session)

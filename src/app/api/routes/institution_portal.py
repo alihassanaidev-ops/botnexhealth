@@ -42,6 +42,10 @@ class InstitutionPortalMeResponse(BaseModel):
     role: str
     institution_id: str | None
     location_id: str | None
+    # PMS integration mode for this tenant. The frontend gates Practice Setup
+    # nav/routes on has_pms (no-PMS tenants are call-intelligence-only).
+    pms_type: str = "nexhealth"
+    has_pms: bool = True
 
 
 class OperatingHoursEntry(BaseModel):
@@ -237,6 +241,8 @@ async def get_my_institution_config(
         role=current_user.role,
         institution_id=current_user.institution_id,
         location_id=current_user.location_id,
+        pms_type=institution.pms_type,
+        has_pms=institution.has_pms,
     )
 
 

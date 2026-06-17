@@ -89,8 +89,8 @@ export default function AdminDashboard() {
                         <div className="relative p-6">
                             <div className="flex items-center justify-between mb-5">
                                 <span className="text-sm font-medium text-muted-foreground">{card.label}</span>
-                                <div className="rounded-xl p-2.5 bg-primary/10">
-                                    <card.icon className="h-4 w-4 text-primary" />
+                                <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
+                                    <card.icon className="h-4 w-4 text-background" />
                                 </div>
                             </div>
                             {loading ? (

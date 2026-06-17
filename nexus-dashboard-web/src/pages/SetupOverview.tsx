@@ -5,17 +5,18 @@ import {
     CalendarCheck2,
     CheckCircle2,
     ClipboardList,
+    Info,
     RefreshCcw,
     Stethoscope,
     TimerReset,
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getSetupOverview, triggerSync } from "@/lib/tenant-api";
 import type { SetupOverview as SetupOverviewData } from "@/types";
 import { useAuth } from "@/context/AuthContext";
@@ -156,182 +157,133 @@ export default function SetupOverview() {
     const canCreateAppointmentTypes = overview?.can_create_appointment_types ?? false;
     const canLinkAvailability = overview?.can_link_availability ?? false;
 
+    const locationName = overview?.location.name ?? null;
+
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="fixed inset-0 pointer-events-none overflow-hidden">
-                <div className="absolute -top-32 right-[-6rem] h-[420px] w-[420px] rounded-full bg-transparent blur-[100px] dark:bg-violet-700/20" />
-            </div>
-
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="space-y-3">
+            {/* Header */}
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <ClipboardList className="h-4 w-4" />
                         Practice setup
                     </div>
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight">First-clinic setup overview</h1>
-                        <p className="max-w-2xl text-muted-foreground">
-                            Use this page to track what has already synced and move through the setup steps in order.
-                        </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="secondary" className="border border-border bg-background">
-                            {completedSteps}/{setupSteps.length} steps complete
-                        </Badge>
-                        <Badge
-                            variant="secondary"
-                            className={canCreateAppointmentTypes ? "border border-emerald-200 bg-emerald-50 text-emerald-700" : "border border-border bg-background"}
-                        >
-                            {canCreateAppointmentTypes ? "PMS supports appointment type creation" : "Appointment types are PMS-managed"}
-                        </Badge>
-                        <Badge
-                            variant="secondary"
-                            className={canLinkAvailability ? "border border-sky-200 bg-sky-50 text-sky-700" : "border border-border bg-background"}
-                        >
-                            {canLinkAvailability ? "Availability linking enabled" : "Availability linking limited"}
-                        </Badge>
-                    </div>
+                    <h1 className="mt-1 text-2xl font-bold tracking-tight">Setup overview</h1>
+                    <p className="text-sm text-muted-foreground">Track what's synced and finish setup in order.</p>
                 </div>
-
-                <div className="flex flex-col gap-3 rounded-xl border border-border bg-background/80 p-4 shadow-sm lg:min-w-[320px]">
-                    <div className="space-y-2">
-                        <div className="text-sm font-medium">Working location</div>
-                        <Select
-                            value={selectedLocationId}
-                            onValueChange={setSelectedLocationId}
-                            disabled={loadingLocations || locations.length === 0}
-                        >
-                            <SelectTrigger>
-                                <SelectValue placeholder="Select a location" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {locations.map((location) => (
-                                    <SelectItem key={location.id} value={location.id}>
-                                        {location.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <Button variant="outline" onClick={() => void handleSync()} disabled={!canSync || syncing || !selectedLocationId}>
+                <div className="flex items-center gap-2">
+                    <Select
+                        value={selectedLocationId}
+                        onValueChange={setSelectedLocationId}
+                        disabled={loadingLocations || locations.length === 0}
+                    >
+                        <SelectTrigger className="h-9 w-[200px]">
+                            <SelectValue placeholder="Select a location" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {locations.map((location) => (
+                                <SelectItem key={location.id} value={location.id}>
+                                    {location.name}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                    <Button onClick={() => void handleSync()} disabled={!canSync || syncing || !selectedLocationId}>
                         <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
                         {syncing ? "Syncing..." : "Run sync"}
                     </Button>
                 </div>
             </div>
 
-            <Card className="border-border/80 bg-background/80 shadow-sm">
-                <CardHeader>
-                    <CardTitle>Completion progress</CardTitle>
-                    <CardDescription>
-                        {overview?.location.name ?? "No location selected"} is {completionPercent}% through the setup checklist.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <Progress value={completionPercent} className="h-3" />
-                    <div className="grid gap-4 md:grid-cols-4">
-                        <div className="rounded-lg border border-border bg-muted/30 p-4">
-                            <div className="text-sm text-muted-foreground">Providers</div>
-                            <div className="mt-2 text-2xl font-semibold">{counts.providers}</div>
+            {/* Progress — single bar; capability + status notes tucked behind the info icon */}
+            <Card>
+                <CardContent className="p-5">
+                    <div className="flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-sm font-medium">
+                                    {locationName ? `${locationName} readiness` : "Setup readiness"}
+                                </span>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <button type="button" className="text-muted-foreground/60 transition-colors hover:text-muted-foreground" aria-label="Setup details">
+                                            <Info className="h-3.5 w-3.5" />
+                                        </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent className="max-w-xs space-y-1.5 text-xs">
+                                        <p>{canCreateAppointmentTypes ? "Your PMS supports creating appointment types here." : "Appointment types are managed in your PMS."}</p>
+                                        <p>{canLinkAvailability ? "Availability linking is enabled." : "Availability linking is limited for this PMS."}</p>
+                                        <p className="text-muted-foreground">Reads cached setup data — run a sync after major PMS-side changes.</p>
+                                    </TooltipContent>
+                                </Tooltip>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                {completedSteps} of {setupSteps.length} steps complete
+                            </p>
                         </div>
-                        <div className="rounded-lg border border-border bg-muted/30 p-4">
-                            <div className="text-sm text-muted-foreground">Appointment types</div>
-                            <div className="mt-2 text-2xl font-semibold">{counts.appointment_types}</div>
-                        </div>
-                        <div className="rounded-lg border border-border bg-muted/30 p-4">
-                            <div className="text-sm text-muted-foreground">Operatories</div>
-                            <div className="mt-2 text-2xl font-semibold">{counts.operatories}</div>
-                        </div>
-                        <div className="rounded-lg border border-border bg-muted/30 p-4">
-                            <div className="text-sm text-muted-foreground">Descriptors</div>
-                            <div className="mt-2 text-2xl font-semibold">{counts.descriptors}</div>
-                        </div>
+                        <span className="text-2xl font-bold tabular-nums">{completionPercent}%</span>
                     </div>
+                    <Progress value={completionPercent} className="mt-3 h-2" />
                 </CardContent>
             </Card>
 
-            <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
-                <div className="grid gap-4 md:grid-cols-2">
+            {/* Checklist */}
+            <Card className={loadingOverview ? "opacity-60 transition-opacity" : "transition-opacity"}>
+                <CardContent className="divide-y divide-border p-0">
                     {setupSteps.map((step) => {
                         const Icon = step.icon;
-
                         return (
-                            <Card key={step.key} className="border-border/80 bg-background/80 shadow-sm">
-                                <CardHeader className="space-y-3">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="flex items-center gap-3">
-                                            <div className="rounded-lg border border-border bg-muted/40 p-2">
-                                                <Icon className="h-5 w-5" />
-                                            </div>
-                                            <div>
-                                                <CardTitle className="text-lg">{step.title}</CardTitle>
-                                                <CardDescription>{step.description}</CardDescription>
-                                            </div>
-                                        </div>
-                                        {step.complete && <CheckCircle2 className="h-5 w-5 text-emerald-600" />}
+                            <div key={step.key} className="flex items-center gap-4 px-5 py-4">
+                                <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-foreground shadow-sm">
+                                    <Icon className="size-5 text-background" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="font-medium">{step.title}</span>
+                                        {step.complete && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />}
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <button type="button" className="text-muted-foreground/60 transition-colors hover:text-muted-foreground" aria-label={`About ${step.title}`}>
+                                                    <Info className="h-3.5 w-3.5" />
+                                                </button>
+                                            </TooltipTrigger>
+                                            <TooltipContent className="max-w-xs text-xs">{step.description}</TooltipContent>
+                                        </Tooltip>
                                     </div>
-                                </CardHeader>
-                                <CardContent className="space-y-4">
-                                    <div className="flex items-baseline justify-between rounded-lg border border-border bg-muted/20 px-4 py-3">
-                                        <div className="text-sm text-muted-foreground">{step.countLabel}</div>
-                                        <div className="text-2xl font-semibold">{step.count}</div>
-                                    </div>
-
-                                    {step.href ? (
-                                        <Button asChild className="w-full">
-                                            <Link to={step.href}>{step.ctaLabel}</Link>
-                                        </Button>
-                                    ) : (
-                                        <Button className="w-full" onClick={() => void handleSync()} disabled={!canSync || syncing || !selectedLocationId}>
-                                            <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                                            {step.ctaLabel}
-                                        </Button>
-                                    )}
-                                </CardContent>
-                            </Card>
+                                    <p className="text-xs tabular-nums text-muted-foreground">
+                                        {step.count} {step.countLabel}
+                                    </p>
+                                </div>
+                                {step.href ? (
+                                    <Button asChild size="sm" variant={step.complete ? "outline" : "default"}>
+                                        <Link to={step.href}>{step.ctaLabel}</Link>
+                                    </Button>
+                                ) : (
+                                    <Button
+                                        size="sm"
+                                        variant={step.complete ? "outline" : "default"}
+                                        onClick={() => void handleSync()}
+                                        disabled={!canSync || syncing || !selectedLocationId}
+                                    >
+                                        <RefreshCcw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+                                        {step.ctaLabel}
+                                    </Button>
+                                )}
+                            </div>
                         );
                     })}
-                </div>
+                </CardContent>
+            </Card>
 
-                <div className="space-y-4">
-                    <Card className="border-border/80 bg-background/80 shadow-sm">
-                        <CardHeader>
-                            <CardTitle>Next actions</CardTitle>
-                            <CardDescription>
-                                Finish the core sync-backed setup first, then review these final configuration areas.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                            <Button asChild variant="outline" className="w-full justify-between">
-                                <Link to="/setup/insurance-plans">Review insurance plans</Link>
-                            </Button>
-                            <Button asChild variant="outline" className="w-full justify-between">
-                                <Link to="/setup/audit-logs">Review audit logs</Link>
-                            </Button>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border/80 bg-background/80 shadow-sm">
-                        <CardHeader>
-                            <CardTitle>Status notes</CardTitle>
-                            <CardDescription>
-                                This page reads from cached setup data so you can see readiness without hitting PMS APIs on every screen.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3 text-sm text-muted-foreground">
-                            <p>
-                                {loadingOverview
-                                    ? "Refreshing setup counts..."
-                                    : overview
-                                        ? `The current view is scoped to ${overview.location.name}.`
-                                        : "Select a location to begin."}
-                            </p>
-                            <p>
-                                Run a fresh sync after major PMS-side changes so provider, appointment type, and operatory counts stay current.
-                            </p>
-                        </CardContent>
-                    </Card>
-                </div>
+            {/* Secondary config */}
+            <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">More configuration</span>
+                <Button asChild variant="outline" size="sm">
+                    <Link to="/setup/insurance-plans">Insurance plans</Link>
+                </Button>
+                <Button asChild variant="outline" size="sm">
+                    <Link to="/setup/audit-logs">Audit logs</Link>
+                </Button>
             </div>
         </div>
     );

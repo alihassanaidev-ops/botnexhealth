@@ -1,6 +1,7 @@
 import { Outlet, Navigate, useLocation } from "react-router-dom";
-import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
+import { TopNav } from "@/components/TopNav"
 import { useAuth } from "@/context/AuthContext"
 
 export default function DashboardWrapper() {
@@ -21,14 +22,16 @@ export default function DashboardWrapper() {
     }
 
     return (
-        <SidebarProvider>
-            <AppSidebar />
-            <main className="w-full">
-                <SidebarTrigger />
-                <div className="p-4">
-                    <Outlet />
-                </div>
-            </main>
+        <SidebarProvider className="flex-col">
+            <TopNav />
+            <div className="flex min-h-0 w-full flex-1">
+                <AppSidebar />
+                <main className="w-full">
+                    <div className="p-4">
+                        <Outlet />
+                    </div>
+                </main>
+            </div>
         </SidebarProvider>
     )
 }

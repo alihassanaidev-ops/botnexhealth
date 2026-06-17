@@ -84,6 +84,12 @@
     @apply border-border;
   }
 
+  /* Tighter base scale — shrinks text, padding and rem-based widths
+     proportionally for a cleaner, denser admin UI. */
+  html {
+    font-size: 14px;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "cv11", "ss01";

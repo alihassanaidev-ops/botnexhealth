@@ -194,8 +194,8 @@ export default function TwilioPhoneNumbers() {
                             <div className="relative p-6">
                                 <div className="flex items-center justify-between mb-5">
                                     <span className="text-sm font-medium text-muted-foreground">{card.label}</span>
-                                    <div className="rounded-xl p-2.5 bg-primary/10">
-                                        <card.icon className="h-4 w-4 text-primary" />
+                                    <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
+                                        <card.icon className="h-4 w-4 text-background" />
                                     </div>
                                 </div>
                                 <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground">
@@ -311,43 +311,48 @@ export default function TwilioPhoneNumbers() {
                         Manually opt a patient phone number out of outbound SMS.
                     </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-5">
-                    <div className="grid gap-3 md:grid-cols-[1.4fr_1fr_1.4fr_auto]">
-                        <div className="space-y-2">
-                            <Label htmlFor="suppression-location">Location</Label>
-                            <select
-                                id="suppression-location"
-                                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                                value={suppressionLocationId}
-                                onChange={(e) => setSuppressionLocationId(e.target.value)}
-                            >
-                                <option value="">Select a location</option>
-                                {smsLocations.map((loc) => (
-                                    <option key={loc.id} value={loc.id}>
-                                        {loc.institution_name} — {loc.location_name}
-                                    </option>
-                                ))}
-                            </select>
+                <CardContent className="space-y-6">
+                    {/* Add-suppression form */}
+                    <div className="rounded-xl border bg-muted/30 p-4">
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                            <div className="space-y-1.5">
+                                <Label htmlFor="suppression-location">Location</Label>
+                                <select
+                                    id="suppression-location"
+                                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                    value={suppressionLocationId}
+                                    onChange={(e) => setSuppressionLocationId(e.target.value)}
+                                >
+                                    <option value="">Select a location</option>
+                                    {smsLocations.map((loc) => (
+                                        <option key={loc.id} value={loc.id}>
+                                            {loc.institution_name} — {loc.location_name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label htmlFor="suppression-phone">Phone</Label>
+                                <Input
+                                    id="suppression-phone"
+                                    placeholder="+12125551234"
+                                    value={suppressionPhone}
+                                    onChange={(e) => setSuppressionPhone(e.target.value)}
+                                />
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label htmlFor="suppression-reason">
+                                    Reason <span className="font-normal text-muted-foreground">(optional)</span>
+                                </Label>
+                                <Input
+                                    id="suppression-reason"
+                                    placeholder="Manual opt-out"
+                                    value={suppressionReason}
+                                    onChange={(e) => setSuppressionReason(e.target.value)}
+                                />
+                            </div>
                         </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="suppression-phone">Phone</Label>
-                            <Input
-                                id="suppression-phone"
-                                placeholder="+12125551234"
-                                value={suppressionPhone}
-                                onChange={(e) => setSuppressionPhone(e.target.value)}
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="suppression-reason">Reason</Label>
-                            <Input
-                                id="suppression-reason"
-                                placeholder="Manual opt-out"
-                                value={suppressionReason}
-                                onChange={(e) => setSuppressionReason(e.target.value)}
-                            />
-                        </div>
-                        <div className="flex items-end">
+                        <div className="mt-4 flex justify-end">
                             <Button
                                 className="gap-2"
                                 onClick={handleCreateSuppression}
@@ -358,38 +363,51 @@ export default function TwilioPhoneNumbers() {
                                 ) : (
                                     <Ban className="h-4 w-4" />
                                 )}
-                                Suppress
+                                Suppress number
                             </Button>
                         </div>
                     </div>
 
-                    <div className="overflow-x-auto">
+                    {/* Active suppressions */}
+                    <div className="overflow-hidden rounded-xl border">
                         <table className="w-full text-sm">
                             <thead>
-                                <tr className="border-b text-left text-muted-foreground">
-                                    <th className="pb-3 font-medium">Phone</th>
-                                    <th className="pb-3 font-medium">Source</th>
-                                    <th className="pb-3 font-medium">Reason</th>
-                                    <th className="pb-3 font-medium">Created</th>
-                                    <th className="pb-3 font-medium sr-only">Actions</th>
+                                <tr className="border-b bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                                    <th className="px-4 py-3 font-medium">Phone</th>
+                                    <th className="px-4 py-3 font-medium">Source</th>
+                                    <th className="px-4 py-3 font-medium">Reason</th>
+                                    <th className="px-4 py-3 font-medium">Created</th>
+                                    <th className="px-4 py-3 text-right font-medium">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {suppressions.length === 0 ? (
                                     <tr>
-                                        <td colSpan={5} className="py-6 text-center text-muted-foreground">
-                                            No active SMS suppressions.
+                                        <td colSpan={5}>
+                                            <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
+                                                <div className="grid size-10 place-items-center rounded-full bg-muted">
+                                                    <Ban className="h-5 w-5 text-muted-foreground" />
+                                                </div>
+                                                <p className="text-sm font-medium text-foreground">No active SMS suppressions</p>
+                                                <p className="max-w-xs text-xs text-muted-foreground">
+                                                    Numbers you opt out of outbound SMS will appear here.
+                                                </p>
+                                            </div>
                                         </td>
                                     </tr>
                                 ) : suppressions.map((row) => (
-                                    <tr key={row.id} className="border-b last:border-0">
-                                        <td className="py-3 font-mono">{row.phone_masked}</td>
-                                        <td className="py-3 text-muted-foreground">{row.source}</td>
-                                        <td className="py-3 text-muted-foreground">{row.reason || "—"}</td>
-                                        <td className="py-3 text-muted-foreground">
+                                    <tr key={row.id} className="border-b transition-colors last:border-0 hover:bg-muted/40">
+                                        <td className="px-4 py-3 font-mono">{row.phone_masked}</td>
+                                        <td className="px-4 py-3">
+                                            <Badge variant="secondary" className="font-normal capitalize">
+                                                {row.source}
+                                            </Badge>
+                                        </td>
+                                        <td className="px-4 py-3 text-muted-foreground">{row.reason || "—"}</td>
+                                        <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
                                             {new Date(row.created_at).toLocaleString()}
                                         </td>
-                                        <td className="py-3 text-right">
+                                        <td className="px-4 py-3 text-right">
                                             <Button
                                                 variant="ghost"
                                                 size="sm"

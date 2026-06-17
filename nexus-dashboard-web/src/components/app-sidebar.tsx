@@ -1,31 +1,19 @@
 import {
     Sidebar,
     SidebarContent,
-    SidebarFooter,
     SidebarGroup,
     SidebarGroupContent,
     SidebarGroupLabel,
-    SidebarHeader,
     SidebarMenu,
     SidebarMenuButton,
     SidebarMenuItem,
     SidebarRail,
 } from "@/components/ui/sidebar"
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuLabel,
-    DropdownMenuSeparator,
-    DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { LocationSelector } from "@/components/location-selector"
 import {
     Home,
     Users,
     Building2,
-    ChevronUp,
-    LogOut,
     CalendarCheck,
     UserCog,
     Armchair,
@@ -37,17 +25,12 @@ import {
     MessageSquare,
     Mail,
     MailCheck,
-    Moon,
-    Sun,
-    Bell,
     Settings,
     ClipboardList,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
-import { useTheme } from "next-themes"
 import { useAuth } from "@/context/AuthContext"
-import { useNotifications } from "@/context/NotificationContext"
-import { formatRoleLabel} from "@/lib/utils"
+import { useInstitution } from "@/context/InstitutionContext"
 
 type NavItemDef = { title: string; url: string; icon: React.ElementType; exact?: boolean }
 
@@ -197,7 +180,7 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
                     relative transition-all duration-150 rounded-md
                     ${isActive
                         ? "bg-sidebar-accent text-sidebar-primary font-semibold before:absolute before:left-0 before:top-1 before:bottom-1 before:w-0.5 before:rounded-full before:bg-sidebar-primary"
-                        : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                        : "text-sidebar-foreground font-medium hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                     }
                 `}
             >
@@ -211,13 +194,10 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-    const { user, signOut } = useAuth();
-    const { unreadCount, setIsDialogOpen } = useNotifications();
+    const { user } = useAuth();
+    const { hasPms } = useInstitution();
     const location = useLocation();
-    const { theme, setTheme } = useTheme();
 
-    const displayEmail = user?.email ?? "—";
-    const initials = (user?.email ?? "?").slice(0, 2).toUpperCase();
     const isAdmin = user?.role === "SUPER_ADMIN";
     const isInstitution =
         user?.role === "INSTITUTION_ADMIN" ||
@@ -231,34 +211,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 ? locationAdminNav
                 : staffNav;
     const setupNav = user?.role === "STAFF"
-        ? navSetup.filter((item) => item.url !== "/setup/audit-logs")
+        ? navSetup.filter((item) => item.url !== "/setup" && item.url !== "/setup/audit-logs")
         : navSetup;
 
     return (
-        <Sidebar collapsible="icon" {...props}>
-            <SidebarHeader>
-                <SidebarMenu>
-                    <SidebarMenuItem>
-                        <SidebarMenuButton size="lg" asChild>
-                            <Link to="/">
-                                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-white shadow-sm shadow-purple-900/20 overflow-hidden">
-                                    <img
-                                        src="/scalenexuslogo.png"
-                                        alt="ScaleNexus"
-                                        className="size-7 object-contain"
-                                    />
-                                </div>
-                                <div className="flex flex-col gap-0.5 leading-none">
-                                    <span className="font-semibold text-sidebar-foreground">Scale Nexus</span>
-                                    <span className="text-xs text-sidebar-foreground/50">Dashboard</span>
-                                </div>
-                            </Link>
-                        </SidebarMenuButton>
-                    </SidebarMenuItem>
-                </SidebarMenu>
-            </SidebarHeader>
-            <SidebarContent>
-                {isInstitution && (
+        <Sidebar
+            collapsible="icon"
+            className="!top-14 !h-[calc(100svh-3.5rem)]"
+            {...props}
+        >
+            <SidebarContent className="pt-2">
+                {user?.role === "INSTITUTION_ADMIN" && (
                     <SidebarGroup className="pt-2">
                         <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
                             Active Location
@@ -285,10 +248,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     }
                                 />
                             ))}
+                            {/* No-PMS tenants are call-intelligence-only: surface the
+                                patient directory in place of Practice Setup. */}
+                            {isInstitution && !hasPms && (
+                                <NavItem
+                                    item={{ title: "Patients", url: "/patients", icon: Users }}
+                                    isActive={location.pathname === "/patients" || location.pathname.startsWith("/patients/")}
+                                />
+                            )}
                         </SidebarMenu>
                     </SidebarGroupContent>
                 </SidebarGroup>
-                {isInstitution && (
+                {isInstitution && hasPms && (
                     <SidebarGroup>
                         <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
                             Practice Setup
@@ -313,27 +284,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 {isInstitution && (
                     <SidebarGroup>
                         <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
-                            Notifications & Settings
+                            Settings
                         </SidebarGroupLabel>
                         <SidebarGroupContent>
                             <SidebarMenu>
-                                <SidebarMenuItem>
-                                    <SidebarMenuButton
-                                        onClick={() => setIsDialogOpen(true)}
-                                        tooltip="Notifications"
-                                        className="relative transition-all duration-150 rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground cursor-pointer"
-                                    >
-                                        <div className="relative">
-                                            <Bell className={`h-5 w-5 ${unreadCount > 0 ? 'animate-bell-swing' : ''}`} />
-                                            {unreadCount > 0 && (
-                                                <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
-                                                    {unreadCount > 9 ? "9+" : unreadCount}
-                                                </span>
-                                            )}
-                                        </div>
-                                        <span>Notifications</span>
-                                    </SidebarMenuButton>
-                                </SidebarMenuItem>
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{
@@ -367,66 +321,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                     </SidebarGroup>
                 )}
             </SidebarContent>
-            <SidebarFooter>
-                <SidebarMenu>
-                    <SidebarMenuItem>
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                                <SidebarMenuButton
-                                    size="lg"
-                                    className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-                                >
-                                    <div className="h-7 w-7 rounded-md bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center text-white shadow-sm shadow-purple-900/30 shrink-0">
-                                        <span className="text-[11px] font-bold">{initials}</span>
-                                    </div>
-                                    <div className="grid flex-1 text-left text-sm leading-tight">
-                                        <span className="truncate font-medium text-sidebar-foreground">{displayEmail}</span>
-                                        <span className="text-[10px] text-sidebar-foreground/40">{formatRoleLabel(user?.role)}</span>
-                                    </div>
-                                    <ChevronUp className="ml-auto h-4 w-4 text-sidebar-foreground/40" />
-                                </SidebarMenuButton>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent
-                                className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
-                                side="top"
-                                align="end"
-                                sideOffset={4}
-                            >
-                                <DropdownMenuLabel className="p-0 font-normal">
-                                    <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                                        <div className="h-8 w-8 rounded-md bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center text-white">
-                                            <span className="text-xs font-bold">{initials}</span>
-                                        </div>
-                                        <div className="grid flex-1 text-left text-sm leading-tight">
-                                            <span className="truncate font-semibold">{displayEmail}</span>
-                                            <span className="text-[10px] text-muted-foreground">{formatRoleLabel(user?.role)}</span>
-                                        </div>
-                                    </div>
-                                </DropdownMenuLabel>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem asChild className="gap-2">
-                                    <Link to="/security">
-                                        <Shield className="h-4 w-4" />
-                                        Security
-                                    </Link>
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                    onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                                    className="gap-2"
-                                >
-                                    {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                                    {theme === "dark" ? "Light mode" : "Dark mode"}
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => signOut()} className="gap-2 text-destructive focus:text-destructive">
-                                    <LogOut className="h-4 w-4" />
-                                    Log out
-                                </DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
-                    </SidebarMenuItem>
-                </SidebarMenu>
-            </SidebarFooter>
             <SidebarRail />
         </Sidebar>
     )

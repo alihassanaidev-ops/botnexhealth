@@ -403,6 +403,7 @@ async def process_retell_call_analyzed_event(
                     location_id=str(location.id) if location else None,
                     webhook_call=mapped_call_data,
                     analysis=analysis_dict,
+                    has_pms=institution.has_pms,
                 )
 
                 # Commit the transaction so contacts and calls are saved!
