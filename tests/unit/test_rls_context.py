@@ -39,6 +39,7 @@ async def test_apply_rls_context_sets_all_postgres_settings() -> None:
         "set_config('app.institution_id', :institution_id, false)",
         "set_config('app.location_id', :location_id, false)",
         "set_config('app.external_id', :external_id, false)",
+        "set_config('app.group_id', :group_id, false)",
     ):
         assert key in sql
     assert call.args[1] == {
@@ -48,6 +49,7 @@ async def test_apply_rls_context_sets_all_postgres_settings() -> None:
         "institution_id": "22222222-2222-2222-2222-222222222222",
         "location_id": "33333333-3333-3333-3333-333333333333",
         "external_id": "retell-call-1",
+        "group_id": "",
     }
 
 
@@ -66,6 +68,7 @@ async def test_apply_rls_context_clears_missing_values_to_empty_strings() -> Non
         "institution_id": "",
         "location_id": "",
         "external_id": "",
+        "group_id": "",
     }
 
 

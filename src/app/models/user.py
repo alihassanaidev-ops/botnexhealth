@@ -26,6 +26,10 @@ class UserRole(str, Enum):
     INSTITUTION_ADMIN = "INSTITUTION_ADMIN"
     LOCATION_ADMIN = "LOCATION_ADMIN"
     STAFF = "STAFF"
+    # Read-only oversight across an InstitutionGroup's member practices.
+    # Has group_id set; institution_id/location_id are NULL. Granted only on
+    # the /group/* endpoints — never on PHI/setup/call routes.
+    GROUP_ADMIN = "GROUP_ADMIN"
 
 
 class InviteStatus(str, Enum):
@@ -95,6 +99,14 @@ class User(Base):
         ForeignKey("institution_locations.id"),
         nullable=True,
         index=True
+    )
+
+    # Set only for GROUP_ADMIN users — the InstitutionGroup they oversee.
+    # Mutually exclusive with institution_id/location_id in practice.
+    group_id: Mapped[str | None] = mapped_column(
+        ForeignKey("institution_groups.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     invite_status: Mapped[str] = mapped_column(

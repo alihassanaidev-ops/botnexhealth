@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.institution import Institution
+from src.app.models.institution_group import InstitutionGroup
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.sms_privacy import hash_for_logging
 
@@ -261,3 +262,59 @@ class InstitutionService:
             institution.is_active = False
             await self.session.flush()
             logger.info(f"Soft deleted institution: {institution.slug}")
+
+
+class InstitutionGroupService:
+    """CRUD for InstitutionGroup (DSO/practice-group oversight umbrella).
+
+    Super-admin-only operations: create a group, list groups, and assign or
+    unassign member institutions. Member assignment is a single FK flip
+    (``institution.group_id``); nothing about the institution's own data moves.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_by_slug(self, slug: str) -> InstitutionGroup | None:
+        result = await self.session.execute(
+            select(InstitutionGroup).where(InstitutionGroup.slug == slug)
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, *, name: str, slug: str) -> InstitutionGroup:
+        group = InstitutionGroup(name=name, slug=slug)
+        self.session.add(group)
+        await self.session.flush()
+        await self.session.refresh(group)
+        logger.info(
+            "Created institution group: slug=%s group_hash=%s",
+            group.slug,
+            hash_for_logging(str(group.id)),
+        )
+        return group
+
+    async def list_with_counts(self) -> list[tuple[InstitutionGroup, int]]:
+        """All groups with their active member-institution counts."""
+        rows = (
+            await self.session.execute(
+                select(InstitutionGroup, func.count(Institution.id))
+                .outerjoin(
+                    Institution,
+                    (Institution.group_id == InstitutionGroup.id)
+                    & (Institution.is_active.is_(True)),
+                )
+                .group_by(InstitutionGroup.id)
+                .order_by(InstitutionGroup.name)
+            )
+        ).all()
+        return [(group, int(count or 0)) for group, count in rows]
+
+    async def set_member(self, institution: Institution, group_id: str | None) -> None:
+        """Assign (group_id) or unassign (None) an institution to/from a group."""
+        institution.group_id = group_id
+        await self.session.flush()
+        logger.info(
+            "Institution %s %s group",
+            institution.slug,
+            "assigned to" if group_id else "unassigned from",
+        )

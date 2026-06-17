@@ -16,6 +16,7 @@ from src.app.models.custom_field import (
     RetellSource,
 )
 from src.app.models.institution import Institution
+from src.app.models.institution_group import InstitutionGroup
 from src.app.models.institution_appointment_type import InstitutionAppointmentType
 from src.app.models.institution_descriptor import InstitutionDescriptor
 from src.app.models.institution_location import InstitutionLocation
@@ -47,6 +48,7 @@ from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
 
 __all__ = [
     "Institution",
+    "InstitutionGroup",
     "InstitutionLocation",
     "InstitutionProvider",
     "InstitutionAppointmentType",

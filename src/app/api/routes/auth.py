@@ -518,6 +518,7 @@ async def _issue_mfa_bound_access_token(
             "role": user.role,
             "institution_id": user.institution_id,
             "location_id": user.location_id,
+            "group_id": user.group_id,
             "mfa": True,
             "amr": list(amr),
             "auth_time": auth_time,

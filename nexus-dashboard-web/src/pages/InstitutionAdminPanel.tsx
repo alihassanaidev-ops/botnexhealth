@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import {
     ArrowDown,
     ArrowUp,
@@ -14,15 +14,14 @@ import {
     TrendingUp,
     UserPlus,
 } from "lucide-react"
-import { Cell, Label, Pie, PieChart } from "recharts"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
+import { ComparisonChart } from "@/components/dashboard/ComparisonChart"
 import { lastNDaysRange, type DateRangeValue } from "@/lib/date-range"
 
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -190,150 +189,37 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
         </Dialog>
     )
 }
+// ── Clinic comparison (per-location) — uses the shared ComparisonDonut ────────
 
-// ── Metric options for the comparison chart ──────────────────────────────────
-
-const COMPARISON_METRICS = [
-    { key: "booking_rate_month" as const, label: "Booking Rate", suffix: "%" },
-    { key: "calls_today" as const, label: "Calls Today", suffix: "" },
-    { key: "calls_this_month" as const, label: "Calls (Month)", suffix: "" },
-    { key: "appointments_booked_month" as const, label: "Bookings", suffix: "" },
-    { key: "new_patients_month" as const, label: "New Patients", suffix: "" },
-    { key: "open_callbacks" as const, label: "Callbacks", suffix: "" },
-]
-
-type ComparisonMetricKey = (typeof COMPARISON_METRICS)[number]["key"]
-
-const COMPARISON_COLORS = [
-    "hsl(var(--chart-1))",
-    "hsl(var(--chart-2))",
-    "hsl(var(--chart-3))",
-    "hsl(var(--chart-4))",
-    "hsl(var(--chart-5))",
+const LOCATION_METRICS = [
+    { key: "booking_rate_month", label: "Booking Rate", suffix: "%" },
+    { key: "calls_today", label: "Calls Today" },
+    { key: "calls_this_month", label: "Calls (Month)" },
+    { key: "appointments_booked_month", label: "Bookings" },
+    { key: "new_patients_month", label: "New Patients" },
+    { key: "open_callbacks", label: "Callbacks" },
 ]
 
 function ClinicComparisonChart({ rows, loading }: { rows: ClinicComparisonRow[]; loading: boolean }) {
-    const [activeMetric, setActiveMetric] = useState<ComparisonMetricKey>("booking_rate_month")
-    const activeDef = COMPARISON_METRICS.find((m) => m.key === activeMetric)!
-
-    const chartData = useMemo(() =>
-        rows.map((row, i) => ({
-            location: row.location_name,
-            value: Number(row[activeMetric]) || 0,
-            fill: COMPARISON_COLORS[i % COMPARISON_COLORS.length],
-        })),
-    [rows, activeMetric])
-
-    const chartConfig = useMemo<ChartConfig>(() => {
-        const cfg: ChartConfig = { value: { label: activeDef.label } }
-        rows.forEach((row, i) => {
-            cfg[row.location_name] = {
-                label: row.location_name,
-                color: COMPARISON_COLORS[i % COMPARISON_COLORS.length],
-            }
-        })
-        return cfg
-    }, [rows, activeDef.label])
-
-    const isRate = activeDef.suffix === "%"
-    const total = useMemo(() => chartData.reduce((s, d) => s + d.value, 0), [chartData])
-    const centerValue = isRate
-        ? Math.round(total / (chartData.length || 1))
-        : total
-
     return (
-        <Card className="border-border shadow-sm flex-1 flex flex-col">
-            <CardHeader className="pb-2">
-                <CardTitle className="text-base">Clinic Comparison</CardTitle>
-                <CardDescription>
-                    <div className="flex items-center gap-1 flex-wrap mt-1">
-                        {COMPARISON_METRICS.map((m) => (
-                            <button
-                                key={m.key}
-                                onClick={() => setActiveMetric(m.key)}
-                                className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-all duration-150
-                                    ${activeMetric === m.key
-                                        ? "bg-primary text-primary-foreground shadow-sm"
-                                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                                    }`}
-                            >
-                                {m.label}
-                            </button>
-                        ))}
-                    </div>
-                </CardDescription>
-            </CardHeader>
-            <CardContent className="flex-1 flex flex-col justify-center">
-                {loading ? (
-                    <div className="flex items-center justify-center py-12">
-                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                    </div>
-                ) : !rows.length ? (
-                    <div className="flex flex-col items-center justify-center py-12 text-center gap-2">
-                        <MapPin className="h-7 w-7 text-muted-foreground/30" />
-                        <p className="text-sm text-muted-foreground">No location data yet.</p>
-                    </div>
-                ) : (
-                    <div className="flex flex-col items-center gap-6 py-2 sm:flex-row sm:justify-center sm:gap-10">
-                        <ChartContainer config={chartConfig} className="aspect-square h-[230px] shrink-0">
-                            <PieChart>
-                                <ChartTooltip
-                                    cursor={false}
-                                    content={<ChartTooltipContent nameKey="location" hideLabel />}
-                                />
-                                <Pie
-                                    data={chartData}
-                                    dataKey="value"
-                                    nameKey="location"
-                                    innerRadius={62}
-                                    outerRadius={95}
-                                    paddingAngle={chartData.length > 1 ? 3 : 0}
-                                    strokeWidth={2}
-                                >
-                                    {chartData.map((entry) => (
-                                        <Cell key={entry.location} fill={entry.fill} />
-                                    ))}
-                                    <Label
-                                        content={({ viewBox }) => {
-                                            if (viewBox && "cx" in viewBox && "cy" in viewBox) {
-                                                const cx = viewBox.cx ?? 0
-                                                const cy = viewBox.cy ?? 0
-                                                return (
-                                                    <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle">
-                                                        <tspan x={cx} y={cy} className="fill-foreground text-2xl font-bold tabular-nums">
-                                                            {centerValue}{activeDef.suffix}
-                                                        </tspan>
-                                                        <tspan x={cx} y={cy + 20} className="fill-muted-foreground text-[11px]">
-                                                            {isRate ? "average" : "total"}
-                                                        </tspan>
-                                                    </text>
-                                                )
-                                            }
-                                            return null
-                                        }}
-                                    />
-                                </Pie>
-                            </PieChart>
-                        </ChartContainer>
-
-                        {/* Value legend */}
-                        <div className="grid w-full max-w-[220px] gap-2.5">
-                            {chartData.map((entry) => (
-                                <div key={entry.location} className="flex items-center justify-between gap-3 text-sm">
-                                    <span className="flex min-w-0 items-center gap-2">
-                                        <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: entry.fill }} />
-                                        <span className="truncate text-muted-foreground">{entry.location}</span>
-                                    </span>
-                                    <span className="shrink-0 font-semibold tabular-nums">
-                                        {entry.value}{activeDef.suffix}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </CardContent>
-        </Card>
+        <ComparisonChart
+            title="Clinic Comparison"
+            loading={loading}
+            metrics={LOCATION_METRICS}
+            emptyText="No location data yet."
+            rows={rows.map((r) => ({
+                id: r.location_id,
+                label: r.location_name,
+                values: {
+                    booking_rate_month: r.booking_rate_month,
+                    calls_today: r.calls_today,
+                    calls_this_month: r.calls_this_month,
+                    appointments_booked_month: r.appointments_booked_month,
+                    new_patients_month: r.new_patients_month,
+                    open_callbacks: r.open_callbacks,
+                },
+            }))}
+        />
     )
 }
 

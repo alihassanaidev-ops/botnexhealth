@@ -32,6 +32,7 @@ LOCATION_ADMIN = "get_current_location_admin"
 INSTITUTION_OR_LOCATION_ADMIN = "get_current_institution_or_location_admin"
 LOCATION_STAFF_OR_ADMIN = "get_current_location_staff_or_admin"
 INSTITUTION_OR_LOCATION_USER = "get_current_institution_or_location_user"
+GROUP = "get_current_group_admin"
 ACTIVE_USER = "get_current_active_user"
 
 
@@ -106,8 +107,13 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/calls/{call_id}/reveal/transcript",
         "POST /api/institution/calls/{call_id}/reveal/recording",
         "POST /api/institution/calls/{call_id}/reveal/custom-fields/{field_key}",
+        "POST /api/institution/calls/{call_id}/reveal/phone",
         "PATCH /api/institution/calls/{call_id}/resolve",
+        "GET /api/institution/contacts",
+        "GET /api/institution/contacts/{contact_id}",
+        "POST /api/institution/contacts/{contact_id}/reveal/phone",
         "GET /api/institution/dashboard/summary",
+        "GET /api/institution/dashboard/monthly-metrics",
         "GET /api/institution/custom-fields/definitions",
         "GET /api/institution/notifications",
         "GET /api/institution/notifications/unread-count",
@@ -131,6 +137,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/admin/institutions/audit-logs",
         "GET /api/admin/institutions",
         "POST /api/admin/institutions",
+        "GET /api/admin/institution-groups",
+        "POST /api/admin/institution-groups",
+        "POST /api/admin/institution-groups/{slug}/institutions/{inst_slug}",
+        "DELETE /api/admin/institution-groups/{slug}/institutions/{inst_slug}",
         "GET /api/admin/institutions/{slug}",
         "PATCH /api/admin/institutions/{slug}",
         "DELETE /api/admin/institutions/{slug}",
@@ -220,6 +230,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/locations/{loc_slug}/insurance-plans",
         "PATCH /api/institution/locations/{loc_slug}/insurance-plans/{plan_id}",
         "DELETE /api/institution/locations/{loc_slug}/insurance-plans/{plan_id}",
+        "POST /api/institution/contacts/{contact_id}/merge",
+        "POST /api/institution/contacts/{contact_id}/unmerge",
     ),
     INSTITUTION_OR_LOCATION_USER: (
         "GET /api/v1/pms/patients",
@@ -249,6 +261,11 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/sms/logs/{sms_id}/reveal-phone",
         "POST /api/institution/sms/logs/{sms_id}/reveal-body",
     ),
+    GROUP: (
+        "GET /api/group/me",
+        "GET /api/group/dashboard",
+        "GET /api/group/institution/{institution_id}/dashboard",
+    ),
     SUPER_ADMIN_STRICT: (
         # Break-glass MFA reset — strictly SUPER_ADMIN, not the broader
         # ``get_current_admin`` boundary used elsewhere. Resetting another
@@ -268,6 +285,7 @@ AUTH_BOUNDARIES = {
     INSTITUTION_OR_LOCATION_ADMIN,
     LOCATION_STAFF_OR_ADMIN,
     INSTITUTION_OR_LOCATION_USER,
+    GROUP,
     ACTIVE_USER,
 }
 
@@ -280,6 +298,7 @@ BOUNDARY_PRECEDENCE = (
     INSTITUTION_OR_LOCATION_ADMIN,
     LOCATION_STAFF_OR_ADMIN,
     INSTITUTION_OR_LOCATION_USER,
+    GROUP,
     ACTIVE_USER,
 )
 
@@ -299,11 +318,16 @@ ALLOWED_ROLES_BY_BOUNDARY: dict[str, set[UserRole]] = {
         UserRole.LOCATION_ADMIN,
         UserRole.STAFF,
     },
+    GROUP: {UserRole.GROUP_ADMIN},
     ACTIVE_USER: {
         UserRole.SUPER_ADMIN,
         UserRole.INSTITUTION_ADMIN,
         UserRole.LOCATION_ADMIN,
         UserRole.STAFF,
+        # A GROUP_ADMIN is an active user, so it passes the outer active-user
+        # gate. Institution data handlers still hard-reject it (no institution_id
+        # → 400) and RLS returns no tenant rows, so no PHI is reachable.
+        UserRole.GROUP_ADMIN,
     },
 }
 
@@ -360,10 +384,13 @@ def _user(
         email=f"{role.value.lower()}@example.com",
         role=role.value,
         institution_id=None
-        if role == UserRole.SUPER_ADMIN
+        if role in (UserRole.SUPER_ADMIN, UserRole.GROUP_ADMIN)
         else "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         location_id=location_id
         if role in (UserRole.LOCATION_ADMIN, UserRole.STAFF)
+        else None,
+        group_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        if role == UserRole.GROUP_ADMIN
         else None,
         is_active=is_active,
     )

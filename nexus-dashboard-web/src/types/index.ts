@@ -5,10 +5,12 @@ export interface User {
     | "SUPER_ADMIN"
     | "INSTITUTION_ADMIN"
     | "LOCATION_ADMIN"
-    | "STAFF";
+    | "STAFF"
+    | "GROUP_ADMIN";
     is_active?: boolean;
     institution_id?: string;
     location_id?: string;
+    group_id?: string;
 }
 
 export interface Institution {
@@ -36,6 +38,9 @@ export interface InstitutionDetail {
 
     // "nexhealth" | "none" (call-intelligence-only). Absent on older payloads.
     pms_type?: string;
+
+    // DSO/group umbrella this institution belongs to (null if standalone).
+    group_id?: string | null;
 
     has_nexhealth_key: boolean;
     has_system_nexhealth_key: boolean;

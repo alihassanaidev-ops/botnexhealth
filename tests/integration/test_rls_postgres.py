@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import importlib.util
+import asyncio
 from pathlib import Path
 from uuid import UUID
 
@@ -96,13 +96,20 @@ def _database_url_with_credentials(
 
 
 async def _apply_rls_migration(database_url: str) -> None:
-    """Run the RLS Alembic migration against the prepared Postgres schema."""
-    engine = create_async_engine(database_url, poolclass=NullPool)
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(_run_rls_upgrade)
-    finally:
-        await engine.dispose()
+    """Apply the FULL Alembic chain to head against the fresh Postgres schema.
+
+    Runs the real ``alembic upgrade head`` so the test DB carries every policy
+    production does — not a hand-picked baseline. Previously this loaded only
+    the May consolidated baseline, so the suite silently stopped covering every
+    policy added after it (call_metrics_daily, the MFA auth-lookup contexts, the
+    DSO/group policies). Walking to head keeps the RLS suite honest as
+    migrations land, and also proves the chain applies cleanly on a fresh DB.
+
+    env.py's online runner calls ``asyncio.run`` internally, so the synchronous
+    ``command.upgrade`` is dispatched to a worker thread rather than nested in
+    this fixture's event loop.
+    """
+    await asyncio.to_thread(_upgrade_to_head, database_url)
 
 
 async def _create_app_role(database_url: str) -> None:
@@ -123,29 +130,21 @@ async def _create_app_role(database_url: str) -> None:
         await engine.dispose()
 
 
-def _run_rls_upgrade(sync_conn) -> None:  # noqa: ANN001
-    from alembic.operations import Operations
-    from alembic.runtime.migration import MigrationContext
+def _upgrade_to_head(database_url: str) -> None:
+    """Run ``alembic upgrade head`` against the given DB (sync, off-loop).
 
-    migration_path = (
-        ROOT / "alembic" / "versions" / "20260510_consolidated_baseline.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "consolidated_baseline_migration", migration_path
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load RLS migration from {migration_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    Walking the real chain to head (rather than hand-picking migration files)
+    means the test DB always carries every policy production does, the suite
+    self-maintains as migrations land, and a migration that fails to apply on a
+    fresh DB fails the suite here instead of silently in prod.
+    """
+    from alembic import command
+    from alembic.config import Config
 
-    context = MigrationContext.configure(sync_conn)
-    operations = Operations(context)
-    original_op = module.op
-    module.op = operations
-    try:
-        module.upgrade()
-    finally:
-        module.op = original_op
+    cfg = Config(str(ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(cfg, "head")
 
 
 async def _set_context(
@@ -157,6 +156,7 @@ async def _set_context(
     institution_id: str = "",
     location_id: str = "",
     external_id: str = "",
+    group_id: str = "",
 ) -> None:
     values = {
         "app.context_type": context_type,
@@ -165,6 +165,7 @@ async def _set_context(
         "app.institution_id": institution_id,
         "app.location_id": location_id,
         "app.external_id": external_id,
+        "app.group_id": group_id,
     }
     for key, value in values.items():
         await conn.execute(
@@ -677,3 +678,141 @@ async def test_rls_institution_locations_branches(rls_engine) -> None:
         assert (
             await conn.scalar(text("SELECT count(*) FROM institution_locations"))
         ) == 1
+
+
+# ── Institution-group (DSO oversight) isolation ─────────────────────────────────
+
+GRP_1 = "c1111111-1111-1111-1111-111111111111"
+GRP_2 = "c2222222-2222-2222-2222-222222222222"
+INST_G1 = "d1111111-1111-1111-1111-111111111111"
+INST_G2 = "d2222222-2222-2222-2222-222222222222"
+LOC_G1 = "e1111111-1111-1111-1111-111111111111"
+USER_GA1 = "f1111111-1111-1111-1111-111111111111"
+USER_GA2 = "f2222222-2222-2222-2222-222222222222"
+SENTINEL = "00000000-0000-0000-0000-000000000000"
+
+
+async def _seed_groups(conn) -> None:
+    await conn.execute(
+        text(
+            "INSERT INTO institution_groups (id, name, slug, is_active) VALUES "
+            "(:g1,'Group One','group-one',true),(:g2,'Group Two','group-two',true)"
+        ),
+        {"g1": GRP_1, "g2": GRP_2},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO institutions (id, name, slug, is_active, group_id) VALUES "
+            "(:i1,'G1 Clinic','g1-clinic',true,:g1),(:i2,'G2 Clinic','g2-clinic',true,:g2)"
+        ),
+        {"i1": INST_G1, "i2": INST_G2, "g1": GRP_1, "g2": GRP_2},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO institution_locations (id, institution_id, name, slug, is_active, timezone) "
+            "VALUES (:l1,:i1,'G1 Main','g1-main',true,'UTC')"
+        ),
+        {"l1": LOC_G1, "i1": INST_G1},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO call_metrics_daily "
+            "(institution_id, location_id, call_date, total_calls, new_patient_calls, "
+            " complaint_calls, insurance_billing_calls, total_duration_seconds, tag_counts, updated_at) VALUES "
+            "(:i1,:l1, current_date, 10, 0, 0, 0, 0, '{}'::jsonb, now()),"
+            "(:i2,:s, current_date, 20, 0, 0, 0, 0, '{}'::jsonb, now())"
+        ),
+        {"i1": INST_G1, "l1": LOC_G1, "i2": INST_G2, "s": SENTINEL},
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO users (id, email, role, institution_id, location_id, group_id, "
+            "invite_status, is_active, created_at) VALUES "
+            "(:ga1,'ga1@example.com','GROUP_ADMIN',NULL,NULL,:g1,'ACCEPTED',true,now()),"
+            "(:ga2,'ga2@example.com','GROUP_ADMIN',NULL,NULL,:g2,'ACCEPTED',true,now())"
+        ),
+        {"ga1": USER_GA1, "ga2": USER_GA2, "g1": GRP_1, "g2": GRP_2},
+    )
+
+
+async def _teardown_groups(conn) -> None:
+    await conn.execute(text("DELETE FROM call_metrics_daily WHERE institution_id = ANY(:ids)"),
+                       {"ids": [INST_G1, INST_G2]})
+    await conn.execute(text("DELETE FROM users WHERE id = ANY(:ids)"), {"ids": [USER_GA1, USER_GA2]})
+    await conn.execute(text("DELETE FROM institution_locations WHERE id = :l"), {"l": LOC_G1})
+    await conn.execute(text("DELETE FROM institutions WHERE id = ANY(:ids)"), {"ids": [INST_G1, INST_G2]})
+    await conn.execute(text("DELETE FROM institution_groups WHERE id = ANY(:ids)"), {"ids": [GRP_1, GRP_2]})
+
+
+@pytest.mark.asyncio
+async def test_rls_group_admin_isolation(rls_engine) -> None:
+    """A GROUP_ADMIN reads only its own group; cross-group is ∅ and writes are rejected."""
+    # Setup as SUPER_ADMIN (bypasses RLS via WITH CHECK).
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await _seed_groups(conn)
+
+    try:
+        # ── As GROUP_ADMIN of group 1 (no institution scope) ──────────────
+        async with rls_engine.begin() as conn:
+            await _set_context(conn, role="GROUP_ADMIN", user_id=USER_GA1, group_id=GRP_1)
+
+            # Own group's institution visible; the other group's is NOT.
+            assert await conn.scalar(
+                text("SELECT count(*) FROM institutions WHERE id = :i"), {"i": INST_G1}
+            ) == 1
+            assert await conn.scalar(
+                text("SELECT count(*) FROM institutions WHERE id = :i"), {"i": INST_G2}
+            ) == 0
+
+            # Own group's rollup visible; the other group's rollup is ∅.
+            assert await conn.scalar(
+                text("SELECT count(*) FROM call_metrics_daily WHERE institution_id = :i"),
+                {"i": INST_G1},
+            ) == 1
+            assert await conn.scalar(
+                text("SELECT count(*) FROM call_metrics_daily WHERE institution_id = :i"),
+                {"i": INST_G2},
+            ) == 0
+            # Group-wide read sees only its own member's rollup.
+            assert await conn.scalar(text("SELECT count(*) FROM call_metrics_daily")) == 1
+
+        # Note: the per-request app.institution_id GUC is trusted by RLS (the
+        # generic user scope clause keys on it for every role), so cross-group
+        # protection on drill-in lives at the app layer — the /group drill-in
+        # endpoint verifies membership BEFORE setting institution_id. The RLS
+        # guarantee tested here is the aggregate (no-institution) context above,
+        # which isolates by group via the membership clause.
+
+        # ── Legit drill-in: GROUP_ADMIN of G1 scoped to its own member ────
+        async with rls_engine.begin() as conn:
+            await _set_context(
+                conn, role="GROUP_ADMIN", user_id=USER_GA1,
+                group_id=GRP_1, institution_id=INST_G1,
+            )
+            assert await conn.scalar(
+                text("SELECT count(*) FROM institution_locations WHERE institution_id = :i"),
+                {"i": INST_G1},
+            ) == 1
+
+        # ── Writes are rejected for a GROUP_ADMIN (read-only oversight) ───
+        async with rls_engine.begin() as conn:
+            await _set_context(conn, role="GROUP_ADMIN", user_id=USER_GA1, group_id=GRP_1)
+            with pytest.raises(DBAPIError):
+                await conn.execute(
+                    text("UPDATE call_metrics_daily SET total_calls = 999 WHERE institution_id = :i"),
+                    {"i": INST_G1},
+                )
+        async with rls_engine.begin() as conn:
+            await _set_context(conn, role="GROUP_ADMIN", user_id=USER_GA1, group_id=GRP_1)
+            with pytest.raises(DBAPIError):
+                await conn.execute(
+                    text(
+                        "INSERT INTO institution_groups (id, name, slug, is_active) "
+                        "VALUES ('c9999999-9999-9999-9999-999999999999','x','x',true)"
+                    )
+                )
+    finally:
+        async with rls_engine.begin() as conn:
+            await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+            await _teardown_groups(conn)

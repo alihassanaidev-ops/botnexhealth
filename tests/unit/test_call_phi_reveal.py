@@ -80,6 +80,11 @@ def _call():
         full_name="Sarah Loomer",
         first_name="Sarah",
         last_name="Loomer",
+        # Encrypted column present (truthy) → phone_reveal_available; the list/
+        # detail responses carry only the last-4 masked form, full number via
+        # the audited reveal endpoint.
+        phone_encrypted="enc-phone",
+        phone="+15125550199",
     )
     transcript_payload = [{"role": "user", "content": "My DOB is [REDACTED]"}]
     summary_payload = "Redacted summary from Retell"

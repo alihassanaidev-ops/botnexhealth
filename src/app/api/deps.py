@@ -84,6 +84,9 @@ def current_user_requires_mfa(user: User) -> bool:
         UserRole.INSTITUTION_ADMIN.value,
         UserRole.LOCATION_ADMIN.value,
         UserRole.STAFF.value,
+        # GROUP_ADMIN is an interactive cross-practice oversight login; it must
+        # enrol/verify MFA like every other human role (no exemption).
+        UserRole.GROUP_ADMIN.value,
     )
 
 
@@ -223,5 +226,29 @@ async def get_current_institution_or_location_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Requires INSTITUTION_ADMIN, LOCATION_ADMIN, or STAFF role"
+        )
+    return current_user
+
+
+async def get_current_group_admin(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+) -> User:
+    """
+    Ensure user is a GROUP_ADMIN with a group assignment.
+
+    GROUP_ADMIN is a read-only oversight role scoped to one InstitutionGroup.
+    It is intentionally accepted ONLY here (the /group/* routes); every
+    institution/location/PHI dependency excludes it, so a group user can never
+    reach per-patient PHI, setup, or write endpoints.
+    """
+    if current_user.role != UserRole.GROUP_ADMIN.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires GROUP_ADMIN role",
+        )
+    if not current_user.group_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Group-scoped account is missing group assignment",
         )
     return current_user

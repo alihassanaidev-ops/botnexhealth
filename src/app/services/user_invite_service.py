@@ -42,6 +42,7 @@ class UserInviteService:
         role: str,
         institution_id: str | None,
         location_id: str | None = None,
+        group_id: str | None = None,
         redirect_url: str | None = None,
         is_active: bool = True,
     ) -> User:
@@ -52,6 +53,7 @@ class UserInviteService:
             role=role,
             institution_id=institution_id,
             location_id=location_id,
+            group_id=group_id,
             is_active=is_active,
         )
         self.session.add(user)

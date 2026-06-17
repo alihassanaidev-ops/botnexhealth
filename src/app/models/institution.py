@@ -10,7 +10,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -175,6 +175,15 @@ class Institution(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     location_limit: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
+
+    # Optional DSO / practice-group umbrella. NULL for standalone institutions.
+    # A GROUP_ADMIN gets read-only oversight across all institutions sharing a group_id.
+    group_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institution_groups.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Regulatory jurisdiction (ISO 3166-2:CA). Drives residency-of-record and
     # provincial privacy-law application; see Jurisdiction enum above.

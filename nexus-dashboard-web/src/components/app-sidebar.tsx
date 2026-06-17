@@ -27,6 +27,7 @@ import {
     MailCheck,
     Settings,
     ClipboardList,
+    Layers,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
@@ -46,6 +47,11 @@ const adminNav: NavItemDef[] = [
         title: "Institutions",
         url: "/institutions",
         icon: Users,
+    },
+    {
+        title: "Groups",
+        url: "/groups",
+        icon: Layers,
     },
     {
         title: "Users",
@@ -135,6 +141,16 @@ const staffNav: NavItemDef[] = [
     },
 ]
 
+// Group oversight (DSO) — read-only cross-practice dashboard.
+const groupNav: NavItemDef[] = [
+    {
+        title: "Group Dashboard",
+        url: "/group",
+        icon: Layers,
+        exact: true,
+    },
+]
+
 // Institution setup nav items
 const navSetup: NavItemDef[] = [
     {
@@ -207,9 +223,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ? adminNav
         : user?.role === "INSTITUTION_ADMIN"
             ? institutionAdminNav
-            : user?.role === "LOCATION_ADMIN"
-                ? locationAdminNav
-                : staffNav;
+            : user?.role === "GROUP_ADMIN"
+                ? groupNav
+                : user?.role === "LOCATION_ADMIN"
+                    ? locationAdminNav
+                    : staffNav;
     const setupNav = user?.role === "STAFF"
         ? navSetup.filter((item) => item.url !== "/setup" && item.url !== "/setup/audit-logs")
         : navSetup;

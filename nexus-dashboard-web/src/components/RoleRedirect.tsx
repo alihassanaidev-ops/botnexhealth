@@ -14,6 +14,10 @@ export default function RoleRedirect() {
         return <Navigate to="/institution-admin" replace />
     }
 
+    if (user.role === "GROUP_ADMIN") {
+        return <Navigate to="/group" replace />
+    }
+
     // LOCATION_ADMIN and STAFF land on the dashboard.
     return <Navigate to="/dashboard" replace />
 }

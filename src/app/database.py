@@ -56,6 +56,10 @@ class RlsContext:
     institution_id: str | None = None
     location_id: str | None = None
     external_id: str | None = None
+    # Set for GROUP_ADMIN sessions. Drives the group RLS read policies on
+    # institutions / institution_groups; member data reads still set
+    # institution_id per-request (see the /group aggregate loop).
+    group_id: str | None = None
 
     @classmethod
     def for_user(cls, user) -> "RlsContext":  # noqa: ANN001
@@ -71,6 +75,9 @@ class RlsContext:
             location_id=(
                 str(user.location_id) if getattr(user, "location_id", None) else None
             ),
+            group_id=(
+                str(user.group_id) if getattr(user, "group_id", None) else None
+            ),
         )
 
     @classmethod
@@ -83,6 +90,7 @@ class RlsContext:
         user_id: str | None = None,
         role: str | None = None,
         external_id: str | None = None,
+        group_id: str | None = None,
     ) -> "RlsContext":
         return cls(
             context_type=context_type,
@@ -91,6 +99,7 @@ class RlsContext:
             institution_id=institution_id,
             location_id=location_id,
             external_id=external_id,
+            group_id=group_id,
         )
 
 
@@ -150,7 +159,8 @@ async def apply_rls_context(session: AsyncSession, context: RlsContext | None) -
             "set_config('app.role', :role, false), "
             "set_config('app.institution_id', :institution_id, false), "
             "set_config('app.location_id', :location_id, false), "
-            "set_config('app.external_id', :external_id, false)"
+            "set_config('app.external_id', :external_id, false), "
+            "set_config('app.group_id', :group_id, false)"
         ),
         {
             "context_type": context.context_type if context else "",
@@ -164,6 +174,9 @@ async def apply_rls_context(session: AsyncSession, context: RlsContext | None) -
             ),
             "external_id": (
                 context.external_id if context and context.external_id else ""
+            ),
+            "group_id": (
+                _validate_uuid_or_empty(context.group_id) if context else ""
             ),
         },
     )

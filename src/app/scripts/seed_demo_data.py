@@ -31,6 +31,7 @@ from src.app.models.call import Call, CallStatus
 from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.models.institution import Institution
+from src.app.models.institution_group import InstitutionGroup
 from src.app.models.institution_appointment_type import InstitutionAppointmentType
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.institution_provider import InstitutionProvider
@@ -131,13 +132,31 @@ STATUS_WEIGHTS = [
 _STATUS_POP = [s for s, w, *_ in STATUS_WEIGHTS for _ in range(w)]
 _STATUS_META = {s: (tags, sent) for s, w, tags, sent in STATUS_WEIGHTS}
 
+# DSO/group demo: a group owning all seeded institutions + a GROUP_ADMIN.
+GROUP_NAME = "Bright Dental Group"
+GROUP_SLUG = "bright-dental-group"
+
 
 async def _wipe(session: AsyncSession, slugs: list[str]) -> None:
     """Delete prior demo rows (FK-safe order) for the given institution slugs."""
+    # Demo group + its GROUP_ADMIN user (the user has no institution_id, so it
+    # isn't covered by the institution-scoped deletes below).
+    await session.execute(
+        text(
+            "DELETE FROM users WHERE group_id IN "
+            "(SELECT id FROM institution_groups WHERE slug = :slug)"
+        ),
+        {"slug": GROUP_SLUG},
+    )
+    await session.execute(
+        text("DELETE FROM institution_groups WHERE slug = :slug"), {"slug": GROUP_SLUG}
+    )
+
     rows = (await session.execute(
         select(Institution.id).where(Institution.slug.in_(slugs))
     )).scalars().all()
     if not rows:
+        await session.commit()
         return
     ids = list(rows)
     for table in ("calls", "call_metrics_daily", "contacts",
@@ -186,6 +205,7 @@ async def main() -> None:
 
             min_date = today - timedelta(days=DAYS_BACK)
 
+            created_institutions: list[Institution] = []
             for inst_def in INSTITUTIONS:
                 inst = Institution(
                     name=inst_def["name"], slug=inst_def["slug"], is_active=True,
@@ -196,6 +216,7 @@ async def main() -> None:
                 )
                 session.add(inst)
                 await session.flush()
+                created_institutions.append(inst)
 
                 locations: list[InstitutionLocation] = []
                 for loc_def in inst_def["locations"]:
@@ -345,6 +366,28 @@ async def main() -> None:
 
                 await session.flush()
                 logger.info("Seeded institution %s (%d locations).", inst_def["name"], len(locations))
+
+            # DSO/group demo: one group owning every seeded institution, plus a
+            # read-only GROUP_ADMIN to exercise cross-practice oversight.
+            group = InstitutionGroup(name=GROUP_NAME, slug=GROUP_SLUG)
+            session.add(group)
+            await session.flush()
+            for inst in created_institutions:
+                inst.group_id = group.id
+            group_admin_email = f"group.admin@{GROUP_SLUG}.dev"
+            session.add(User(
+                email=group_admin_email,
+                role=UserRole.GROUP_ADMIN.value,
+                institution_id=None,
+                location_id=None,
+                group_id=group.id,
+                password_hash=PasswordService.hash_password(PASSWORD),
+                password_set_at=datetime.now(timezone.utc),
+                is_active=True,
+                invite_status=InviteStatus.ACCEPTED.value,
+            ))
+            created_users.append((group_admin_email, UserRole.GROUP_ADMIN.value))
+            logger.info("Seeded group %s with %d institutions.", GROUP_NAME, len(created_institutions))
 
             await session.commit()
 

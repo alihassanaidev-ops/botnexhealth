@@ -6,6 +6,7 @@ import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
 import PmsGuard from "./components/PmsGuard";
 import AppLayout from "./components/AppLayout";
+import RouteError from "./components/RouteError";
 
 // Auth pages — eagerly loaded (small, needed immediately)
 import Login from "./pages/Login";
@@ -35,6 +36,8 @@ const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
 const Security = lazy(() => import("./pages/Security"));
 const Patients = lazy(() => import("./pages/Patients"));
+const GroupDashboard = lazy(() => import("./pages/GroupDashboard"));
+const Groups = lazy(() => import("./pages/Groups"));
 
 function LazyFallback() {
     return (
@@ -51,6 +54,7 @@ function S({ children }: { children: React.ReactNode }) {
 export const router = createBrowserRouter([
     {
         element: <AppLayout />,
+        errorElement: <RouteError />,
         children: [
             {
                 path: "/login",
@@ -63,6 +67,7 @@ export const router = createBrowserRouter([
             {
                 path: "/",
                 element: <DashboardWrapper />,
+                errorElement: <RouteError />,
                 children: [
                     {
                         path: "/",
@@ -254,6 +259,22 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <S><Patients /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "group",
+                        element: (
+                            <RoleGuard allowed={["GROUP_ADMIN"]}>
+                                <S><GroupDashboard /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "groups",
+                        element: (
+                            <RoleGuard allowed={["SUPER_ADMIN"]}>
+                                <S><Groups /></S>
                             </RoleGuard>
                         ),
                     },

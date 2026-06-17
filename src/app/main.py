@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from src.app.api.routes import router as api_router
 from src.app.api.routes import public_router
 from src.app.api.routes.admin_institutions import router as institutions_router
+from src.app.api.routes.admin_groups import router as admin_groups_router
 from src.app.api.routes.admin_users import router as admin_users_router
 from src.app.config import settings
 from src.app.retell.functions import router as retell_router
@@ -18,6 +19,7 @@ from src.app.api.routes.institution_setup import router as institution_setup_rou
 from src.app.api.routes.calls import router as calls_router
 from src.app.api.routes.contacts import router as contacts_router
 from src.app.api.routes.dashboard import router as dashboard_router
+from src.app.api.routes.group import router as group_router
 from src.app.api.routes.custom_fields import router as custom_fields_router
 from src.app.api.routes.notifications import router as notifications_router
 from src.app.api.routes.callbacks import router as callbacks_router
@@ -239,6 +241,7 @@ def create_app() -> FastAPI:
     # Admin routes
     app.include_router(auth_router, prefix="/api")
     app.include_router(institutions_router, prefix="/api")
+    app.include_router(admin_groups_router, prefix="/api")
     app.include_router(admin_users_router, prefix="/api")
 
     # Institution portal routes (authenticated institution users)
@@ -247,6 +250,7 @@ def create_app() -> FastAPI:
     app.include_router(calls_router, prefix="/api")
     app.include_router(contacts_router, prefix="/api")
     app.include_router(dashboard_router, prefix="/api")
+    app.include_router(group_router, prefix="/api")
     app.include_router(custom_fields_router, prefix="/api")
     app.include_router(notifications_router, prefix="/api")
     app.include_router(callbacks_router, prefix="/api")

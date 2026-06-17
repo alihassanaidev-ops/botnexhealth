@@ -64,6 +64,15 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     ("src/app/services/retention_policy.py", 331, "Call"),    # purged-call CFV cleanup
     ("src/app/services/retention_policy.py", 356, "Call"),    # retained-call EXISTS
     ("src/app/services/retention_policy.py", 390, "Contact"), # anonymized-contact CFV
+
+    # Contact-detail (Patients page) loads a primary contact's aliases and the
+    # union of their calls AFTER the primary has been institution-scoped by
+    # ``_scoped_contact`` (checks institution_id + location access). The alias
+    # query keys on ``merged_into_id == contact.id`` and the calls query on
+    # ``contact_id IN <member ids>`` — both derived from that scoped contact,
+    # and RLS enforces institution_id on Contact and Call regardless.
+    ("src/app/api/routes/contacts.py", 293, "Contact"),  # aliases of scoped primary
+    ("src/app/api/routes/contacts.py", 304, "Call"),     # calls of scoped primary + aliases
 }
 
 
