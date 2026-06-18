@@ -22,6 +22,8 @@ export interface CallsFilters {
     status?: string;
     /** Multi-tag filter — each tag must be present in the call's tags */
     tags?: string[];
+    /** Workflow-status filter — match any of these status ids */
+    status_ids?: string[];
     direction?: string;
     search?: string;
     date_from?: string;
@@ -34,6 +36,7 @@ export async function listCalls(filters: CallsFilters = {}): Promise<CallsListRe
     if (filters.offset !== undefined) params.set("offset", String(filters.offset));
     if (filters.status) params.set("status", filters.status);
     if (filters.tags?.length) filters.tags.forEach((t) => params.append("tags", t));
+    if (filters.status_ids?.length) filters.status_ids.forEach((s) => params.append("status_ids", s));
     if (filters.direction) params.set("direction", filters.direction);
     if (filters.search) params.set("search", filters.search);
     if (filters.date_from) params.set("date_from", filters.date_from);

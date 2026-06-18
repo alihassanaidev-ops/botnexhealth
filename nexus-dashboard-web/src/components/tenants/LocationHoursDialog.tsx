@@ -173,7 +173,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
 
     return (
         <Dialog open={!!location} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto border-border bg-gradient-to-b from-background to-accent/30">
+            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto border-border bg-card">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <Clock className="w-5 h-5 text-muted-foreground" />
@@ -195,15 +195,15 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                                 <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
                             </div>
                         ) : (
-                            <div className="space-y-3 rounded-lg border border-border bg-background/70 p-4">
+                            <div className="space-y-3 rounded-lg border border-border bg-card p-4">
                                 {hours.map((hour) => (
-                                    <div key={hour.day_of_week} className="flex items-center gap-4 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+                                    <div key={hour.day_of_week} className="flex items-center gap-4 rounded-md border border-border bg-muted px-3 py-2">
                                         <div className="w-32 flex items-center gap-2">
                                             <Switch
                                                 checked={hour.is_open}
                                                 onCheckedChange={(c) => handleUpdateHour(hour.day_of_week, "is_open", c)}
                                             />
-                                            <span className="text-sm font-medium">{DAYS.find(d => d.value === hour.day_of_week)?.label}</span>
+                                            <span className="text-sm font-medium text-foreground">{DAYS.find(d => d.value === hour.day_of_week)?.label}</span>
                                         </div>
                                         <div className="flex-1 flex items-center gap-2">
                                             <Input
@@ -242,7 +242,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                         <div className="flex items-center justify-between">
                             <h3 className="text-lg font-medium">Scheduled Breaks</h3>
                         </div>
-                        <div className="space-y-4 rounded-lg border border-border bg-background/70 p-4">
+                        <div className="space-y-4 rounded-lg border border-border bg-card p-4">
                             {isLoadingBreaks ? (
                                 <div className="flex justify-center p-4">
                                     <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -252,10 +252,10 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                             ) : (
                                 <div className="space-y-2">
                                     {breaks.map((brk) => (
-                                        <div key={brk.id} className="flex items-center justify-between rounded-md border border-border/60 bg-muted/30 p-3">
+                                        <div key={brk.id} className="flex items-center justify-between rounded-md border border-border bg-muted p-3">
                                             <div className="grid grid-cols-4 w-full items-center gap-4">
-                                                <span className="font-medium text-sm col-span-1 truncate">{brk.name}</span>
-                                                <span className="text-sm text-muted-foreground col-span-1">{getDayLabel(brk.day_of_week)}</span>
+                                                <span className="font-medium text-sm col-span-1 truncate text-foreground">{brk.name}</span>
+                                                <span className="text-sm text-foreground col-span-1">{getDayLabel(brk.day_of_week)}</span>
                                                 <span className="text-sm col-span-1">{brk.start_time} - {brk.end_time}</span>
                                                 <div className="col-span-1 flex justify-end">
                                                     <Button variant="ghost" size="icon" onClick={() => handleDeleteBreak(brk.id)}>

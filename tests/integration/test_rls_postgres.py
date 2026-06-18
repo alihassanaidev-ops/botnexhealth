@@ -471,6 +471,8 @@ async def test_rls_institution_owned_tables_isolate_system_contexts(
     et_b = "a2000000-0000-0000-0000-000000000002"
     enr_a = "a3000000-0000-0000-0000-000000000001"
     enr_b = "a3000000-0000-0000-0000-000000000002"
+    ws_a = "a5000000-0000-0000-0000-000000000001"
+    ws_b = "a5000000-0000-0000-0000-000000000002"
 
     # Seed under SUPER_ADMIN context (matches existing module-load pattern)
     async with rls_engine.begin() as conn:
@@ -517,6 +519,18 @@ async def test_rls_institution_owned_tables_isolate_system_contexts(
             ),
             {"enr_a": enr_a, "enr_b": enr_b, "inst_a": INST_A, "inst_b": INST_B},
         )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO workflow_statuses
+                  (id, institution_id, name, color, display_order, is_active)
+                VALUES
+                  (:ws_a, :inst_a, 'Done A', 'emerald', 0, true),
+                  (:ws_b, :inst_b, 'Done B', 'rose', 0, true)
+                """
+            ),
+            {"ws_a": ws_a, "ws_b": ws_b, "inst_a": INST_A, "inst_b": INST_B},
+        )
 
     # For each system context with institution A, must see only A's rows
     for context_type in ("celery", "twilio", "retell", "dead_letter"):
@@ -532,6 +546,11 @@ async def test_rls_institution_owned_tables_isolate_system_contexts(
             et_count = await conn.scalar(text("SELECT count(*) FROM email_templates"))
             enr_count = await conn.scalar(
                 text("SELECT count(*) FROM external_notification_recipients")
+            )
+            ws_count = await conn.scalar(text("SELECT count(*) FROM workflow_statuses"))
+            assert ws_count == 1, (
+                f"{context_type}: workflow_statuses visible={ws_count}, "
+                f"expected 1 (only INST_A row)"
             )
             assert cfd_count == 1, (
                 f"{context_type}: custom_field_definitions visible={cfd_count}, "

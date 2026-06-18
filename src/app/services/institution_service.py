@@ -81,6 +81,12 @@ class InstitutionService:
         await self.session.flush()
         await self.session.refresh(institution)
 
+        # Seed the default workflow statuses so the feature works out of the box
+        # and the cross-clinic baseline stays consistent.
+        from src.app.services.workflow_status_service import WorkflowStatusService
+
+        await WorkflowStatusService(self.session).seed_defaults(institution.id)
+
         logger.info(
             "Created institution: slug=%s institution_hash=%s",
             institution.slug,

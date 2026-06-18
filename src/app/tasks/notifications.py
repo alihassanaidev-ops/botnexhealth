@@ -364,6 +364,17 @@ async def _send_call_notification_async(
             is_urgent=urgent, is_appointment_booked=is_appointment
         )
 
+        # For no-PMS institutions an "appointment_booked" call is really a
+        # request to be booked manually — drives request-worded email default.
+        appointment_pending = False
+        if is_appointment:
+            pms_type = (
+                await session.execute(
+                    select(Institution.pms_type).where(Institution.id == institution_id)
+                )
+            ).scalar_one_or_none()
+            appointment_pending = (pms_type or "nexhealth") == "none"
+
         recipients = await _resolve_recipients(
             session, institution_id, location_id, template_type
         )
@@ -411,6 +422,7 @@ async def _send_call_notification_async(
             idempotency_key=idempotency_key,
             template_type=template_type,
             institution_id=institution_id,
+            appointment_pending=appointment_pending,
         )
 
         logger.info(

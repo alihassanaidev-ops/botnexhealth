@@ -254,11 +254,30 @@ export interface ContactSummary {
     last_name: string | null;
 }
 
+/** A tenant-defined workflow status definition (managed in settings). */
+export interface WorkflowStatus {
+    id: string;
+    institution_id: string;
+    name: string;
+    color: string;
+    display_order: number;
+    is_active: boolean;
+    created_at: string;
+}
+
+/** The status reference embedded on a call (id/name/color only). */
+export interface WorkflowStatusRef {
+    id: string;
+    name: string;
+    color: string;
+}
+
 export interface CallRecord {
     id: string;
     call_direction: string | null;
     call_status: string | null;
     call_tags: string[];           // all normalized tags for this call
+    workflow_status?: WorkflowStatusRef | null;  // human-assigned (distinct from call_tags)
     patient_status: string | null;
     summary: string | null;
     patient_sentiment: string | null;
@@ -514,6 +533,7 @@ export interface CallbackListItem {
     preferred_callback_datetime: string | null;
     created_at: string;
     contact: ContactSummary | null;
+    workflow_status?: WorkflowStatusRef | null;
     phone_masked: string | null;
     phone_reveal_available: boolean;
 }

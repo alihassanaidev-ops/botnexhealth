@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import {
     PhoneForwarded,
     CalendarIcon,
@@ -11,6 +11,8 @@ import {
     RefreshCcw,
     Clock,
     CircleDot,
+    LayoutList,
+    MessagesSquare,
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -46,12 +48,16 @@ import { toast } from "sonner"
 import { useSSE } from "@/hooks/useSSE"
 import { listCallbacks } from "@/lib/callbacks-api"
 import { resolveCallback } from "@/lib/calls-api"
+import { listWorkflowStatuses } from "@/lib/workflow-status-api"
+import { ConversationView } from "@/components/calls/ConversationView"
 import { cn } from "@/lib/utils"
-import type { CallbackListItem, CallbacksListResponse } from "@/types"
+import type { CallbackListItem, CallbacksListResponse, WorkflowStatus } from "@/types"
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 25
+
+type ViewMode = "table" | "conversation"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -338,9 +344,26 @@ function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
 export default function Callbacks() {
     const { lastEvent } = useSSE()
     const navigate = useNavigate()
+    const [searchParams, setSearchParams] = useSearchParams()
     const [data, setData] = useState<CallbacksListResponse | null>(null)
     const [loading, setLoading] = useState(true)
     const [resolveTarget, setResolveTarget] = useState<CallbackListItem | null>(null)
+    const [statuses, setStatuses] = useState<WorkflowStatus[]>([])
+    useEffect(() => {
+        listWorkflowStatuses().then(setStatuses).catch(() => { /* non-fatal */ })
+    }, [])
+    const [viewMode, setViewMode] = useState<ViewMode>(
+        searchParams.get("view") === "conversation" ? "conversation" : "table"
+    )
+
+    function changeView(mode: ViewMode) {
+        setViewMode(mode)
+        setSearchParams((prev) => {
+            if (mode === "conversation") prev.set("view", "conversation")
+            else prev.delete("view")
+            return prev
+        }, { replace: true })
+    }
 
     // Filters
     const [search, setSearch] = useState("")
@@ -433,6 +456,36 @@ export default function Callbacks() {
                             </p>
                         </div>
                     )}
+                    <div className="flex items-center rounded-lg border bg-muted/40 p-0.5">
+                        <button
+                            type="button"
+                            onClick={() => changeView("table")}
+                            aria-pressed={viewMode === "table"}
+                            className={cn(
+                                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                                viewMode === "table"
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground",
+                            )}
+                        >
+                            <LayoutList className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Table</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => changeView("conversation")}
+                            aria-pressed={viewMode === "conversation"}
+                            className={cn(
+                                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                                viewMode === "conversation"
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground",
+                            )}
+                        >
+                            <MessagesSquare className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Conversations</span>
+                        </button>
+                    </div>
                     <Button variant="outline" size="sm" onClick={fetchCallbacks} disabled={loading} className="gap-1.5">
                         <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
                         Refresh
@@ -512,7 +565,38 @@ export default function Callbacks() {
                 </div>
             </div>
 
-            {/* Table */}
+            {/* Conversation (inbox) view */}
+            {viewMode === "conversation" ? (
+                <ConversationView
+                    items={(data?.items ?? []).map((it) => ({
+                        id: it.call_id,
+                        name: it.contact_name ?? it.contact?.full_name ?? null,
+                        date: it.call_date,
+                        time: it.call_time,
+                        summary: it.summary,
+                        needsCallback: !it.callback_resolved,
+                        status: it.workflow_status,
+                    }))}
+                    loading={loading}
+                    total={total}
+                    page={page}
+                    pageCount={pageCount}
+                    from={from}
+                    to={to}
+                    hasFilters={hasFilters}
+                    onPageChange={setPage}
+                    onResolved={fetchCallbacks}
+                    statuses={statuses}
+                    title="Callbacks"
+                    emptyTitle={resolvedFilter === "unresolved" ? "No pending callbacks" : "No callbacks found"}
+                    emptyHint={
+                        resolvedFilter === "unresolved"
+                            ? "All callbacks have been resolved. Great work!"
+                            : "Callbacks will appear here when calls need follow-up."
+                    }
+                />
+            ) : (
+            /* Table */
             <Card>
                 <CardContent className="p-0">
                     <div className="overflow-x-auto">
@@ -594,8 +678,9 @@ export default function Callbacks() {
                     )}
                 </CardContent>
             </Card>
+            )}
 
-            {/* Resolve dialog */}
+            {/* Resolve dialog (table view) */}
             <ResolveDialog
                 callbackItem={resolveTarget}
                 onClose={() => setResolveTarget(null)}

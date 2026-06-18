@@ -28,6 +28,7 @@ from src.app.models.custom_field import EntityType
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.custom_field_service import CustomFieldService
+from src.app.services.workflow_status_service import WorkflowStatusService
 from src.app.services.event_bus import publish_event
 from src.app.services.sms_privacy import hash_for_logging, mask_phone, safe_error_summary
 
@@ -44,6 +45,14 @@ class ContactSummary(BaseModel):
     full_name: str | None
     first_name: str | None
     last_name: str | None
+
+
+class WorkflowStatusOut(BaseModel):
+    """The human-assigned workflow status on a call (tenant-defined)."""
+
+    id: str
+    name: str
+    color: str
 
 
 class CallRecord(BaseModel):
@@ -64,6 +73,8 @@ class CallRecord(BaseModel):
     callback_resolved: bool
     created_at: str
     contact: ContactSummary | None
+    # Human-assigned workflow status (null = unset). Distinct from call_tags (AI).
+    workflow_status: WorkflowStatusOut | None = None
     # Callback number, masked to the last 4 digits. The full value is served
     # only via the audited POST /{call_id}/reveal/phone endpoint.
     phone_masked: str | None = None
@@ -103,6 +114,11 @@ class CallsListResponse(BaseModel):
 
 class ResolveCallbackRequest(BaseModel):
     note: str | None = None
+
+
+class AssignStatusRequest(BaseModel):
+    # null clears the status.
+    status_id: str | None = None
 
 
 class TranscriptRevealResponse(BaseModel):
@@ -211,6 +227,15 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         callback_resolved=call.callback_resolved,
         created_at=call.created_at.isoformat(),
         contact=contact_out,
+        workflow_status=(
+            WorkflowStatusOut(
+                id=ws.id,
+                name=ws.name,
+                color=ws.color,
+            )
+            if (ws := getattr(call, "workflow_status", None))
+            else None
+        ),
         phone_masked=phone_masked,
         phone_reveal_available=phone_reveal_available,
     )
@@ -401,6 +426,8 @@ async def list_calls(
     call_status: str | None = Query(None, alias="status"),
     # Multi-tag filter: ?tags=complaint&tags=faq_handled
     tags: list[str] = Query(default=[]),
+    # Human workflow status filter (any of): ?status_ids=<uuid>&status_ids=<uuid>
+    status_ids: list[str] = Query(default=[]),
     direction: str | None = Query(None),
     search: str | None = Query(
         None,
@@ -445,6 +472,9 @@ async def list_calls(
                     Call.call_tags.ilike(f"%{tag}%"),
                 )
             )
+
+        if status_ids:
+            conditions.append(Call.workflow_status_id.in_(status_ids))
 
         if direction:
             conditions.append(Call.call_direction == direction)
@@ -841,6 +871,83 @@ async def resolve_callback(
                 "Failed to publish callback-resolution SSE events: call_hash=%s institution_hash=%s error=%s",
                 hash_for_logging(call_id),
                 hash_for_logging(current_user.institution_id),
+                safe_error_summary(exc),
+            )
+        return _call_to_record(call)
+
+
+# ── Assign workflow status ──────────────────────────────────────────────────────
+
+
+@router.patch("/{call_id}/status", response_model=CallRecord)
+@limiter.limit(RATE_WRITE)
+async def assign_workflow_status(
+    request: Request,
+    call_id: str,
+    body: AssignStatusRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> CallRecord:
+    """Assign (or clear) the human workflow status on a call.
+
+    Any active institution user with access to the call may set this — staff
+    triage is the point of the feature. The target status must belong to the
+    caller's institution and be active. Pass ``status_id: null`` to clear.
+    """
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
+
+    async with get_db_session() as session:
+        conditions = [
+            Call.id == call_id,
+            Call.institution_id == current_user.institution_id,
+        ]
+        location_agent_id = await _location_agent_filter(session, current_user)
+        if location_agent_id:
+            conditions.append(Call.location_id == location_agent_id)
+
+        call = (
+            await session.execute(
+                select(Call).where(*conditions).options(selectinload(Call.contact))
+            )
+        ).scalar_one_or_none()
+        if not call:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+        if body.status_id:
+            ws = await WorkflowStatusService(session).get_status(
+                current_user.institution_id, body.status_id
+            )
+            if not ws or not ws.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status"
+                )
+            # Assign the ORM object so the relationship stays in sync for the
+            # response without a lazy reload.
+            call.workflow_status = ws
+        else:
+            call.workflow_status = None
+
+        await session.commit()
+
+        log_audit_background(
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
+            action=AuditAction.LOCATION_UPDATE,
+            target_resource=f"call:{call.id}/status",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": current_user.institution_id,
+                "status_id": body.status_id,
+            },
+            institution_id=current_user.institution_id,
+        )
+        try:
+            publish_event(current_user.institution_id, "calls_updated")
+        except Exception as exc:
+            logger.warning(
+                "Failed to publish status-update SSE: call_hash=%s error=%s",
+                hash_for_logging(call_id),
                 safe_error_summary(exc),
             )
         return _call_to_record(call)

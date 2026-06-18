@@ -13,6 +13,7 @@ import httpx
 from src.app.config import settings
 from src.app.models.email_template import EmailTemplateType
 from src.app.services.email_template_service import (
+    APPOINTMENT_REQUEST_DEFAULT,
     DEFAULT_TEMPLATES,
     EmailTemplateService,
 )
@@ -116,6 +117,7 @@ class EmailNotificationService:
         template_type: str,
         institution_id: str | None = None,
         patient_facing: bool = False,
+        appointment_pending: bool = False,
     ) -> None:
         """Send a notification email using the appropriate template.
 
@@ -164,7 +166,7 @@ class EmailNotificationService:
                     hash_for_logging(institution_id),
                 )
 
-        # Fall back to defaults
+        # Fall back to in-code defaults when no active DB template exists.
         if not subject_tpl:
             defaults = DEFAULT_TEMPLATES.get(
                 template_type, DEFAULT_TEMPLATES[EmailTemplateType.CALL_SUMMARY.value]
@@ -172,6 +174,20 @@ class EmailNotificationService:
             subject_tpl = defaults["subject_template"]
             html_tpl = defaults["html_body"]
             text_tpl = defaults["text_body"]
+
+        # No-PMS: an appointment is a *request* staff must book manually, not a
+        # confirmation. If the resolved template is the untouched confirmation
+        # default — whether the in-code default above or a seeded-but-unedited
+        # DB row — swap to request wording. A clinic that customized its
+        # appointment template (different subject) keeps it.
+        if appointment_pending:
+            conf_default = DEFAULT_TEMPLATES.get(
+                EmailTemplateType.APPOINTMENT_CONFIRMATION.value
+            )
+            if conf_default and subject_tpl == conf_default["subject_template"]:
+                subject_tpl = APPOINTMENT_REQUEST_DEFAULT["subject_template"]
+                html_tpl = APPOINTMENT_REQUEST_DEFAULT["html_body"]
+                text_tpl = APPOINTMENT_REQUEST_DEFAULT["text_body"]
 
         # Render templates
         render = EmailTemplateService.render

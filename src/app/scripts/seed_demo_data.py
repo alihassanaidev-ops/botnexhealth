@@ -39,6 +39,7 @@ from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.user import InviteStatus, User, UserRole
 from src.app.services.dashboard_rollup import recompute_window
 from src.app.services.password_service import PasswordService
+from src.app.services.workflow_status_service import WorkflowStatusService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("seed_demo_data")
@@ -218,6 +219,12 @@ async def main() -> None:
                 await session.flush()
                 created_institutions.append(inst)
 
+                # Seed the default workflow statuses for this institution, then
+                # keep the list so we can assign some to calls below.
+                ws_svc = WorkflowStatusService(session)
+                await ws_svc.seed_defaults(inst.id)
+                inst_statuses = await ws_svc.list_statuses(inst.id)
+
                 locations: list[InstitutionLocation] = []
                 for loc_def in inst_def["locations"]:
                     loc = InstitutionLocation(
@@ -348,6 +355,9 @@ async def main() -> None:
                             if call_day < today - timedelta(days=3) and random.random() < 0.6:
                                 call.callback_resolved = True
                                 call.callback_resolved_at = created + timedelta(hours=random.randint(3, 60))
+                        # Demo: a staffer has triaged ~45% of calls with a workflow status.
+                        if inst_statuses and random.random() < 0.45:
+                            call.workflow_status_id = random.choice(inst_statuses).id
                         session.add(call)
                         access_pairs.add((contact.id, loc.id))
 

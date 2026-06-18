@@ -15,6 +15,7 @@ import {
 } from "@/lib/notification-settings-api"
 import { Phone, AlertTriangle, CalendarCheck, Loader2, Plus, Trash2, Bell } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
+import { useInstitution } from "@/context/InstitutionContext"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
@@ -48,7 +49,14 @@ const TEMPLATE_META: Record<string, { label: string; description: string; icon: 
 
 export default function NotificationPreferences() {
     const { user } = useAuth()
-    const isAdmin = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
+    const { pmsType } = useInstitution()
+    // No-PMS clinics can't truly book — the AI captures a *request* staff book
+    // manually — so the appointment toggle reads "Appointment Request" for them.
+    const noPms = pmsType === "none"
+    // External recipients are institution-wide config — the backend restricts
+    // their CRUD to INSTITUTION_ADMIN, so only show/fetch that section for them.
+    // (Per-user toggles below remain available to every role.)
+    const isAdmin = user?.role === "INSTITUTION_ADMIN"
 
     const [prefs, setPrefs] = useState<NotificationPreference[]>([])
     const [loading, setLoading] = useState(true)
@@ -199,7 +207,15 @@ export default function NotificationPreferences() {
                     </CardHeader>
                     <CardContent className="space-y-0 divide-y divide-border">
                         {prefs.map((pref) => {
-                            const meta = TEMPLATE_META[pref.template_type]
+                            let meta = TEMPLATE_META[pref.template_type]
+                            if (noPms && pref.template_type === "appointment_confirmation") {
+                                meta = {
+                                    ...meta,
+                                    label: "Appointment Request",
+                                    description:
+                                        "Get notified when the AI agent captures an appointment request to book manually in your system.",
+                                }
+                            }
                             if (!meta) return null
                             const Icon = meta.icon
                             const isSaving = saving === pref.template_type

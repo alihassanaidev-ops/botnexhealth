@@ -337,6 +337,50 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     },
 }
 
+# Default wording for no-PMS institutions. The AI cannot truly book without a
+# PMS, so an "appointment_booked" call is really a *request* staff must enter
+# manually. Used only as the fallback (DB-customized templates still win) and
+# selected at send time when ``pms_type == 'none'``. Reuses the same
+# ``appointment_confirmation`` template_type so preferences / external
+# recipients / custom templates are unaffected.
+APPOINTMENT_REQUEST_DEFAULT: dict[str, str] = {
+    "name": "Appointment Request",
+    "subject_template": "{{ location_name }} — Appointment request ({{ appointment_service }})",
+    "html_body": _wrap_email(
+        "Appointment Request",
+        "A patient requested an appointment by phone. It is not booked yet — "
+        "please confirm availability and book it manually.",
+        _appointment_section()
+        + (
+            f'<div style="margin-top:20px;">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+            ' style="border-collapse:collapse;">'
+            f'<tr><td style="{_LABEL_STYLE}">Caller</td>'
+            f'<td style="{_VALUE_STYLE}font-family:monospace;">{{{{ caller_phone }}}}</td></tr>'
+            f'<tr><td style="{_LABEL_STYLE}">Duration</td>'
+            f'<td style="{_VALUE_STYLE}">{{{{ duration }}}}</td></tr>'
+            f'<tr><td style="{_LABEL_STYLE}">Status</td>'
+            f'<td style="{_VALUE_STYLE}">Pending — manual booking required</td></tr>'
+            "</table></div>"
+        )
+        + _dashboard_button(),
+    ),
+    "text_body": (
+        "Appointment Request (pending manual booking)\n\n"
+        "A patient requested an appointment by phone. It is not booked yet —\n"
+        "please confirm availability and book it manually.\n\n"
+        "Patient: {{ patient_name }}\n"
+        "Requested Date/Time: {{ appointment_datetime }}\n"
+        "Provider: {{ appointment_provider }}\n"
+        "Service: {{ appointment_service }}\n\n"
+        "Call Details\n"
+        "Caller Phone: {{ caller_phone }}\n"
+        "Duration: {{ duration }}\n"
+        "{% if dashboard_link %}\nView full details: {{ dashboard_link }}\n{% endif %}"
+    ),
+}
+
+
 # Template types seeded inactive — a clinic must opt in before they are used.
 # The patient-facing confirmation emails the patient directly, so it stays off
 # until a clinic explicitly enables it in the email template editor.

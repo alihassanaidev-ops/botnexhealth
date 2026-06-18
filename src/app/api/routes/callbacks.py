@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from src.app.api.deps import get_current_active_user
 from src.app.api.rate_limit import RATE_READ, limiter
-from src.app.api.routes.calls import ContactSummary, _location_agent_filter
+from src.app.api.routes.calls import ContactSummary, WorkflowStatusOut, _location_agent_filter
 from src.app.services.sms_privacy import mask_phone
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
@@ -49,6 +49,7 @@ class CallbackItem(BaseModel):
     preferred_callback_datetime: str | None
     created_at: str
     contact: ContactSummary | None
+    workflow_status: WorkflowStatusOut | None = None
     # Masked callback number; full value via POST /institution/calls/{id}/reveal/phone.
     phone_masked: str | None = None
     phone_reveal_available: bool = False
@@ -92,6 +93,11 @@ def _call_to_callback_item(call: Call) -> CallbackItem:
         preferred_callback_datetime=call.preferred_callback_datetime.isoformat() if call.preferred_callback_datetime else None,
         created_at=call.created_at.isoformat(),
         contact=contact_out,
+        workflow_status=(
+            WorkflowStatusOut(id=ws.id, name=ws.name, color=ws.color)
+            if (ws := getattr(call, "workflow_status", None))
+            else None
+        ),
         phone_masked=phone_masked,
         phone_reveal_available=phone_reveal_available,
     )

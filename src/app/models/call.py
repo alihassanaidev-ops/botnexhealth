@@ -91,6 +91,14 @@ class Call(Base):
                 "call_status = 'needs_callback' AND callback_resolved = false"
             ),
         ),
+        # Indexed equality for the human Workflow Status filter — keeps
+        # "all <Status> calls, newest first" a fast range scan at scale.
+        Index(
+            "ix_call_institution_workflow_status",
+            "institution_id",
+            "workflow_status_id",
+            "created_at",
+        ),
     )
 
     # Primary key
@@ -182,6 +190,14 @@ class Call(Base):
     patient_intent: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Human-assigned workflow status (tenant-defined). Single-select; NULL = unset.
+    # Distinct from the AI ``call_status``/``call_tags`` above.
+    workflow_status_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("workflow_statuses.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     # Timing
     call_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     call_time: Mapped[time | None] = mapped_column(Time(timezone=True), nullable=True)
@@ -221,6 +237,9 @@ class Call(Base):
     # Relationships
     contact: Mapped["Contact"] = relationship(  # noqa: F821
         "Contact", back_populates="calls", lazy="selectin",
+    )
+    workflow_status: Mapped["WorkflowStatus | None"] = relationship(  # noqa: F821
+        "WorkflowStatus", lazy="selectin",
     )
 
     # =========================================================================

@@ -138,7 +138,7 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
 
     return (
         <Dialog open={!!location} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-2xl border-border bg-gradient-to-b from-background to-accent/30">
+            <DialogContent className="max-w-2xl border-border bg-card">
                 <DialogHeader>
                     <DialogTitle>Operating Hours: {location.name}</DialogTitle>
                 </DialogHeader>
@@ -149,13 +149,13 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
                 ) : (
                     <div className="space-y-3">
                         {hours.map((hour) => (
-                            <div key={hour.day_of_week} className="flex items-center gap-3 rounded-lg border border-border/70 bg-muted/20 p-3">
+                            <div key={hour.day_of_week} className="flex items-center gap-3 rounded-lg border border-border bg-muted p-3">
                                 <div className="flex w-40 items-center gap-2">
                                     <Switch
                                         checked={hour.is_open}
                                         onCheckedChange={(value) => setHour(hour.day_of_week, { is_open: value })}
                                     />
-                                    <span className="text-sm font-medium">
+                                    <span className="text-sm font-medium text-foreground">
                                         {DAYS.find((d) => d.value === hour.day_of_week)?.label}
                                     </span>
                                 </div>

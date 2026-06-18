@@ -31,6 +31,7 @@ const InstitutionAdminPanel = lazy(() => import("./pages/InstitutionAdminPanel")
 const LocationAdminPanel = lazy(() => import("./pages/LocationAdminPanel"));
 const InstitutionUserManagement = lazy(() => import("./pages/InstitutionUserManagement"));
 const InstitutionSettings = lazy(() => import("./pages/InstitutionSettings"));
+const WorkflowStatuses = lazy(() => import("./pages/WorkflowStatuses"));
 const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
@@ -251,6 +252,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <S><Callbacks /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/call-statuses",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><WorkflowStatuses /></S>
                             </RoleGuard>
                         ),
                     },

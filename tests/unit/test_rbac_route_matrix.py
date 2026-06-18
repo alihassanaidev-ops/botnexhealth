@@ -109,6 +109,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/calls/{call_id}/reveal/custom-fields/{field_key}",
         "POST /api/institution/calls/{call_id}/reveal/phone",
         "PATCH /api/institution/calls/{call_id}/resolve",
+        "PATCH /api/institution/calls/{call_id}/status",
+        "GET /api/institution/statuses",
         "GET /api/institution/contacts",
         "GET /api/institution/contacts/{contact_id}",
         "POST /api/institution/contacts/{contact_id}/reveal/phone",
@@ -232,6 +234,9 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/institution/locations/{loc_slug}/insurance-plans/{plan_id}",
         "POST /api/institution/contacts/{contact_id}/merge",
         "POST /api/institution/contacts/{contact_id}/unmerge",
+        "POST /api/institution/statuses",
+        "PATCH /api/institution/statuses/{status_id}",
+        "DELETE /api/institution/statuses/{status_id}",
     ),
     INSTITUTION_OR_LOCATION_USER: (
         "GET /api/v1/pms/patients",

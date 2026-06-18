@@ -28,6 +28,7 @@ import {
     Settings,
     ClipboardList,
     Layers,
+    Tag,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
@@ -97,6 +98,11 @@ const institutionAdminNav: NavItemDef[] = [
         url: "/callbacks",
         icon: PhoneForwarded,
     },
+    {
+        title: "Call Statuses",
+        url: "/institution-admin/call-statuses",
+        icon: Tag,
+    },
 ]
 
 const locationAdminNav: NavItemDef[] = [
@@ -120,6 +126,11 @@ const locationAdminNav: NavItemDef[] = [
         title: "Callback Queue",
         url: "/callbacks",
         icon: PhoneForwarded,
+    },
+    {
+        title: "Call Statuses",
+        url: "/institution-admin/call-statuses",
+        icon: Tag,
     },
 ]
 

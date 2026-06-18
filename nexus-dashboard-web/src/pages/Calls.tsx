@@ -13,8 +13,8 @@ import {
     CheckCircle2,
     RefreshCcw,
     PlusCircle,
-    Eye,
-    Loader2,
+    LayoutList,
+    MessagesSquare,
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -58,74 +58,28 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { useSSE } from "@/hooks/useSSE"
+import { getCall, listCalls, resolveCallback } from "@/lib/calls-api"
+import { ConversationView } from "@/components/calls/ConversationView"
 import {
-    getCall,
-    listCalls,
-    resolveCallback,
-    revealCustomPhiField,
-    revealRecording,
-    revealTranscript,
-} from "@/lib/calls-api"
+    CustomFieldsSection,
+    RecordingSection,
+    TranscriptSection,
+    TagBadge,
+    SentimentBadge,
+    StatusBadge,
+    StatusSelect,
+} from "@/components/calls/shared"
+import { formatDateTime, formatDuration, getInitials } from "@/components/calls/format"
+import { listWorkflowStatuses, assignCallStatus } from "@/lib/workflow-status-api"
 import { STATUS_OPTIONS, DIRECTION_OPTIONS } from "@/lib/constants"
 import { cn } from "@/lib/utils"
-import type { CallRecord, CallDetail, CallsListResponse, CustomFieldValue, TranscriptTurn } from "@/types"
+import type { CallRecord, CallDetail, CallsListResponse, WorkflowStatus } from "@/types"
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 25
 
-const STATUS_MAP = Object.fromEntries(STATUS_OPTIONS.map((o) => [o.value, o]))
-
-// ── Style helpers ─────────────────────────────────────────────────────────────
-
-function TagBadge({ tag }: { tag: string }) {
-    const opt = STATUS_MAP[tag]
-    const cls = opt?.color ?? "bg-zinc-500/15 text-zinc-500 border-zinc-500/25"
-    const label = opt?.label ?? tag.replace(/_/g, " ")
-    return (
-        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>
-            {label}
-        </span>
-    )
-}
-
-function sentimentBadge(sentiment: string | null) {
-    if (!sentiment) return <span className="text-xs text-muted-foreground">—</span>
-    const map: Record<string, string> = {
-        Positive: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-        Negative: "bg-red-500/15 text-red-600 dark:text-red-400",
-        Neutral: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400",
-    }
-    const cls = map[sentiment] ?? "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400"
-    return (
-        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
-            {sentiment}
-        </span>
-    )
-}
-
-function formatDuration(seconds: number | null): string {
-    if (seconds === null) return "—"
-    if (seconds < 60) return `${seconds}s`
-    const m = Math.floor(seconds / 60)
-    const s = seconds % 60
-    if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`
-    const h = Math.floor(m / 60)
-    const rem = m % 60
-    return rem > 0 ? `${h}h ${rem}m` : `${h}h`
-}
-
-function formatDateTime(dateStr: string | null, timeStr: string | null): string {
-    if (!dateStr) return "—"
-    const d = new Date(dateStr)
-    const datePart = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-    if (!timeStr) return datePart
-    const [h, m] = timeStr.split(":")
-    const hour = parseInt(h, 10)
-    const ampm = hour >= 12 ? "PM" : "AM"
-    const h12 = hour % 12 || 12
-    return `${datePart} · ${h12}:${m} ${ampm}`
-}
+type ViewMode = "table" | "conversation"
 
 // ── Tag filter toggle ─────────────────────────────────────────────────────────
 
@@ -295,270 +249,20 @@ function CallsDateRangeFilter({ from, to, onChange }: CallsDateRangeFilterProps)
     )
 }
 
-// ── Custom Fields Section ─────────────────────────────────────────────────
-
-function renderFieldValue(field: CustomFieldValue): string {
-    if (field.value === null || field.value === undefined) return "—"
-    switch (field.field_type) {
-        case "boolean":
-            return field.value.toLowerCase() === "true" ? "Yes" : "No"
-        case "number":
-            return field.value
-        case "date": {
-            try {
-                const d = new Date(field.value)
-                return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-            } catch {
-                return field.value
-            }
-        }
-        default:
-            return field.value
-    }
-}
-
-function CustomFieldDisplay({ callId, field }: { callId: string; field: CustomFieldValue }) {
-    const [revealed, setRevealed] = useState(false)
-    const [revealedValue, setRevealedValue] = useState<string | null>(null)
-    const [revealing, setRevealing] = useState(false)
-
-    async function handleReveal() {
-        setRevealing(true)
-        try {
-            const result = await revealCustomPhiField(callId, field.field_key)
-            setRevealedValue(result.value)
-            setRevealed(true)
-            toast.success("Field revealed and audited")
-        } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Failed to reveal field")
-        } finally {
-            setRevealing(false)
-        }
-    }
-
-    if (field.is_phi && field.reveal_available && !revealed) {
-        return (
-            <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-1 h-7 gap-1.5 px-2 text-xs"
-                onClick={handleReveal}
-                disabled={revealing}
-            >
-                {revealing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Eye className="h-3 w-3" />}
-                Reveal
-            </Button>
-        )
-    }
-
-    return (
-        <p className="font-medium mt-0.5">
-            {renderFieldValue({ ...field, value: revealed ? revealedValue : field.value })}
-        </p>
-    )
-}
-
-function CustomFieldsSection({ callId, fields }: { callId: string; fields: CustomFieldValue[] }) {
-    if (!fields || fields.length === 0) return null
-    return (
-        <div>
-            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">
-                Additional Details
-            </p>
-            <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3 text-xs">
-                {fields.map((f) => (
-                    <div key={f.field_key}>
-                        <p className="text-muted-foreground flex items-center gap-1">
-                            {f.field_name}
-                        </p>
-                        <CustomFieldDisplay callId={callId} field={f} />
-                    </div>
-                ))}
-            </div>
-        </div>
-    )
-}
-
-// ── Transcript Chat UI ──────────────────────────────────────────────────────
-
-function TranscriptChatBubbles({ turns }: { turns: TranscriptTurn[] }) {
-    if (turns.length === 0) {
-        return <p className="text-xs text-muted-foreground italic p-3">No transcript turns available.</p>
-    }
-    return (
-        <div className="space-y-2 p-3">
-            {turns.map((turn, i) => {
-                if (turn.role === "tool_call_invocation") {
-                    return (
-                        <div key={i} className="flex justify-center">
-                            <span className="inline-flex items-center gap-1 rounded-full bg-muted border px-2.5 py-0.5 text-[10px] text-muted-foreground">
-                                ⚙ Agent triggered: <span className="font-medium">{turn.name ?? "action"}</span>
-                            </span>
-                        </div>
-                    )
-                }
-                if (turn.role === "tool_call_result") return null
-                if (!turn.content) return null
-
-                const isAgent = turn.role === "agent"
-                return (
-                    <div key={i} className={`flex ${isAgent ? "justify-start" : "justify-end"}`}>
-                        <div
-                            className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs leading-relaxed shadow-sm ${isAgent
-                                ? "bg-background border text-foreground rounded-tl-sm"
-                                : "bg-primary text-primary-foreground rounded-tr-sm"
-                                }`}
-                        >
-                            <p className={`font-semibold mb-0.5 text-[10px] ${isAgent ? "opacity-50" : "opacity-75"
-                                }`}>
-                                {isAgent ? "AI Assistant" : "Caller"}
-                            </p>
-                            {turn.content}
-                        </div>
-                    </div>
-                )
-            })}
-        </div>
-    )
-}
-
-function TranscriptSection({ detail }: { detail: CallDetail }) {
-    const [turns, setTurns] = useState<TranscriptTurn[] | null>(null)
-    const [revealing, setRevealing] = useState(false)
-
-    useEffect(() => {
-        setTurns(null)
-        setRevealing(false)
-    }, [detail.id])
-
-    if (!detail.transcript_available) return null
-
-    async function handleReveal() {
-        setRevealing(true)
-        try {
-            const result = await revealTranscript(detail.id)
-            setTurns(result.transcript_with_tool_calls ?? [])
-            toast.success("Transcript revealed and audited")
-        } catch (e) {
-            // 503 from a durable-audit failure surfaces here as well.
-            // Prefer the FastAPI `detail` field when present so the user
-            // sees "Audit log unavailable; please retry" instead of a
-            // generic axios message.
-            const detailMsg =
-                (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-            toast.error(
-                detailMsg ?? (e instanceof Error ? e.message : "Failed to reveal transcript"),
-            )
-        } finally {
-            setRevealing(false)
-        }
-    }
-
-    return (
-        <div>
-            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
-                Transcript
-                <span className="ml-1.5 text-[9px] opacity-60 font-normal normal-case">
-                    HIPAA ✓ PII-scrubbed
-                </span>
-            </p>
-            <div className="rounded-lg border bg-muted max-h-64 overflow-y-auto">
-                {turns ? (
-                    <TranscriptChatBubbles turns={turns} />
-                ) : (
-                    <div className="flex min-h-24 flex-col items-center justify-center gap-2 p-3 text-center">
-                        <p className="text-xs text-muted-foreground">
-                            Reveal the scrubbed transcript. Each reveal is audit-logged.
-                        </p>
-                        <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1.5"
-                            onClick={handleReveal}
-                            disabled={revealing}
-                        >
-                            {revealing ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                                <Eye className="h-3.5 w-3.5" />
-                            )}
-                            Reveal transcript
-                        </Button>
-                    </div>
-                )}
-            </div>
-        </div>
-    )
-}
-
-function RecordingSection({ detail }: { detail: CallDetail }) {
-    const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
-    const [revealing, setRevealing] = useState(false)
-
-    useEffect(() => {
-        setRecordingUrl(null)
-        setRevealing(false)
-    }, [detail.id])
-
-    if (!detail.recording_available && !recordingUrl) return null
-
-    async function handleRevealRecording() {
-        setRevealing(true)
-        try {
-            const result = await revealRecording(detail.id)
-            setRecordingUrl(result.recording_url)
-            if (result.recording_url) {
-                toast.success("Recording revealed and audited")
-            } else {
-                toast.info("No recording is available for this call")
-            }
-        } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Failed to reveal recording")
-        } finally {
-            setRevealing(false)
-        }
-    }
-
-    return (
-        <div>
-            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Call Recording</p>
-            <div className="rounded-lg border bg-muted p-3 flex items-center justify-center">
-                {recordingUrl ? (
-                    <audio controls className="w-full h-10 outline-none" src={recordingUrl}>
-                        Your browser does not support the audio element.
-                    </audio>
-                ) : (
-                    <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 gap-1.5"
-                        onClick={handleRevealRecording}
-                        disabled={revealing}
-                    >
-                        {revealing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
-                        Reveal recording
-                    </Button>
-                )}
-            </div>
-        </div>
-    )
-}
-
 // ── Call Detail Dialog ─────────────────────────────────────────────────────────
 
 interface CallDetailProps {
     callId: string | null
+    statuses: WorkflowStatus[]
     onClose: () => void
     onResolved: (callId: string) => void
 }
 
-function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
+function CallDetailDialog({ callId, statuses, onClose, onResolved }: CallDetailProps) {
     const [detail, setDetail] = useState<CallDetail | null>(null)
     const [loading, setLoading] = useState(false)
     const [resolving, setResolving] = useState(false)
+    const [savingStatus, setSavingStatus] = useState(false)
     const [note, setNote] = useState("")
 
     useEffect(() => {
@@ -569,6 +273,21 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
             .catch((e) => toast.error(e instanceof Error ? e.message : "Failed to load call"))
             .finally(() => setLoading(false))
     }, [callId])
+
+    async function handleAssignStatus(statusId: string | null) {
+        if (!callId) return
+        setSavingStatus(true)
+        try {
+            await assignCallStatus(callId, statusId)
+            const fresh = await getCall(callId)
+            setDetail(fresh)
+            onResolved(callId)
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Failed to update status")
+        } finally {
+            setSavingStatus(false)
+        }
+    }
 
     async function handleResolve() {
         if (!callId) return
@@ -639,8 +358,26 @@ function CallDetailDialog({ callId, onClose, onResolved }: CallDetailProps) {
                                 ? detail.call_tags.map((t) => <TagBadge key={t} tag={t} />)
                                 : <span className="text-xs text-muted-foreground">No tags</span>
                             }
-                            {sentimentBadge(detail.patient_sentiment)}
+                            <SentimentBadge sentiment={detail.patient_sentiment} />
                         </div>
+
+                        {/* Workflow status (human-assigned) */}
+                        {statuses.length > 0 && (
+                            <div>
+                                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Status</p>
+                                <div className="flex items-center gap-2">
+                                    <div className="w-48">
+                                        <StatusSelect
+                                            statuses={statuses}
+                                            value={detail.workflow_status?.id ?? null}
+                                            onChange={handleAssignStatus}
+                                            saving={savingStatus}
+                                        />
+                                    </div>
+                                    {detail.workflow_status && <StatusBadge status={detail.workflow_status} />}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Date & duration */}
                         <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3 text-xs">
@@ -750,6 +487,18 @@ export default function Calls() {
     const [selectedCallId, setSelectedCallId] = useState<string | null>(
         searchParams.get("detail")
     )
+    const [viewMode, setViewMode] = useState<ViewMode>(
+        searchParams.get("view") === "conversation" ? "conversation" : "table"
+    )
+
+    function changeView(mode: ViewMode) {
+        setViewMode(mode)
+        setSearchParams((prev) => {
+            if (mode === "conversation") prev.set("view", "conversation")
+            else prev.delete("view")
+            return prev
+        }, { replace: true })
+    }
 
     // Clear the query param once consumed
     useEffect(() => {
@@ -761,9 +510,16 @@ export default function Calls() {
     // Filters
     const [search, setSearch] = useState("")
     const [selectedTags, setSelectedTags] = useState<string[]>([])
+    const [selectedStatusIds, setSelectedStatusIds] = useState<string[]>([])
     const [directionFilter, setDirectionFilter] = useState("")
     const [dateFrom, setDateFrom] = useState("")
     const [dateTo, setDateTo] = useState("")
+
+    // Tenant-defined workflow statuses (for the filter + assign control).
+    const [statuses, setStatuses] = useState<WorkflowStatus[]>([])
+    useEffect(() => {
+        listWorkflowStatuses().then(setStatuses).catch(() => { /* non-fatal */ })
+    }, [])
 
     // Pagination
     const [page, setPage] = useState(0)
@@ -778,7 +534,7 @@ export default function Calls() {
     }, [search])
 
     // Reset page on filter change
-    useEffect(() => { setPage(0) }, [debouncedSearch, selectedTags, directionFilter, dateFrom, dateTo])
+    useEffect(() => { setPage(0) }, [debouncedSearch, selectedTags, selectedStatusIds, directionFilter, dateFrom, dateTo])
 
     const fetchCalls = useCallback(async () => {
         setLoading(true)
@@ -787,6 +543,7 @@ export default function Calls() {
                 limit: PAGE_SIZE,
                 offset: page * PAGE_SIZE,
                 tags: selectedTags.length ? selectedTags : undefined,
+                status_ids: selectedStatusIds.length ? selectedStatusIds : undefined,
                 direction: directionFilter || undefined,
                 search: debouncedSearch || undefined,
                 date_from: dateFrom || undefined,
@@ -798,7 +555,7 @@ export default function Calls() {
         } finally {
             setLoading(false)
         }
-    }, [page, selectedTags, directionFilter, debouncedSearch, dateFrom, dateTo])
+    }, [page, selectedTags, selectedStatusIds, directionFilter, debouncedSearch, dateFrom, dateTo])
 
     useEffect(() => { fetchCalls() }, [fetchCalls])
 
@@ -845,6 +602,36 @@ export default function Calls() {
                             <p className="text-xs text-muted-foreground">total calls</p>
                         </div>
                     )}
+                    <div className="flex items-center rounded-lg border bg-muted/40 p-0.5">
+                        <button
+                            type="button"
+                            onClick={() => changeView("table")}
+                            aria-pressed={viewMode === "table"}
+                            className={cn(
+                                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                                viewMode === "table"
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground",
+                            )}
+                        >
+                            <LayoutList className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Table</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => changeView("conversation")}
+                            aria-pressed={viewMode === "conversation"}
+                            className={cn(
+                                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                                viewMode === "conversation"
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground",
+                            )}
+                        >
+                            <MessagesSquare className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Conversations</span>
+                        </button>
+                    </div>
                     <Button variant="outline" size="sm" onClick={fetchCalls} disabled={loading} className="gap-1.5">
                         <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
                         Refresh
@@ -865,11 +652,19 @@ export default function Calls() {
                         />
                     </div>
                     <CallsFacetedFilter
-                        title="Status"
+                        title="Tags"
                         options={STATUS_OPTIONS}
                         selectedValues={new Set(selectedTags)}
                         onSelectedChange={(s) => setSelectedTags(Array.from(s))}
                     />
+                    {statuses.length > 0 && (
+                        <CallsFacetedFilter
+                            title="Status"
+                            options={statuses.map((s) => ({ value: s.id, label: s.name }))}
+                            selectedValues={new Set(selectedStatusIds)}
+                            onSelectedChange={(s) => setSelectedStatusIds(Array.from(s))}
+                        />
+                    )}
                     <Select value={directionFilter || "all"} onValueChange={(v) => setDirectionFilter(v === "all" ? "" : v)}>
                         <SelectTrigger className="h-8 w-[150px]">
                             <SelectValue placeholder="Direction" />
@@ -914,7 +709,36 @@ export default function Calls() {
                 )}
             </div>
 
-            {/* Table */}
+            {/* Conversation (inbox) view */}
+            {viewMode === "conversation" ? (
+                <ConversationView
+                    items={(data?.items ?? []).map((c) => ({
+                        id: c.id,
+                        name: c.contact?.full_name ?? null,
+                        date: c.call_date,
+                        time: c.call_time,
+                        summary: c.summary,
+                        direction: c.call_direction,
+                        tags: c.call_tags,
+                        isNewPatient: c.is_new_patient,
+                        needsCallback: c.call_tags.includes("needs_callback") && !c.callback_resolved,
+                        status: c.workflow_status,
+                    }))}
+                    loading={loading}
+                    total={total}
+                    page={page}
+                    pageCount={pageCount}
+                    from={from}
+                    to={to}
+                    hasFilters={hasFilters}
+                    onPageChange={setPage}
+                    onResolved={fetchCalls}
+                    statuses={statuses}
+                    emptyTitle="No calls found"
+                    emptyHint="Calls will appear here once your voice agent starts taking calls."
+                />
+            ) : (
+            /* Table */
             <Card>
                 <CardContent className="p-0">
                     <div className="overflow-x-auto">
@@ -987,10 +811,12 @@ export default function Calls() {
                     )}
                 </CardContent>
             </Card>
+            )}
 
-            {/* Detail dialog */}
+            {/* Detail dialog (table view) */}
             <CallDetailDialog
                 callId={selectedCallId}
+                statuses={statuses}
                 onClose={() => setSelectedCallId(null)}
                 onResolved={fetchCalls}
             />
@@ -999,14 +825,6 @@ export default function Calls() {
 }
 
 // ── Call row ──────────────────────────────────────────────────────────────────
-
-/** "Ashley Bentley" → "AB"; single word → first two letters; empty → "?". */
-function getInitials(name: string | null | undefined): string {
-    const parts = (name ?? "").trim().split(/\s+/).filter(Boolean)
-    if (parts.length === 0) return "?"
-    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-}
 
 interface CallRowProps {
     call: CallRecord
@@ -1062,10 +880,11 @@ function CallRow({ call, onClick }: CallRowProps) {
             </TableCell>
 
             <TableCell>
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-wrap items-center gap-1">
+                    {call.workflow_status && <StatusBadge status={call.workflow_status} />}
                     {call.call_tags.length > 0
                         ? call.call_tags.slice(0, 3).map((t) => <TagBadge key={t} tag={t} />)
-                        : <span className="text-xs text-muted-foreground">—</span>
+                        : (!call.workflow_status && <span className="text-xs text-muted-foreground">—</span>)
                     }
                     {call.call_tags.length > 3 && (
                         <Badge variant="secondary" className="text-[10px]">+{call.call_tags.length - 3}</Badge>
@@ -1073,7 +892,7 @@ function CallRow({ call, onClick }: CallRowProps) {
                 </div>
             </TableCell>
 
-            <TableCell>{sentimentBadge(call.patient_sentiment)}</TableCell>
+            <TableCell><SentimentBadge sentiment={call.patient_sentiment} /></TableCell>
 
             <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
                 {formatDuration(call.call_duration_seconds)}

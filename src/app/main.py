@@ -21,6 +21,7 @@ from src.app.api.routes.contacts import router as contacts_router
 from src.app.api.routes.dashboard import router as dashboard_router
 from src.app.api.routes.group import router as group_router
 from src.app.api.routes.custom_fields import router as custom_fields_router
+from src.app.api.routes.workflow_statuses import router as workflow_statuses_router
 from src.app.api.routes.notifications import router as notifications_router
 from src.app.api.routes.callbacks import router as callbacks_router
 from src.app.api.routes.email_templates import router as email_templates_router
@@ -252,6 +253,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router, prefix="/api")
     app.include_router(group_router, prefix="/api")
     app.include_router(custom_fields_router, prefix="/api")
+    app.include_router(workflow_statuses_router, prefix="/api")
     app.include_router(notifications_router, prefix="/api")
     app.include_router(callbacks_router, prefix="/api")
     app.include_router(email_templates_router, prefix="/api")
