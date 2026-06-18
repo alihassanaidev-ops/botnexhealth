@@ -836,6 +836,7 @@ class NexHealthPlatformStack(Stack):
         self._attach_waf(api_service.load_balancer.load_balancer_arn)
         self._attach_alarms(
             api_service=api_service,
+            worker_service=worker_service,
             database=database,
             audit_failure_filter=audit_failure_filter,
         )
@@ -1384,6 +1385,7 @@ class NexHealthPlatformStack(Stack):
         self,
         *,
         api_service: ecs_patterns.ApplicationLoadBalancedFargateService,
+        worker_service: ecs.FargateService,
         database: rds.DatabaseInstance,
         audit_failure_filter: logs.MetricFilter,
     ) -> None:
@@ -1477,6 +1479,108 @@ class NexHealthPlatformStack(Stack):
         alb_5xx.add_alarm_action(action)
 
         CfnOutput(self, "AlarmTopicArn", value=topic.topic_arn)
+
+        # ── Consolidated CloudWatch dashboard ────────────────────────────────
+        # Single pane for load/health: ALB throughput+latency+5xx, ECS CPU/mem
+        # for API and worker, RDS CPU/connections/storage, and app metrics
+        # (Celery backlog, audit-write failures). 1-minute granularity.
+        lb = api_service.load_balancer
+        m1 = Duration.minutes(1)
+        alb_5xx_1m = cloudwatch.Metric(
+            namespace="AWS/ApplicationELB",
+            metric_name="HTTPCode_Target_5XX_Count",
+            dimensions_map={"LoadBalancer": lb.load_balancer_full_name},
+            period=m1,
+            statistic="Sum",
+        )
+        celery_depth = cloudwatch.Metric(
+            namespace=f"{self.config.app_name}/{self.config.app_env}",
+            metric_name="CeleryQueueDepth",
+            dimensions_map={"Queue": "all"},
+            statistic="Average",
+            period=m1,
+        )
+        dashboard = cloudwatch.Dashboard(
+            self,
+            "OpsDashboard",
+            dashboard_name=f"{self.config.app_name}-{self.config.environment_name}",
+        )
+        dashboard.add_widgets(
+            cloudwatch.GraphWidget(
+                title="ALB — Requests / min",
+                left=[lb.metric_request_count(period=m1, statistic="Sum", label="requests")],
+                width=8, height=6,
+            ),
+            cloudwatch.GraphWidget(
+                title="ALB — Target latency (s)",
+                left=[
+                    lb.metric_target_response_time(period=m1, statistic="p50", label="p50"),
+                    lb.metric_target_response_time(period=m1, statistic="p95", label="p95"),
+                    lb.metric_target_response_time(period=m1, statistic="p99", label="p99"),
+                ],
+                width=8, height=6,
+            ),
+            cloudwatch.GraphWidget(
+                title="ALB — Target 5xx / min",
+                left=[alb_5xx_1m],
+                width=8, height=6,
+            ),
+        )
+        dashboard.add_widgets(
+            cloudwatch.GraphWidget(
+                title="ECS — CPU %",
+                left=[
+                    api_service.service.metric_cpu_utilization(period=m1, label="api"),
+                    worker_service.metric_cpu_utilization(period=m1, label="worker"),
+                ],
+                width=12, height=6,
+            ),
+            cloudwatch.GraphWidget(
+                title="ECS — Memory %",
+                left=[
+                    api_service.service.metric_memory_utilization(period=m1, label="api"),
+                    worker_service.metric_memory_utilization(period=m1, label="worker"),
+                ],
+                width=12, height=6,
+            ),
+        )
+        dashboard.add_widgets(
+            cloudwatch.GraphWidget(
+                title="RDS — CPU %",
+                left=[database.metric_cpu_utilization(period=m1)],
+                width=8, height=6,
+            ),
+            cloudwatch.GraphWidget(
+                title="RDS — Connections",
+                left=[database.metric_database_connections(period=m1)],
+                width=8, height=6,
+            ),
+            cloudwatch.GraphWidget(
+                title="RDS — Free storage (bytes)",
+                left=[database.metric_free_storage_space(period=m1)],
+                width=8, height=6,
+            ),
+        )
+        dashboard.add_widgets(
+            cloudwatch.GraphWidget(
+                title="Celery — queue depth",
+                left=[celery_depth],
+                width=12, height=6,
+            ),
+            cloudwatch.GraphWidget(
+                title="Audit-write failures (5m)",
+                left=[audit_failure_filter.metric(statistic="Sum", period=Duration.minutes(5))],
+                width=12, height=6,
+            ),
+        )
+        CfnOutput(
+            self,
+            "DashboardUrl",
+            value=(
+                f"https://{self.config.region}.console.aws.amazon.com/cloudwatch/home"
+                f"?region={self.config.region}#dashboards/dashboard/{self.config.app_name}-{self.config.environment_name}"
+            ),
+        )
 
     def _api_base_url(self, api_service: ecs_patterns.ApplicationLoadBalancedFargateService) -> str:
         if self.config.api.domain_name and self.config.api.certificate_arn:

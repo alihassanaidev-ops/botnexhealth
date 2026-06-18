@@ -5,6 +5,7 @@
   "region": "ca-central-1",
   "appEnv": "staging",
   "logLevel": "info",
+  "alarmEmail": "zulkhaifahmed@gmail.com",
   "network": {
     "maxAzs": 2,
     "natGateways": 1
