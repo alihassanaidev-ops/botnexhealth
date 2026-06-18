@@ -12,6 +12,11 @@ export const STATUS_OPTIONS: { value: string; label: string; color: string }[] =
     { value: "insurance_verified", label: "Insurance Verified", color: "bg-green-500/15 text-green-600 border-green-500/25 dark:text-green-400" },
     { value: "insurance_unverified", label: "Insurance Unverified", color: "bg-rose-500/15 text-rose-600 border-rose-500/25 dark:text-rose-400" },
     { value: "no_action_needed", label: "No Action Needed", color: "bg-zinc-500/10 text-zinc-500 border-zinc-500/20 dark:text-zinc-500" },
+    // No-PMS vocabulary — requests the team books/handles manually.
+    { value: "needs_booking", label: "Needs Booking", color: "bg-emerald-500/15 text-emerald-600 border-emerald-500/25 dark:text-emerald-400" },
+    { value: "needs_reschedule", label: "Needs Reschedule", color: "bg-blue-500/15 text-blue-600 border-blue-500/25 dark:text-blue-400" },
+    { value: "needs_cancellation", label: "Needs Cancellation", color: "bg-rose-500/15 text-rose-600 border-rose-500/25 dark:text-rose-400" },
+    { value: "insurance_and_billing", label: "Insurance & Billing", color: "bg-green-500/15 text-green-600 border-green-500/25 dark:text-green-400" },
 ]
 
 export const DIRECTION_OPTIONS = [

@@ -8,6 +8,32 @@ from src.app.config import get_settings, settings as global_settings
 from src.app.api.deps import get_current_admin
 from src.app.models.user import User, UserRole, InviteStatus
 
+
+@pytest.fixture(autouse=True)
+def _clear_nexhealth_token_cache():
+    """Isolate each test from the cross-test NexHealth bearer token.
+
+    These tests mock NexHealth with respx and assert that POST /authenticates
+    is called. But the token is cached in Redis (key ``nh:token``) by the
+    TokenManager and persists across tests AND runs, so a later test would
+    reuse the cached token, skip /authenticates, and fail respx's
+    assert_all_called(). Clearing the key before each test forces a fresh auth.
+    No-op when Redis isn't configured (the in-memory cache is already
+    per-process and starts empty).
+    """
+    url = getattr(global_settings, "effective_redis_url", None)
+    if url:
+        try:
+            import redis as _redis
+
+            client = _redis.from_url(url)
+            client.delete("nh:token", "nh:token:refresh-lock")
+            client.close()
+        except Exception:  # pragma: no cover — best-effort isolation
+            pass
+    yield
+
+
 @pytest.fixture
 def override_settings(mock_settings):
     app.dependency_overrides[get_settings] = lambda: mock_settings

@@ -359,13 +359,16 @@ async def _send_call_notification_async(
         tags = _split_csv(call.call_tags)
         urgent = _is_urgent(call.call_status, tags)
         primary_tag = (call.call_status or "").lower().replace(" ", "_")
-        is_appointment = primary_tag == "appointment_booked"
+        # PMS agents emit "appointment_booked"; no-PMS agents emit "needs_booking"
+        # (a request to book manually). Both drive the appointment notification.
+        is_appointment = primary_tag in ("appointment_booked", "needs_booking")
         template_type = resolve_template_type(
             is_urgent=urgent, is_appointment_booked=is_appointment
         )
 
-        # For no-PMS institutions an "appointment_booked" call is really a
-        # request to be booked manually — drives request-worded email default.
+        # For no-PMS institutions the appointment is a *request* to be booked
+        # manually — drives the request-worded email default. needs_booking only
+        # ever comes from no-PMS agents, but we also gate on pms_type for safety.
         appointment_pending = False
         if is_appointment:
             pms_type = (
@@ -373,7 +376,7 @@ async def _send_call_notification_async(
                     select(Institution.pms_type).where(Institution.id == institution_id)
                 )
             ).scalar_one_or_none()
-            appointment_pending = (pms_type or "nexhealth") == "none"
+            appointment_pending = (pms_type or "nexhealth") == "none" or primary_tag == "needs_booking"
 
         recipients = await _resolve_recipients(
             session, institution_id, location_id, template_type

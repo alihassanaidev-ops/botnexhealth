@@ -133,6 +133,21 @@ STATUS_WEIGHTS = [
 _STATUS_POP = [s for s, w, *_ in STATUS_WEIGHTS for _ in range(w)]
 _STATUS_META = {s: (tags, sent) for s, w, tags, sent in STATUS_WEIGHTS}
 
+# No-PMS institutions emit request-style statuses (agent can't transact in a PMS).
+NO_PMS_STATUS_WEIGHTS = [
+    (CallStatus.NEEDS_BOOKING.value, 30, ["scheduling", "new_patient"], "Positive"),
+    (CallStatus.NEEDS_CALLBACK.value, 16, ["follow_up"], "Neutral"),
+    (CallStatus.INSURANCE_AND_BILLING.value, 12, ["insurance", "billing"], "Neutral"),
+    (CallStatus.FINANCIAL_INQUIRY.value, 8, ["billing"], "Neutral"),
+    (CallStatus.NEEDS_RESCHEDULE.value, 8, ["scheduling"], "Neutral"),
+    (CallStatus.NEEDS_CANCELLATION.value, 5, ["scheduling"], "Negative"),
+    (CallStatus.COMPLAINT.value, 4, ["service", "wait_time"], "Negative"),
+    (CallStatus.EMERGENCY.value, 3, ["urgent", "pain"], "Negative"),
+    (CallStatus.NO_ACTION_NEEDED.value, 2, [], "Neutral"),
+]
+_NO_PMS_STATUS_POP = [s for s, w, *_ in NO_PMS_STATUS_WEIGHTS for _ in range(w)]
+_NO_PMS_STATUS_META = {s: (tags, sent) for s, w, tags, sent in NO_PMS_STATUS_WEIGHTS}
+
 # DSO/group demo: a group owning all seeded institutions + a GROUP_ADMIN.
 GROUP_NAME = "Bright Dental Group"
 GROUP_SLUG = "bright-dental-group"
@@ -322,15 +337,18 @@ async def main() -> None:
                     for _ in range(day_calls):
                         loc = random.choice(locations)
                         contact = random.choice(contacts)
-                        status = random.choice(_STATUS_POP)
-                        extra_tags, sent_bias = _STATUS_META[status]
+                        status_pop = _NO_PMS_STATUS_POP if no_pms else _STATUS_POP
+                        status_meta = _NO_PMS_STATUS_META if no_pms else _STATUS_META
+                        status = random.choice(status_pop)
+                        extra_tags, sent_bias = status_meta[status]
                         tags = [status] + random.sample(extra_tags, min(len(extra_tags), random.randint(0, 2)))
                         sentiment = sent_bias if random.random() < 0.6 else random.choice(["Positive", "Neutral", "Negative"])
                         hh = random.randint(8, 17)
                         mm = random.choice([0, 7, 15, 23, 30, 42, 51])
                         call_t = time(hh, mm, tzinfo=timezone.utc)
                         created = datetime.combine(call_day, call_t)
-                        is_new = contact.is_new_patient and status == CallStatus.APPOINTMENT_BOOKED.value and random.random() < 0.6
+                        booking_statuses = (CallStatus.APPOINTMENT_BOOKED.value, CallStatus.NEEDS_BOOKING.value)
+                        is_new = contact.is_new_patient and status in booking_statuses and random.random() < 0.6
                         needs_cb = status == CallStatus.NEEDS_CALLBACK.value
                         call = Call(
                             institution_id=inst.id, location_id=loc.id, contact_id=contact.id,
@@ -343,6 +361,7 @@ async def main() -> None:
                             is_new_patient=is_new,
                             is_complaint=status == CallStatus.COMPLAINT.value,
                             is_insurance_billing=status in (
+                                CallStatus.INSURANCE_AND_BILLING.value,
                                 CallStatus.INSURANCE_VERIFIED.value,
                                 CallStatus.INSURANCE_UNVERIFIED.value,
                                 CallStatus.FINANCIAL_INQUIRY.value,

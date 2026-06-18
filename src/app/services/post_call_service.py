@@ -39,6 +39,15 @@ RETELL_STATUS_MAP: dict[str, str] = {
     "insurance verified": CallStatus.INSURANCE_VERIFIED.value,
     "insurance unverified": CallStatus.INSURANCE_UNVERIFIED.value,
     "no action needed": CallStatus.NO_ACTION_NEEDED.value,
+    # No-PMS vocabulary — agent can't transact in a PMS, so these are requests
+    # staff action manually. Distinct webhook strings, so they coexist with the
+    # PMS set above (no per-institution branching needed).
+    "needs booking": CallStatus.NEEDS_BOOKING.value,
+    "needs reschedule": CallStatus.NEEDS_RESCHEDULE.value,
+    "needs cancellation": CallStatus.NEEDS_CANCELLATION.value,
+    "needs call back": CallStatus.NEEDS_CALLBACK.value,  # → Callback Queue
+    "financial": CallStatus.FINANCIAL_INQUIRY.value,  # same concept as PMS "Financial Inquiry"
+    "insurance and billing": CallStatus.INSURANCE_AND_BILLING.value,
 }
 
 

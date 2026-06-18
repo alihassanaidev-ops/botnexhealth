@@ -37,8 +37,17 @@ from src.app.models.institution import decrypt_value, encrypt_value
 
 
 class CallStatus(str, Enum):
-    """Primary outcome tag for a call (first normalized tag from Retell 'Call Status' field)."""
+    """Primary outcome tag for a call (first normalized tag from Retell 'Call Status' field).
 
+    Two vocabularies coexist, keyed by what the agent emits:
+    - PMS agents emit completed actions (appointment_booked, …).
+    - No-PMS agents can't transact in a PMS, so they emit *requests* staff must
+      action manually (needs_booking, needs_reschedule, needs_cancellation,
+      insurance_and_billing). "Needs call back" normalizes to NEEDS_CALLBACK so
+      it still surfaces in the Callback Queue.
+    """
+
+    # PMS (completed actions)
     APPOINTMENT_BOOKED = "appointment_booked"
     APPOINTMENT_RESCHEDULED = "appointment_rescheduled"
     APPOINTMENT_CANCELLED = "appointment_cancelled"
@@ -51,6 +60,11 @@ class CallStatus(str, Enum):
     INSURANCE_VERIFIED = "insurance_verified"
     INSURANCE_UNVERIFIED = "insurance_unverified"
     NO_ACTION_NEEDED = "no_action_needed"
+    # No-PMS (requests needing manual follow-up)
+    NEEDS_BOOKING = "needs_booking"
+    NEEDS_RESCHEDULE = "needs_reschedule"
+    NEEDS_CANCELLATION = "needs_cancellation"
+    INSURANCE_AND_BILLING = "insurance_and_billing"
 
 
 class PatientStatus(str, Enum):
