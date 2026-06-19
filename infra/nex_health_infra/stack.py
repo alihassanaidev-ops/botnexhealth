@@ -252,6 +252,10 @@ class NexHealthPlatformStack(Stack):
             database_proxy = rds.DatabaseProxy(
                 self,
                 "DatabaseProxy",
+                # Physical name must be environment-scoped — DB proxy names are
+                # unique per account/region, so a fixed name blocks running two
+                # proxy-enabled stacks (e.g. prod + loadtest) in one account.
+                db_proxy_name=f"{config.app_name}-{config.environment_name}",
                 proxy_target=rds.ProxyTarget.from_instance(database),
                 secrets=[app_role_secret],
                 vpc=vpc,
@@ -488,7 +492,16 @@ class NexHealthPlatformStack(Stack):
             min_capacity=config.api.min_count,
             max_capacity=config.api.max_count,
         )
-        api_scaling.scale_on_cpu_utilization("ApiCpuScaling", target_utilization_percent=65)
+        # Scale out early and fast: the load test showed latency degrades well
+        # before CPU alone trips a 65% target, and the default scale-out cooldown
+        # reacted too slowly. Lower target + short scale-out cooldown; keep a
+        # longer scale-in cooldown so we don't flap.
+        api_scaling.scale_on_cpu_utilization(
+            "ApiCpuScaling",
+            target_utilization_percent=50,
+            scale_in_cooldown=Duration.seconds(180),
+            scale_out_cooldown=Duration.seconds(60),
+        )
         api_scaling.scale_on_memory_utilization("ApiMemoryScaling", target_utilization_percent=75)
         if config.api.requests_per_target:
             api_scaling.scale_on_request_count(
@@ -535,6 +548,9 @@ class NexHealthPlatformStack(Stack):
             enable_execute_command=True,
             vpc_subnets=private_subnets,
             circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
+            # Never drop below desired during a rolling deploy (default is 50%).
+            min_healthy_percent=100,
+            max_healthy_percent=200,
         )
         worker_scaling = worker_service.auto_scale_task_count(
             min_capacity=config.worker.min_count,
@@ -1118,6 +1134,9 @@ class NexHealthPlatformStack(Stack):
             "assign_public_ip": False,
             "task_subnets": subnet_selection,
             "circuit_breaker": ecs.DeploymentCircuitBreaker(rollback=True),
+            # Never drop below desired during a rolling deploy (default is 50%).
+            "min_healthy_percent": 100,
+            "max_healthy_percent": 200,
         }
 
         if service_config.domain_name and service_config.certificate_arn and service_config.hosted_zone_name:

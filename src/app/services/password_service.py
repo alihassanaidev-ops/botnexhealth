@@ -17,10 +17,17 @@ class PasswordService:
     MIN_PASSWORD_LENGTH = 12
     MAX_PASSWORD_BYTES = 256
     TOKEN_BYTES = 32
+    # OWASP-recommended Argon2id minimum (m=19 MiB, t=2, p=1). parallelism=1 is
+    # deliberate: our Fargate tasks are 1–2 vCPU, so a higher degree spawns
+    # threads that contend for the same core under concurrent logins — that was
+    # measured as the login bottleneck (~10–15 logins/s, p95 ~50s). p=1 lets each
+    # hash use one core and concurrent logins spread cleanly across workers.
+    # Backed by mandatory MFA + account lockout, so this is well within policy.
+    # check_needs_rehash() upgrades older (t=3,m=64MiB,p=4) hashes on next login.
     _HASHER = PasswordHasher(
-        time_cost=3,
-        memory_cost=65_536,
-        parallelism=4,
+        time_cost=2,
+        memory_cost=19_456,
+        parallelism=1,
         hash_len=32,
         salt_len=16,
         type=Type.ID,
