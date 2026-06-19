@@ -235,6 +235,20 @@ def init_database(database_url: str, *, use_null_pool: bool = False) -> None:
     global _engine, _session_factory
     from src.app.config import settings
 
+    # asyncpg uses server-side prepared statements by default. Behind RDS Proxy
+    # (production runs with proxyEnabled=true) those make the Proxy PIN the
+    # session to a single backend connection — defeating multiplexing — and can
+    # surface intermittent ``prepared statement "__asyncpg_stmt_N__" does not
+    # exist`` errors when the Proxy reassigns the backend. Disabling both the
+    # asyncpg statement cache and the SQLAlchemy dialect's prepared-statement
+    # cache keeps us on unnamed prepared statements that are safe to multiplex.
+    # Harmless on a direct connection (staging, proxyEnabled=false), so we set it
+    # unconditionally to keep staging and prod behaviour identical.
+    connect_args = {
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+    }
+
     if use_null_pool:
         from sqlalchemy.pool import NullPool
 
@@ -242,6 +256,7 @@ def init_database(database_url: str, *, use_null_pool: bool = False) -> None:
             database_url,
             echo=False,
             poolclass=NullPool,
+            connect_args=connect_args,
         )
     else:
         _engine = create_async_engine(
@@ -252,6 +267,7 @@ def init_database(database_url: str, *, use_null_pool: bool = False) -> None:
             pool_timeout=settings.database_pool_timeout_seconds,
             pool_recycle=settings.database_pool_recycle_seconds,
             pool_pre_ping=True,
+            connect_args=connect_args,
         )
 
     _session_factory = async_sessionmaker(

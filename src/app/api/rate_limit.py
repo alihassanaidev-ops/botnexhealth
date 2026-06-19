@@ -35,8 +35,24 @@ def _proxy_aware_key(request: Request) -> str:
 
 
 _storage_uri = settings.effective_redis_url
+
+# Load-test environments (app_env == "loadtest") disable the per-IP limiter so a
+# load generator measures the application, not the limiter. ``is_production`` is
+# mutually exclusive with "loadtest" (see ``Settings.is_production``), so a
+# production deployment can never reach this branch.
+_rate_limit_enabled = settings.app_env.lower() not in {"loadtest", "load_test"}
+if not _rate_limit_enabled:
+    logger.warning(
+        "Rate limiting DISABLED (app_env=%s) — load-test environments only.",
+        settings.app_env,
+    )
+
 if _storage_uri:
-    limiter = Limiter(key_func=_proxy_aware_key, storage_uri=_storage_uri)
+    limiter = Limiter(
+        key_func=_proxy_aware_key,
+        storage_uri=_storage_uri,
+        enabled=_rate_limit_enabled,
+    )
 else:
     # In-memory storage is per-process. Acceptable for local/test, NOT for
     # production: with multiple gunicorn workers the published rate is
@@ -50,7 +66,7 @@ else:
     logger.warning(
         "Rate limiter using in-memory storage. Acceptable for local/test only."
     )
-    limiter = Limiter(key_func=_proxy_aware_key)
+    limiter = Limiter(key_func=_proxy_aware_key, enabled=_rate_limit_enabled)
 
 
 # ── Standard rate tiers ──────────────────────────────────────────────

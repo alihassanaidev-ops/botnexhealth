@@ -7,5 +7,13 @@
   "hosted-zone:account=287553036543:domainName=staging.scalenexus.ai:region=ca-central-1": {
     "Id": "/hostedzone/Z00167603B8UEPDURH4XN",
     "Name": "staging.scalenexus.ai."
+  },
+  "hosted-zone:account=287553036543:domainName=app.scalenexus.ai:region=ca-central-1": {
+    "Id": "/hostedzone/Z059877223PXJ71V6XGVO",
+    "Name": "app.scalenexus.ai."
+  },
+  "hosted-zone:account=287553036543:domainName=api.scalenexus.ai:region=ca-central-1": {
+    "Id": "/hostedzone/Z06055691JWDIUN3E32ZC",
+    "Name": "api.scalenexus.ai."
   }
 }

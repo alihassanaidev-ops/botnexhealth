@@ -1,0 +1,95 @@
+{
+  "appName": "nex-health",
+  "environmentName": "loadtest",
+  "account": "287553036543",
+  "region": "ca-central-1",
+  "appEnv": "loadtest",
+  "logLevel": "info",
+  "network": {
+    "maxAzs": 2,
+    "natGateways": 1
+  },
+  "corsAllowedOrigins": [
+    "*"
+  ],
+  "webauthnRpName": "ScaleNexus LoadTest",
+  "trustedProxyCidrs": [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16"
+  ],
+  "recordingsBucketName": "nex-health-loadtest-recordings",
+  "retention": {
+    "clinicalRecordDays": 3650,
+    "minorRecordAgeYears": 28,
+    "recordingDays": 90,
+    "smsBodyDays": 3650,
+    "smsMetadataDays": 2190,
+    "notificationDays": 180,
+    "deadLetterRawDays": 30,
+    "idempotencyDays": 7
+  },
+  "database": {
+    "name": "nexhealth",
+    "username": "nexhealth_admin",
+    "instanceType": "t4g.medium",
+    "allocatedStorage": 100,
+    "maxAllocatedStorage": 500,
+    "multiAz": false,
+    "backupRetentionDays": 1,
+    "deletionProtection": false,
+    "engineMajorVersion": "16",
+    "engineFullVersion": "16.14",
+    "proxyEnabled": false,
+    "appPoolSize": 10,
+    "appMaxOverflow": 10,
+    "appPoolTimeoutSeconds": 10,
+    "appPoolRecycleSeconds": 1800
+  },
+  "redis": {
+    "nodeType": "cache.t4g.micro",
+    "engineVersion": "7.1",
+    "numNodeGroups": 1,
+    "replicasPerNodeGroup": 0,
+    "automaticFailoverEnabled": false,
+    "multiAzEnabled": false
+  },
+  "api": {
+    "cpu": 2048,
+    "memoryMiB": 4096,
+    "desiredCount": 2,
+    "minCount": 2,
+    "maxCount": 10,
+    "containerPort": 8000,
+    "webConcurrency": 4,
+    "requestsPerTarget": 800
+  },
+  "worker": {
+    "cpu": 1024,
+    "memoryMiB": 2048,
+    "desiredCount": 1,
+    "minCount": 1,
+    "maxCount": 6,
+    "queueScaleUpDepth": 100,
+    "queueScaleDownDepth": 10,
+    "command": [
+      "celery",
+      "-A",
+      "src.app.worker",
+      "worker",
+      "--loglevel=info"
+    ]
+  },
+  "frontend": {
+    "enabled": false
+  },
+  "wafRateLimitPer5Min": 20000000,
+  "externalSecrets": {
+    "NEXHEALTH_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/loadtest/nexhealth-api-key-a8DDpS",
+    "RETELL_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/loadtest/retell-api-secret-OfLGsP",
+    "RESEND_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/loadtest/resend-api-key-upfvJ6",
+    "RESEND_FROM_EMAIL": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/loadtest/resend-from-email-bTsMtX",
+    "TWILLIO_SID": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/loadtest/twillio-sid-Zp0gYk",
+    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/loadtest/twillio-api-secret-rbbYZU"
+  }
+}
