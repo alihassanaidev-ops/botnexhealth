@@ -46,11 +46,20 @@ with hashed identifiers only.
 
 ## Authorization
 
-Four roles (`src/app/models/user.py`): `SUPER_ADMIN` (platform operator),
-`INSTITUTION_ADMIN` (one clinic, all locations), `LOCATION_ADMIN` and `STAFF`
-(one location). Enforcement is in route dependencies
-(`src/app/api/deps_scope.py`); location-scoped users are pinned to their
-assigned location and any explicit `location_id` mismatching it is a 403.
+Five roles (`src/app/models/user.py`): `SUPER_ADMIN` (platform operator,
+cross-tenant), `INSTITUTION_ADMIN` (one clinic, all locations), `LOCATION_ADMIN`
+and `STAFF` (one location), and `GROUP_ADMIN` (read-only oversight across an
+`InstitutionGroup`, confined to `/group/*` and walled off from all PHI/setup/
+write/call routes). Enforcement is split across two files: role gates in
+`src/app/api/deps.py` (`get_current_*` dependencies that 403 on role mismatch)
+and location-scope pins in `src/app/api/deps_scope.py` — location-scoped users
+are pinned to their assigned location and any explicit `location_id` mismatching
+it is a 403. Location users additionally see only contacts granted to their
+location via `contact_location_accesses` (404, not 403, when no grant exists).
+
+Full role inventory, the dependency-function list, the `ContactLocationAccess`
+visibility model, and a role→route matrix are in
+[REPOSITORY_CONTEXT.md](REPOSITORY_CONTEXT.md#3-rbac--permission-model).
 
 The voice agent is its own principal: Retell requests authenticate by HMAC
 signature, are scoped by the agent→location mapping, and `lookup_patient`

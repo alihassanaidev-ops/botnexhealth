@@ -96,3 +96,6 @@ temp_script.py
 # CDK
 infra/cdk.out/
 cdk.out/
+
+# Graphify knowledge graph (generated; large graph.json). Rebuild with `graphify .`
+graphify-out/
