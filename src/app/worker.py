@@ -25,6 +25,7 @@ def _build_celery_app() -> Celery:
             "src.app.tasks.sms",
             "src.app.tasks.recordings",
             "src.app.tasks.webhooks",
+            "src.app.tasks.automation_workflow",
         ],
     )
 
@@ -42,12 +43,21 @@ def _build_celery_app() -> Celery:
             # (e.g., during a Retell retry storm) doesn't starve the
             # notification/SMS queues for worker capacity.
             Queue("webhooks"),
+            # Workflow engine scheduler and dispatch tasks.
+            Queue("workflow"),
         ),
         # Per-task names use dotted prefixes (``webhooks.*``,
         # ``notifications.*``) so Celery routes them to the right
         # queue without each task having to specify ``queue=`` itself.
         task_routes={
             "webhooks.*": {"queue": "webhooks"},
+            "src.app.tasks.automation_workflow.*": {"queue": "workflow"},
+        },
+        beat_schedule={
+            "poll-workflow-timers": {
+                "task": "src.app.tasks.automation_workflow.poll_workflow_timers",
+                "schedule": 30.0,  # seconds
+            },
         },
         task_acks_late=True,
         worker_prefetch_multiplier=1,
