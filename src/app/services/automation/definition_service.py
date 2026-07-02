@@ -11,6 +11,7 @@ from fastapi import HTTPException, status as http_status
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.app.models.automation_workflow import (
     AutomationWorkflow,
@@ -68,7 +69,9 @@ class AutomationWorkflowDefinitionService:
         self, institution_id: str, workflow_id: str
     ) -> AutomationWorkflow | None:
         result = await self.session.execute(
-            select(AutomationWorkflow).where(
+            select(AutomationWorkflow)
+            .options(selectinload(AutomationWorkflow.current_version))
+            .where(
                 AutomationWorkflow.id == workflow_id,
                 AutomationWorkflow.institution_id == institution_id,
             )
@@ -84,6 +87,7 @@ class AutomationWorkflowDefinitionService:
     ) -> list[AutomationWorkflow]:
         stmt = (
             select(AutomationWorkflow)
+            .options(selectinload(AutomationWorkflow.current_version))
             .where(AutomationWorkflow.institution_id == institution_id)
             .order_by(AutomationWorkflow.created_at.desc())
         )
@@ -172,8 +176,10 @@ class AutomationWorkflowDefinitionService:
         await self.session.flush()
 
         workflow.current_version_id = version.id
+        workflow.current_version = version
         workflow.status = AutomationWorkflowStatus.ACTIVE.value
         await self.session.flush()
+        await self.session.refresh(workflow, attribute_names=["updated_at"])
         return version
 
     async def pause_workflow(self, workflow: AutomationWorkflow) -> AutomationWorkflow:
@@ -184,6 +190,7 @@ class AutomationWorkflowDefinitionService:
             )
         workflow.status = AutomationWorkflowStatus.PAUSED.value
         await self.session.flush()
+        await self.session.refresh(workflow, attribute_names=["updated_at"])
         return workflow
 
     async def resume_workflow(self, workflow: AutomationWorkflow) -> AutomationWorkflow:
@@ -194,6 +201,7 @@ class AutomationWorkflowDefinitionService:
             )
         workflow.status = AutomationWorkflowStatus.ACTIVE.value
         await self.session.flush()
+        await self.session.refresh(workflow, attribute_names=["updated_at"])
         return workflow
 
     async def archive_workflow(self, workflow: AutomationWorkflow) -> AutomationWorkflow:
@@ -201,4 +209,5 @@ class AutomationWorkflowDefinitionService:
             return workflow
         workflow.status = AutomationWorkflowStatus.ARCHIVED.value
         await self.session.flush()
+        await self.session.refresh(workflow, attribute_names=["updated_at"])
         return workflow

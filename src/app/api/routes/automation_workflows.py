@@ -122,7 +122,7 @@ def _institution_id(user: User) -> str:
 async def _get_workflow_or_404(
     svc: AutomationWorkflowDefinitionService, workflow_id: str, institution_id: str
 ) -> Any:
-    wf = await svc.get_workflow(workflow_id, institution_id)
+    wf = await svc.get_workflow(institution_id, workflow_id)
     if wf is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
     return wf
@@ -143,7 +143,7 @@ async def create_workflow(
         svc = AutomationWorkflowDefinitionService(session)
         wf = await svc.create_draft(institution_id=inst_id, name=data.name)
         await svc.publish_version(wf, data.definition)
-    return WorkflowResponse.from_model(wf)
+        return WorkflowResponse.from_model(wf)
 
 
 @router.get("", response_model=list[WorkflowResponse])
@@ -152,7 +152,7 @@ async def list_workflows(current_user: _InstitutionAdmin) -> list[WorkflowRespon
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
         workflows = await svc.list_workflows(institution_id=inst_id)
-    return [WorkflowResponse.from_model(wf) for wf in workflows]
+        return [WorkflowResponse.from_model(wf) for wf in workflows]
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
@@ -164,7 +164,7 @@ async def get_workflow(
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
-    return WorkflowResponse.from_model(wf)
+        return WorkflowResponse.from_model(wf)
 
 
 @router.patch("/{workflow_id}", response_model=WorkflowResponse)
@@ -180,9 +180,10 @@ async def update_workflow(
         if data.name is not None:
             wf.name = data.name
             await session.flush()
+            await session.refresh(wf, attribute_names=["updated_at"])
         if data.definition is not None:
             await svc.publish_version(wf, data.definition)
-    return WorkflowResponse.from_model(wf)
+        return WorkflowResponse.from_model(wf)
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +201,7 @@ async def publish_workflow(
         svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
         await svc.publish_version(wf)
-    return WorkflowResponse.from_model(wf)
+        return WorkflowResponse.from_model(wf)
 
 
 @router.post("/{workflow_id}/pause", response_model=WorkflowResponse)
@@ -213,7 +214,7 @@ async def pause_workflow(
         svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
         await svc.pause_workflow(wf)
-    return WorkflowResponse.from_model(wf)
+        return WorkflowResponse.from_model(wf)
 
 
 @router.post("/{workflow_id}/resume", response_model=WorkflowResponse)
@@ -226,7 +227,7 @@ async def resume_workflow(
         svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
         await svc.resume_workflow(wf)
-    return WorkflowResponse.from_model(wf)
+        return WorkflowResponse.from_model(wf)
 
 
 @router.post("/{workflow_id}/archive", response_model=WorkflowResponse)
@@ -239,7 +240,7 @@ async def archive_workflow(
         svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
         await svc.archive_workflow(wf)
-    return WorkflowResponse.from_model(wf)
+        return WorkflowResponse.from_model(wf)
 
 
 # ---------------------------------------------------------------------------
