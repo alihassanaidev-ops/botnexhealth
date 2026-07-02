@@ -1,6 +1,18 @@
 """SQLAlchemy models for multi-institution architecture."""
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
+from src.app.models.automation_workflow import (
+    AutomationRunStatus,
+    AutomationStepStatus,
+    AutomationTimerStatus,
+    AutomationWorkflow,
+    AutomationWorkflowEvent,
+    AutomationWorkflowRun,
+    AutomationWorkflowStatus,
+    AutomationWorkflowStepExecution,
+    AutomationWorkflowTimer,
+    AutomationWorkflowVersion,
+)
 from src.app.models.call import Call, CallDirection, CallStatus, PatientStatus
 from src.app.models.call_metrics_daily import (  # noqa: F401 — model registration
     CallMetricsDaily,
@@ -51,6 +63,16 @@ __all__ = [
     "Institution",
     "InstitutionGroup",
     "WorkflowStatus",
+    "AutomationWorkflow",
+    "AutomationWorkflowVersion",
+    "AutomationWorkflowRun",
+    "AutomationWorkflowStepExecution",
+    "AutomationWorkflowTimer",
+    "AutomationWorkflowEvent",
+    "AutomationWorkflowStatus",
+    "AutomationRunStatus",
+    "AutomationStepStatus",
+    "AutomationTimerStatus",
     "InstitutionLocation",
     "InstitutionProvider",
     "InstitutionAppointmentType",

@@ -79,11 +79,22 @@ PROTECTED_TABLES: tuple[str, ...] = (
     "dead_letter_events",
     "retell_webhook_events",
     "retell_function_invocations",
+    "workflow_statuses",
     # call_metrics_daily is added in migration 20260513_metrics; it is
     # institution-scoped and RLS-enabled at table-creation time. Listing
     # it here satisfies the
     # tests/unit/test_rls_protected_tables_coverage.py invariant.
     "call_metrics_daily",
+    # Outbound automation workflow engine tables are added by
+    # 20260702_auto_workflow_core for existing databases. They are
+    # listed here too because the baseline creates all current SQLAlchemy
+    # models on fresh local/test databases.
+    "automation_workflows",
+    "automation_workflow_versions",
+    "automation_workflow_runs",
+    "automation_workflow_step_executions",
+    "automation_workflow_timers",
+    "automation_workflow_events",
 )
 
 
@@ -412,6 +423,30 @@ def _location_scoped_expr(table: str) -> str:
     return f"""
         app_rls_is_super_admin()
         OR app_rls_context_type() IN ({_scoped_system_contexts()})
+        OR (
+            app_rls_context_type() = 'user'
+            AND {table}.institution_id = app_rls_institution_id()
+            AND (
+                app_rls_role() = 'INSTITUTION_ADMIN'
+                OR {table}.location_id IS NULL
+                OR {table}.location_id = app_rls_location_id()
+            )
+        )
+    """
+
+
+def _automation_workflow_expr(table: str) -> str:
+    return f"""
+        app_rls_is_super_admin()
+        OR (
+            app_rls_context_type() IN ('celery', 'dead_letter')
+            AND {table}.institution_id = app_rls_institution_id()
+            AND (
+                app_rls_location_id() IS NULL
+                OR {table}.location_id IS NULL
+                OR {table}.location_id = app_rls_location_id()
+            )
+        )
         OR (
             app_rls_context_type() = 'user'
             AND {table}.institution_id = app_rls_institution_id()
@@ -806,6 +841,25 @@ def _all_policies_sql() -> tuple[str, ...]:
         (
             "retell_function_invocations",
             _retell_events_expr("retell_function_invocations"),
+        ),
+        ("workflow_statuses", _institution_owned_expr("workflow_statuses")),
+        ("automation_workflows", _automation_workflow_expr("automation_workflows")),
+        (
+            "automation_workflow_versions",
+            _automation_workflow_expr("automation_workflow_versions"),
+        ),
+        ("automation_workflow_runs", _automation_workflow_expr("automation_workflow_runs")),
+        (
+            "automation_workflow_step_executions",
+            _automation_workflow_expr("automation_workflow_step_executions"),
+        ),
+        (
+            "automation_workflow_timers",
+            _automation_workflow_expr("automation_workflow_timers"),
+        ),
+        (
+            "automation_workflow_events",
+            _automation_workflow_expr("automation_workflow_events"),
         ),
     )
     out: list[str] = []
