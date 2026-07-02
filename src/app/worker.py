@@ -58,6 +58,10 @@ def _build_celery_app() -> Celery:
                 "task": "src.app.tasks.automation_workflow.poll_workflow_timers",
                 "schedule": 30.0,  # seconds
             },
+            "scan-recall-workflows": {
+                "task": "src.app.tasks.automation_workflow.scan_recall_workflows",
+                "schedule": 3600.0,  # hourly — patient visit history changes slowly
+            },
         },
         task_acks_late=True,
         worker_prefetch_multiplier=1,

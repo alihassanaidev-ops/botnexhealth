@@ -141,6 +141,21 @@ class AutomationWorkflow(Base):
         lazy="selectin",
     )
 
+    @property
+    def definition(self) -> dict | None:
+        """Shortcut to the current version's definition JSON, or None if unpublished."""
+        if self.current_version is not None:
+            return self.current_version.definition
+        return None
+
+    @property
+    def trigger_type(self) -> str | None:
+        """Trigger type extracted from the current version's definition."""
+        defn = self.definition
+        if defn is not None:
+            return (defn.get("trigger") or {}).get("type")
+        return None
+
 
 class AutomationWorkflowVersion(Base):
     """Immutable workflow definition snapshot used by runs."""

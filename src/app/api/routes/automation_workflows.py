@@ -138,15 +138,10 @@ async def create_workflow(
     current_user: _InstitutionAdmin,
 ) -> WorkflowResponse:
     inst_id = _institution_id(current_user)
-    trigger_type = (data.definition.get("trigger") or {}).get("type", "manual")
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await svc.create_draft(
-            institution_id=inst_id,
-            name=data.name,
-            trigger_type=trigger_type,
-            definition=data.definition,
-        )
+        wf = await svc.create_draft(institution_id=inst_id, name=data.name)
+        await svc.publish_version(wf, data.definition)
     return WorkflowResponse.from_model(wf)
 
 
@@ -185,7 +180,7 @@ async def update_workflow(
             wf.name = data.name
             await session.flush()
         if data.definition is not None:
-            await svc.update_draft(wf, data.definition)
+            await svc.publish_version(wf, data.definition)
     return WorkflowResponse.from_model(wf)
 
 
@@ -351,3 +346,88 @@ async def cancel_run(
         enroll_svc = AutomationWorkflowEnrollmentService(session)
         await enroll_svc.cancel_run(run)
     return WorkflowRunResponse.from_model(run)
+
+
+# ---------------------------------------------------------------------------
+# Bulk enrollment — Slice 12 (Plan 09)
+# ---------------------------------------------------------------------------
+
+
+class BulkEnrollItem(BaseModel):
+    contact_id: str | None = None
+    location_id: str | None = None
+    trigger_ref_type: str | None = None
+    trigger_ref_id: str | None = None
+    idempotency_key: str
+    trigger_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BulkEnrollRequest(BaseModel):
+    items: list[BulkEnrollItem] = Field(..., min_length=1, max_length=500)
+
+
+class BulkEnrollResponse(BaseModel):
+    enqueued: int
+    workflow_id: str
+    workflow_version_id: str
+
+
+@router.post(
+    "/{workflow_id}/bulk-enroll",
+    response_model=BulkEnrollResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def bulk_enroll(
+    workflow_id: str,
+    data: BulkEnrollRequest,
+    current_user: _InstitutionAdmin,
+) -> BulkEnrollResponse:
+    """Enqueue workflow enrollment for a list of contacts (up to 500 per request).
+
+    Each item is dispatched as an independent Celery task with its own
+    idempotency key. Returns 202 immediately — enrollment happens asynchronously.
+    """
+    from src.app.tasks.automation_workflow import enroll_and_start_workflow_run
+
+    inst_id = _institution_id(current_user)
+
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+
+        if wf.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Workflow is not active (status={wf.status})",
+            )
+        if not wf.current_version_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Workflow has no published version",
+            )
+
+        version_id = str(wf.current_version_id)
+        trigger_type = wf.trigger_type
+
+    for item in data.items:
+        enroll_and_start_workflow_run.apply_async(
+            kwargs={
+                "institution_id": inst_id,
+                "workflow_id": workflow_id,
+                "workflow_version_id": version_id,
+                "contact_id": item.contact_id,
+                "location_id": item.location_id,
+                "trigger_type": trigger_type,
+                "trigger_ref_type": item.trigger_ref_type,
+                "trigger_ref_id": item.trigger_ref_id,
+                "idempotency_key": item.idempotency_key,
+                "trigger_metadata": item.trigger_metadata,
+            },
+            queue="workflow",
+        )
+
+    return BulkEnrollResponse(
+        enqueued=len(data.items),
+        workflow_id=workflow_id,
+        workflow_version_id=version_id,
+    )

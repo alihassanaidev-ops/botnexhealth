@@ -112,17 +112,29 @@ class AutomationWorkflowDefinitionService:
     async def publish_version(
         self,
         workflow: AutomationWorkflow,
-        definition: dict,
+        definition: dict | None = None,
         *,
         content_classification: str | None = None,
         published_by_user_id: str | None = None,
     ) -> AutomationWorkflowVersion:
-        """Snapshot the definition as an immutable version and activate the workflow."""
+        """Snapshot the definition as an immutable version and activate the workflow.
+
+        If *definition* is omitted the current version's definition is reused,
+        which is the correct behaviour for re-activating a paused workflow.
+        """
         if workflow.status not in _PUBLISHABLE_STATUSES:
             raise HTTPException(
                 status_code=http_status.HTTP_409_CONFLICT,
                 detail=f"Workflow status '{workflow.status}' cannot be published.",
             )
+
+        if definition is None:
+            if workflow.current_version is None:
+                raise HTTPException(
+                    status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="No definition provided and workflow has no existing version.",
+                )
+            definition = workflow.current_version.definition
 
         try:
             WorkflowDefinition.model_validate(definition)

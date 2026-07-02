@@ -15,7 +15,13 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowVersion,
 )
 from src.app.models.institution_location import InstitutionLocation
+from src.app.services.automation.appointment_trigger_service import (
+    AppointmentTriggerService,
+    compute_enrollment_eta,
+    make_appointment_idempotency_key,
+)
 from src.app.services.automation.definition_schema import WorkflowDefinition
+from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.step_dispatcher import WorkflowStepDispatcher
@@ -202,3 +208,319 @@ async def _dispatch_timer_async(
 
 def _retry_countdown(retries: int) -> int:
     return min(300, 2 ** max(retries, 0))
+
+
+# ---------------------------------------------------------------------------
+# Enrollment + start + advance (shared by appointment trigger and bulk enroll)
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.enroll_and_start_workflow_run",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def enroll_and_start_workflow_run(
+    self,
+    *,
+    institution_id: str,
+    workflow_id: str,
+    workflow_version_id: str,
+    contact_id: str | None,
+    location_id: str | None,
+    trigger_type: str | None,
+    trigger_ref_type: str | None,
+    trigger_ref_id: str | None,
+    idempotency_key: str,
+    trigger_metadata: dict,
+) -> dict:
+    """Enroll a contact in a workflow, start the run, and advance through the definition.
+
+    Designed to be scheduled with an ETA for appointment-offset triggers, or
+    called immediately for manual/bulk/recall triggers.
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(
+            _enroll_and_start_async(
+                institution_id=institution_id,
+                workflow_id=workflow_id,
+                workflow_version_id=workflow_version_id,
+                contact_id=contact_id,
+                location_id=location_id,
+                trigger_type=trigger_type,
+                trigger_ref_type=trigger_ref_type,
+                trigger_ref_id=trigger_ref_id,
+                idempotency_key=idempotency_key,
+                trigger_metadata=trigger_metadata,
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "enroll_and_start_workflow_run failed: workflow=%s contact=%s: %s",
+            workflow_id, contact_id, exc,
+        )
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _enroll_and_start_async(
+    *,
+    institution_id: str,
+    workflow_id: str,
+    workflow_version_id: str,
+    contact_id: str | None,
+    location_id: str | None,
+    trigger_type: str | None,
+    trigger_ref_type: str | None,
+    trigger_ref_id: str | None,
+    idempotency_key: str,
+    trigger_metadata: dict,
+) -> dict:
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        location_id=location_id,
+        external_id=idempotency_key,
+    ) as session:
+        enroll_svc = AutomationWorkflowEnrollmentService(session)
+        run, created = await enroll_svc.enroll(
+            institution_id=institution_id,
+            workflow_id=workflow_id,
+            workflow_version_id=workflow_version_id,
+            contact_id=contact_id,
+            location_id=location_id,
+            trigger_type=trigger_type,
+            trigger_ref_type=trigger_ref_type,
+            trigger_ref_id=trigger_ref_id,
+            trigger_metadata=trigger_metadata,
+            idempotency_key=idempotency_key,
+        )
+
+        if not created:
+            logger.info(
+                "enroll_and_start: duplicate idempotency_key=%s — skipping", idempotency_key
+            )
+            await session.commit()
+            return {"run_id": str(run.id), "created": False}
+
+        version = await session.get(AutomationWorkflowVersion, workflow_version_id)
+        if version is None:
+            logger.error(
+                "enroll_and_start: version %s not found for workflow %s",
+                workflow_version_id, workflow_id,
+            )
+            await session.commit()
+            return {"run_id": str(run.id), "created": True, "skipped": True}
+
+        location_timezone = "UTC"
+        if location_id:
+            location = await session.get(InstitutionLocation, location_id)
+            if location and location.timezone:
+                location_timezone = location.timezone
+
+        definition = WorkflowDefinition.model_validate(version.definition)
+        runtime = AutomationWorkflowRuntimeService(session)
+        scheduler = AutomationWorkflowSchedulerService(session)
+        dispatcher = WorkflowStepDispatcher(session, runtime, scheduler)
+
+        await runtime.start_run(run)
+        result = await dispatcher.advance(
+            run, definition, context=trigger_metadata, location_timezone=location_timezone
+        )
+        await session.commit()
+
+    logger.info(
+        "enroll_and_start: workflow=%s run=%s status=%s steps=%d",
+        workflow_id, run.id, result.status, result.steps_advanced,
+    )
+    return {
+        "run_id": str(run.id),
+        "created": True,
+        "dispatch_status": result.status,
+        "steps_advanced": result.steps_advanced,
+        "outcome": result.outcome,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Appointment trigger — Slice 10 (Plan 09)
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.trigger_appointment_workflows",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def trigger_appointment_workflows(
+    self,
+    *,
+    institution_id: str,
+    appointment_id: str,
+    appointment_at_iso: str,
+    contact_id: str | None = None,
+    location_id: str | None = None,
+    trigger_metadata: dict | None = None,
+) -> dict:
+    """Find matching AppointmentOffsetTrigger workflows and schedule enrollments.
+
+    Called from a NexHealth webhook handler or appointment sync job whenever
+    an appointment is created or updated. Each matching workflow gets an
+    enroll_and_start_workflow_run task scheduled at appointment_at + offset_hours.
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(
+            _trigger_appointment_async(
+                institution_id=institution_id,
+                appointment_id=appointment_id,
+                appointment_at_iso=appointment_at_iso,
+                contact_id=contact_id,
+                location_id=location_id,
+                trigger_metadata=trigger_metadata or {},
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "trigger_appointment_workflows failed: institution=%s appt=%s: %s",
+            institution_id, appointment_id, exc,
+        )
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _trigger_appointment_async(
+    *,
+    institution_id: str,
+    appointment_id: str,
+    appointment_at_iso: str,
+    contact_id: str | None,
+    location_id: str | None,
+    trigger_metadata: dict,
+) -> dict:
+    from datetime import datetime, timezone
+
+    appointment_at = datetime.fromisoformat(appointment_at_iso)
+    if appointment_at.tzinfo is None:
+        appointment_at = appointment_at.replace(tzinfo=timezone.utc)
+
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        external_id=f"appt_trigger:{appointment_id}",
+    ) as session:
+        svc = AppointmentTriggerService(session)
+        workflows = await svc.find_active_appointment_workflows(institution_id)
+
+    scheduled = 0
+    skipped = 0
+    for wf in workflows:
+        if not wf.current_version_id:
+            continue
+        eta = compute_enrollment_eta(wf, appointment_at)
+        if eta is None:
+            skipped += 1
+            logger.info(
+                "trigger_appointment: skipping past-window appt=%s workflow=%s",
+                appointment_id, wf.id,
+            )
+            continue
+
+        idempotency_key = make_appointment_idempotency_key(
+            str(wf.current_version_id), appointment_id
+        )
+        enroll_and_start_workflow_run.apply_async(
+            kwargs={
+                "institution_id": institution_id,
+                "workflow_id": str(wf.id),
+                "workflow_version_id": str(wf.current_version_id),
+                "contact_id": contact_id,
+                "location_id": location_id,
+                "trigger_type": "appointment_offset",
+                "trigger_ref_type": "appointment",
+                "trigger_ref_id": appointment_id,
+                "idempotency_key": idempotency_key,
+                "trigger_metadata": {
+                    **trigger_metadata,
+                    "appointment_id": appointment_id,
+                    "appointment_at": appointment_at_iso,
+                },
+            },
+            eta=eta,
+            queue="workflow",
+        )
+        scheduled += 1
+
+    logger.info(
+        "trigger_appointment: institution=%s appt=%s scheduled=%d skipped=%d",
+        institution_id, appointment_id, scheduled, skipped,
+    )
+    return {"appointment_id": appointment_id, "scheduled": scheduled, "skipped": skipped}
+
+
+# ---------------------------------------------------------------------------
+# Recall scanner — Slice 11 (Plan 09)
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.scan_recall_workflows",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def scan_recall_workflows(self) -> dict:
+    """Find active recall_scan workflows and trigger patient enrollment.
+
+    Stub: identifies institutions with active recall workflows and emits a
+    per-institution scan task. The actual patient query (patients overdue for
+    a visit by recall_interval_months) requires NexHealth patient/appointment
+    history data which is resolved in a later Plan 09 slice once the
+    NexHealth sync layer is in place.
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(_scan_recall_async())
+    except Exception as exc:
+        logger.exception("scan_recall_workflows failed: %s", exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _scan_recall_async() -> dict:
+    from sqlalchemy import select as sa_select
+
+    from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowStatus
+
+    async with get_system_db_session(
+        "celery", external_id="recall_scanner"
+    ) as session:
+        result = await session.execute(
+            sa_select(AutomationWorkflow).where(
+                AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,
+                AutomationWorkflow.current_version_id.is_not(None),
+            )
+        )
+        rows = [
+            (wf.institution_id, wf.id, wf.current_version_id)
+            for wf in result.scalars().all()
+            if wf.trigger_type == "recall_scan"
+        ]
+
+    institution_workflow_counts: dict[str, int] = {}
+    for institution_id, _wf_id, _version_id in rows:
+        institution_workflow_counts[str(institution_id)] = (
+            institution_workflow_counts.get(str(institution_id), 0) + 1
+        )
+
+    # NOTE: Real recall enrollment requires querying patient visit history from
+    # NexHealth per institution. Stub here logs discovered workflows and returns
+    # a summary. Wire in per-institution scan tasks when NexHealth sync is ready.
+    logger.info(
+        "scan_recall_workflows: found %d active recall workflows across %d institution(s)",
+        len(rows), len(institution_workflow_counts),
+    )
+    return {
+        "active_recall_workflows": len(rows),
+        "institutions": len(institution_workflow_counts),
+    }
