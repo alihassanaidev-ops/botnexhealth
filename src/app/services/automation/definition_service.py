@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from fastapi import HTTPException, status as http_status
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,7 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowStatus,
     AutomationWorkflowVersion,
 )
+from src.app.services.automation.definition_schema import WorkflowDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +123,15 @@ class AutomationWorkflowDefinitionService:
                 status_code=http_status.HTTP_409_CONFLICT,
                 detail=f"Workflow status '{workflow.status}' cannot be published.",
             )
+
+        try:
+            WorkflowDefinition.model_validate(definition)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid workflow definition: {exc.error_count()} error(s). "
+                       + "; ".join(e["msg"] for e in exc.errors()),
+            ) from exc
 
         result = await self.session.execute(
             select(AutomationWorkflowVersion)

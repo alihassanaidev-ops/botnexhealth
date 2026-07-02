@@ -10,6 +10,20 @@ import pytest
 from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowStatus
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
 
+_VALID_DEFINITION = {
+    "trigger": {"type": "appointment_offset", "offset_hours": -24},
+    "entry_node_id": "sms-1",
+    "nodes": [
+        {
+            "type": "send_sms",
+            "id": "sms-1",
+            "body_template": "Reminder for {{patient_name}}.",
+            "next_node_id": "exit-1",
+        },
+        {"type": "exit", "id": "exit-1"},
+    ],
+}
+
 
 def _make_session(*, execute_returns=None) -> AsyncMock:
     session = AsyncMock()
@@ -70,7 +84,7 @@ def test_publish_version_transitions_draft_to_active() -> None:
     session = _make_session(execute_returns=None)
     svc = AutomationWorkflowDefinitionService(session)
     workflow = _make_workflow(AutomationWorkflowStatus.DRAFT.value)
-    version = asyncio.run(svc.publish_version(workflow, {"nodes": []}, published_by_user_id="u-1"))
+    version = asyncio.run(svc.publish_version(workflow, _VALID_DEFINITION, published_by_user_id="u-1"))
     assert workflow.status == AutomationWorkflowStatus.ACTIVE.value
     assert workflow.current_version_id == version.id
     assert version.version_number == 1
@@ -90,7 +104,7 @@ def test_publish_version_increments_version_number() -> None:
     session = _make_session(execute_returns=existing)
     svc = AutomationWorkflowDefinitionService(session)
     workflow = _make_workflow(AutomationWorkflowStatus.PAUSED.value)
-    version = asyncio.run(svc.publish_version(workflow, {"nodes": []}))
+    version = asyncio.run(svc.publish_version(workflow, _VALID_DEFINITION))
     assert version.version_number == 4
 
 
