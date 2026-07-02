@@ -145,6 +145,9 @@ class Settings(BaseSettings):
     # PREFERRED, which accepts a bare presence tap. Keep True for any
     # environment with modern devices.
     webauthn_user_verification_strict: bool = True
+    # Local-dev escape hatch for machines without a configured passkey provider.
+    # Ignored in production; SUPER_ADMIN remains passkey-only there.
+    dev_allow_super_admin_totp: bool = False
 
     # CORS — comma-separated allowed origins; defaults to "*" for local dev only
     cors_allowed_origins: str = "*"
@@ -333,6 +336,10 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env.lower() in {"production", "prod"}
+
+    @property
+    def allow_super_admin_totp(self) -> bool:
+        return not self.is_production and self.dev_allow_super_admin_totp
 
     @property
     def allowed_auth_redirect_netlocs(self) -> frozenset[str]:

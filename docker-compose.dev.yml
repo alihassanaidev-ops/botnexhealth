@@ -41,6 +41,7 @@ services:
       APP_ENV: local
       JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-local-dev-encryption-secret}
+      DEV_ALLOW_SUPER_ADMIN_TOTP: "true"
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/nexhealth
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1

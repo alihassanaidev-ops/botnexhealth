@@ -6,6 +6,7 @@ import pyotp
 import pytest
 from webauthn.helpers import bytes_to_base64url
 
+from src.app.config import settings
 from src.app.models.mfa import MfaRecoveryCode, UserTotpFactor, WebAuthnCredential
 from src.app.models.user import User, UserRole
 from src.app.services.mfa import (
@@ -139,6 +140,32 @@ async def test_mfa_ticket_is_bound_to_purpose_ip_and_user_agent(fake_redis: _Fak
 
 
 def test_super_admin_requires_passkey_even_when_totp_exists() -> None:
+    status = MfaStatus(webauthn_count=0, totp_enabled=True, recovery_codes_remaining=2)
+
+    assert status.enrolled_for_role(UserRole.SUPER_ADMIN.value) is False
+    assert status.available_methods_for_role(UserRole.SUPER_ADMIN.value) == ["recovery_code"]
+    assert status.setup_methods_for_role(UserRole.SUPER_ADMIN.value) == ["webauthn"]
+
+
+def test_super_admin_totp_can_be_enabled_for_local_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "app_env", "local")
+    monkeypatch.setattr(settings, "dev_allow_super_admin_totp", True)
+    status = MfaStatus(webauthn_count=0, totp_enabled=True, recovery_codes_remaining=2)
+
+    assert status.enrolled_for_role(UserRole.SUPER_ADMIN.value) is True
+    assert status.available_methods_for_role(UserRole.SUPER_ADMIN.value) == [
+        "totp",
+        "recovery_code",
+    ]
+    assert status.setup_methods_for_role(UserRole.SUPER_ADMIN.value) == [
+        "webauthn",
+        "totp",
+    ]
+
+
+def test_super_admin_totp_flag_is_ignored_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "dev_allow_super_admin_totp", True)
     status = MfaStatus(webauthn_count=0, totp_enabled=True, recovery_codes_remaining=2)
 
     assert status.enrolled_for_role(UserRole.SUPER_ADMIN.value) is False

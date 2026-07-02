@@ -119,7 +119,7 @@ class MfaStatus:
     recovery_codes_remaining: int
 
     def enrolled_for_role(self, role: str) -> bool:
-        if role == UserRole.SUPER_ADMIN.value:
+        if role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
             return self.webauthn_count > 0
         return self.webauthn_count > 0 or self.totp_enabled
 
@@ -127,14 +127,20 @@ class MfaStatus:
         methods: list[str] = []
         if self.webauthn_count > 0:
             methods.append("webauthn")
-        if self.totp_enabled and role != UserRole.SUPER_ADMIN.value:
+        if (
+            self.totp_enabled
+            and (
+                role != UserRole.SUPER_ADMIN.value
+                or settings.allow_super_admin_totp
+            )
+        ):
             methods.append("totp")
         if self.recovery_codes_remaining > 0:
             methods.append("recovery_code")
         return methods
 
     def setup_methods_for_role(self, role: str) -> list[str]:
-        if role == UserRole.SUPER_ADMIN.value:
+        if role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
             return ["webauthn"]
         return ["webauthn", "totp"]
 

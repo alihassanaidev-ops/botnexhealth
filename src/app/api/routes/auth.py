@@ -1355,7 +1355,7 @@ async def mfa_totp_setup_options(
     data: MfaTicketRequest,
 ) -> TotpSetupResponse:
     ticket = await _ticket_from_request(request, data.mfa_ticket)
-    if ticket.role == UserRole.SUPER_ADMIN.value:
+    if ticket.role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Super admin accounts must enroll a passkey",
@@ -1388,7 +1388,7 @@ async def mfa_totp_setup_verify(
     data: TotpVerifyRequest,
 ) -> AuthSession:
     ticket = await _ticket_from_request(request, data.mfa_ticket)
-    if ticket.role == UserRole.SUPER_ADMIN.value:
+    if ticket.role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Super admin accounts must enroll a passkey",
@@ -1447,7 +1447,7 @@ async def mfa_totp_verify(
     data: TotpVerifyRequest,
 ) -> AuthSession:
     ticket = await _ticket_from_request(request, data.mfa_ticket)
-    if ticket.role == UserRole.SUPER_ADMIN.value:
+    if ticket.role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Super admin accounts must use a passkey or recovery code",
@@ -2001,7 +2001,7 @@ async def mfa_factors_totp_setup_options(
     data: AddFactorOptionsRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> AddTotpOptionsResponse:
-    if current_user.role == UserRole.SUPER_ADMIN.value:
+    if current_user.role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Super admin accounts must enroll a passkey",
@@ -2054,7 +2054,7 @@ async def mfa_factors_totp_setup_verify(
     data: AddTotpVerifyRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> AddTotpResponse:
-    if current_user.role == UserRole.SUPER_ADMIN.value:
+    if current_user.role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Super admin accounts must enroll a passkey",
