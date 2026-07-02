@@ -18,6 +18,7 @@ import {
     UserCog,
     Armchair,
     LayoutDashboard,
+    Megaphone,
     Phone,
     PhoneForwarded,
     Shield,
@@ -102,6 +103,11 @@ const institutionAdminNav: NavItemDef[] = [
         title: "Call Statuses",
         url: "/institution-admin/call-statuses",
         icon: Tag,
+    },
+    {
+        title: "Campaigns",
+        url: "/institution-admin/campaigns",
+        icon: Megaphone,
     },
 ]
 

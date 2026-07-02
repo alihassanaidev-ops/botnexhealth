@@ -251,6 +251,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/institution/statuses/{status_id}",
         "GET /api/automation/workflows/{workflow_id}",
         "POST /api/automation/workflows/{workflow_id}/enroll",
+        "GET /api/automation/workflows/{workflow_id}/runs",
         "GET /api/automation/workflows/{workflow_id}/runs/{run_id}",
         "POST /api/automation/workflows/{workflow_id}/runs/{run_id}/cancel",
         "GET /api/automation/templates",

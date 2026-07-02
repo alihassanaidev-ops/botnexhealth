@@ -538,6 +538,28 @@ export interface CallbackListItem {
     phone_reveal_available: boolean;
 }
 
+export interface AutomationWorkflow {
+    id: string;
+    name: string;
+    status: "active" | "paused" | "archived" | "draft";
+    trigger_type: string | null;
+    definition: Record<string, unknown> | null;
+    current_version_id: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface AutomationWorkflowRun {
+    id: string;
+    workflow_id: string;
+    status: string;
+    current_step_id: string | null;
+    outcome: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    created_at: string;
+}
+
 export interface CallbacksListResponse {
     total: number;
     limit: number;

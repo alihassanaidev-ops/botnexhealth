@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.app.api.deps import (
@@ -13,6 +13,7 @@ from src.app.api.deps import (
     get_current_institution_user,
 )
 from src.app.database import get_db_session
+from sqlalchemy import select as sa_select
 from src.app.models.automation_workflow import AutomationWorkflowRun, AutomationWorkflowVersion
 from src.app.models.user import User
 from src.app.services.automation.definition_schema import WorkflowDefinition
@@ -308,6 +309,27 @@ async def enroll_in_workflow(
             )
 
     return WorkflowRunResponse.from_model(run)
+
+
+@router.get("/{workflow_id}/runs", response_model=list[WorkflowRunResponse])
+async def list_runs(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    limit: int = Query(50, ge=1, le=500),
+) -> list[WorkflowRunResponse]:
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        result = await session.execute(
+            sa_select(AutomationWorkflowRun)
+            .where(
+                AutomationWorkflowRun.workflow_id == workflow_id,
+                AutomationWorkflowRun.institution_id == inst_id,
+            )
+            .order_by(AutomationWorkflowRun.created_at.desc())
+            .limit(limit)
+        )
+        runs = result.scalars().all()
+    return [WorkflowRunResponse.from_model(r) for r in runs]
 
 
 @router.get("/{workflow_id}/runs/{run_id}", response_model=WorkflowRunResponse)
