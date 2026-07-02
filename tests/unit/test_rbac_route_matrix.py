@@ -206,6 +206,15 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "PUT /api/institution/notification-recipients/{recipient_id}",
         "DELETE /api/institution/notification-recipients/{recipient_id}",
     ),
+    INSTITUTION_USER: (
+        "POST /api/automation/workflows",
+        "GET /api/automation/workflows",
+        "PATCH /api/automation/workflows/{workflow_id}",
+        "POST /api/automation/workflows/{workflow_id}/publish",
+        "POST /api/automation/workflows/{workflow_id}/pause",
+        "POST /api/automation/workflows/{workflow_id}/resume",
+        "POST /api/automation/workflows/{workflow_id}/archive",
+    ),
     LOCATION_ADMIN: (
         "GET /api/institution/location/users",
         "POST /api/institution/location/users/{user_id}/deactivate",
@@ -237,6 +246,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/statuses",
         "PATCH /api/institution/statuses/{status_id}",
         "DELETE /api/institution/statuses/{status_id}",
+        "GET /api/automation/workflows/{workflow_id}",
+        "POST /api/automation/workflows/{workflow_id}/enroll",
+        "GET /api/automation/workflows/{workflow_id}/runs/{run_id}",
+        "POST /api/automation/workflows/{workflow_id}/runs/{run_id}/cancel",
     ),
     INSTITUTION_OR_LOCATION_USER: (
         "GET /api/v1/pms/patients",
