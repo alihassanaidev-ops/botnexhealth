@@ -35,6 +35,7 @@ from src.app.api.routes.sms import institution_router as institution_sms_router
 from src.app.api.routes.dead_letter import router as dead_letter_router
 from src.app.api.routes.automation_workflows import router as automation_workflows_router
 from src.app.api.routes.automation_templates import router as automation_templates_router
+from src.app.api.routes.nexhealth_webhooks import router as nexhealth_webhooks_router
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -240,6 +241,7 @@ def create_app() -> FastAPI:
     app.include_router(retell_router, prefix="/api/v1")
     app.include_router(retell_webhook_router, prefix="/api/v1")
     app.include_router(twilio_webhooks_router, prefix="/api/v1")
+    app.include_router(nexhealth_webhooks_router, prefix="/api/v1")
 
     # Admin routes
     app.include_router(auth_router, prefix="/api")

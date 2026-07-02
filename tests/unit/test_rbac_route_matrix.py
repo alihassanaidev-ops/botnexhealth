@@ -63,6 +63,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/v1/retell/webhook",
         "POST /api/v1/twilio/webhooks/inbound-sms",
         "POST /api/v1/twilio/webhooks/sms-status",
+        "POST /api/v1/nexhealth/webhooks/appointments",
     ),
     TICKET_AUTH: (
         "GET /api/institution/events",
@@ -510,7 +511,9 @@ def test_internal_admin_surfaces_remain_super_admin_only():
             "/api/admin/",
             "/api/auth/admin/",
             "/api/v1/nexhealth/",
-        )):
+        )) and not path.startswith("/api/v1/nexhealth/webhooks/"):
+            # Webhook endpoints are externally called with signature verification,
+            # not admin surfaces — they use SIGNED_WEBHOOK boundary instead.
             assert boundary in {SUPER_ADMIN, SUPER_ADMIN_STRICT}
 
 

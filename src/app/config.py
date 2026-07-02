@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     # Optional NexHealth settings
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
+    nexhealth_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound webhook signatures
 
     # Retell AI settings
     retell_api_secret: str | None = None
