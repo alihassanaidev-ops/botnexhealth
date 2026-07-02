@@ -214,6 +214,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/automation/workflows/{workflow_id}/pause",
         "POST /api/automation/workflows/{workflow_id}/resume",
         "POST /api/automation/workflows/{workflow_id}/archive",
+        "POST /api/automation/templates/{template_id}/instantiate",
     ),
     LOCATION_ADMIN: (
         "GET /api/institution/location/users",
@@ -250,6 +251,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/automation/workflows/{workflow_id}/enroll",
         "GET /api/automation/workflows/{workflow_id}/runs/{run_id}",
         "POST /api/automation/workflows/{workflow_id}/runs/{run_id}/cancel",
+        "GET /api/automation/templates",
+        "GET /api/automation/templates/{template_id}",
     ),
     INSTITUTION_OR_LOCATION_USER: (
         "GET /api/v1/pms/patients",
