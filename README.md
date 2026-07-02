@@ -38,30 +38,40 @@ tests/              unit / integration (testcontainers) / rls tiers
 
 ## Local development
 
-Backend (Python 3.11+, [uv](https://docs.astral.sh/uv/)):
+Full local stack:
 
 ```bash
-uv sync
-cp .env.example .env        # fill in at minimum: DATABASE_*, JWT_SECRET, ENCRYPTION_KEY
-uvicorn src.app.main:app --reload
+make dev
 ```
 
-Postgres is expected on `localhost:5433` for local work; Redis is optional
-locally (rate limiting and token caching fall back to in-process, Celery needs
-it). Run migrations with `alembic upgrade head`, create an admin with
-`python -m src.app.scripts.create_super_admin`.
+The first run copies `.env.example` to `.env` if needed, starts Postgres, Redis,
+the FastAPI API, and the Vite frontend, then runs migrations inside the API
+container. The app is available at:
 
-Frontend:
+```text
+Dashboard: http://localhost:3000
+API:       http://localhost:8000
+```
+
+Useful commands:
 
 ```bash
-cd nexus-dashboard-web
-npm install
-npm run dev                  # expects the API on :8000 (VITE_API_URL to override)
+make up          # start stack in the background
+make logs        # tail logs
+make migrate     # run Alembic migrations inside the API container
+make down        # stop stack
 ```
+
+The Compose file overrides local container settings such as `DATABASE_URL`,
+Redis URLs, CORS, and cookie security. Edit `.env` for real vendor credentials
+or local `JWT_SECRET` / `ENCRYPTION_KEY` changes. Create an admin after
+migrations with `docker compose -f docker-compose.dev.yml run --rm api python -m
+src.app.scripts.create_super_admin`.
 
 Tests and lint:
 
 ```bash
+uv sync
 make test                    # unit tier; integration/rls tiers need Docker
 make lint                    # ruff
 ```
