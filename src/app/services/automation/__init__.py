@@ -1,5 +1,6 @@
 """Automation workflow engine services."""
 
+from src.app.services.automation.compliance_gate import ComplianceGate, GateResult, NoOpComplianceGate
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
@@ -11,6 +12,9 @@ __all__ = [
     "AutomationWorkflowEnrollmentService",
     "AutomationWorkflowRuntimeService",
     "AutomationWorkflowSchedulerService",
+    "ComplianceGate",
     "DispatchResult",
+    "GateResult",
+    "NoOpComplianceGate",
     "WorkflowStepDispatcher",
 ]

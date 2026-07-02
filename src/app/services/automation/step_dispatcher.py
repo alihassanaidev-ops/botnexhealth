@@ -27,6 +27,7 @@ from src.app.services.automation.definition_schema import (
     WaitNode,
     WorkflowDefinition,
 )
+from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 
@@ -55,10 +56,12 @@ class WorkflowStepDispatcher:
         session: AsyncSession,
         runtime: AutomationWorkflowRuntimeService,
         scheduler: AutomationWorkflowSchedulerService,
+        gate: ComplianceGate | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime
         self.scheduler = scheduler
+        self.gate: ComplianceGate = gate or NoOpComplianceGate()
 
     async def advance(
         self,
@@ -110,6 +113,19 @@ class WorkflowStepDispatcher:
                 )
 
             elif isinstance(node, (SendSmsNode, SendVoiceNode, SendEmailNode)):
+                gate_result = await self.gate.check(run, node.type)
+                if gate_result.action == "block":
+                    step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
+                    await self.runtime.fail_step(step, result_code="compliance_blocked")
+                    await self.runtime.fail_run(run, reason=gate_result.reason or "compliance_blocked")
+                    return DispatchResult(status="failed", steps_advanced=steps_advanced)
+                if gate_result.action == "hold":
+                    step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
+                    await self.runtime.fail_step(step, result_code="compliance_hold")
+                    await self.runtime.complete_run(run, outcome="compliance_hold")
+                    return DispatchResult(
+                        status="completed", outcome="compliance_hold", steps_advanced=steps_advanced
+                    )
                 current_node_id = await self._dispatch_send_stub(run, node)
 
             elif isinstance(node, ConditionNode):
