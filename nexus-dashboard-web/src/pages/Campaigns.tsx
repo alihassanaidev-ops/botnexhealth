@@ -8,6 +8,8 @@ import {
     Archive,
     ChevronRight,
     Loader2,
+    Plus,
+    Workflow,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -130,16 +132,24 @@ export default function Campaigns() {
                         Automated outreach workflows for appointment reminders and patient recall.
                     </p>
                 </div>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={refresh}
-                    disabled={loading}
-                    className="gap-1.5"
-                >
-                    <RefreshCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-                    Refresh
-                </Button>
+                <div className="flex items-center gap-2">
+                    <Button size="sm" asChild className="gap-1.5">
+                        <Link to="/institution-admin/campaigns/templates">
+                            <Plus className="h-3.5 w-3.5" />
+                            New from template
+                        </Link>
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={refresh}
+                        disabled={loading}
+                        className="gap-1.5"
+                    >
+                        <RefreshCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+                        Refresh
+                    </Button>
+                </div>
             </div>
 
             <Card>
@@ -216,6 +226,19 @@ export default function Campaigns() {
                                                         ) : (
                                                             <Play className="h-3.5 w-3.5" />
                                                         )}
+                                                    </Button>
+                                                )}
+                                                {wf.status !== "archived" && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8"
+                                                        asChild
+                                                        title="Edit in builder"
+                                                    >
+                                                        <Link to={`/institution-admin/campaigns/${wf.id}/builder`}>
+                                                            <Workflow className="h-3.5 w-3.5" />
+                                                        </Link>
                                                     </Button>
                                                 )}
                                                 {wf.status !== "archived" && (

@@ -1,6 +1,35 @@
 import "@testing-library/jest-dom/vitest"
-import { afterEach } from "vitest"
+import { afterEach, vi } from "vitest"
 import { cleanup } from "@testing-library/react"
+
+// jsdom lacks a few browser APIs that React Flow (and some Radix primitives) touch
+// during render. Provide minimal, safe stubs so canvas-bearing components can mount
+// in tests without throwing.
+if (!("ResizeObserver" in globalThis)) {
+    globalThis.ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+    } as unknown as typeof ResizeObserver
+}
+if (typeof globalThis.matchMedia !== "function") {
+    globalThis.matchMedia = ((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+    })) as unknown as typeof globalThis.matchMedia
+}
+if (!("DOMMatrixReadOnly" in globalThis)) {
+    globalThis.DOMMatrixReadOnly = class {
+        m22 = 1
+        constructor() {}
+    } as unknown as typeof DOMMatrixReadOnly
+}
 
 afterEach(() => {
   cleanup()

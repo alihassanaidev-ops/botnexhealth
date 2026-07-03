@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "graphify": {
+      "command": "C:\\Users\\AliHa\\.local\\bin\\graphify-mcp.exe",
+      "args": ["graphify-out/graph.json"],
+      "type": "stdio"
+    }
+  }
+}

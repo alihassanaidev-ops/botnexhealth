@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from src.app.api.deps import (
     get_current_institution_or_location_admin,
@@ -107,6 +107,52 @@ class WorkflowRunResponse(BaseModel):
         )
 
 
+class WorkflowVersionResponse(BaseModel):
+    id: str
+    workflow_id: str
+    version_number: int
+    definition: dict[str, Any]
+    definition_checksum: str | None
+    content_classification: str | None
+    published_by_user_id: str | None
+    published_at: datetime
+    created_at: datetime
+    is_current: bool
+
+    @classmethod
+    def from_model(cls, v: Any, *, current_version_id: str | None) -> "WorkflowVersionResponse":
+        return cls(
+            id=str(v.id),
+            workflow_id=str(v.workflow_id),
+            version_number=v.version_number,
+            definition=v.definition,
+            definition_checksum=v.definition_checksum,
+            content_classification=v.content_classification,
+            published_by_user_id=(
+                str(v.published_by_user_id) if v.published_by_user_id else None
+            ),
+            published_at=v.published_at,
+            created_at=v.created_at,
+            is_current=bool(current_version_id) and str(v.id) == str(current_version_id),
+        )
+
+
+class ValidateDefinitionRequest(BaseModel):
+    definition: dict[str, Any]
+
+
+class ValidationIssueResponse(BaseModel):
+    severity: Literal["error"] = "error"
+    node_id: str | None = None
+    field_path: list[Any] = Field(default_factory=list)
+    message: str
+
+
+class ValidateDefinitionResponse(BaseModel):
+    valid: bool
+    issues: list[ValidationIssueResponse] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -129,6 +175,38 @@ async def _get_workflow_or_404(
     return wf
 
 
+def _node_id_for_loc(loc: tuple, definition: dict[str, Any]) -> str | None:
+    """Resolve the declared node id for a pydantic error location.
+
+    Pydantic reports node-level errors with a location like
+    ``("nodes", <index>, ...)``; translate the positional index back to the
+    node's own ``id`` so the builder can highlight the offending node.
+    """
+    if len(loc) >= 2 and loc[0] == "nodes" and isinstance(loc[1], int):
+        nodes = definition.get("nodes")
+        if isinstance(nodes, list) and 0 <= loc[1] < len(nodes):
+            node = nodes[loc[1]]
+            if isinstance(node, dict) and node.get("id") is not None:
+                return str(node["id"])
+    return None
+
+
+def _issue_from_pydantic_error(
+    err: dict[str, Any], definition: dict[str, Any]
+) -> ValidationIssueResponse:
+    loc = tuple(err.get("loc", ()))
+    message = str(err.get("msg", "invalid"))
+    # Graph-structure errors raised in the model validator are prefixed by
+    # pydantic with "Value error, " — strip it for a cleaner message.
+    if message.startswith("Value error, "):
+        message = message[len("Value error, "):]
+    return ValidationIssueResponse(
+        node_id=_node_id_for_loc(loc, definition),
+        field_path=list(loc),
+        message=message,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Workflow CRUD
 # ---------------------------------------------------------------------------
@@ -145,6 +223,26 @@ async def create_workflow(
         wf = await svc.create_draft(institution_id=inst_id, name=data.name)
         await svc.publish_version(wf, data.definition)
         return WorkflowResponse.from_model(wf)
+
+
+@router.post("/validate", response_model=ValidateDefinitionResponse)
+async def validate_definition(
+    data: ValidateDefinitionRequest,
+    current_user: _InstitutionAdmin,
+) -> ValidateDefinitionResponse:
+    """Validate a workflow definition against the authoritative backend schema
+    without persisting anything.
+
+    Mirrors exactly what publish enforces (which otherwise surfaces as a 422),
+    returned up-front and node-linked so the builder can block/annotate invalid
+    workflows before the user commits to publishing.
+    """
+    try:
+        WorkflowDefinition.model_validate(data.definition)
+    except ValidationError as exc:
+        issues = [_issue_from_pydantic_error(e, data.definition) for e in exc.errors()]
+        return ValidateDefinitionResponse(valid=False, issues=issues)
+    return ValidateDefinitionResponse(valid=True, issues=[])
 
 
 @router.get("", response_model=list[WorkflowResponse])
@@ -166,6 +264,30 @@ async def get_workflow(
         svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
         return WorkflowResponse.from_model(wf)
+
+
+@router.get("/{workflow_id}/versions", response_model=list[WorkflowVersionResponse])
+async def list_workflow_versions(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> list[WorkflowVersionResponse]:
+    """List every published version of a workflow, newest first.
+
+    The definition schema is ``extra="forbid"`` so versions are immutable
+    snapshots; this exposes the full history the model already records (only
+    ``current_version_id`` was previously reachable via the API).
+    """
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        versions = sorted(
+            wf.versions, key=lambda v: v.version_number, reverse=True
+        )
+        return [
+            WorkflowVersionResponse.from_model(v, current_version_id=wf.current_version_id)
+            for v in versions
+        ]
 
 
 @router.patch("/{workflow_id}", response_model=WorkflowResponse)

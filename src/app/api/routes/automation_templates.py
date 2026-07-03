@@ -11,6 +11,7 @@ from src.app.api.deps import (
     get_current_institution_or_location_admin,
     get_current_institution_user,
 )
+from src.app.api.routes.automation_workflows import WorkflowResponse
 from src.app.database import get_db_session
 from src.app.models.user import User
 from src.app.services.automation.campaign_templates import (
@@ -78,14 +79,22 @@ async def get_campaign_template(
 
 @router.post(
     "/{template_id}/instantiate",
-    response_model=dict,
+    response_model=WorkflowResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def instantiate_template(
     template_id: str,
     current_user: _InstitutionAdmin,
-) -> dict:
-    """Create a draft workflow from a campaign template."""
+) -> WorkflowResponse:
+    """Instantiate a campaign template as a new workflow.
+
+    The template's definition is validated and published as version 1, so the
+    resulting workflow is immediately ``active`` — consistent with
+    ``POST /automation/workflows``. The engine has no draft-with-definition
+    lifecycle (a definition only ever lives inside a published version), so a
+    true "draft from template" is a documented backend follow-up; callers who
+    want to review before it runs can immediately pause it.
+    """
     if not current_user.institution_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No institution context")
 
@@ -93,19 +102,17 @@ async def instantiate_template(
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
 
+    user_id = str(current_user.id) if getattr(current_user, "id", None) else None
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
         wf = await svc.create_draft(
             institution_id=str(current_user.institution_id),
             name=template.name,
-            trigger_type=template.trigger_type,
-            definition=template.definition,
+            created_by_user_id=user_id,
         )
-
-    return {
-        "id": str(wf.id),
-        "name": wf.name,
-        "status": wf.status,
-        "trigger_type": wf.trigger_type,
-        "created_at": wf.created_at.isoformat(),
-    }
+        await svc.publish_version(
+            wf,
+            template.definition,
+            published_by_user_id=user_id,
+        )
+        return WorkflowResponse.from_model(wf)

@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from src.app.api.routes.automation_workflows import (
     EnrollRequest,
+    ValidateDefinitionRequest,
     WorkflowCreateRequest,
     WorkflowResponse,
     WorkflowRunResponse,
@@ -23,11 +24,13 @@ from src.app.api.routes.automation_workflows import (
     enroll_in_workflow,
     get_run_status,
     get_workflow,
+    list_workflow_versions,
     list_workflows,
     pause_workflow,
     publish_workflow,
     resume_workflow,
     update_workflow,
+    validate_definition,
 )
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
@@ -395,3 +398,116 @@ def test_cancel_run_calls_cancel():
         asyncio.run(cancel_run("wf-1", "run-1", user))
 
     enroll_svc.cancel_run.assert_awaited_once_with(run)
+
+
+# ---------------------------------------------------------------------------
+# validate_definition  (finding #2 — backend node-linked validation endpoint)
+# ---------------------------------------------------------------------------
+
+
+_VALID_DEF = {
+    "trigger": {"type": "manual"},
+    "entry_node_id": "e1",
+    "nodes": [{"type": "exit", "id": "e1", "outcome": "done"}],
+}
+
+
+def test_validate_accepts_valid_definition():
+    user = _make_user()
+    result = asyncio.run(validate_definition(ValidateDefinitionRequest(definition=_VALID_DEF), user))
+    assert result.valid is True
+    assert result.issues == []
+
+
+def test_validate_reports_missing_exit_node():
+    user = _make_user()
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "s1",
+        "nodes": [
+            {"type": "send_sms", "id": "s1", "body_template": "hi", "next_node_id": "s1"},
+        ],
+    }
+    result = asyncio.run(validate_definition(ValidateDefinitionRequest(definition=definition), user))
+    assert result.valid is False
+    assert any("exit node" in issue.message for issue in result.issues)
+
+
+def test_validate_links_field_error_to_node_id():
+    """A node-level field error must carry the offending node's declared id."""
+    user = _make_user()
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "s1",
+        "nodes": [
+            {"type": "send_sms", "id": "s1", "body_template": "", "next_node_id": "x1"},
+            {"type": "exit", "id": "x1"},
+        ],
+    }
+    result = asyncio.run(validate_definition(ValidateDefinitionRequest(definition=definition), user))
+    assert result.valid is False
+    assert any(issue.node_id == "s1" for issue in result.issues)
+
+
+# ---------------------------------------------------------------------------
+# list_workflow_versions  (finding #6 — version history endpoint)
+# ---------------------------------------------------------------------------
+
+
+def _make_version(version_id, number):
+    v = MagicMock()
+    v.id = version_id
+    v.workflow_id = "wf-1"
+    v.version_number = number
+    v.definition = {"trigger": {"type": "manual"}, "entry_node_id": "e1", "nodes": []}
+    v.definition_checksum = f"sum-{number}"
+    v.content_classification = None
+    v.published_by_user_id = "user-1"
+    v.published_at = _NOW
+    v.created_at = _NOW
+    return v
+
+
+def test_list_versions_returns_newest_first_with_current_flag():
+    user = _make_user()
+    v1 = _make_version("ver-1", 1)
+    v2 = _make_version("ver-2", 2)
+    wf = _make_workflow(status="active", version_id="ver-2")
+    # relationship returns versions unordered; the route must sort them.
+    wf.versions = [v1, v2]
+
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(list_workflow_versions("wf-1", user))
+
+    assert [v.version_number for v in result] == [2, 1]
+    assert result[0].is_current is True
+    assert result[1].is_current is False
+
+
+def test_list_versions_workflow_not_found_raises_404():
+    user = _make_user()
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=None)
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(list_workflow_versions("wf-bad", user))
+
+    assert exc_info.value.status_code == 404

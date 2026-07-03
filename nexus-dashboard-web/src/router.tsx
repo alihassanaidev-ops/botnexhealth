@@ -41,6 +41,9 @@ const GroupDashboard = lazy(() => import("./pages/GroupDashboard"));
 const Groups = lazy(() => import("./pages/Groups"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
 const CampaignDetail = lazy(() => import("./pages/CampaignDetail"));
+const WorkflowTemplates = lazy(() => import("./pages/WorkflowTemplates"));
+const WorkflowBuilder = lazy(() => import("./pages/WorkflowBuilder"));
+const WorkflowVersions = lazy(() => import("./pages/WorkflowVersions"));
 
 function LazyFallback() {
     return (
@@ -274,10 +277,34 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
+                        path: "institution-admin/campaigns/templates",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><WorkflowTemplates /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
                         path: "institution-admin/campaigns/:id",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <S><CampaignDetail /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/campaigns/:id/builder",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><WorkflowBuilder /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/campaigns/:id/versions",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><WorkflowVersions /></S>
                             </RoleGuard>
                         ),
                     },

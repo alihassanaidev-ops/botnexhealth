@@ -134,23 +134,36 @@ def test_get_route_unknown_id_raises_404() -> None:
 
 
 def _make_wf_mock():
+    from datetime import datetime, timezone
     wf = MagicMock()
     wf.id = "wf-new"
     wf.name = "Appointment Reminder (24h)"
-    wf.status = "draft"
+    # Post-publish state: create_draft + publish_version leaves the workflow active.
+    wf.status = "active"
     wf.trigger_type = "appointment_offset"
-    from datetime import datetime, timezone
+    wf.definition = TEMPLATES["appointment-reminder-24h"].definition
+    wf.current_version_id = "ver-1"
     wf.created_at = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
+    wf.updated_at = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
     return wf
 
 
-def test_instantiate_creates_draft_workflow() -> None:
+def test_instantiate_creates_and_publishes_workflow() -> None:
+    """instantiate must create the draft AND publish the template definition.
+
+    Regression guard for the original bug: the route passed ``trigger_type`` and
+    ``definition`` kwargs that ``create_draft`` does not accept (TypeError at
+    runtime), and never persisted a version. It now mirrors
+    ``POST /automation/workflows`` — create_draft then publish_version.
+    """
     user = MagicMock()
     user.institution_id = "inst-1"
+    user.id = "user-1"
 
     wf = _make_wf_mock()
     mock_svc = AsyncMock()
     mock_svc.create_draft = AsyncMock(return_value=wf)
+    mock_svc.publish_version = AsyncMock()
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -169,9 +182,18 @@ def test_instantiate_creates_draft_workflow() -> None:
     ):
         result = asyncio.run(instantiate_template("appointment-reminder-24h", user))
 
-    assert result["id"] == "wf-new"
-    assert result["status"] == "draft"
+    assert result.id == "wf-new"
+    assert result.status == "active"
+    assert result.trigger_type == "appointment_offset"
+    # create_draft must NOT receive trigger_type/definition (the original bug).
     mock_svc.create_draft.assert_awaited_once()
+    _, create_kwargs = mock_svc.create_draft.call_args
+    assert "trigger_type" not in create_kwargs
+    assert "definition" not in create_kwargs
+    # the template definition must be published as a version
+    mock_svc.publish_version.assert_awaited_once()
+    published_def = mock_svc.publish_version.call_args.args[1]
+    assert published_def == TEMPLATES["appointment-reminder-24h"].definition
 
 
 def test_instantiate_unknown_template_raises_404() -> None:
