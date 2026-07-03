@@ -27,6 +27,7 @@ from src.app.services.automation.definition_schema import (
     WaitNode,
     WorkflowDefinition,
 )
+from src.app.services.automation.email_node_executor import EmailNodeExecutor
 from src.app.services.automation.sms_node_executor import SmsNodeExecutor
 from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
@@ -129,6 +130,10 @@ class WorkflowStepDispatcher:
                     )
                 if isinstance(node, SendSmsNode):
                     current_node_id = await SmsNodeExecutor(
+                        self.session, self.runtime
+                    ).execute(run, node, context)
+                elif isinstance(node, SendEmailNode):
+                    current_node_id = await EmailNodeExecutor(
                         self.session, self.runtime
                     ).execute(run, node, context)
                 else:
