@@ -95,6 +95,9 @@ PROTECTED_TABLES: tuple[str, ...] = (
     "automation_workflow_step_executions",
     "automation_workflow_timers",
     "automation_workflow_events",
+    # Plan 12 compliance gate halt table — added by 20260703_outbound_halt
+    # for existing databases; listed here so fresh databases get RLS too.
+    "outbound_emergency_halts",
 )
 
 
@@ -474,6 +477,21 @@ def _location_only_expr(table: str) -> str:
                     OR il.id = app_rls_location_id()
                   )
             )
+        )
+    """
+
+
+def _outbound_halt_expr() -> str:
+    return """
+        app_rls_is_super_admin()
+        OR (
+            app_rls_context_type() IN ('celery', 'dead_letter')
+            AND outbound_emergency_halts.institution_id = app_rls_institution_id()
+        )
+        OR (
+            app_rls_context_type() = 'user'
+            AND outbound_emergency_halts.institution_id = app_rls_institution_id()
+            AND app_rls_role() = 'INSTITUTION_ADMIN'
         )
     """
 
@@ -861,6 +879,7 @@ def _all_policies_sql() -> tuple[str, ...]:
             "automation_workflow_events",
             _automation_workflow_expr("automation_workflow_events"),
         ),
+        ("outbound_emergency_halts", _outbound_halt_expr()),
     )
     out: list[str] = []
     for table, expr in spec:

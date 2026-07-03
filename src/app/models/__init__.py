@@ -58,6 +58,7 @@ from src.app.models.sms_consent import (
     SmsSuppression,
 )
 from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
+from src.app.models.outbound_halt import OutboundEmergencyHalt
 
 __all__ = [
     "Institution",
@@ -117,4 +118,5 @@ __all__ = [
     "SmsSuppression",
     "DeadLetterEvent",
     "DeadLetterStatus",
+    "OutboundEmergencyHalt",
 ]
