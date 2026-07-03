@@ -20,6 +20,7 @@ from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.services.automation.email_node_executor import EmailNodeExecutor
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.sms_node_executor import SmsNodeExecutor
+from src.app.services.automation.voice_node_executor import VoiceNodeExecutor
 
 
 class ActionExecutor(Protocol):
@@ -30,11 +31,12 @@ class ActionExecutor(Protocol):
     async def execute(self, run: AutomationWorkflowRun, node: object, context: dict) -> str: ...
 
 
-# node.type -> executor class. Voice (send_voice) registers when Plan 03 provides
-# the outbound Retell executor; until then the dispatcher falls back to the stub.
+# node.type -> executor class. All three launch channels are live; a new channel
+# plugs in by registering its executor here (no dispatcher edit required).
 _ACTION_EXECUTORS: dict[str, type] = {
     "send_sms": SmsNodeExecutor,
     "send_email": EmailNodeExecutor,
+    "send_voice": VoiceNodeExecutor,  # Plan 03 (Retell create-phone-call)
 }
 
 

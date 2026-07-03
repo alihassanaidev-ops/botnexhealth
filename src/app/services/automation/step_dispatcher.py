@@ -1,7 +1,8 @@
 """Workflow step dispatcher: advances a run through its definition until wait or exit.
 
-SMS and email sends are live (Plans 04/05). Voice send nodes remain stubbed until
-Plan 03 is integrated.
+All send channels are live via the action registry: SMS (Plan 04), email (Plan 05),
+and voice (Plan 03). `_dispatch_send_stub` remains only as a defensive no-op for any
+unregistered send node type.
 
 Use ``build_dispatcher()`` to construct a dispatcher: it is the single wiring point
 that injects the real ComplianceGateService and resolves the location timezone, so
@@ -189,11 +190,15 @@ class WorkflowStepDispatcher:
                         status="waiting", timer_id=timer.id, steps_advanced=steps_advanced
                     )
                 # Channel dispatch via the action registry — new channels plug in
-                # by registering an executor (see action_registry). Unregistered
-                # types (e.g. send_voice until Plan 03) fall back to the stub.
+                # by registering an executor (see action_registry). Any unregistered
+                # send type falls back to the defensive stub.
                 executor_cls = get_action_executor(node.type)
                 if executor_cls is not None:
                     current_node_id = await executor_cls(
+                        self.session, self.runtime
+                    ).execute(run, node, context)
+                elif isinstance(node, SendVoiceNode):
+                    current_node_id = await VoiceNodeExecutor(
                         self.session, self.runtime
                     ).execute(run, node, context)
                 else:
