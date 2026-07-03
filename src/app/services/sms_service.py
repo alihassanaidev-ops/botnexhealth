@@ -40,17 +40,25 @@ class SmsService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    def _get_twilio_client(self) -> Client:
-        """Initialise and return a Twilio REST client using platform credentials."""
-        account_sid = settings.twillio_sid
-        auth_token = settings.twillio_api_secret
+    def _get_twilio_client(
+        self,
+        account_sid: str | None = None,
+        auth_token: str | None = None,
+    ) -> Client:
+        """Return a Twilio REST client.
 
-        if not account_sid or not auth_token:
+        Uses per-institution sub-account credentials when supplied; falls back
+        to platform-level credentials from settings.
+        """
+        sid = account_sid or settings.twillio_sid
+        token = auth_token or settings.twillio_api_secret
+
+        if not sid or not token:
             raise RuntimeError(
                 "Twilio credentials not configured (TWILLIO_SID / TWILLIO_API_SECRET)"
             )
 
-        return Client(account_sid, auth_token)
+        return Client(sid, token)
 
     async def send_sms(
         self,
@@ -189,7 +197,10 @@ class SmsService:
         await self.session.flush()
 
         try:
-            client = self._get_twilio_client()
+            client = self._get_twilio_client(
+                account_sid=institution.twilio_account_sid if institution else None,
+                auth_token=institution.twilio_auth_token if institution else None,
+            )
 
             # Using asyncio to offload the blocking Twilio client network call
             create_kwargs: dict[str, Any] = {

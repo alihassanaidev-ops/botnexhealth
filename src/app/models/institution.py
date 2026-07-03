@@ -220,6 +220,14 @@ class Institution(Base):
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Twilio sub-account credentials (encrypted) — per-institution outbound SMS
+    twilio_account_sid_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    twilio_auth_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Email sending identity — per-institution from-address for outbound email
+    email_from_address: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    email_from_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -255,6 +263,22 @@ class Institution(Base):
     def nexhealth_api_key(self, value: str | None) -> None:
         """Encrypt and store NexHealth API key."""
         self.nexhealth_api_key_encrypted = encrypt_value(value)
+
+    @property
+    def twilio_account_sid(self) -> str | None:
+        return decrypt_value(self.twilio_account_sid_encrypted)
+
+    @twilio_account_sid.setter
+    def twilio_account_sid(self, value: str | None) -> None:
+        self.twilio_account_sid_encrypted = encrypt_value(value)
+
+    @property
+    def twilio_auth_token(self) -> str | None:
+        return decrypt_value(self.twilio_auth_token_encrypted)
+
+    @twilio_auth_token.setter
+    def twilio_auth_token(self, value: str | None) -> None:
+        self.twilio_auth_token_encrypted = encrypt_value(value)
 
     def __repr__(self) -> str:
         return f"<Institution(id={self.id}, name='{self.name}', slug='{self.slug}')>"

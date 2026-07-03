@@ -1554,3 +1554,99 @@ async def delete_break(
             )
 
         await session.delete(brk)
+
+
+# =============================================================================
+# Per-institution Provisioning (Plan 10)
+# =============================================================================
+
+
+class ProvisioningStatusResponse(BaseModel):
+    twilio_configured: bool
+    twilio_account_sid_masked: str | None
+    email_from_address: str | None
+    email_from_name: str | None
+
+
+class ProvisioningUpdateRequest(BaseModel):
+    twilio_account_sid: str | None = Field(default=None, description="Twilio sub-account SID")
+    twilio_auth_token: str | None = Field(default=None, description="Twilio sub-account auth token")
+    email_from_address: str | None = Field(default=None, description="From-address for outbound email")
+    email_from_name: str | None = Field(default=None, description="Display name for outbound email")
+
+
+def _mask_sid(sid: str | None) -> str | None:
+    """Return first-4 + **** + last-4 of a Twilio SID for safe display."""
+    if not sid or len(sid) < 9:
+        return sid
+    return f"{sid[:4]}****{sid[-4:]}"
+
+
+@router.get("/{slug}/provisioning", response_model=ProvisioningStatusResponse)
+async def get_provisioning(
+    slug: str,
+    _: User = Depends(get_current_admin),
+):
+    """Return the provisioning status for an institution. Auth tokens are never returned."""
+    async with get_db_session() as session:
+        from src.app.models.institution import Institution
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(slug, include_inactive=True)
+        if not institution:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+
+        return ProvisioningStatusResponse(
+            twilio_configured=bool(institution.twilio_account_sid),
+            twilio_account_sid_masked=_mask_sid(institution.twilio_account_sid),
+            email_from_address=institution.email_from_address,
+            email_from_name=institution.email_from_name,
+        )
+
+
+@router.patch("/{slug}/provisioning", response_model=ProvisioningStatusResponse)
+async def update_provisioning(
+    slug: str,
+    body: ProvisioningUpdateRequest,
+    _: User = Depends(get_current_admin),
+):
+    """Set or update per-institution Twilio sub-account and email from-address."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(slug, include_inactive=True)
+        if not institution:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+
+        if body.twilio_account_sid is not None:
+            institution.twilio_account_sid = body.twilio_account_sid or None
+        if body.twilio_auth_token is not None:
+            institution.twilio_auth_token = body.twilio_auth_token or None
+        if body.email_from_address is not None:
+            institution.email_from_address = body.email_from_address or None
+        if body.email_from_name is not None:
+            institution.email_from_name = body.email_from_name or None
+
+        await session.flush()
+
+        return ProvisioningStatusResponse(
+            twilio_configured=bool(institution.twilio_account_sid),
+            twilio_account_sid_masked=_mask_sid(institution.twilio_account_sid),
+            email_from_address=institution.email_from_address,
+            email_from_name=institution.email_from_name,
+        )
+
+
+@router.delete("/{slug}/provisioning/twilio", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_twilio_provisioning(
+    slug: str,
+    _: User = Depends(get_current_admin),
+):
+    """Clear per-institution Twilio sub-account credentials (reverts to platform credentials)."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(slug, include_inactive=True)
+        if not institution:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+
+        institution.twilio_account_sid = None
+        institution.twilio_auth_token = None
+        await session.flush()
