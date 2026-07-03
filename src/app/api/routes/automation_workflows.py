@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,6 +15,7 @@ from src.app.api.deps import (
 from src.app.database import get_db_session
 from sqlalchemy import select as sa_select
 from src.app.models.automation_workflow import AutomationWorkflowRun, AutomationWorkflowVersion
+from src.app.models.outbound_halt import OutboundEmergencyHalt
 from src.app.models.user import User
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
@@ -454,3 +455,132 @@ async def bulk_enroll(
         workflow_id=workflow_id,
         workflow_version_id=version_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Outbound emergency halt — institution-level kill switch (Plan 12)
+# ---------------------------------------------------------------------------
+
+
+class OutboundHaltResponse(BaseModel):
+    halted: bool
+    halt_id: str | None = None
+    reason: str | None = None
+    halted_at: datetime | None = None
+    halted_by_user_id: str | None = None
+
+
+@router.get("/outbound-halt", response_model=OutboundHaltResponse)
+async def get_outbound_halt_status(
+    current_user: _InstitutionAdmin,
+) -> OutboundHaltResponse:
+    """Return the current outbound halt status for this institution."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        result = await session.execute(
+            sa_select(OutboundEmergencyHalt)
+            .where(
+                OutboundEmergencyHalt.institution_id == inst_id,
+                OutboundEmergencyHalt.released_at.is_(None),
+            )
+            .limit(1)
+        )
+        halt = result.scalar_one_or_none()
+    if halt is None:
+        return OutboundHaltResponse(halted=False)
+    return OutboundHaltResponse(
+        halted=True,
+        halt_id=halt.id,
+        reason=halt.reason,
+        halted_at=halt.created_at,
+        halted_by_user_id=halt.halted_by_user_id,
+    )
+
+
+class OutboundHaltRequest(BaseModel):
+    reason: str | None = None
+
+
+@router.post(
+    "/outbound-halt",
+    response_model=OutboundHaltResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def activate_outbound_halt(
+    data: OutboundHaltRequest,
+    current_user: _InstitutionAdmin,
+) -> OutboundHaltResponse:
+    """Activate institution-wide outbound campaign halt. Idempotent — if already
+    halted, returns the existing active halt without creating a duplicate."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        existing = (
+            await session.execute(
+                sa_select(OutboundEmergencyHalt)
+                .where(
+                    OutboundEmergencyHalt.institution_id == inst_id,
+                    OutboundEmergencyHalt.released_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        if existing:
+            return OutboundHaltResponse(
+                halted=True,
+                halt_id=existing.id,
+                reason=existing.reason,
+                halted_at=existing.created_at,
+                halted_by_user_id=existing.halted_by_user_id,
+            )
+
+        halt = OutboundEmergencyHalt(
+            institution_id=inst_id,
+            halted_by_user_id=str(current_user.id),
+            reason=data.reason,
+        )
+        session.add(halt)
+        await session.flush()
+        halt_id = halt.id
+        halt_reason = halt.reason
+        halt_created = halt.created_at
+        await session.commit()
+
+    return OutboundHaltResponse(
+        halted=True,
+        halt_id=halt_id,
+        reason=halt_reason,
+        halted_at=halt_created,
+        halted_by_user_id=str(current_user.id),
+    )
+
+
+@router.delete("/outbound-halt", response_model=OutboundHaltResponse)
+async def release_outbound_halt(
+    current_user: _InstitutionAdmin,
+) -> OutboundHaltResponse:
+    """Release the active outbound halt. Returns 404 if no halt is active."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        halt = (
+            await session.execute(
+                sa_select(OutboundEmergencyHalt)
+                .where(
+                    OutboundEmergencyHalt.institution_id == inst_id,
+                    OutboundEmergencyHalt.released_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        if halt is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No active outbound halt for this institution",
+            )
+
+        halt.released_at = datetime.now(tz=timezone.utc)
+        halt.released_by_user_id = str(current_user.id)
+        await session.commit()
+
+    return OutboundHaltResponse(halted=False)

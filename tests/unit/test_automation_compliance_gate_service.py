@@ -1,0 +1,330 @@
+"""Unit tests for ComplianceGateService (Plan 12 Slice 3)."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, time, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.app.models.automation_workflow import AutomationRunStatus, AutomationWorkflowRun
+from src.app.models.location_operating_hours import LocationOperatingHours
+from src.app.models.outbound_halt import OutboundEmergencyHalt
+from src.app.models.sms_consent import ConsentChannel, ConsentRecord, ConsentStatus
+from src.app.services.automation.compliance_gate import ComplianceGate, GateResult
+from src.app.services.automation.compliance_gate_service import ComplianceGateService
+from src.app.services.sms_compliance import SmsBlockedReason, SmsSendBlockedError
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_run(*, contact_id: str | None = "contact-1", location_id: str | None = "loc-1") -> AutomationWorkflowRun:
+    return AutomationWorkflowRun(
+        institution_id="inst-1",
+        workflow_id="wf-1",
+        workflow_version_id="ver-1",
+        contact_id=contact_id,
+        location_id=location_id,
+        status=AutomationRunStatus.RUNNING.value,
+    )
+
+
+def _make_session(
+    *,
+    halt: OutboundEmergencyHalt | None = None,
+    operating_hours: LocationOperatingHours | None = None,
+    consent_record: ConsentRecord | None = None,
+    location=None,
+    contact=None,
+) -> AsyncMock:
+    """Build a mock AsyncSession whose execute() returns different things per query."""
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    def _execute_side_effect(stmt, *args, **kwargs):
+        result = MagicMock()
+        # Determine return value by inspecting the statement's entity
+        stmt_str = str(stmt)
+        if "outbound_emergency_halts" in stmt_str:
+            result.scalar_one_or_none.return_value = halt
+        elif "location_operating_hours" in stmt_str:
+            result.scalar_one_or_none.return_value = operating_hours
+        elif "consent_records" in stmt_str:
+            result.scalar_one_or_none.return_value = consent_record
+        else:
+            result.scalar_one_or_none.return_value = None
+        return result
+
+    async def _async_execute(stmt, *args, **kwargs):
+        return _execute_side_effect(stmt)
+
+    session.execute = AsyncMock(side_effect=_async_execute)
+
+    async def _session_get(model, pk):
+        from src.app.models.institution_location import InstitutionLocation
+        from src.app.models.contact import Contact
+        if model is InstitutionLocation:
+            return location
+        if model is Contact:
+            return contact
+        return None
+
+    session.get = AsyncMock(side_effect=_session_get)
+    return session
+
+
+def _make_location(timezone: str = "America/Toronto"):
+    loc = MagicMock()
+    loc.timezone = timezone
+    return loc
+
+
+def _make_contact(phone: str | None = "+14165551234"):
+    contact = MagicMock()
+    contact.phone = phone
+    return contact
+
+
+def _make_hours(*, is_open=True, open_time=time(8, 0), close_time=time(20, 0)):
+    hours = MagicMock(spec=LocationOperatingHours)
+    hours.is_open = is_open
+    hours.open_time = open_time
+    hours.close_time = close_time
+    return hours
+
+
+def _make_consent(status: str = ConsentStatus.GRANTED.value):
+    record = MagicMock(spec=ConsentRecord)
+    record.status = status
+    return record
+
+
+def _make_halt():
+    halt = MagicMock(spec=OutboundEmergencyHalt)
+    halt.released_at = None
+    return halt
+
+
+# ---------------------------------------------------------------------------
+# Protocol check
+# ---------------------------------------------------------------------------
+
+
+def test_gate_service_satisfies_protocol():
+    assert issubclass(ComplianceGateService, object)
+    # Runtime check via Protocol — instantiate with a mock session
+    svc = ComplianceGateService(AsyncMock())
+    assert isinstance(svc, ComplianceGate)
+
+
+# ---------------------------------------------------------------------------
+# Check 1: Emergency halt
+# ---------------------------------------------------------------------------
+
+
+def test_gate_blocks_on_active_halt():
+    session = _make_session(halt=_make_halt())
+    svc = ComplianceGateService(session)
+    run = _make_run()
+    result = asyncio.run(svc.check(run, "send_sms"))
+    assert result.action == "block"
+    assert result.reason == "emergency_halt"
+
+
+def test_gate_proceeds_when_no_active_halt():
+    """No halt + no location → skips quiet hours → checks consent."""
+    contact = _make_contact()
+    session = _make_session(halt=None, contact=contact)
+    svc = ComplianceGateService(session)
+    run = _make_run(location_id=None)
+
+    with patch.object(
+        svc, "_check_sms", new=AsyncMock(return_value=GateResult(action="allow"))
+    ):
+        result = asyncio.run(svc.check(run, "send_sms"))
+    assert result.action == "allow"
+
+
+# ---------------------------------------------------------------------------
+# Check 2: Quiet hours
+# ---------------------------------------------------------------------------
+
+
+def test_gate_holds_outside_open_hours():
+    """Current time before open_time → hold."""
+    location = _make_location("UTC")
+    # open 08:00-20:00; inject now at 06:00 UTC
+    hours = _make_hours(is_open=True, open_time=time(8, 0), close_time=time(20, 0))
+    session = _make_session(halt=None, operating_hours=hours, location=location)
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 6, 0, tzinfo=timezone.utc)  # Thursday 06:00 UTC
+    result = asyncio.run(svc.check(run, "send_sms", now=now))
+    assert result.action == "hold"
+    assert result.reason == "quiet_hours"
+
+
+def test_gate_holds_when_clinic_closed_today():
+    """is_open=False for the day → hold regardless of time."""
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=False)
+    session = _make_session(halt=None, operating_hours=hours, location=location)
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    result = asyncio.run(svc.check(run, "send_sms", now=now))
+    assert result.action == "hold"
+
+
+def test_gate_skips_quiet_hours_when_no_location():
+    """No location_id on run → quiet hours check skipped entirely."""
+    contact = _make_contact()
+    session = _make_session(halt=None, contact=contact)
+    svc = ComplianceGateService(session)
+    run = _make_run(location_id=None)
+
+    with patch.object(
+        svc, "_check_sms", new=AsyncMock(return_value=GateResult(action="allow"))
+    ):
+        result = asyncio.run(svc.check(run, "send_sms"))
+    assert result.action == "allow"
+
+
+def test_gate_allows_within_open_hours():
+    """Current time within open hours → passes quiet hours check."""
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True, open_time=time(8, 0), close_time=time(20, 0))
+    contact = _make_contact()
+    session = _make_session(halt=None, operating_hours=hours, location=location, contact=contact)
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)  # noon UTC
+    with patch.object(
+        svc, "_check_sms", new=AsyncMock(return_value=GateResult(action="allow"))
+    ):
+        result = asyncio.run(svc.check(run, "send_sms", now=now))
+    assert result.action == "allow"
+
+
+# ---------------------------------------------------------------------------
+# Check 3: Consent
+# ---------------------------------------------------------------------------
+
+
+def test_gate_blocks_when_contact_id_is_none():
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    session = _make_session(halt=None, operating_hours=hours, location=location)
+    svc = ComplianceGateService(session)
+    run = _make_run(contact_id=None)
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    result = asyncio.run(svc.check(run, "send_sms", now=now))
+    assert result.action == "block"
+    assert result.reason == "no_contact"
+
+
+def test_gate_blocks_on_sms_suppression():
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    session = _make_session(halt=None, operating_hours=hours, location=location, contact=contact)
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch(
+        "src.app.services.automation.compliance_gate_service.SmsComplianceService"
+    ) as MockSvc:
+        instance = MockSvc.return_value
+        instance.assert_can_send = AsyncMock(
+            side_effect=SmsSendBlockedError(SmsBlockedReason.OPTED_OUT)
+        )
+        result = asyncio.run(svc.check(run, "send_sms", now=now))
+
+    assert result.action == "block"
+    assert "opted_out" in result.reason or result.reason is not None
+
+
+def test_gate_allows_sms_when_compliant():
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    session = _make_session(halt=None, operating_hours=hours, location=location, contact=contact)
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch(
+        "src.app.services.automation.compliance_gate_service.SmsComplianceService"
+    ) as MockSvc:
+        instance = MockSvc.return_value
+        instance.assert_can_send = AsyncMock(return_value=MagicMock())
+        result = asyncio.run(svc.check(run, "send_sms", now=now))
+
+    assert result.action == "allow"
+
+
+def test_gate_blocks_on_no_email_consent():
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, consent_record=None,
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="hashed"):
+        result = asyncio.run(svc.check(run, "send_email", now=now))
+
+    assert result.action == "block"
+    assert "email" in result.reason
+
+
+def test_gate_allows_with_granted_email_consent():
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    consent = _make_consent(ConsentStatus.GRANTED.value)
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, consent_record=consent,
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="hashed"):
+        result = asyncio.run(svc.check(run, "send_email", now=now))
+
+    assert result.action == "allow"
+
+
+def test_gate_blocks_on_revoked_email_consent():
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    consent = _make_consent(ConsentStatus.REVOKED.value)
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, consent_record=consent,
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="hashed"):
+        result = asyncio.run(svc.check(run, "send_email", now=now))
+
+    assert result.action == "block"
+    assert "revoked" in result.reason

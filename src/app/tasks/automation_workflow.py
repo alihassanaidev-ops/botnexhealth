@@ -24,6 +24,7 @@ from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
+from src.app.services.automation.compliance_gate_service import ComplianceGateService
 from src.app.services.automation.step_dispatcher import WorkflowStepDispatcher
 from src.app.worker import celery_app
 
@@ -180,7 +181,7 @@ async def _dispatch_timer_async(
         # Build services and fire timer before dispatch.
         runtime = AutomationWorkflowRuntimeService(session)
         scheduler = AutomationWorkflowSchedulerService(session)
-        dispatcher = WorkflowStepDispatcher(session, runtime, scheduler)
+        dispatcher = WorkflowStepDispatcher(session, runtime, scheduler, gate=ComplianceGateService(session))
 
         await scheduler.fire_timer(timer)
 
@@ -322,7 +323,7 @@ async def _enroll_and_start_async(
         definition = WorkflowDefinition.model_validate(version.definition)
         runtime = AutomationWorkflowRuntimeService(session)
         scheduler = AutomationWorkflowSchedulerService(session)
-        dispatcher = WorkflowStepDispatcher(session, runtime, scheduler)
+        dispatcher = WorkflowStepDispatcher(session, runtime, scheduler, gate=ComplianceGateService(session))
 
         await runtime.start_run(run)
         result = await dispatcher.advance(
