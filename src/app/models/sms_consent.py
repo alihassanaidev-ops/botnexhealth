@@ -15,6 +15,8 @@ from src.app.database import Base
 
 class ConsentChannel(str, Enum):
     SMS = "sms"
+    EMAIL = "email"
+    VOICE = "voice"
 
 
 class ConsentStatus(str, Enum):
@@ -34,7 +36,7 @@ class ConsentRecord(Base):
     __tablename__ = "consent_records"
     __table_args__ = (
         Index("ix_consent_records_institution_channel_phone", "institution_id", "channel", "phone_hash"),
-        CheckConstraint("channel IN ('sms')", name="ck_consent_records_channel"),
+        CheckConstraint("channel IN ('sms', 'email', 'voice')", name="ck_consent_records_channel"),
         CheckConstraint("status IN ('granted', 'revoked')", name="ck_consent_records_status"),
         CheckConstraint(
             "source IN ('manual', 'twilio_keyword', 'system')",
@@ -80,7 +82,7 @@ class SmsSuppression(Base):
             unique=True,
             postgresql_where=text("is_active = true"),
         ),
-        CheckConstraint("channel IN ('sms')", name="ck_sms_suppressions_channel"),
+        CheckConstraint("channel IN ('sms', 'email', 'voice')", name="ck_sms_suppressions_channel"),
         CheckConstraint(
             "source IN ('manual', 'twilio_keyword', 'system')",
             name="ck_sms_suppressions_source",
