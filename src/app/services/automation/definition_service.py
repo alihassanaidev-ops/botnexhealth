@@ -8,17 +8,23 @@ import logging
 from typing import Any
 
 from fastapi import HTTPException, status as http_status
-from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.app.models.automation_workflow import (
+    AutomationRunStatus,
     AutomationWorkflow,
+    AutomationWorkflowEvent,
+    AutomationWorkflowRun,
     AutomationWorkflowStatus,
     AutomationWorkflowVersion,
 )
 from src.app.services.automation.definition_schema import WorkflowDefinition
+from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
+from src.app.services.automation.channel_readiness import ChannelReadinessService
+from src.app.services.automation.validation_service import WorkflowValidationService
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +33,12 @@ _PUBLISHABLE_STATUSES = {
     AutomationWorkflowStatus.DRAFT.value,
     AutomationWorkflowStatus.PAUSED.value,
 }
+# Non-terminal runs that an emergency halt must actively terminate.
+_IN_FLIGHT_RUN_STATUSES = (
+    AutomationRunStatus.PENDING.value,
+    AutomationRunStatus.RUNNING.value,
+    AutomationRunStatus.WAITING.value,
+)
 
 
 class AutomationWorkflowDefinitionService:
@@ -140,14 +152,23 @@ class AutomationWorkflowDefinitionService:
                 )
             definition = workflow.current_version.definition
 
-        try:
-            WorkflowDefinition.model_validate(definition)
-        except ValidationError as exc:
+        # Authoritative validation: structural + consent/content-class + the
+        # Plan-12/Plan-10 seams. Publish is fail-closed on any error-severity issue.
+        issues = await WorkflowValidationService(
+            self.session,
+            readiness_checker=ChannelReadinessService(self.session),
+        ).validate(
+            definition,
+            institution_id=workflow.institution_id,
+            location_id=workflow.location_id,
+        )
+        errors = [i for i in issues if i.severity == "error"]
+        if errors:
             raise HTTPException(
                 status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid workflow definition: {exc.error_count()} error(s). "
-                       + "; ".join(e["msg"] for e in exc.errors()),
-            ) from exc
+                detail=f"Cannot publish: {len(errors)} error(s). "
+                + "; ".join(e.message for e in errors),
+            )
 
         result = await self.session.execute(
             select(AutomationWorkflowVersion)
@@ -211,3 +232,68 @@ class AutomationWorkflowDefinitionService:
         await self.session.flush()
         await self.session.refresh(workflow, attribute_names=["updated_at"])
         return workflow
+
+    # ------------------------------------------------------------------
+    # Emergency halt — terminate in-flight runs (distinct from pause)
+    # ------------------------------------------------------------------
+    #
+    # Pause only stops *new* enrollment and defers waiting runs. Emergency halt
+    # is the operator/compliance kill switch: it terminates every in-flight run
+    # mid-flight and cancels its pending timers, so a version found non-compliant
+    # (bad content, missing consent path) stops sending immediately.
+
+    async def emergency_halt_version(
+        self,
+        *,
+        institution_id: str,
+        workflow_version_id: str,
+        actor_user_id: str | None = None,
+        reason: str = "emergency_halt",
+    ) -> int:
+        """Terminate all in-flight runs on a specific workflow version. Returns count."""
+        stmt = select(AutomationWorkflowRun).where(
+            AutomationWorkflowRun.institution_id == institution_id,
+            AutomationWorkflowRun.workflow_version_id == workflow_version_id,
+            AutomationWorkflowRun.status.in_(_IN_FLIGHT_RUN_STATUSES),
+        )
+        return await self._halt_runs(stmt, actor_user_id=actor_user_id, reason=reason)
+
+    async def emergency_halt_institution(
+        self,
+        *,
+        institution_id: str,
+        actor_user_id: str | None = None,
+        reason: str = "emergency_halt",
+    ) -> int:
+        """Terminate all in-flight runs for an institution (institution-wide halt)."""
+        stmt = select(AutomationWorkflowRun).where(
+            AutomationWorkflowRun.institution_id == institution_id,
+            AutomationWorkflowRun.status.in_(_IN_FLIGHT_RUN_STATUSES),
+        )
+        return await self._halt_runs(stmt, actor_user_id=actor_user_id, reason=reason)
+
+    async def _halt_runs(self, stmt, *, actor_user_id: str | None, reason: str) -> int:
+        result = await self.session.execute(stmt)
+        runs = list(result.scalars().all())
+        if not runs:
+            return 0
+        enrollment = AutomationWorkflowEnrollmentService(self.session)
+        scheduler = AutomationWorkflowSchedulerService(self.session)
+        for run in runs:
+            await scheduler.cancel_timers_for_run(run.id)
+            await enrollment.cancel_run(run, reason=reason)
+            self.session.add(
+                AutomationWorkflowEvent(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    event_type="run.emergency_halted",
+                    event_metadata={"reason": reason, "actor_user_id": actor_user_id},
+                )
+            )
+        await self.session.flush()
+        logger.info(
+            "emergency_halt: terminated %d in-flight run(s) reason=%s actor=%s",
+            len(runs), reason, actor_user_id,
+        )
+        return len(runs)

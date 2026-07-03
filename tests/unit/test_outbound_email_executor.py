@@ -189,11 +189,15 @@ def test_executor_falls_back_to_platform_from_address():
 
     with (
         patch("src.app.services.automation.email_node_executor.settings") as mock_settings,
+        patch("src.app.services.messaging_credentials.settings") as resolver_settings,
         patch("src.app.services.automation.email_node_executor.httpx.AsyncClient") as MockClient,
     ):
         mock_settings.resend_api_key = "re_test"
         mock_settings.resend_from_email = "platform@example.com"
         mock_settings.resend_reply_to = None
+        # The from-address fallback is resolved by TenantTwilioCredentialResolver,
+        # which reads settings from its own module.
+        resolver_settings.resend_from_email = "platform@example.com"
         mock_http = AsyncMock()
         mock_http.__aenter__ = AsyncMock(return_value=mock_http)
         mock_http.__aexit__ = AsyncMock(return_value=False)

@@ -181,4 +181,15 @@ class AutomationWorkflowRuntimeService:
         )
         self.session.add(event)
         await self.session.flush()
+
+        # Best-effort SSE progress hint on run-level lifecycle transitions. PHI-free
+        # (no run detail) — the campaign progress UI (Plan 02/08) refetches on receipt.
+        if event_type.startswith("run."):
+            try:
+                from src.app.services.event_bus import publish_event
+
+                publish_event(run.institution_id, "workflow_run_updated")
+            except Exception:  # noqa: BLE001 — SSE is a non-critical hint
+                logger.debug("workflow_run_updated SSE publish failed", exc_info=True)
+
         return event

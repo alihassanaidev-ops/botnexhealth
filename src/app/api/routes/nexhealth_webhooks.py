@@ -19,8 +19,63 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/nexhealth/webhooks", tags=["NexHealth Webhooks"])
 
-# Only these events trigger workflow enrollment.
-_TRIGGER_EVENTS = frozenset({"appointment.created", "appointment.updated"})
+# Events we act on. Cancellations arrive both as a dedicated event and as an
+# ``appointment.updated`` carrying ``cancelled: true`` — status is evaluated on
+# every update, not just the cancellation event (Plan 09 §Technical Considerations).
+_ENROLL_EVENTS = frozenset({"appointment.created", "appointment.updated"})
+_CANCEL_EVENTS = frozenset({"appointment.cancelled", "appointment.deleted"})
+_HANDLED_EVENTS = _ENROLL_EVENTS | _CANCEL_EVENTS
+
+
+def _appointment_is_cancelled(event: str, appt: dict) -> bool:
+    """Whether this event represents a cancelled appointment."""
+    if event in _CANCEL_EVENTS:
+        return True
+    return bool(appt.get("cancelled", False) or appt.get("canceled", False))
+
+
+async def _cancel_runs_for_appointment(
+    institution_id: str, appointment_id: str, *, reason: str
+) -> int:
+    """Cancel active workflow runs + their pending timers for an appointment.
+
+    Used when an appointment is cancelled: any reminder/confirmation run already
+    materialised for it is terminated and its scheduled timers cancelled so no
+    send fires for a dead appointment. Returns the number of runs cancelled.
+    """
+    from src.app.models.automation_workflow import AutomationRunStatus, AutomationWorkflowRun
+    from src.app.services.automation.enrollment_service import (
+        AutomationWorkflowEnrollmentService,
+    )
+    from src.app.services.automation.scheduler_service import (
+        AutomationWorkflowSchedulerService,
+    )
+
+    cancelled = 0
+    async with get_system_db_session(
+        "nexhealth_webhooks", institution_id=institution_id, external_id=appointment_id
+    ) as session:
+        result = await session.execute(
+            select(AutomationWorkflowRun).where(
+                AutomationWorkflowRun.institution_id == institution_id,
+                AutomationWorkflowRun.trigger_ref_type == "appointment",
+                AutomationWorkflowRun.trigger_ref_id == appointment_id,
+                AutomationWorkflowRun.status.in_([
+                    AutomationRunStatus.PENDING.value,
+                    AutomationRunStatus.RUNNING.value,
+                    AutomationRunStatus.WAITING.value,
+                ]),
+            )
+        )
+        runs = list(result.scalars().all())
+        enroll_svc = AutomationWorkflowEnrollmentService(session)
+        scheduler = AutomationWorkflowSchedulerService(session)
+        for run in runs:
+            await scheduler.cancel_timers_for_run(str(run.id))
+            await enroll_svc.cancel_run(run, reason=reason)
+            cancelled += 1
+        await session.commit()
+    return cancelled
 
 
 def _verify_signature(raw_body: bytes, signature_header: str | None) -> None:
@@ -69,7 +124,7 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
         )
 
     event: str = payload.get("event", "")
-    if event not in _TRIGGER_EVENTS:
+    if event not in _HANDLED_EVENTS:
         logger.debug("nexhealth_appointment_webhook: ignoring event=%s", event)
         return {"status": "ignored", "event": event}
 
@@ -80,11 +135,19 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     nexhealth_patient_id: str | None = (
         str(appt["patient_id"]) if appt.get("patient_id") else None
     )
+    is_cancelled = _appointment_is_cancelled(event, appt)
 
-    if not nexhealth_location_id or not appointment_id or not start_time:
+    # location_id + id are always required; start_time only for the enroll path
+    # (a cancellation may omit it).
+    if not nexhealth_location_id or not appointment_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Appointment payload missing required fields: location_id, id, or start_time",
+            detail="Appointment payload missing required fields: location_id or id",
+        )
+    if not is_cancelled and not start_time:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Appointment payload missing required field: start_time",
         )
 
     async with get_system_db_session(
@@ -109,7 +172,7 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
         location_id = str(location.id)
 
         contact_id: str | None = None
-        if nexhealth_patient_id:
+        if not is_cancelled and nexhealth_patient_id:
             contact_row = await session.execute(
                 select(Contact).where(
                     Contact.institution_id == institution_id,
@@ -119,6 +182,25 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
             contact = contact_row.scalar_one_or_none()
             if contact:
                 contact_id = str(contact.id)
+
+    # Cancellation path: terminate any already-scheduled runs/timers for this
+    # appointment instead of enrolling. (Reschedules keep their enrollment; the
+    # dispatch-time PmsLiveRevalidationService is the backstop that skips a send
+    # whose appointment time no longer matches at fire time.)
+    if is_cancelled:
+        runs_cancelled = await _cancel_runs_for_appointment(
+            institution_id, appointment_id, reason="appointment_cancelled"
+        )
+        logger.info(
+            "nexhealth_appointment_webhook: cancelled institution=%s appt=%s runs=%d event=%s",
+            institution_id, appointment_id, runs_cancelled, event,
+        )
+        return {
+            "status": "cancelled",
+            "appointment_id": appointment_id,
+            "institution_id": institution_id,
+            "runs_cancelled": runs_cancelled,
+        }
 
     from src.app.tasks.automation_workflow import trigger_appointment_workflows
 

@@ -101,3 +101,62 @@ Two discoveries reshaped the plan vs. the outbound-02 §5 framing:
 3 dependency-free backend follow-ups implemented and green (#1 bug fix, #2 validate,
 #6 version-list); 6 items deferred with concrete, code-grounded blockers. Frontend
 untouched. **Status: implementation complete; finalizing graph refresh.**
+
+---
+
+## Slice 4 — Post-merge re-evaluation (Plans 04/05) — 2026-07-03
+- Backed up all work to branch `ali/phase-2` (commit `6177641`, pushed).
+- Verified + merged the other dev's `feature/outbound-engagement-engine`
+  (Plan 04 SMS `73c5a78`, Plan 05 email `802895e`) into `ali/phase-2`. Conflict
+  check first (`git merge-tree`, 0 file overlap) → clean merge `4732361`. Merged
+  tree green (88 automation tests pass).
+- **Impact on deferrals:** Plan 04/05 shipped `template_renderer.py` — the
+  send-handler renderer whose absence was the blocker for #3 and #5. Analyzed the
+  merged files (renderer + SMS/email executors + dispatcher diff). Full detail and
+  the authoritative merge-field set in `findings.md §6`.
+- **Reclassified:** #3 (merge-field catalog) → **now actionable**; #5 (server
+  test-run) → **preview half unblocked, dry-run half still Plan-06-gated**; #4/T2
+  still blocked (voice still stubbed).
+- No code implemented in this slice — reclassification + docs only, pending
+  go-ahead on #3.
+
+---
+
+## Slice 5 — Implement #3 merge-field catalog (now unblocked) — 2026-07-03
+
+### Analysis of the merged dev files (Plans 04/05)
+- `template_renderer.render_sms_body` is the single merge function; the email
+  executor uses it for **both** subject and body (`email_node_executor.py:89-90`),
+  so SMS + email share one contract.
+- Static fields resolved: `patient_first_name`, `patient_last_name`,
+  `patient_full_name` (Contact), `clinic_name` (Location). Context/trigger keys
+  are also substitutable but dynamic. Voice still stubbed (Plan 03).
+
+### Change — single source of truth + endpoint
+- `src/app/services/automation/template_renderer.py`: introduced
+  `MergeFieldSpec` + `STATIC_MERGE_FIELDS` (name, label, description, sample,
+  group, source, resolver). `render_sms_body` now builds its substitutions by
+  iterating this list — so the catalog and the renderer are physically the same
+  source and cannot drift. **Behaviour preserved:** a static field is only set
+  when its source object is present (matches the original), so a campaign-context
+  value can still fill an unresolved field.
+- `src/app/api/routes/automation_workflows.py`: added `MergeFieldResponse` and
+  `GET /automation/workflows/merge-fields` returning the catalog (with a ready
+  `token` = `{{name}}`). **Declared before `/{workflow_id}`** so the literal path
+  is not captured as a workflow id (the shadowing trap flagged in findings §4).
+
+### Tests (3 new) — `tests/unit/test_automation_workflow_routes.py`
+- `test_list_merge_fields_returns_catalog_with_tokens` — endpoint returns the 4
+  fields with correct `{{token}}`.
+- `test_merge_field_catalog_does_not_drift_from_renderer` — renders a template of
+  every catalog token and asserts no raw `{{...}}` remain (drift guard).
+- `test_merge_fields_route_declared_before_workflow_id` — route-ordering guard.
+
+### Validation
+- `pytest` automation route/template/executor suites → **91 passed**.
+- `ruff check` on the two source files → **All checks passed** (the 6 F401s remain
+  pre-existing unused imports in the test file; my new imports are all used).
+
+**Result:** #3 delivered and green. Remaining deferred: #4, #5 (dry-run half),
+#7, T1, T2 — blockers unchanged (voice stub / Plan-06 runtime / product+schema
+decisions).

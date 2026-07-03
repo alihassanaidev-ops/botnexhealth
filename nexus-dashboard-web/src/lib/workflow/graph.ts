@@ -13,6 +13,8 @@
 import type { Edge, Node } from "@xyflow/react"
 import {
     SCHEMA_VERSION,
+    type ChannelKey,
+    type NodePosition,
     type NodeType,
     type TriggerType,
     type WorkflowDefinition,
@@ -74,6 +76,23 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
     }
 }
 
+/** Delivery channel a send-node type targets (undefined for non-send nodes). */
+const CHANNEL_BY_NODE_TYPE: Partial<Record<NodeType, ChannelKey>> = {
+    send_sms: "sms",
+    send_email: "email",
+    send_voice: "voice",
+}
+
+/** The set of delivery channels the definition actually uses (from its send nodes). */
+export function channelsUsed(def: WorkflowDefinition): Set<ChannelKey> {
+    const used = new Set<ChannelKey>()
+    for (const n of def.nodes) {
+        const channel = CHANNEL_BY_NODE_TYPE[n.type]
+        if (channel) used.add(channel)
+    }
+    return used
+}
+
 /** All node ids this node references (non-empty). */
 export function referencedIds(node: WorkflowNode): string[] {
     return outgoing(node)
@@ -132,6 +151,8 @@ export function definitionToFlow(def: WorkflowDefinition): {
     edges: FlowEdge[]
 } {
     const depth = computeDepths(def)
+    // Manual positions (presentational) win over the auto-layout when present.
+    const layout = def.layout ?? {}
 
     // Order nodes within each column by definition order for determinism.
     const rowByDepth = new Map<number, number>()
@@ -147,7 +168,7 @@ export function definitionToFlow(def: WorkflowDefinition): {
     nodes.push({
         id: TRIGGER_NODE_ID,
         type: "trigger",
-        position: { x: X0, y: Y0 + nextRow(0) * ROW_H },
+        position: layout[TRIGGER_NODE_ID] ?? { x: X0, y: Y0 + nextRow(0) * ROW_H },
         data: { kind: "trigger", trigger: def.trigger },
         deletable: false,
     })
@@ -157,7 +178,7 @@ export function definitionToFlow(def: WorkflowDefinition): {
         nodes.push({
             id: n.id,
             type: "step",
-            position: { x: X0 + d * COL_W, y: Y0 + nextRow(d) * ROW_H },
+            position: layout[n.id] ?? { x: X0 + d * COL_W, y: Y0 + nextRow(d) * ROW_H },
             data: { kind: "step", node: n, isEntry: n.id === def.entry_node_id },
         })
     }
@@ -334,6 +355,62 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
 
 export function setEntry(def: WorkflowDefinition, id: string): WorkflowDefinition {
     return { ...def, entry_node_id: id }
+}
+
+/**
+ * Set a forward pointer from a source node to a target — the immutable core of
+ * drag-to-connect. Connecting FROM the synthetic trigger repoints the entry node.
+ * For a condition node the `handle` selects the true/false branch; for linear/send
+ * nodes it sets `next_node_id`. Exit nodes have no outgoing pointer (no-op).
+ *
+ * This is the ONLY thing a canvas connection mutates: edges/`next_node_id` stay the
+ * runtime source of truth, independent of any presentational `layout`.
+ */
+export function connectNodes(
+    def: WorkflowDefinition,
+    sourceId: string,
+    targetId: string,
+    handle?: "true" | "false",
+): WorkflowDefinition {
+    if (sourceId === TRIGGER_NODE_ID) return setEntry(def, targetId)
+    const node = def.nodes.find((n) => n.id === sourceId)
+    if (!node) return def
+    switch (node.type) {
+        case "wait":
+        case "send_sms":
+        case "send_voice":
+        case "send_email":
+            return updateNode(def, sourceId, { ...node, next_node_id: targetId })
+        case "condition":
+            return updateNode(
+                def,
+                sourceId,
+                handle === "false"
+                    ? { ...node, false_next_node_id: targetId }
+                    : { ...node, true_next_node_id: targetId },
+            )
+        case "exit":
+            return def
+    }
+}
+
+/** Persist a manual canvas position for a node (presentational only). */
+export function setNodePosition(
+    def: WorkflowDefinition,
+    id: string,
+    position: NodePosition,
+): WorkflowDefinition {
+    return {
+        ...def,
+        layout: { ...(def.layout ?? {}), [id]: { x: position.x, y: position.y } },
+    }
+}
+
+/** Drop all manual positions so the deterministic auto-layout ("Tidy layout") applies. */
+export function clearLayout(def: WorkflowDefinition): WorkflowDefinition {
+    const next = { ...def }
+    delete next.layout
+    return next
 }
 
 /** Ensure schema_version is set before sending to the backend. */

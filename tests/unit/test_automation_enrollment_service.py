@@ -9,10 +9,21 @@ from src.app.models.automation_workflow import AutomationRunStatus, AutomationWo
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 
 
+class _NestedCM:
+    """Minimal async context manager standing in for session.begin_nested()."""
+
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 def _make_session(*, existing_run=None) -> AsyncMock:
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
+    session.begin_nested = MagicMock(return_value=_NestedCM())
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = existing_run
     session.execute = AsyncMock(return_value=mock_result)
@@ -73,6 +84,53 @@ def test_enroll_creates_new_run_when_no_match_for_idempotency_key() -> None:
     )
     assert created is True
     assert run.idempotency_key == "appt-xyz"
+
+
+def test_enroll_dedupes_conflicting_active_run() -> None:
+    """A contact already in a non-terminal run of the workflow is not re-enrolled."""
+    active = _make_run(AutomationRunStatus.WAITING.value)
+    session = _make_session(existing_run=active)
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, created = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            contact_id="contact-1",
+        )
+    )
+    assert created is False
+    assert run is active
+    session.add.assert_not_called()
+
+
+def test_enroll_idempotency_race_returns_winner() -> None:
+    """Concurrent insert loses the unique-index race → recover the winner's run
+    instead of surfacing IntegrityError."""
+    from sqlalchemy.exc import IntegrityError
+
+    winner = _make_run()
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.begin_nested = MagicMock(return_value=_NestedCM())
+    first = MagicMock()
+    first.scalar_one_or_none.return_value = None  # pre-insert lookup: none
+    second = MagicMock()
+    second.scalar_one_or_none.return_value = winner  # post-conflict lookup: winner
+    session.execute = AsyncMock(side_effect=[first, second])
+    session.flush = AsyncMock(side_effect=IntegrityError("INSERT", {}, Exception("dup")))
+
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, created = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            idempotency_key="appt-race",
+        )
+    )
+    assert created is False
+    assert run is winner
 
 
 def test_cancel_run_transitions_to_cancelled() -> None:

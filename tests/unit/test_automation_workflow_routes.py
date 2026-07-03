@@ -24,11 +24,13 @@ from src.app.api.routes.automation_workflows import (
     enroll_in_workflow,
     get_run_status,
     get_workflow,
+    list_merge_fields,
     list_workflow_versions,
     list_workflows,
     pause_workflow,
     publish_workflow,
     resume_workflow,
+    router as workflows_router,
     update_workflow,
     validate_definition,
 )
@@ -416,7 +418,9 @@ def test_validate_accepts_valid_definition():
     user = _make_user()
     result = asyncio.run(validate_definition(ValidateDefinitionRequest(definition=_VALID_DEF), user))
     assert result.valid is True
-    assert result.issues == []
+    # A structurally-valid sending workflow with no content class is publishable
+    # but surfaces a (non-blocking) content-class warning, never an error.
+    assert not any(issue.severity == "error" for issue in result.issues)
 
 
 def test_validate_reports_missing_exit_node():
@@ -511,3 +515,56 @@ def test_list_versions_workflow_not_found_raises_404():
             asyncio.run(list_workflow_versions("wf-bad", user))
 
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# list_merge_fields  (finding #3 — merge-field catalog, unblocked by Plans 04/05)
+# ---------------------------------------------------------------------------
+
+
+def test_list_merge_fields_returns_catalog_with_tokens():
+    user = _make_user()
+    result = asyncio.run(list_merge_fields(user))
+    names = {f.name for f in result}
+    assert {
+        "patient_first_name",
+        "patient_last_name",
+        "patient_full_name",
+        "clinic_name",
+    } <= names
+    for f in result:
+        assert f.token == "{{" + f.name + "}}"
+        assert f.label and f.sample and f.group
+
+
+def test_merge_field_catalog_does_not_drift_from_renderer():
+    """Every catalog field must actually be substituted by the renderer.
+
+    This is the drift guard: the catalog is sourced from the renderer's
+    STATIC_MERGE_FIELDS, so a template of all catalog tokens must render with no
+    raw {{...}} left behind.
+    """
+    from types import SimpleNamespace
+
+    from src.app.services.automation.template_renderer import (
+        STATIC_MERGE_FIELDS,
+        render_sms_body,
+    )
+
+    contact = SimpleNamespace(first_name="Jordan", last_name="Rivera", full_name="Jordan Rivera")
+    location = SimpleNamespace(name="Riverside Dental")
+    template = " ".join("{{" + f.name + "}}" for f in STATIC_MERGE_FIELDS)
+
+    rendered = render_sms_body(template, contact, location, {})
+
+    assert "{{" not in rendered and "}}" not in rendered
+    assert "Jordan" in rendered and "Riverside Dental" in rendered
+
+
+def test_merge_fields_route_declared_before_workflow_id():
+    """Guard the route-shadowing trap: the literal /merge-fields path must be
+    matched before the parameterised /{workflow_id} route."""
+    paths = [getattr(r, "path", "") for r in workflows_router.routes]
+    mf = paths.index("/automation/workflows/merge-fields")
+    wid = paths.index("/automation/workflows/{workflow_id}")
+    assert mf < wid

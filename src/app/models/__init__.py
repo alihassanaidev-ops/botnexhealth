@@ -59,6 +59,12 @@ from src.app.models.sms_consent import (
 )
 from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
 from src.app.models.outbound_halt import OutboundEmergencyHalt
+from src.app.models.usage_event import (
+    UsageChannel,
+    UsageDirection,
+    UsageEvent,
+    UsageProvider,
+)
 
 __all__ = [
     "Institution",
@@ -119,4 +125,8 @@ __all__ = [
     "DeadLetterEvent",
     "DeadLetterStatus",
     "OutboundEmergencyHalt",
+    "UsageEvent",
+    "UsageChannel",
+    "UsageDirection",
+    "UsageProvider",
 ]

@@ -9,7 +9,6 @@ Revises: 20260703_consent_channel
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "20260703_provisioning"
@@ -17,16 +16,25 @@ down_revision = "20260703_consent_channel"
 branch_labels = None
 depends_on = None
 
+# Idempotent (ADD COLUMN IF NOT EXISTS) to match the repo convention: the
+# consolidated baseline builds the whole schema from live model metadata via
+# Base.metadata.create_all, so on a fresh `upgrade head` these columns already
+# exist. Bare op.add_column here previously raised DuplicateColumnError and broke
+# fresh deploys; the guard makes this a no-op on fresh DBs and a real add on any
+# older DB that predates the model columns.
+_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("twilio_account_sid_encrypted", "TEXT"),
+    ("twilio_auth_token_encrypted", "TEXT"),
+    ("email_from_address", "VARCHAR(320)"),
+    ("email_from_name", "VARCHAR(255)"),
+)
+
 
 def upgrade() -> None:
-    op.add_column("institutions", sa.Column("twilio_account_sid_encrypted", sa.Text(), nullable=True))
-    op.add_column("institutions", sa.Column("twilio_auth_token_encrypted", sa.Text(), nullable=True))
-    op.add_column("institutions", sa.Column("email_from_address", sa.String(320), nullable=True))
-    op.add_column("institutions", sa.Column("email_from_name", sa.String(255), nullable=True))
+    for name, coltype in _COLUMNS:
+        op.execute(f"ALTER TABLE institutions ADD COLUMN IF NOT EXISTS {name} {coltype}")
 
 
 def downgrade() -> None:
-    op.drop_column("institutions", "email_from_name")
-    op.drop_column("institutions", "email_from_address")
-    op.drop_column("institutions", "twilio_auth_token_encrypted")
-    op.drop_column("institutions", "twilio_account_sid_encrypted")
+    for name, _ in reversed(_COLUMNS):
+        op.execute(f"ALTER TABLE institutions DROP COLUMN IF EXISTS {name}")

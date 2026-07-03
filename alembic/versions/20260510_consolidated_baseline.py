@@ -98,6 +98,9 @@ PROTECTED_TABLES: tuple[str, ...] = (
     # Plan 12 compliance gate halt table — added by 20260703_outbound_halt
     # for existing databases; listed here so fresh databases get RLS too.
     "outbound_emergency_halts",
+    # Plan 11 usage-metering ingestion table — added by 20260704_usage_events
+    # for existing databases; listed here so fresh databases get RLS too.
+    "usage_events",
 )
 
 
@@ -479,6 +482,13 @@ def _location_only_expr(table: str) -> str:
             )
         )
     """
+
+
+def _usage_events_expr() -> str:
+    return _automation_workflow_expr("usage_events").replace(
+        "app_rls_context_type() IN ('celery', 'dead_letter')",
+        "app_rls_context_type() IN ('celery', 'dead_letter', 'usage_metering')",
+    )
 
 
 def _outbound_halt_expr() -> str:
@@ -880,6 +890,7 @@ def _all_policies_sql() -> tuple[str, ...]:
             _automation_workflow_expr("automation_workflow_events"),
         ),
         ("outbound_emergency_halts", _outbound_halt_expr()),
+        ("usage_events", _usage_events_expr()),
     )
     out: list[str] = []
     for table, expr in spec:

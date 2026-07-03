@@ -62,6 +62,18 @@ def _build_celery_app() -> Celery:
                 "task": "src.app.tasks.automation_workflow.scan_recall_workflows",
                 "schedule": 3600.0,  # hourly — patient visit history changes slowly
             },
+            "recover-stale-workflow-timers": {
+                "task": "src.app.tasks.automation_workflow.recover_stale_workflow_timers",
+                # Faster than the 120 s claim TTL so a crashed-worker timer is
+                # returned to PENDING and re-dispatched within one TTL window.
+                "schedule": 60.0,
+            },
+            "publish-workflow-metrics": {
+                "task": "src.app.tasks.automation_workflow.publish_workflow_metrics",
+                # Emit workflow-engine health metrics (backlog, stale timers,
+                # active/failed runs, failed steps) to CloudWatch every minute.
+                "schedule": 60.0,
+            },
         },
         task_acks_late=True,
         worker_prefetch_multiplier=1,

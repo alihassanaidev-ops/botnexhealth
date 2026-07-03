@@ -5,7 +5,14 @@
  */
 import api from "@/lib/api"
 import type { AutomationWorkflow } from "@/types"
-import type { WorkflowDefinition } from "@/types/workflow"
+import type {
+    ChannelReadiness,
+    MergeFieldCatalogItem,
+    TestRunResult,
+    ValidateDefinitionResponse,
+    WorkflowDefinition,
+    WorkflowVersion,
+} from "@/types/workflow"
 
 /** Response of `GET /automation/templates` (definition is the Plan-01 shape). */
 export interface CampaignTemplate {
@@ -64,6 +71,73 @@ export async function resumeWorkflow(id: string): Promise<AutomationWorkflow> {
 
 export async function archiveWorkflow(id: string): Promise<AutomationWorkflow> {
     const { data } = await api.post<AutomationWorkflow>(`/automation/workflows/${id}/archive`)
+    return data
+}
+
+// ---- Versions / validation / merge-field catalog ----
+
+/** List every published version, newest-first (`GET .../{id}/versions`). */
+export async function listVersions(workflowId: string): Promise<WorkflowVersion[]> {
+    const { data } = await api.get<WorkflowVersion[]>(
+        `/automation/workflows/${workflowId}/versions`,
+    )
+    return data
+}
+
+/**
+ * Validate a definition against the authoritative backend schema without
+ * persisting (`POST /automation/workflows/validate`). Returns errors AND
+ * warnings (consent/content-class + structural + reachability).
+ */
+export async function validateDefinition(
+    definition: WorkflowDefinition,
+): Promise<ValidateDefinitionResponse> {
+    const { data } = await api.post<ValidateDefinitionResponse>(
+        "/automation/workflows/validate",
+        { definition },
+    )
+    return data
+}
+
+/**
+ * Server-side dry-run of a definition (`POST /automation/workflows/dry-run`). This is
+ * the authoritative simulation — it walks the definition on the backend WITHOUT
+ * dispatching anything and returns the ordered steps, final outcome, and a truncated
+ * flag. `conditionChoices` (nodeId -> take-true) explores specific branches.
+ */
+export async function dryRun(
+    definition: WorkflowDefinition,
+    opts?: {
+        context?: Record<string, unknown>
+        conditionChoices?: Record<string, boolean>
+    },
+): Promise<TestRunResult> {
+    const body: Record<string, unknown> = {
+        definition,
+        condition_choices: opts?.conditionChoices ?? {},
+    }
+    if (opts?.context) body.context = opts.context
+    const { data } = await api.post<TestRunResult>("/automation/workflows/dry-run", body)
+    return data
+}
+
+/**
+ * Report whether SMS / email / voice are provisioned for a location
+ * (`GET /automation/workflows/channel-readiness?location_id=...`). Advisory only:
+ * an unready channel the workflow uses warns at publish but does not block it.
+ */
+export async function getChannelReadiness(locationId: string): Promise<ChannelReadiness> {
+    const { data } = await api.get<ChannelReadiness>(
+        `/automation/workflows/channel-readiness?location_id=${encodeURIComponent(locationId)}`,
+    )
+    return data
+}
+
+/** The catalog of merge tokens the engine can resolve (`GET .../merge-fields`). */
+export async function listMergeFields(): Promise<MergeFieldCatalogItem[]> {
+    const { data } = await api.get<MergeFieldCatalogItem[]>(
+        "/automation/workflows/merge-fields",
+    )
     return data
 }
 

@@ -15,6 +15,8 @@ from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import SendEmailNode
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.template_renderer import render_sms_body
+from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
+from src.app.services.usage_metering_service import UsageMeteringService
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +68,9 @@ class EmailNodeExecutor:
 
         # --- Resolve from-address (institution → platform fallback) ---
         institution: Institution | None = await self.session.get(Institution, run.institution_id)
-        from_address = (
-            (institution.email_from_address if institution else None)
-            or settings.resend_from_email
-        )
-        from_name = institution.email_from_name if institution else None
+        email_from = TenantTwilioCredentialResolver.resolve_email_from(institution)
+        from_address = email_from.from_address
+        from_name = email_from.from_name
 
         api_key = settings.resend_api_key
         if not api_key or not from_address:
@@ -112,6 +112,12 @@ class EmailNodeExecutor:
                     f"Resend returned {response.status_code}: {response.text[:200]}"
                 )
 
+            resend_id: str | None = None
+            try:
+                resend_id = (response.json() or {}).get("id")
+            except Exception:  # noqa: BLE001 — body may not be JSON
+                resend_id = None
+
         except Exception as exc:
             logger.error(
                 "send_email failed: institution=%s run=%s node=%s error=%s",
@@ -122,4 +128,28 @@ class EmailNodeExecutor:
             return node.next_node_id
 
         await self.runtime.complete_step(step, result_code="sent")
+
+        # Meter the successful send (Plan 11). Best-effort: a metering hiccup
+        # must never fail an email that already went out. Runs in this session
+        # (celery/institution-scoped context is authorized for usage_events).
+        # Idempotent on the Resend message id, falling back to run+node.
+        try:
+            await UsageMeteringService(self.session).record(
+                institution_id=str(run.institution_id),
+                location_id=str(run.location_id) if run.location_id else None,
+                channel="email",
+                direction="outbound",
+                provider="resend",
+                emails=1,
+                provider_message_id=resend_id,
+                idempotency_key=(
+                    f"email:{resend_id}" if resend_id else f"email:{run.id}:{node.id}"
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — metering is best-effort
+            logger.warning(
+                "usage metering failed for email node=%s run=%s: %s",
+                node.id, run.id, exc,
+            )
+
         return node.next_node_id

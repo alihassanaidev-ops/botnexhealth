@@ -168,8 +168,8 @@ async def test_webhook_queues_task_with_no_contact():
 
 
 @pytest.mark.asyncio
-async def test_webhook_ignores_cancelled_event():
-    payload = {**_VALID_PAYLOAD, "event": "appointment.cancelled"}
+async def test_webhook_ignores_unhandled_event():
+    payload = {**_VALID_PAYLOAD, "event": "patient.updated"}
     request = _make_request(payload)
 
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
@@ -177,7 +177,67 @@ async def test_webhook_ignores_cancelled_event():
         result = await nexhealth_appointment_webhook(request)
 
     assert result["status"] == "ignored"
-    assert result["event"] == "appointment.cancelled"
+    assert result["event"] == "patient.updated"
+
+
+@pytest.mark.asyncio
+async def test_webhook_cancels_runs_on_cancelled_update():
+    """An appointment.updated carrying cancelled=True cancels scheduled runs/timers."""
+    location = _make_location()
+    # location lookup only (contact lookup skipped on cancellation path)
+    lookup_session = AsyncMock()
+    lookup_session.__aenter__ = AsyncMock(return_value=lookup_session)
+    lookup_session.__aexit__ = AsyncMock(return_value=False)
+    loc_result = MagicMock()
+    loc_result.scalar_one_or_none.return_value = location
+    lookup_session.execute = AsyncMock(return_value=loc_result)
+
+    # cancellation session: returns one active run for the appointment
+    cancel_session = AsyncMock()
+    cancel_session.__aenter__ = AsyncMock(return_value=cancel_session)
+    cancel_session.__aexit__ = AsyncMock(return_value=False)
+    cancel_session.commit = AsyncMock()
+    run = MagicMock()
+    run.id = "run-1"
+    runs_result = MagicMock()
+    runs_result.scalars.return_value.all.return_value = [run]
+    cancel_session.execute = AsyncMock(return_value=runs_result)
+
+    payload = {
+        "event": "appointment.updated",
+        "data": {
+            "appointment": {
+                "id": "appt-999",
+                "location_id": "nexloc-1",
+                "patient_id": "nexpat-42",
+                "start_time": "2026-08-01T10:00:00Z",
+                "cancelled": True,
+            }
+        },
+    }
+    request = _make_request(payload)
+
+    mock_enroll_svc = AsyncMock()
+    mock_scheduler = AsyncMock()
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+        side_effect=[lookup_session, cancel_session],
+    ), patch(
+        "src.app.services.automation.enrollment_service.AutomationWorkflowEnrollmentService",
+        return_value=mock_enroll_svc,
+    ), patch(
+        "src.app.services.automation.scheduler_service.AutomationWorkflowSchedulerService",
+        return_value=mock_scheduler,
+    ):
+        mock_settings.nexhealth_webhook_secret = ""
+        result = await nexhealth_appointment_webhook(request)
+
+    assert result["status"] == "cancelled"
+    assert result["runs_cancelled"] == 1
+    mock_scheduler.cancel_timers_for_run.assert_awaited_once_with("run-1")
+    mock_enroll_svc.cancel_run.assert_awaited_once()
+    cancel_session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

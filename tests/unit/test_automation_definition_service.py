@@ -7,8 +7,55 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowStatus
+from src.app.models.automation_workflow import (
+    AutomationRunStatus,
+    AutomationWorkflow,
+    AutomationWorkflowStatus,
+)
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
+
+
+def test_emergency_halt_version_terminates_in_flight_runs() -> None:
+    """emergency_halt terminates in-flight runs (cancel + cancel timers), unlike
+    pause which leaves them running."""
+    run = MagicMock()
+    run.id = "run-1"
+    run.institution_id = "inst-1"
+    run.location_id = None
+    run.status = AutomationRunStatus.WAITING.value
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    run_result = MagicMock()
+    run_result.scalars.return_value.all.return_value = [run]
+    timers_result = MagicMock()
+    timers_result.scalars.return_value.all.return_value = []  # no timers to cancel
+    session.execute = AsyncMock(side_effect=[run_result, timers_result])
+
+    svc = AutomationWorkflowDefinitionService(session)
+    count = asyncio.run(
+        svc.emergency_halt_version(
+            institution_id="inst-1", workflow_version_id="ver-1", actor_user_id="u-1"
+        )
+    )
+    assert count == 1
+    assert run.status == AutomationRunStatus.CANCELLED.value
+
+
+def test_emergency_halt_version_noop_when_no_runs() -> None:
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    empty = MagicMock()
+    empty.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=empty)
+
+    svc = AutomationWorkflowDefinitionService(session)
+    count = asyncio.run(
+        svc.emergency_halt_version(institution_id="inst-1", workflow_version_id="ver-1")
+    )
+    assert count == 0
 
 _VALID_DEFINITION = {
     "trigger": {"type": "appointment_offset", "offset_hours": -24},

@@ -7,7 +7,7 @@
  * activation, and disabled while there are validation errors.
  */
 import { useState } from "react"
-import { Loader2, Pause, Play, Archive, UploadCloud, FlaskConical, RotateCcw } from "lucide-react"
+import { Loader2, Pause, Play, Archive, UploadCloud, FlaskConical, RotateCcw, AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
     Dialog,
@@ -23,6 +23,11 @@ export interface WorkflowPublishControlsProps {
     dirty: boolean
     errorCount: number
     busy: boolean
+    /**
+     * Advisory notice shown in the publish-confirm dialog when the workflow uses a
+     * channel that isn't set up for its location (Plan 02 B6). Does NOT block publish.
+     */
+    readinessWarning?: string | null
     onPublish: () => void
     onDiscard: () => void
     onPause: () => void
@@ -85,6 +90,12 @@ export default function WorkflowPublishControls(props: WorkflowPublishControlsPr
                             already in a sequence continue on the version they enrolled under.
                         </DialogDescription>
                     </DialogHeader>
+                    {props.readinessWarning && (
+                        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span>{props.readinessWarning}</span>
+                        </div>
+                    )}
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setConfirmPublish(false)}>Cancel</Button>
                         <Button

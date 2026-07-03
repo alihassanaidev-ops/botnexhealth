@@ -30,7 +30,7 @@ the rest with a concrete, code-grounded reason.
 | 1 | Fix `instantiate` | **IMPLEMENT** | Self-contained bug (TypeError). Fix mirrors working `create_workflow`. |
 | 2 | Validate endpoint | **IMPLEMENT** | Validation logic already exists (`WorkflowDefinition.model_validate`); just expose it pre-publish, node-linked. |
 | 6 | Version-list | **IMPLEMENT** | Data model fully supports it; only the route was missing. |
-| 3 | Merge-field catalog | **DEFER** | No renderer exists — send handlers are stubs (Plans 03/04/05 own the authoritative field set). |
+| 3 | Merge-field catalog | **DEFER → IMPLEMENTED (Slice 5)** | Was blocked (no renderer); Plans 04/05 merged `template_renderer.py`, so the catalog now sources from `STATIC_MERGE_FIELDS`. See findings §6 / progress Slice 5. |
 | 4 | Channel readiness | **DEFER** | Voice needs per-clinic Retell agent provisioning; "ready" contract unspecified; frontend already degrades gracefully. |
 | 5 | Server test-run | **DEFER** | Entangled with Plan-06 runtime AND depends on the (missing) send-handler renderer. |
 | 7 | Draft-with-definition | **DEFER** | Structural gap → product decision + schema migration. Root cause of instantiate's awkward semantics. |

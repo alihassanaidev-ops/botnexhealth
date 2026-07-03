@@ -1,17 +1,20 @@
 """Compliance gate contract between Plan 01 (workflow engine) and Plan 12 (compliance).
 
-The dispatcher calls gate.check() before firing any send node. Dev B implements
-a real ComplianceGate against Plan 12; this module ships the protocol and a
-no-op stub so the engine runs safely without a compliance layer in place.
+The dispatcher calls gate.check() before firing any send node. A real
+ComplianceGate is implemented against Plan 12; this module ships the protocol and
+a no-op stub so the engine runs safely without a compliance layer in place.
 
-Hold semantics (this slice): hold terminates the run with outcome
-"compliance_hold" rather than re-queuing. Re-queue support (consent-pending
-flows) is deferred to a later slice when the consent flow is defined.
+Hold semantics: a "hold" defers the send until the next permitted send window.
+The gate sets ``GateResult.retry_at`` to that window; the dispatcher schedules a
+timer for that time and the run resumes and re-evaluates the gate then (it is
+never dropped). If no permitted window exists within the horizon the gate returns
+"block" instead of "hold".
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -22,6 +25,9 @@ if TYPE_CHECKING:
 class GateResult:
     action: Literal["allow", "block", "hold"]
     reason: str | None = None
+    # For action == "hold": the UTC time the send should be retried (next
+    # permitted send window). None for allow/block.
+    retry_at: datetime | None = None
 
 
 @runtime_checkable

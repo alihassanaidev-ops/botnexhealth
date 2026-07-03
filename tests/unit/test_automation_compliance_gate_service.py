@@ -169,8 +169,9 @@ def test_gate_holds_outside_open_hours():
     assert result.reason == "quiet_hours"
 
 
-def test_gate_holds_when_clinic_closed_today():
-    """is_open=False for the day → hold regardless of time."""
+def test_gate_blocks_when_no_permitted_window():
+    """is_open=False for every day → no window within the horizon → block (never an
+    infinite hold). The mock returns a closed row for all day lookups."""
     location = _make_location("UTC")
     hours = _make_hours(is_open=False)
     session = _make_session(halt=None, operating_hours=hours, location=location)
@@ -179,7 +180,8 @@ def test_gate_holds_when_clinic_closed_today():
 
     now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
     result = asyncio.run(svc.check(run, "send_sms", now=now))
-    assert result.action == "hold"
+    assert result.action == "block"
+    assert result.reason == "no_permitted_window"
 
 
 def test_gate_skips_quiet_hours_when_no_location():

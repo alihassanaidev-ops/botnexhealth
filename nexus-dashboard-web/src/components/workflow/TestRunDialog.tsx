@@ -3,7 +3,7 @@
  * dispatching anything (findings.md §3 — there is no backend test-run endpoint;
  * `/enroll` runs for real). Lets the tester flip condition branches to explore paths.
  */
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { AlertTriangle, FlaskConical } from "lucide-react"
 import {
     Dialog,
@@ -17,7 +17,8 @@ import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 import { NODE_META } from "@/lib/workflow/catalog"
 import { simulateRun } from "@/lib/workflow/test-run"
-import type { WorkflowDefinition } from "@/types/workflow"
+import { dryRun } from "@/lib/workflow-api"
+import type { TestRunResult, WorkflowDefinition } from "@/types/workflow"
 
 export interface TestRunDialogProps {
     open: boolean
@@ -27,12 +28,34 @@ export interface TestRunDialogProps {
 
 export default function TestRunDialog({ open, onOpenChange, def }: TestRunDialogProps) {
     const [choices, setChoices] = useState<Record<string, boolean>>({})
+    // Offline fallback (client walker) is the initial/last-resort result; the server
+    // dry-run is authoritative and replaces it when the request succeeds.
+    const [result, setResult] = useState<TestRunResult>(() =>
+        simulateRun(def, { conditionChoices: choices }),
+    )
+    const [source, setSource] = useState<"server" | "offline">("offline")
 
     const conditions = useMemo(() => def.nodes.filter((n) => n.type === "condition"), [def.nodes])
-    const result = useMemo(
-        () => simulateRun(def, { conditionChoices: choices }),
-        [def, choices],
-    )
+
+    useEffect(() => {
+        if (!open) return
+        let cancelled = false
+        dryRun(def, { conditionChoices: choices })
+            .then((r) => {
+                if (cancelled) return
+                setResult(r)
+                setSource("server")
+            })
+            .catch(() => {
+                if (cancelled) return
+                // Backend unreachable/rejected — fall back to the client-side walker.
+                setResult(simulateRun(def, { conditionChoices: choices }))
+                setSource("offline")
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [open, def, choices])
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -99,6 +122,13 @@ export default function TestRunDialog({ open, onOpenChange, def }: TestRunDialog
                     <span className="text-muted-foreground">Final outcome: </span>
                     <span className="font-medium">{result.outcome ?? "— (no exit reached)"}</span>
                 </div>
+
+                {source === "offline" && (
+                    <p className="text-[11px] text-muted-foreground">
+                        Simulated locally — the server dry-run was unavailable, so this preview may
+                        differ from a real run.
+                    </p>
+                )}
             </DialogContent>
         </Dialog>
     )

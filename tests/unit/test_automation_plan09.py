@@ -12,12 +12,15 @@ from src.app.services.automation.appointment_trigger_service import (
     AppointmentTriggerService,
     compute_enrollment_eta,
     make_appointment_idempotency_key,
+    make_recall_idempotency_key,
 )
 from src.app.models.automation_workflow import AutomationWorkflowStatus
 from src.app.tasks.automation_workflow import (
     _enroll_and_start_async,
     _trigger_appointment_async,
     _scan_recall_async,
+    _recall_is_due,
+    _recall_patient_id,
 )
 from src.app.api.routes.automation_workflows import (
     BulkEnrollRequest,
@@ -186,14 +189,41 @@ async def test_trigger_appointment_no_workflows():
 
 
 # ---------------------------------------------------------------------------
-# _scan_recall_async — returns summary
+# make_recall_idempotency_key
+# ---------------------------------------------------------------------------
+
+
+def test_make_recall_idempotency_key_format():
+    key = make_recall_idempotency_key("ver-1", "pat-9", "2026-07")
+    assert key == "recall:ver-1:pat-9:2026-07"
+
+
+# ---------------------------------------------------------------------------
+# recall due-date / patient-id helpers
+# ---------------------------------------------------------------------------
+
+
+def test_recall_patient_id_direct_and_nested():
+    assert _recall_patient_id({"patient_id": 42}) == "42"
+    assert _recall_patient_id({"patient": {"id": 7}}) == "7"
+    assert _recall_patient_id({}) is None
+
+
+def test_recall_is_due():
+    now = datetime(2026, 7, 10, tzinfo=timezone.utc)
+    assert _recall_is_due({"due_date": "2026-06-01"}, now=now) is True  # overdue
+    assert _recall_is_due({"due_date": "2026-09-01"}, now=now) is False  # future
+    assert _recall_is_due({}, now=now) is True  # no due date → treated as due
+
+
+# ---------------------------------------------------------------------------
+# _scan_recall_async — no active recall workflows → empty summary
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_scan_recall_async_returns_summary():
-    mock_session = _make_session()
-    mock_session.execute = AsyncMock(return_value=MagicMock(all=lambda: []))
+async def test_scan_recall_async_no_workflows_returns_empty_summary():
+    mock_session = _make_session(workflows=[])
 
     with patch(
         "src.app.tasks.automation_workflow.get_system_db_session",
@@ -203,6 +233,79 @@ async def test_scan_recall_async_returns_summary():
 
     assert result["active_recall_workflows"] == 0
     assert result["institutions"] == 0
+    assert result["enrolled"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _scan_recall_async — enrolls due patients from the NexHealth recall list
+# ---------------------------------------------------------------------------
+
+
+def _cm(session):
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_async_enrolls_due_patients():
+    # One active recall workflow for one institution.
+    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    scan_session = _make_session(workflows=[wf])
+
+    # Institution-scoped session: get(Institution) truthy, one configured location,
+    # then a contact lookup per due patient (all None → contact_id None but still enrolls).
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=MagicMock())  # Institution present
+    location = MagicMock()
+    location.id = "loc-1"
+    location.nexhealth_subdomain = "sub"
+    location.nexhealth_location_id = "nexloc-1"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    contact_result = MagicMock()
+    contact_result.scalar_one_or_none.return_value = None
+    # 1 locations query + 3 contact lookups (one per due recall)
+    inst_session.execute = AsyncMock(
+        side_effect=[loc_result, contact_result, contact_result, contact_result]
+    )
+
+    recalls = [
+        {"patient_id": "p1", "due_date": "2020-01-01"},
+        {"patient_id": "p2", "due_date": "2020-01-01"},
+        {"patient_id": "p3", "due_date": "2020-01-01"},
+    ]
+    adapter = AsyncMock()
+    adapter.list_patient_recalls = AsyncMock(return_value=recalls)
+    adapter.close = AsyncMock()
+
+    with patch(
+        "src.app.tasks.automation_workflow.get_system_db_session",
+        side_effect=[_cm(scan_session), _cm(inst_session)],
+    ), patch(
+        "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+        AsyncMock(return_value=adapter),
+    ), patch(
+        "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+    ) as mock_task:
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    # 3 due patients × 1 workflow = 3 enrollment tasks queued.
+    assert result["enrolled"] == 3
+    assert result["institutions"] == 1
+    assert mock_task.apply_async.call_count == 3
+
+    # Idempotency keys follow recall:{version}:{patient}:{period}.
+    keys = {c.kwargs["kwargs"]["idempotency_key"] for c in mock_task.apply_async.call_args_list}
+    assert all(k.startswith("recall:ver-1:") for k in keys)
+    assert len(keys) == 3  # distinct per patient
+    # Recall runs carry the recall trigger ref type.
+    assert all(
+        c.kwargs["kwargs"]["trigger_ref_type"] == "recall"
+        for c in mock_task.apply_async.call_args_list
+    )
 
 
 # ---------------------------------------------------------------------------

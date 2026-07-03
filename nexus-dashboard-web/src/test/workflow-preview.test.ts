@@ -5,7 +5,7 @@ import { extractTokens, unknownTokens } from "@/lib/workflow/merge-fields"
 describe("message preview", () => {
     it("substitutes known merge fields with sample data", () => {
         expect(renderTemplate("Hi {{patient_first_name}} at {{clinic_name}}")).toBe(
-            "Hi Jordan at Bright Smiles Dental",
+            "Hi Jordan at Riverside Dental",
         )
     })
     it("tolerates inner whitespace in tokens", () => {

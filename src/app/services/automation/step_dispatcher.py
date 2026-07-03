@@ -1,12 +1,17 @@
 """Workflow step dispatcher: advances a run through its definition until wait or exit.
 
-SMS sends are live (Plan 04). Voice and email send nodes remain stubbed until
-Plans 03 and 05 are implemented.
+SMS and email sends are live (Plans 04/05). Voice send nodes remain stubbed until
+Plan 03 is integrated.
+
+Use ``build_dispatcher()`` to construct a dispatcher: it is the single wiring point
+that injects the real ComplianceGateService and resolves the location timezone, so
+no caller can accidentally send without a compliance gate or in the wrong timezone.
 """
 
 from __future__ import annotations
 
 import logging
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import Literal
@@ -15,6 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.automation_workflow import AutomationWorkflowRun
+from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import (
     CalendarDelay,
     ConditionNode,
@@ -27,15 +33,19 @@ from src.app.services.automation.definition_schema import (
     WaitNode,
     WorkflowDefinition,
 )
-from src.app.services.automation.email_node_executor import EmailNodeExecutor
-from src.app.services.automation.sms_node_executor import SmsNodeExecutor
+from src.app.services.automation.action_registry import get_action_executor
 from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
+from src.app.services.automation.revalidation import NoOpRevalidator, RunRevalidator
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 
 logger = logging.getLogger(__name__)
 
 _MAX_STEPS = 50
+# Spread of jitter applied to calendar (fixed local-time) sends so an 800-patient
+# "9 AM reminder" batch doesn't hit the vendor in one burst. Full budget-aware
+# pacing across NexHealth/Retell/Twilio is coordinated with Plans 09/11.
+_DEFAULT_CALENDAR_JITTER_SECONDS = 300
 
 
 @dataclass
@@ -59,11 +69,16 @@ class WorkflowStepDispatcher:
         runtime: AutomationWorkflowRuntimeService,
         scheduler: AutomationWorkflowSchedulerService,
         gate: ComplianceGate | None = None,
+        revalidator: RunRevalidator | None = None,
+        calendar_jitter_seconds: int = 0,
     ) -> None:
         self.session = session
         self.runtime = runtime
         self.scheduler = scheduler
         self.gate: ComplianceGate = gate or NoOpComplianceGate()
+        self.revalidator: RunRevalidator = revalidator or NoOpRevalidator()
+        # 0 = deterministic (unit tests); build_dispatcher sets a production spread.
+        self.calendar_jitter_seconds = calendar_jitter_seconds
 
     async def advance(
         self,
@@ -94,6 +109,11 @@ class WorkflowStepDispatcher:
 
             if isinstance(node, WaitNode):
                 due_at = _compute_due_at(node.delay, location_timezone, now)
+                # Smooth calendar (fixed local-time) sends to avoid vendor stampedes.
+                if self.calendar_jitter_seconds and isinstance(node.delay, CalendarDelay):
+                    due_at += timedelta(
+                        seconds=secrets.randbelow(self.calendar_jitter_seconds + 1)
+                    )
                 step = await self.runtime.begin_step(
                     run,
                     step_id=node.id,
@@ -115,6 +135,24 @@ class WorkflowStepDispatcher:
                 )
 
             elif isinstance(node, (SendSmsNode, SendVoiceNode, SendEmailNode)):
+                # Dispatch-time revalidation: the appointment/state this run targets
+                # may have changed since enrollment (e.g. cancelled). Skip + exit if
+                # the run is no longer valid, before spending a send.
+                skip_outcome = await self.revalidator.revalidate(run)
+                if skip_outcome is not None:
+                    step = await self.runtime.begin_step(
+                        run, step_id=node.id, step_type=node.type
+                    )
+                    await self.runtime.complete_step(step, result_code=skip_outcome)
+                    await self.runtime.complete_run(run, outcome=skip_outcome)
+                    logger.info(
+                        "dispatch: revalidation skip run=%s node=%s outcome=%s",
+                        run.id, node.id, skip_outcome,
+                    )
+                    return DispatchResult(
+                        status="completed", outcome=skip_outcome, steps_advanced=steps_advanced
+                    )
+
                 gate_result = await self.gate.check(run, node.type)
                 if gate_result.action == "block":
                     step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
@@ -122,18 +160,40 @@ class WorkflowStepDispatcher:
                     await self.runtime.fail_run(run, reason=gate_result.reason or "compliance_blocked")
                     return DispatchResult(status="failed", steps_advanced=steps_advanced)
                 if gate_result.action == "hold":
-                    step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
-                    await self.runtime.fail_step(step, result_code="compliance_hold")
-                    await self.runtime.complete_run(run, outcome="compliance_hold")
-                    return DispatchResult(
-                        status="completed", outcome="compliance_hold", steps_advanced=steps_advanced
+                    # Defer the send to the next permitted window instead of
+                    # dropping it (scope §8: held, never dropped). Schedule a timer
+                    # at retry_at; on fire the run resumes and re-checks the gate at
+                    # this same send node.
+                    resume_at = gate_result.retry_at or (now + timedelta(hours=1))
+                    step = await self.runtime.begin_step(
+                        run,
+                        step_id=node.id,
+                        step_type=node.type,
+                        scheduled_at=resume_at,
+                        scheduled_timezone=location_timezone,
                     )
-                if isinstance(node, SendSmsNode):
-                    current_node_id = await SmsNodeExecutor(
-                        self.session, self.runtime
-                    ).execute(run, node, context)
-                elif isinstance(node, SendEmailNode):
-                    current_node_id = await EmailNodeExecutor(
+                    timer = await self.scheduler.create_timer(
+                        institution_id=run.institution_id,
+                        location_id=run.location_id,
+                        workflow_run_id=run.id,
+                        step_execution_id=step.id,
+                        due_at=resume_at,
+                        timezone_name=location_timezone,
+                    )
+                    await self.runtime.wait_run(run, step)
+                    logger.info(
+                        "dispatch: hold->deferred run=%s node=%s resume_at=%s reason=%s",
+                        run.id, node.id, resume_at, gate_result.reason,
+                    )
+                    return DispatchResult(
+                        status="waiting", timer_id=timer.id, steps_advanced=steps_advanced
+                    )
+                # Channel dispatch via the action registry — new channels plug in
+                # by registering an executor (see action_registry). Unregistered
+                # types (e.g. send_voice until Plan 03) fall back to the stub.
+                executor_cls = get_action_executor(node.type)
+                if executor_cls is not None:
+                    current_node_id = await executor_cls(
                         self.session, self.runtime
                     ).execute(run, node, context)
                 else:
@@ -172,10 +232,14 @@ class WorkflowStepDispatcher:
         location_timezone: str = "UTC",
         now: datetime | None = None,
     ) -> DispatchResult:
-        """Resume a WAITING run after its timer fires, then advance to the next node.
+        """Resume a WAITING run after its timer fires, then continue advancing.
 
-        Finds the waiting step execution, resumes the run, advances the current
-        step pointer past the wait node, then calls advance().
+        Two kinds of waits resume here:
+          * a WaitNode delay — advance the step pointer past the wait node;
+          * a compliance *hold* deferred at a send node — leave the pointer on the
+            send node so advance() re-checks the gate and (if now permitted) sends.
+        Finds the waiting step execution, resumes the run, repositions the pointer
+        accordingly, then calls advance().
         """
         from sqlalchemy import select
 
@@ -193,10 +257,12 @@ class WorkflowStepDispatcher:
             return DispatchResult(status="failed")
 
         node_map = {n.id: n for n in definition.nodes}
-        wait_node = node_map.get(run.current_step_id or "")
-        if not isinstance(wait_node, WaitNode):
+        current_node = node_map.get(run.current_step_id or "")
+        is_wait = isinstance(current_node, WaitNode)
+        is_held_send = isinstance(current_node, (SendSmsNode, SendVoiceNode, SendEmailNode))
+        if not (is_wait or is_held_send):
             await self.runtime.fail_run(
-                run, reason=f"expected wait node at '{run.current_step_id}'"
+                run, reason=f"expected wait or held send node at '{run.current_step_id}'"
             )
             return DispatchResult(status="failed")
 
@@ -218,7 +284,10 @@ class WorkflowStepDispatcher:
             return DispatchResult(status="failed")
 
         await self.runtime.resume_run(run, waiting_step)
-        run.current_step_id = wait_node.next_node_id
+        if is_wait:
+            # Move past the wait node. A held send stays put so advance()
+            # re-evaluates the compliance gate at the same node.
+            run.current_step_id = current_node.next_node_id
         await self.session.flush()
 
         return await self.advance(
@@ -283,3 +352,48 @@ def _compute_due_at(
     if local_target <= now:
         local_target += timedelta(days=1)
     return local_target.astimezone(timezone.utc)
+
+
+async def build_dispatcher(
+    session: AsyncSession,
+    *,
+    location_id: str | None = None,
+    runtime: AutomationWorkflowRuntimeService | None = None,
+    scheduler: AutomationWorkflowSchedulerService | None = None,
+    gate: ComplianceGate | None = None,
+    revalidator: RunRevalidator | None = None,
+    calendar_jitter_seconds: int = _DEFAULT_CALENDAR_JITTER_SECONDS,
+) -> tuple[WorkflowStepDispatcher, str]:
+    """Construct a dispatcher wired with the real compliance gate + resolve the
+    location's timezone.
+
+    This is the single construction path used by both the API enroll route and the
+    Celery dispatch/enroll tasks. Centralizing it prevents the class of bug where a
+    caller builds ``WorkflowStepDispatcher(...)`` without a gate (defaulting to
+    NoOpComplianceGate) or with a hardcoded ``location_timezone``.
+
+    Returns ``(dispatcher, resolved_location_timezone)``.
+    """
+    # Lazy import avoids any import cycle between the dispatcher and the gate.
+    from src.app.services.automation.compliance_gate_service import ComplianceGateService
+
+    runtime = runtime or AutomationWorkflowRuntimeService(session)
+    scheduler = scheduler or AutomationWorkflowSchedulerService(session)
+    if gate is None:
+        gate = ComplianceGateService(session)
+
+    location_timezone = "UTC"
+    if location_id:
+        location = await session.get(InstitutionLocation, location_id)
+        if location and location.timezone:
+            location_timezone = location.timezone
+
+    dispatcher = WorkflowStepDispatcher(
+        session,
+        runtime,
+        scheduler,
+        gate=gate,
+        revalidator=revalidator,
+        calendar_jitter_seconds=calendar_jitter_seconds,
+    )
+    return dispatcher, location_timezone

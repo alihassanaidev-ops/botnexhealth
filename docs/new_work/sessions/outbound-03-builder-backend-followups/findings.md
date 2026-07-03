@@ -55,8 +55,11 @@ Exposed the existing validator pre-publish: `POST /automation/workflows/validate
 ### #6 — Version-list (IMPLEMENTED)
 `GET /automation/workflows/{id}/versions` → newest-first `WorkflowVersionResponse[]` with an `is_current` flag. Reuses `_get_workflow_or_404` (ownership/404) and the already-eager `wf.versions`. Zero new data access — the model had everything (§2.5).
 
-### #3 — Merge-field catalog (DEFERRED — blocked)
-The authoritative field set is defined by the send handlers, which **do not exist** (§2.4, Plans 03/04/05). Shipping a server catalog now would invent a contract the engine does not honor and risk drift. **No regression:** the frontend already ships a client-side catalog. Revisit when Plans 03/04/05 land the renderer.
+### #3 — Merge-field catalog (WAS DEFERRED → NOW ACTIONABLE, see §6)
+Originally deferred because the send handlers (and thus the authoritative field
+set) did not exist (§2.4). **This blocker is now gone** — Plans 04/05 landed a
+real renderer (`template_renderer.py`). See §6 for the concrete field set and
+the recommended implementation.
 
 ### #4 — Per-channel readiness (DEFERRED — partially blocked + unspecified)
 - **Voice** readiness needs a per-clinic **Retell agent id**; that provisioning does not exist (it's why `send_voice` is omitted from every template — `campaign_templates.py:1-7`).
@@ -78,6 +81,33 @@ Requires a concurrency contract (which token — `updated_at`/version — and wh
 ## 4. Bonus observation (not in scope — flagged for follow-up)
 `GET /automation/workflows/outbound-halt` is declared **after** `GET /{workflow_id}` (`automation_workflows.py`). Starlette matches routes in declaration order; a single-segment literal declared after a `/{param}` route can be shadowed (captured as `workflow_id="outbound-halt"`). **Unverified** — needs a routing test. My two new routes avoid this: `/validate` is POST (no GET `/{param}` collision) and `/{id}/versions` has an extra segment (unambiguous). Recommend a dedicated test for the halt routes.
 
-## 5. Net result
+## 5. Net result (initial session)
 - **3 implemented, unblocked:** #1, #2, #6.
 - **6 deferred with concrete blockers:** #3, #4, #5, #7, T1, T2 — every one traces to a missing component (send-handler renderer, Retell provisioning, Plan-06 runtime) or an unresolved product/schema decision, not to effort.
+
+---
+
+## 6. Post-merge update — 2026-07-03 (Plans 04/05 merged into `ali/phase-2`)
+
+Merged `origin/feature/outbound-engagement-engine` (commits `73c5a78` Plan 04 SMS,
+`802895e` Plan 05 email). No conflicts (file sets disjoint from ours). This
+**unblocks #3** and **partially unblocks #5**. Verified by reading the merged files:
+
+### The renderer now exists — `template_renderer.py`
+- Single function `render_sms_body(template, contact, location, context)`; `{{var}}` syntax; unknown vars → empty string.
+- **Used by BOTH channels:** `sms_node_executor.py:73` (body) and `email_node_executor.py:89-90` (subject *and* body). One unified contract.
+- Dispatcher (`step_dispatcher.py`) now runs SMS + email live; **voice (`send_voice`) is still stubbed** (Plan 03 pending).
+
+### Authoritative merge-field set (from `template_renderer.py:29-44`)
+| Field | Source |
+|-------|--------|
+| `patient_first_name` | Contact.first_name |
+| `patient_last_name` | Contact.last_name |
+| `patient_full_name` | Contact.full_name |
+| `clinic_name` | Location.name |
+| *(any trigger/context key)* | run context — **dynamic, open-ended, not a fixed catalog** |
+
+### Reclassification
+- **#3 merge-field catalog → IMPLEMENTED (Slice 5).** `GET /automation/workflows/merge-fields` now exposes the 4 static fields, sourced from `template_renderer.STATIC_MERGE_FIELDS` (single source of truth). See progress.md Slice 5.
+- **#5 server test-run → STILL PARTIALLY BLOCKED.** The renderer now enables an accurate "would-send" message preview, but a faithful *non-destructive* dry-run still needs a no-dispatch mode wired through the dispatcher/executors (Plan-06 runtime). Message-preview half unblocked; graph-simulation half still gated.
+- #4 (voice readiness) and T2 (`send_voice` seed) remain blocked — voice is still stubbed and needs a clinic Retell agent id.

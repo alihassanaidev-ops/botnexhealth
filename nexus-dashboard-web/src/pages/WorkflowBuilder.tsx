@@ -17,33 +17,48 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
     archiveWorkflow,
+    getChannelReadiness,
     getWorkflow,
     pauseWorkflow,
     resumeWorkflow,
     updateWorkflow,
+    validateDefinition as validateDefinitionOnServer,
 } from "@/lib/workflow-api"
 import {
     addNode,
     blankDefinition,
+    clearLayout,
+    connectNodes,
     createNode,
     definitionToFlow,
     genId,
     removeNode,
     serializeDefinition,
     setEntry,
+    setNodePosition,
     TRIGGER_NODE_ID,
     updateNode,
     type FlowNode,
 } from "@/lib/workflow/graph"
 import { validateDefinition } from "@/lib/workflow/validation"
+import { usedChannelStatuses } from "@/lib/workflow/readiness"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
 import WorkflowPalette from "@/components/workflow/WorkflowPalette"
 import StepConfigPanel from "@/components/workflow/StepConfigPanel"
 import WorkflowValidationPanel from "@/components/workflow/WorkflowValidationPanel"
 import WorkflowPublishControls from "@/components/workflow/WorkflowPublishControls"
+import ComplianceSettings from "@/components/workflow/ComplianceSettings"
 import TestRunDialog from "@/components/workflow/TestRunDialog"
 import type { AutomationWorkflow } from "@/types"
-import type { NodeType, WorkflowDefinition, WorkflowNode, WorkflowTrigger } from "@/types/workflow"
+import type {
+    ChannelReadiness,
+    ComplianceMetadata,
+    NodeType,
+    ValidationIssue,
+    WorkflowDefinition,
+    WorkflowNode,
+    WorkflowTrigger,
+} from "@/types/workflow"
 
 const STATUS_STYLES: Record<string, string> = {
     active: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800",
@@ -66,6 +81,8 @@ export default function WorkflowBuilder() {
     const [selectedId, setSelectedId] = useState<string | null>(null)
     const [panelOpen, setPanelOpen] = useState(false)
     const [testOpen, setTestOpen] = useState(false)
+    const [backendIssues, setBackendIssues] = useState<ValidationIssue[]>([])
+    const [readiness, setReadiness] = useState<ChannelReadiness | null>(null)
     const serverDef = useRef<WorkflowDefinition | null>(null)
 
     const readOnly = workflow?.status === "archived"
@@ -105,11 +122,35 @@ export default function WorkflowBuilder() {
         void load()
     }, [load])
 
+    // Channel readiness (Plan 02 B6): only location-scoped workflows have channels
+    // to verify; institution-level / no-location workflows have nothing to check.
+    const locationId = workflow?.location_id ?? null
+    useEffect(() => {
+        if (!locationId) {
+            setReadiness(null)
+            return
+        }
+        let cancelled = false
+        getChannelReadiness(locationId)
+            .then((r) => {
+                if (!cancelled) setReadiness(r)
+            })
+            .catch(() => {
+                // Advisory only — a failed lookup silently omits the indicator.
+                if (!cancelled) setReadiness(null)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [locationId])
+
     // ---- editing buffer ----
     const applyDef = useCallback(
         (next: WorkflowDefinition) => {
             setDef(next)
             setDirty(true)
+            // Stale server issues no longer describe the edited definition.
+            setBackendIssues([])
             if (id) localStorage.setItem(draftKey(id), JSON.stringify(next))
         },
         [id],
@@ -117,6 +158,19 @@ export default function WorkflowBuilder() {
 
     const issues = useMemo(() => (def ? validateDefinition(def) : []), [def])
     const errorCount = issues.filter((i) => i.severity === "error").length
+
+    // Readiness of the channels this definition actually uses (empty when no
+    // location or no readiness report yet). Unready channels warn but never block.
+    const channelStatuses = useMemo(
+        () => (def && readiness ? usedChannelStatuses(def, readiness) : []),
+        [def, readiness],
+    )
+    const readinessWarning = useMemo(() => {
+        const unready = channelStatuses.filter((s) => !s.ready)
+        if (unready.length === 0) return null
+        const names = unready.map((s) => s.label).join(", ")
+        return `${names} ${unready.length > 1 ? "are" : "is"} not set up for this location. You can still publish, but those steps won't send until it's configured.`
+    }, [channelStatuses])
 
     const flow = useMemo(() => {
         if (!def) return { nodes: [] as FlowNode[], edges: [] }
@@ -162,6 +216,12 @@ export default function WorkflowBuilder() {
         },
         [def, applyDef],
     )
+    const onComplianceChange = useCallback(
+        (compliance: ComplianceMetadata) => {
+            if (def) applyDef({ ...def, compliance })
+        },
+        [def, applyDef],
+    )
     const onDeleteNode = useCallback(
         (nodeId: string) => {
             if (!def) return
@@ -177,6 +237,23 @@ export default function WorkflowBuilder() {
         },
         [def, applyDef],
     )
+
+    // ---- canvas: drag-to-connect + presentational layout (never alters semantics) ----
+    const onConnectNodes = useCallback(
+        (sourceId: string, targetId: string, handle?: "true" | "false") => {
+            if (def) applyDef(connectNodes(def, sourceId, targetId, handle))
+        },
+        [def, applyDef],
+    )
+    const onNodePositionChange = useCallback(
+        (nodeId: string, position: { x: number; y: number }) => {
+            if (def) applyDef(setNodePosition(def, nodeId, position))
+        },
+        [def, applyDef],
+    )
+    const onTidyLayout = useCallback(() => {
+        if (def) applyDef(clearLayout(def))
+    }, [def, applyDef])
 
     const onDiscard = useCallback(() => {
         if (!id || !serverDef.current) return
@@ -207,15 +284,27 @@ export default function WorkflowBuilder() {
 
     async function onPublish() {
         if (!id || !def) return
+        // Fast client-side gate first.
         if (errorCount > 0) {
             toast.error(`Resolve ${errorCount} validation error${errorCount > 1 ? "s" : ""} before publishing`)
             return
         }
+        const payload = serializeDefinition(def)
         setBusy(true)
         try {
+            // Authoritative backend validation (consent/content-class + schema).
+            const result = await validateDefinitionOnServer(payload)
+            setBackendIssues(result.issues)
+            const serverErrors = result.issues.filter((i) => i.severity === "error")
+            if (serverErrors.length > 0) {
+                toast.error(
+                    `Resolve ${serverErrors.length} server validation error${serverErrors.length > 1 ? "s" : ""} before publishing`,
+                )
+                return
+            }
             const updated = await updateWorkflow(id, {
                 name: name.trim() || workflow?.name,
-                definition: serializeDefinition(def),
+                definition: payload,
             })
             setWorkflow(updated)
             serverDef.current = def
@@ -288,6 +377,7 @@ export default function WorkflowBuilder() {
                         dirty={dirty}
                         errorCount={errorCount}
                         busy={busy}
+                        readinessWarning={readinessWarning}
                         onPublish={onPublish}
                         onDiscard={onDiscard}
                         onPause={() => runLifecycle(pauseWorkflow, "Campaign paused")}
@@ -310,12 +400,31 @@ export default function WorkflowBuilder() {
                 </aside>
 
                 <div className="relative min-h-0 flex-1">
-                    <WorkflowCanvas nodes={flow.nodes} edges={flow.edges} selectedId={selectedId} onSelect={onSelect} />
+                    <WorkflowCanvas
+                        nodes={flow.nodes}
+                        edges={flow.edges}
+                        selectedId={selectedId}
+                        onSelect={onSelect}
+                        editable={!readOnly}
+                        onConnectNodes={onConnectNodes}
+                        onNodePositionChange={onNodePositionChange}
+                        onTidyLayout={onTidyLayout}
+                    />
                 </div>
 
                 <aside className="w-72 shrink-0 space-y-3 overflow-y-auto border-l border-border p-3">
+                    <ComplianceSettings
+                        compliance={def.compliance}
+                        onChange={onComplianceChange}
+                        disabled={readOnly}
+                    />
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Validation</h3>
-                    <WorkflowValidationPanel issues={issues} onSelectNode={onSelect} />
+                    <WorkflowValidationPanel
+                        issues={issues}
+                        backendIssues={backendIssues}
+                        readiness={channelStatuses}
+                        onSelectNode={onSelect}
+                    />
                     {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </aside>
             </div>

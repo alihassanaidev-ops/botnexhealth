@@ -19,12 +19,23 @@ from src.app.models.sms_consent import ConsentSource
 from src.app.services.audit import log_audit
 from src.app.services.dead_letter import capture_dead_letter
 from src.app.services.sms_compliance import SmsComplianceService
+from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
 from src.app.services.sms_privacy import hash_for_logging, redact_payload
 from src.app.services.sms_service import SmsService
+from src.app.services.usage_metering_service import (
+    parse_cost_amount,
+    parse_segments,
+    record_usage_event,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/twilio/webhooks", tags=["Twilio Webhooks"])
+
+# Terminal Twilio message statuses. Usage is metered once per message on the
+# first terminal callback; the idempotency key (MessageSid) dedupes the
+# follow-on "delivered" callback that Twilio sends after "sent".
+_TERMINAL_SMS_STATUSES = {"delivered", "sent", "failed", "undelivered"}
 
 STOP_KEYWORDS = {"STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"}
 START_KEYWORDS = {"START", "UNSTOP"}
@@ -162,7 +173,25 @@ async def sms_status(request: Request) -> dict[str, str]:
             await session.commit()
             return {"status": "ignored", "reason": "unknown_message_sid"}
         await session.commit()
-        return {"status": "updated"}
+
+    # Meter billable consumption once the message reaches a terminal state.
+    # Recorded from a dedicated session because this webhook's RLS context is
+    # not authorized for usage_events. Keyed on MessageSid alone so the
+    # "sent" then "delivered" callback pair counts a single message once.
+    if provider_status.lower().strip() in _TERMINAL_SMS_STATUSES and row.institution_id:
+        await record_usage_event(
+            institution_id=str(row.institution_id),
+            location_id=str(row.location_id) if row.location_id else None,
+            channel="sms",
+            direction="outbound",
+            provider="twilio",
+            segments=parse_segments(_field(form, "NumSegments")),
+            cost_amount=parse_cost_amount(_field(form, "Price")),
+            currency=(_field(form, "PriceUnit") or "USD"),
+            provider_message_id=message_sid,
+            idempotency_key=f"sms:{message_sid}",
+        )
+    return {"status": "updated"}
 
 
 async def _verified_form(request: Request) -> dict[str, Any]:
@@ -175,8 +204,21 @@ async def _verified_form(request: Request) -> dict[str, Any]:
             detail="Twilio auth token is not configured",
         )
 
+    # Twilio signs each webhook with the auth token of the (sub-)account that
+    # owns the number involved — the destination (To) for inbound SMS, the
+    # sender (From) for outbound status callbacks. Resolve the sub-account token
+    # for whichever candidate maps to a provisioned location; fall back to the
+    # platform token when the number belongs to no sub-account (behavior
+    # unchanged for tenants without sub-account credentials).
+    async with get_system_db_session(
+        "twilio_signature", external_id=_field(form, "To")
+    ) as session:
+        auth_token = await TenantTwilioCredentialResolver(session).resolve_auth_token(
+            _field(form, "To"), _field(form, "From")
+        )
+
     signature = request.headers.get("X-Twilio-Signature")
-    validator = RequestValidator(settings.twillio_api_secret)
+    validator = RequestValidator(auth_token or settings.twillio_api_secret)
     if not signature or not validator.validate(str(request.url), form, signature):
         logger.warning(
             "Invalid Twilio webhook signature: payload=%s", redact_payload(form)

@@ -14,15 +14,21 @@ from src.app.api.deps import (
 )
 from src.app.database import get_db_session
 from sqlalchemy import select as sa_select
-from src.app.models.automation_workflow import AutomationWorkflowRun, AutomationWorkflowVersion
+from src.app.models.automation_workflow import (
+    AutomationWorkflowRun,
+    AutomationWorkflowStatus,
+    AutomationWorkflowVersion,
+)
 from src.app.models.outbound_halt import OutboundEmergencyHalt
 from src.app.models.user import User
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
+from src.app.services.automation.channel_readiness import ChannelReadinessService
+from src.app.services.automation.dry_run import simulate_run
+from src.app.services.automation.validation_service import WorkflowValidationService
+from src.app.services.automation.template_renderer import STATIC_MERGE_FIELDS
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
-from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
-from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
-from src.app.services.automation.step_dispatcher import WorkflowStepDispatcher
+from src.app.services.automation.step_dispatcher import build_dispatcher
 
 router = APIRouter(prefix="/automation/workflows", tags=["Automation Workflows"])
 
@@ -65,6 +71,7 @@ class WorkflowResponse(BaseModel):
     status: str
     trigger_type: str | None
     definition: dict[str, Any] | None
+    location_id: str | None
     current_version_id: str | None
     created_at: datetime
     updated_at: datetime
@@ -77,6 +84,7 @@ class WorkflowResponse(BaseModel):
             status=wf.status,
             trigger_type=wf.trigger_type,
             definition=wf.definition,
+            location_id=str(wf.location_id) if wf.location_id else None,
             current_version_id=str(wf.current_version_id) if wf.current_version_id else None,
             created_at=wf.created_at,
             updated_at=wf.updated_at,
@@ -142,15 +150,57 @@ class ValidateDefinitionRequest(BaseModel):
 
 
 class ValidationIssueResponse(BaseModel):
-    severity: Literal["error"] = "error"
+    severity: Literal["error", "warning"] = "error"
     node_id: str | None = None
     field_path: list[Any] = Field(default_factory=list)
     message: str
+    code: str | None = None
 
 
 class ValidateDefinitionResponse(BaseModel):
     valid: bool
     issues: list[ValidationIssueResponse] = Field(default_factory=list)
+
+
+class MergeFieldResponse(BaseModel):
+    name: str
+    token: str
+    label: str
+    description: str
+    sample: str
+    group: str
+
+
+class ChannelReadinessDetail(BaseModel):
+    channel: str
+    ready: bool
+    reason: str | None = None
+
+
+class ChannelReadinessResponse(BaseModel):
+    sms: bool
+    email: bool
+    voice_configurable: bool
+    details: list[ChannelReadinessDetail] = Field(default_factory=list)
+
+
+class DryRunRequest(BaseModel):
+    definition: dict[str, Any]
+    context: dict[str, Any] | None = None
+    condition_choices: dict[str, bool] | None = None
+
+
+class DryRunStepResponse(BaseModel):
+    node_id: str
+    node_type: str
+    summary: str
+    detail: str | None = None
+
+
+class DryRunResultResponse(BaseModel):
+    steps: list[DryRunStepResponse] = Field(default_factory=list)
+    outcome: str | None = None
+    truncated: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -233,16 +283,64 @@ async def validate_definition(
     """Validate a workflow definition against the authoritative backend schema
     without persisting anything.
 
-    Mirrors exactly what publish enforces (which otherwise surfaces as a 422),
-    returned up-front and node-linked so the builder can block/annotate invalid
-    workflows before the user commits to publishing.
+    Mirrors exactly what publish enforces (which otherwise surfaces as a 422):
+    structural + reachability + consent/content-class + the Plan-12/readiness
+    seams, returned up-front and node-linked (with warnings) so the builder can
+    block/annotate before the user commits to publishing.
     """
+    inst_id = _institution_id(current_user)
+    # Pure validation — no persistence, so no location context is supplied. The
+    # Plan-10 readiness checker short-circuits on a null location (readiness is a
+    # per-location property surfaced by GET /channel-readiness), so it adds no
+    # issues here; the Plan-12 content seam is still a no-op.
+    issues = await WorkflowValidationService(
+        session=None,
+        readiness_checker=ChannelReadinessService(None),
+    ).validate(data.definition, institution_id=inst_id)
+    responses = [
+        ValidationIssueResponse(
+            severity=i.severity,
+            node_id=i.node_id,
+            field_path=list(i.field_path),
+            message=i.message,
+            code=i.code,
+        )
+        for i in issues
+    ]
+    valid = not any(i.severity == "error" for i in issues)
+    return ValidateDefinitionResponse(valid=valid, issues=responses)
+
+
+@router.post("/dry-run", response_model=DryRunResultResponse)
+async def dry_run_definition(
+    data: DryRunRequest,
+    current_user: _InstitutionAdmin,
+) -> DryRunResultResponse:
+    """Simulate a run against the authoritative backend definition + merge renderer
+    without persisting or sending. Powers the builder's test-run preview so it can't
+    drift from real engine semantics. Structurally-invalid definitions return 422."""
+    _institution_id(current_user)  # authz / institution context
     try:
-        WorkflowDefinition.model_validate(data.definition)
+        definition = WorkflowDefinition.model_validate(data.definition)
     except ValidationError as exc:
-        issues = [_issue_from_pydantic_error(e, data.definition) for e in exc.errors()]
-        return ValidateDefinitionResponse(valid=False, issues=issues)
-    return ValidateDefinitionResponse(valid=True, issues=[])
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid workflow definition: {exc.error_count()} error(s)",
+        ) from exc
+
+    result = simulate_run(
+        definition, context=data.context, condition_choices=data.condition_choices
+    )
+    return DryRunResultResponse(
+        steps=[
+            DryRunStepResponse(
+                node_id=s.node_id, node_type=s.node_type, summary=s.summary, detail=s.detail
+            )
+            for s in result.steps
+        ],
+        outcome=result.outcome,
+        truncated=result.truncated,
+    )
 
 
 @router.get("", response_model=list[WorkflowResponse])
@@ -252,6 +350,62 @@ async def list_workflows(current_user: _InstitutionAdmin) -> list[WorkflowRespon
         svc = AutomationWorkflowDefinitionService(session)
         workflows = await svc.list_workflows(institution_id=inst_id)
         return [WorkflowResponse.from_model(wf) for wf in workflows]
+
+
+@router.get("/merge-fields", response_model=list[MergeFieldResponse])
+async def list_merge_fields(
+    current_user: _InstitutionOrLocationAdmin,
+) -> list[MergeFieldResponse]:
+    """Return the catalog of static merge fields the message renderer substitutes.
+
+    Sourced from the renderer's own ``STATIC_MERGE_FIELDS`` (single source of
+    truth) so the builder's insert-field menu can never advertise a token the
+    engine won't fill. Campaign/trigger-context values are additionally
+    substitutable at runtime but are dynamic and not enumerated here.
+
+    NOTE: declared before ``/{workflow_id}`` so this literal path is not
+    captured as a workflow id by the parameterised route.
+    """
+    return [
+        MergeFieldResponse(
+            name=f.name,
+            token="{{" + f.name + "}}",
+            label=f.label,
+            description=f.description,
+            sample=f.sample,
+            group=f.group,
+        )
+        for f in STATIC_MERGE_FIELDS
+    ]
+
+
+@router.get("/channel-readiness", response_model=ChannelReadinessResponse)
+async def get_channel_readiness(
+    current_user: _InstitutionAdmin,
+    location_id: str = Query(..., description="Location to check channel readiness for"),
+) -> ChannelReadinessResponse:
+    """Report whether SMS / email / voice are provisioned for a location so the
+    builder can surface missing setup before publish (B6).
+
+    Readiness is computed from existing credentials (Twilio sender number /
+    sub-account creds, email from-address, per-location Retell agent) — there is
+    no readiness state table. Provisioning stays manual in this MVP, so these are
+    advisory: an unready channel warns at publish but does not block it.
+
+    NOTE: declared before ``/{workflow_id}`` so this literal path is not captured
+    as a workflow id by the parameterised route.
+    """
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        report = await ChannelReadinessService(session).readiness_for_location(
+            institution_id=inst_id, location_id=location_id
+        )
+    return ChannelReadinessResponse(
+        sms=report.sms,
+        email=report.email,
+        voice_configurable=report.voice_configurable,
+        details=[ChannelReadinessDetail(**d) for d in report.details],
+    )
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
@@ -421,15 +575,23 @@ async def enroll_in_workflow(
             # task if response latency becomes a concern at higher volume.
             version = await session.get(AutomationWorkflowVersion, str(wf.current_version_id))
             definition = WorkflowDefinition.model_validate(version.definition)
-            runtime = AutomationWorkflowRuntimeService(session)
-            scheduler = AutomationWorkflowSchedulerService(session)
-            dispatcher = WorkflowStepDispatcher(session, runtime, scheduler)
-            await runtime.start_run(run)
+            # Single wiring path: injects the real ComplianceGateService and
+            # resolves the location timezone (never NoOp / never hardcoded UTC).
+            # The live PMS revalidator guards appointment-triggered sends against
+            # cancelled/rescheduled appointments; it is a no-op for other runs.
+            from src.app.services.automation.revalidation import PmsLiveRevalidationService
+
+            dispatcher, location_timezone = await build_dispatcher(
+                session,
+                location_id=location_id,
+                revalidator=PmsLiveRevalidationService(session),
+            )
+            await dispatcher.runtime.start_run(run)
             await dispatcher.advance(
                 run,
                 definition,
                 context=run.trigger_metadata or {},
-                location_timezone="UTC",
+                location_timezone=location_timezone,
             )
 
     return WorkflowRunResponse.from_model(run)
@@ -590,6 +752,8 @@ class OutboundHaltResponse(BaseModel):
     reason: str | None = None
     halted_at: datetime | None = None
     halted_by_user_id: str | None = None
+    # Number of in-flight runs terminated when the halt was activated.
+    halted_runs: int | None = None
 
 
 @router.get("/outbound-halt", response_model=OutboundHaltResponse)
@@ -666,6 +830,17 @@ async def activate_outbound_halt(
         halt_id = halt.id
         halt_reason = halt.reason
         halt_created = halt.created_at
+
+        # A halt is a kill switch: terminate in-flight runs now (cancel their
+        # timers) so waiting runs can't fire during the halt — not just block the
+        # next send. New sends are also blocked by the compliance gate reading
+        # this halt row.
+        def_svc = AutomationWorkflowDefinitionService(session)
+        halted_runs = await def_svc.emergency_halt_institution(
+            institution_id=inst_id,
+            actor_user_id=str(current_user.id),
+            reason=data.reason or "emergency_halt",
+        )
         await session.commit()
 
     return OutboundHaltResponse(
@@ -674,6 +849,7 @@ async def activate_outbound_halt(
         reason=halt_reason,
         halted_at=halt_created,
         halted_by_user_id=str(current_user.id),
+        halted_runs=halted_runs,
     )
 
 
@@ -706,3 +882,40 @@ async def release_outbound_halt(
         await session.commit()
 
     return OutboundHaltResponse(halted=False)
+
+
+class WorkflowHaltResponse(BaseModel):
+    workflow_id: str
+    halted_runs: int
+    status: str
+
+
+@router.post("/{workflow_id}/emergency-halt", response_model=WorkflowHaltResponse)
+async def emergency_halt_workflow(
+    workflow_id: str,
+    current_user: _InstitutionAdmin,
+    data: OutboundHaltRequest | None = None,
+) -> WorkflowHaltResponse:
+    """Emergency-halt a single workflow: terminate all in-flight runs on its
+    current version (cancelling their timers) and pause the workflow so no new
+    enrollments start. Distinct from pause, which leaves in-flight runs to finish."""
+    inst_id = _institution_id(current_user)
+    reason = (data.reason if data else None) or "emergency_halt"
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        halted = 0
+        if wf.current_version_id:
+            halted = await svc.emergency_halt_version(
+                institution_id=inst_id,
+                workflow_version_id=str(wf.current_version_id),
+                actor_user_id=str(current_user.id),
+                reason=reason,
+            )
+        if wf.status == AutomationWorkflowStatus.ACTIVE.value:
+            await svc.pause_workflow(wf)
+        status_val = wf.status
+        await session.commit()
+    return WorkflowHaltResponse(
+        workflow_id=workflow_id, halted_runs=halted, status=status_val
+    )

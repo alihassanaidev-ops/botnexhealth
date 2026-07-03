@@ -547,6 +547,12 @@ export interface AutomationWorkflow {
     current_version_id: string | null;
     created_at: string;
     updated_at: string;
+    /**
+     * Target location this workflow runs against, or null for
+     * institution-level workflows. Drives the builder's channel-readiness
+     * check (only location-scoped workflows have channels to verify).
+     */
+    location_id?: string | null;
 }
 
 export interface AutomationWorkflowRun {

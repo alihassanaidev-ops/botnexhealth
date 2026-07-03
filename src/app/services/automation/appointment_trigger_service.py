@@ -89,3 +89,15 @@ def make_appointment_idempotency_key(
 ) -> str:
     """Stable idempotency key preventing double-enrollment per appointment per version."""
     return f"appt:{workflow_version_id}:{appointment_id}"
+
+
+def make_recall_idempotency_key(
+    workflow_version_id: str, patient_id: str, period: str
+) -> str:
+    """Stable idempotency key for recall enrollment.
+
+    Scoped by ``period`` (e.g. ``"2026-07"``) so a patient who stays overdue is
+    enrolled at most once per period per workflow version, even though the recall
+    scanner runs repeatedly (hourly beat).
+    """
+    return f"recall:{workflow_version_id}:{patient_id}:{period}"

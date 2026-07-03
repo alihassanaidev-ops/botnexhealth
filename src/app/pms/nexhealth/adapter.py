@@ -310,6 +310,46 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             logger.warning(f"Failed to check provider appointments: {e}")
             return True  # safe fallback — don't hide slots
 
+    async def get_appointment(self, appointment_id: str) -> dict[str, Any] | None:
+        """Fetch a single appointment's current record from NexHealth.
+
+        Returns the raw appointment dict (carrying ``cancelled``/``start_time``)
+        or ``None`` if it cannot be read. Used by the dispatch-time revalidator
+        (Plan 09) so a cancelled or rescheduled appointment is not messaged.
+        Goes through ``handle_nexhealth_request`` so the shared API key's
+        rate-limit/pacing wrapper still applies.
+        """
+        params = self._default_params()
+        try:
+            raw = await handle_nexhealth_request(
+                self._client, "GET", f"/appointments/{_strip(appointment_id)}", params=params
+            )
+        except Exception:
+            return None
+        data = raw.get("data")
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict) or not data.get("id"):
+            return None
+        return data
+
+    async def list_patient_recalls(self, *, max_items: int = 500) -> list[dict[str, Any]]:
+        """List patient recall records for this location from NexHealth.
+
+        NexHealth exposes recall queues (``GET /recalls``) scoped by subdomain +
+        location (capability "View patient recalls"). Each record carries a
+        ``patient_id`` and a ``due_date``; the recall scanner derives "overdue"
+        from the due date. Paged via the shared ``fetch_all_pages`` helper so the
+        shared API key's rate limiter/pacing wrapper still governs the pull.
+        """
+        params = self._default_params()
+
+        async def fetch(page: int, per_page: int) -> dict[str, Any]:
+            p = {**params, "page": page, "per_page": per_page}
+            return await handle_nexhealth_request(self._client, "GET", "/recalls", params=p)
+
+        return await fetch_all_pages(fetch, per_page=50, max_items=max_items)
+
     # ── Operatories ──────────────────────────────────────────────────────
 
     async def list_operatories(self) -> list[UniversalOperatory]:

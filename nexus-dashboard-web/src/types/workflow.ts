@@ -3,8 +3,9 @@
  *
  * This mirrors `src/app/services/automation/definition_schema.py` EXACTLY (snake_case
  * field names), because this object is round-tripped verbatim to/from the backend
- * (`POST/PATCH /automation/workflows`). The backend uses Pydantic `extra="forbid"`, so
- * NO extra keys (e.g. visual coordinates) may be added — layout is derived client-side.
+ * (`POST/PATCH /automation/workflows`). The backend forbids unknown keys, but now
+ * accepts two presentational top-level passthroughs the runtime ignores: `compliance`
+ * and `layout` (manual canvas coordinates). Everything else must match the schema.
  */
 
 export const SCHEMA_VERSION = "1.0" as const
@@ -135,11 +136,38 @@ export type WorkflowNode =
     | ConditionNode
     | ExitNode
 
+// ---------------------------------------------------------------------------
+// Compliance metadata (top-level `compliance` block; mirrors backend
+// `ComplianceMetadata` in definition_schema.py). Drives the validation
+// service's consent-path + content-class checks.
+// ---------------------------------------------------------------------------
+export type ContentClass = "transactional_care" | "recall" | "sales" | "marketing"
+
+export interface ComplianceMetadata {
+    content_class: ContentClass | null
+    consent_required: boolean
+}
+
+/** Presentational canvas coordinate for a node (keyed by node id). */
+export interface NodePosition {
+    x: number
+    y: number
+}
+
 export interface WorkflowDefinition {
     schema_version: typeof SCHEMA_VERSION
     trigger: WorkflowTrigger
     entry_node_id: string
     nodes: WorkflowNode[]
+    /** Optional compliance classification (content class + consent basis). */
+    compliance?: ComplianceMetadata | null
+    /**
+     * Optional presentational layout — manual canvas positions keyed by node id
+     * (the synthetic trigger uses `TRIGGER_NODE_ID`). Purely visual: the runtime
+     * ignores it, and edges/`next_node_id` remain the source of truth. Backend
+     * accepts it as a top-level passthrough.
+     */
+    layout?: Record<string, NodePosition> | null
 }
 
 /** Node types that carry exactly one forward pointer (`next_node_id`). */
@@ -159,16 +187,77 @@ export interface ValidationIssue {
     message: string
     /** Optional recommended fix, surfaced in the validation panel. */
     fix?: string
+    /** Pydantic-style location path (backend issues only). */
+    field_path?: (string | number)[]
+    /** Machine code for the issue, e.g. "consent_required" (backend issues). */
+    code?: string
 }
 
 // ---------------------------------------------------------------------------
-// Merge fields (client-side catalog until a backend catalog endpoint exists)
+// Backend validate endpoint — `POST /automation/workflows/validate`
+// ---------------------------------------------------------------------------
+export interface ValidateDefinitionResponse {
+    valid: boolean
+    issues: ValidationIssue[]
+}
+
+// ---------------------------------------------------------------------------
+// Channel readiness — `GET /automation/workflows/channel-readiness?location_id=`
+// Mirrors backend `ChannelReadinessResponse`. Advisory (Plan 02 B6 / Plan 10):
+// an unready channel the definition uses WARNS at publish but never hard-blocks.
+// ---------------------------------------------------------------------------
+/** The three deliverable channels a send node can target. */
+export type ChannelKey = "sms" | "email" | "voice"
+
+export interface ChannelReadinessDetail {
+    /** "sms" | "email" | "voice" (mirrors backend detail channel names). */
+    channel: string
+    ready: boolean
+    reason: string | null
+}
+
+export interface ChannelReadiness {
+    sms: boolean
+    email: boolean
+    voice_configurable: boolean
+    details: ChannelReadinessDetail[]
+}
+
+// ---------------------------------------------------------------------------
+// Version history — `GET /automation/workflows/{id}/versions` (newest-first)
+// ---------------------------------------------------------------------------
+export interface WorkflowVersion {
+    id: string
+    workflow_id: string
+    version_number: number
+    definition: WorkflowDefinition
+    definition_checksum: string | null
+    content_classification: string | null
+    published_by_user_id: string | null
+    published_at: string
+    created_at: string
+    is_current: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Merge fields — sourced from `GET /automation/workflows/merge-fields`.
+// `MergeField` is the light shape the builder's preview/insert affordances use;
+// `MergeFieldCatalogItem` mirrors the full backend `MergeFieldResponse`.
 // ---------------------------------------------------------------------------
 export interface MergeField {
     /** Full token including braces, e.g. "{{patient_first_name}}". */
     token: string
     label: string
     sample: string
+}
+
+export interface MergeFieldCatalogItem {
+    name: string
+    token: string
+    label: string
+    description: string
+    sample: string
+    group: string
 }
 
 // ---------------------------------------------------------------------------

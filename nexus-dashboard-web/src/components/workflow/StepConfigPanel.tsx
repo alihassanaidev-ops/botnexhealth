@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/select"
 import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
-import { MERGE_FIELDS } from "@/lib/workflow/merge-fields"
+import { useMergeFields } from "@/lib/workflow/merge-fields"
 import { TRIGGER_NODE_ID } from "@/lib/workflow/graph"
 import type {
     ConditionNode,
@@ -504,6 +504,7 @@ function MessageField({
     onChange: (v: string) => void
     readOnly?: boolean
 }) {
+    const mergeFields = useMergeFields()
     return (
         <div className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -514,7 +515,7 @@ function MessageField({
                             <SelectValue placeholder="Insert field" />
                         </SelectTrigger>
                         <SelectContent>
-                            {MERGE_FIELDS.map((f) => (
+                            {mergeFields.map((f) => (
                                 <SelectItem key={f.token} value={f.token} className="text-xs">
                                     {f.label}
                                 </SelectItem>

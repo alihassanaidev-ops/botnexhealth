@@ -263,12 +263,11 @@ async def test_dispatch_timer_happy_path_returns_dispatch_result() -> None:
     from src.app.services.automation.step_dispatcher import DispatchResult
 
     mock_dispatcher = AsyncMock()
+    mock_dispatcher.scheduler = AsyncMock()
+    mock_dispatcher.scheduler.fire_timer = AsyncMock()
     mock_dispatcher.resume_after_timer = AsyncMock(
         return_value=DispatchResult(status="completed", outcome="done", steps_advanced=1)
     )
-    mock_sched = AsyncMock()
-    mock_sched.fire_timer = AsyncMock()
-    mock_runtime = AsyncMock()
 
     with (
         patch(
@@ -276,16 +275,8 @@ async def test_dispatch_timer_happy_path_returns_dispatch_result() -> None:
             return_value=session,
         ),
         patch(
-            "src.app.tasks.automation_workflow.AutomationWorkflowSchedulerService",
-            return_value=mock_sched,
-        ),
-        patch(
-            "src.app.tasks.automation_workflow.AutomationWorkflowRuntimeService",
-            return_value=mock_runtime,
-        ),
-        patch(
-            "src.app.tasks.automation_workflow.WorkflowStepDispatcher",
-            return_value=mock_dispatcher,
+            "src.app.tasks.automation_workflow.build_dispatcher",
+            new=AsyncMock(return_value=(mock_dispatcher, "UTC")),
         ),
     ):
         result = await _dispatch_timer_async(
@@ -298,5 +289,73 @@ async def test_dispatch_timer_happy_path_returns_dispatch_result() -> None:
     assert result["dispatch_status"] == "completed"
     assert result["outcome"] == "done"
     assert result["steps_advanced"] == 1
-    mock_sched.fire_timer.assert_awaited_once()
+    mock_dispatcher.scheduler.fire_timer.assert_awaited_once()
     mock_dispatcher.resume_after_timer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_timer_defers_when_workflow_paused() -> None:
+    """A waiting run whose workflow is paused is deferred (timer re-armed), not
+    advanced — pause stops in-flight runs, not just new enrollments."""
+    from src.app.models.automation_workflow import (
+        AutomationWorkflow,
+        AutomationWorkflowStatus,
+    )
+
+    timer = MagicMock()
+    timer.id = "t-1"
+    timer.status = AutomationTimerStatus.CLAIMED.value
+
+    run = MagicMock()
+    run.id = "run-1"
+    run.status = AutomationRunStatus.WAITING.value
+    run.workflow_id = "wf-1"
+    run.location_id = None
+
+    workflow = MagicMock()
+    workflow.status = AutomationWorkflowStatus.PAUSED.value
+
+    session = _mock_session_get({
+        (AutomationWorkflowTimer, "t-1"): timer,
+        (AutomationWorkflowRun, "run-1"): run,
+        (AutomationWorkflow, "wf-1"): workflow,
+    })
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            return_value=session,
+        ),
+        patch("src.app.tasks.automation_workflow.build_dispatcher") as mock_build,
+    ):
+        result = await _dispatch_timer_async(
+            timer_id="t-1", institution_id="inst-1", location_id=None, run_id="run-1"
+        )
+
+    assert result["skipped"] is True
+    assert result["reason"] == "workflow paused"
+    assert result.get("deferred") is True
+    mock_build.assert_not_called()
+    assert timer.status == AutomationTimerStatus.PENDING.value  # re-armed, not fired
+
+
+@pytest.mark.asyncio
+async def test_recover_stale_async_returns_count() -> None:
+    """The stale-claim recovery task delegates to the scheduler and reports count."""
+    from src.app.tasks.automation_workflow import _recover_stale_async
+
+    session = _mock_session_get({})
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            return_value=session,
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.AutomationWorkflowSchedulerService"
+        ) as mock_cls,
+    ):
+        mock_cls.return_value.recover_stale_claims = AsyncMock(return_value=3)
+        result = await _recover_stale_async()
+
+    assert result["recovered"] == 3
+    mock_cls.return_value.recover_stale_claims.assert_awaited_once()

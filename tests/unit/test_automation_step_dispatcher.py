@@ -164,6 +164,102 @@ def test_advance_wait_node_returns_waiting() -> None:
 
 
 # ---------------------------------------------------------------------------
+# advance() — compliance hold defers the send (never drops it, scope §8)
+# ---------------------------------------------------------------------------
+
+
+def test_advance_send_hold_defers_via_timer() -> None:
+    """A 'hold' schedules a resume timer at retry_at and waits — it must NOT
+    terminate the run (the pre-fix behavior dropped the message)."""
+    from datetime import timedelta
+
+    from src.app.services.automation.compliance_gate import GateResult
+
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    resume_at = _NOW + timedelta(hours=5)
+    gate = AsyncMock()
+    gate.check = AsyncMock(
+        return_value=GateResult(action="hold", reason="quiet_hours", retry_at=resume_at)
+    )
+    dispatcher = WorkflowStepDispatcher(session, rt, sched, gate=gate)
+
+    run = _make_run()
+    defn = _definition(
+        nodes=[
+            SendSmsNode(id="sms-1", body_template="Hi", next_node_id="exit-1"),
+            ExitNode(id="exit-1", outcome="sent"),
+        ],
+        entry="sms-1",
+    )
+
+    result = asyncio.run(dispatcher.advance(run, defn, context={}, now=_NOW))
+
+    assert result.status == "waiting"
+    assert result.timer_id == "timer-1"
+    sched.create_timer.assert_awaited_once()
+    assert sched.create_timer.await_args.kwargs["due_at"] == resume_at
+    rt.wait_run.assert_awaited_once()
+    rt.complete_run.assert_not_awaited()  # the send is deferred, not dropped
+
+
+def test_advance_revalidation_skips_send() -> None:
+    """If dispatch-time revalidation returns a terminal outcome, the send is skipped
+    and the run exits with that outcome (e.g. appointment cancelled)."""
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    reval = AsyncMock()
+    reval.revalidate = AsyncMock(return_value="skipped_cancelled")
+    dispatcher = WorkflowStepDispatcher(session, rt, sched, revalidator=reval)
+
+    run = _make_run()
+    defn = _definition(
+        nodes=[
+            SendSmsNode(id="sms-1", body_template="Hi", next_node_id="exit-1"),
+            ExitNode(id="exit-1", outcome="sent"),
+        ],
+        entry="sms-1",
+    )
+    result = asyncio.run(dispatcher.advance(run, defn, context={}))
+
+    assert result.status == "completed"
+    assert result.outcome == "skipped_cancelled"
+    reval.revalidate.assert_awaited_once()
+
+
+def test_calendar_send_jitter_within_bounds() -> None:
+    """Calendar sends get bounded jitter to avoid vendor stampedes."""
+    from datetime import timedelta
+
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched, calendar_jitter_seconds=300)
+
+    run = _make_run()
+    defn = _definition(
+        nodes=[
+            WaitNode(
+                id="w1",
+                delay=CalendarDelay(offset_days=1, time_of_day="09:00"),
+                next_node_id="exit-1",
+            ),
+            ExitNode(id="exit-1"),
+        ],
+        entry="w1",
+    )
+    asyncio.run(dispatcher.advance(run, defn, context={}, now=_NOW))
+
+    base = _compute_due_at(
+        CalendarDelay(offset_days=1, time_of_day="09:00"), "UTC", _NOW
+    )
+    due = sched.create_timer.await_args.kwargs["due_at"]
+    assert base <= due <= base + timedelta(seconds=300)
+
+
+# ---------------------------------------------------------------------------
 # advance() — condition node branches correctly
 # ---------------------------------------------------------------------------
 

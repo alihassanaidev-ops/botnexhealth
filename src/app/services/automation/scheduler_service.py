@@ -121,6 +121,23 @@ class AutomationWorkflowSchedulerService:
             await self.session.flush()
         return len(timers)
 
+    async def reschedule_timer(
+        self, timer: AutomationWorkflowTimer, *, due_at: datetime
+    ) -> AutomationWorkflowTimer:
+        """Return a claimed timer to pending with a new due time (defer dispatch).
+
+        Used when a run cannot advance yet but must not be dropped — e.g. its
+        workflow is paused: the timer is re-armed for a later poll rather than
+        fired/cancelled, so the run resumes once the workflow is active again.
+        """
+        timer.status = AutomationTimerStatus.PENDING.value
+        timer.due_at = due_at
+        timer.claim_token = None
+        timer.claimed_at = None
+        timer.claim_expires_at = None
+        await self.session.flush()
+        return timer
+
     async def recover_stale_claims(
         self, *, now: datetime | None = None
     ) -> int:

@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest"
 import {
     addNode,
     blankDefinition,
+    clearLayout,
     computeDepths,
+    connectNodes,
     createNode,
     createTrigger,
     definitionToFlow,
@@ -12,6 +14,7 @@ import {
     removeNode,
     serializeDefinition,
     setEntry,
+    setNodePosition,
     TRIGGER_NODE_ID,
     updateNode,
 } from "@/lib/workflow/graph"
@@ -168,5 +171,81 @@ describe("workflow graph — mutations", () => {
     })
     it("serializeDefinition always stamps schema_version", () => {
         expect(serializeDefinition(LINEAR).schema_version).toBe("1.0")
+    })
+})
+
+describe("workflow graph — drag-to-connect (Phase 4)", () => {
+    it("connecting from a linear/send node sets its next_node_id", () => {
+        const next = connectNodes(LINEAR, "sms-1", "exit-1")
+        const sms = next.nodes.find((n) => n.id === "sms-1")!
+        expect(sms.type === "send_sms" && sms.next_node_id).toBe("exit-1")
+    })
+
+    it("connecting from a condition node's true/false handle sets the matching branch", () => {
+        const t = connectNodes(BRANCHED, "cond-1", "exit-no", "true")
+        const f = connectNodes(BRANCHED, "cond-1", "exit-yes", "false")
+        const tCond = t.nodes.find((n) => n.id === "cond-1")!
+        const fCond = f.nodes.find((n) => n.id === "cond-1")!
+        expect(tCond.type === "condition" && tCond.true_next_node_id).toBe("exit-no")
+        // Untouched branch preserved.
+        expect(tCond.type === "condition" && tCond.false_next_node_id).toBe("exit-no")
+        expect(fCond.type === "condition" && fCond.false_next_node_id).toBe("exit-yes")
+    })
+
+    it("connecting from the synthetic trigger repoints entry_node_id", () => {
+        const next = connectNodes(LINEAR, TRIGGER_NODE_ID, "wait-1")
+        expect(next.entry_node_id).toBe("wait-1")
+    })
+
+    it("connecting from an exit node is a no-op", () => {
+        expect(connectNodes(LINEAR, "exit-1", "sms-1")).toBe(LINEAR)
+    })
+
+    it("is immutable — the original definition is untouched", () => {
+        connectNodes(LINEAR, "sms-1", "exit-1")
+        expect((LINEAR.nodes[0] as { next_node_id: string }).next_node_id).toBe("wait-1")
+    })
+})
+
+describe("workflow graph — presentational layout (Phase 4)", () => {
+    it("setNodePosition persists a position into definition.layout keyed by node id", () => {
+        const next = setNodePosition(LINEAR, "sms-1", { x: 512, y: 128 })
+        expect(next.layout).toEqual({ "sms-1": { x: 512, y: 128 } })
+        // Original untouched.
+        expect(LINEAR.layout).toBeUndefined()
+    })
+
+    it("setNodePosition merges without dropping other saved positions", () => {
+        const a = setNodePosition(LINEAR, "sms-1", { x: 1, y: 2 })
+        const b = setNodePosition(a, "wait-1", { x: 3, y: 4 })
+        expect(b.layout).toEqual({ "sms-1": { x: 1, y: 2 }, "wait-1": { x: 3, y: 4 } })
+    })
+
+    it("definitionToFlow uses a saved layout position when present, else auto-layout", () => {
+        const withPos = setNodePosition(LINEAR, "sms-1", { x: 999, y: 777 })
+        const { nodes } = definitionToFlow(withPos)
+        const sms = nodes.find((n) => n.id === "sms-1")!
+        expect(sms.position).toEqual({ x: 999, y: 777 })
+        // A node with no saved position still gets an auto-layout coordinate.
+        const wait = nodes.find((n) => n.id === "wait-1")!
+        expect(typeof wait.position.x).toBe("number")
+    })
+
+    it("Tidy layout (clearLayout) drops manual positions so auto-layout resumes", () => {
+        const withPos = setNodePosition(LINEAR, "sms-1", { x: 999, y: 777 })
+        const tidied = clearLayout(withPos)
+        expect(tidied.layout).toBeUndefined()
+        const auto = definitionToFlow(LINEAR).nodes.find((n) => n.id === "sms-1")!
+        const tidiedSms = definitionToFlow(tidied).nodes.find((n) => n.id === "sms-1")!
+        expect(tidiedSms.position).toEqual(auto.position)
+    })
+
+    it("layout is purely presentational — it never changes derived edges/semantics", () => {
+        const base = definitionToFlow(LINEAR).edges
+        const moved = definitionToFlow(setNodePosition(LINEAR, "sms-1", { x: 42, y: 42 })).edges
+        // Same edges (source/target/handle), regardless of position.
+        const norm = (es: typeof base) =>
+            es.map((e) => ({ source: e.source, target: e.target, handle: e.sourceHandle ?? null }))
+        expect(norm(moved)).toEqual(norm(base))
     })
 })

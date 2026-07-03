@@ -55,6 +55,9 @@ _EVENT_SCHEMAS: dict[str, type[BaseModel]] = {
     "callbacks_updated": _EmptyEvent,
     "dashboard_updated": _EmptyEvent,
     "notification": _NotificationEvent,
+    # Workflow/automation run progress — PHI-free refetch hint for the campaign
+    # progress UI (Plan 02/08). Carries no run detail; the client refetches.
+    "workflow_run_updated": _EmptyEvent,
 }
 
 SUPPORTED_EVENT_TYPES = frozenset(_EVENT_SCHEMAS.keys())

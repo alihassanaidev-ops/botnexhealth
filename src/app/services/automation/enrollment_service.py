@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.automation_workflow import (
@@ -15,6 +16,14 @@ from src.app.models.automation_workflow import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Non-terminal run statuses — a contact already in one of these for a workflow
+# must not be enrolled into a second, conflicting run of the same workflow.
+_ACTIVE_RUN_STATUSES = (
+    AutomationRunStatus.PENDING.value,
+    AutomationRunStatus.RUNNING.value,
+    AutomationRunStatus.WAITING.value,
+)
 
 
 class AutomationWorkflowEnrollmentService:
@@ -48,15 +57,25 @@ class AutomationWorkflowEnrollmentService:
         returned with created=False (no duplicate created).
         """
         if idempotency_key:
-            result = await self.session.execute(
-                select(AutomationWorkflowRun).where(
-                    AutomationWorkflowRun.institution_id == institution_id,
-                    AutomationWorkflowRun.idempotency_key == idempotency_key,
-                )
+            existing = await self._find_by_idempotency(
+                institution_id, workflow_version_id, idempotency_key
             )
-            existing = result.scalar_one_or_none()
             if existing is not None:
                 return existing, False
+
+        # Conflicting-active-run dedup: a contact already in a non-terminal run of
+        # this workflow is not enrolled again (avoids double-contact). Re-enrollment
+        # is allowed once the prior run reaches a terminal state.
+        if contact_id is not None:
+            conflicting = await self._find_active_run(
+                institution_id, workflow_id, contact_id
+            )
+            if conflicting is not None:
+                logger.info(
+                    "enroll: contact %s already has active run %s for workflow %s",
+                    contact_id, conflicting.id, workflow_id,
+                )
+                return conflicting, False
 
         run = AutomationWorkflowRun(
             institution_id=institution_id,
@@ -72,7 +91,25 @@ class AutomationWorkflowEnrollmentService:
             status=AutomationRunStatus.PENDING.value,
         )
         self.session.add(run)
-        await self.session.flush()
+        try:
+            # Savepoint: if a concurrent enrollment wins the race on the
+            # (institution, version, idempotency_key) unique index, the failed
+            # INSERT is rolled back to here without poisoning the outer
+            # transaction, and we return the winner's run instead of 500ing.
+            async with self.session.begin_nested():
+                await self.session.flush()
+        except IntegrityError:
+            if idempotency_key:
+                existing = await self._find_by_idempotency(
+                    institution_id, workflow_version_id, idempotency_key
+                )
+                if existing is not None:
+                    logger.info(
+                        "enroll: idempotency race resolved institution=%s key=%s",
+                        institution_id, idempotency_key,
+                    )
+                    return existing, False
+            raise
 
         self.session.add(
             AutomationWorkflowEvent(
@@ -89,6 +126,39 @@ class AutomationWorkflowEnrollmentService:
         )
         await self.session.flush()
         return run, True
+
+    async def _find_active_run(
+        self, institution_id: str, workflow_id: str, contact_id: str
+    ) -> AutomationWorkflowRun | None:
+        """Find a non-terminal run for this contact on this workflow, if any."""
+        result = await self.session.execute(
+            select(AutomationWorkflowRun)
+            .where(
+                AutomationWorkflowRun.institution_id == institution_id,
+                AutomationWorkflowRun.workflow_id == workflow_id,
+                AutomationWorkflowRun.contact_id == contact_id,
+                AutomationWorkflowRun.status.in_(_ACTIVE_RUN_STATUSES),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _find_by_idempotency(
+        self,
+        institution_id: str,
+        workflow_version_id: str,
+        idempotency_key: str,
+    ) -> AutomationWorkflowRun | None:
+        """Look up an existing run by the same grain as the DB unique index
+        (institution_id, workflow_version_id, idempotency_key)."""
+        result = await self.session.execute(
+            select(AutomationWorkflowRun).where(
+                AutomationWorkflowRun.institution_id == institution_id,
+                AutomationWorkflowRun.workflow_version_id == workflow_version_id,
+                AutomationWorkflowRun.idempotency_key == idempotency_key,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def cancel_run(
         self,

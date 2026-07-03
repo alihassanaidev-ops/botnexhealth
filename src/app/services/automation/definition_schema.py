@@ -174,6 +174,35 @@ WorkflowNode = Annotated[
 ]
 
 # ---------------------------------------------------------------------------
+# Compliance metadata + visual layout (non-executable)
+# ---------------------------------------------------------------------------
+
+
+class ComplianceMetadata(BaseModel):
+    """Compliance classification for the workflow. Consumed by the validation
+    service (consent-path + content-class checks) and rendered in the builder's
+    validation panel. The semantic content/PHI/blast-radius validators are owned
+    by Plan 12; this block carries the classification they act on."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # exempt-care/recall vs. marketing drives the consent basis and content rules.
+    content_class: Literal["transactional_care", "recall", "sales", "marketing"] | None = None
+    # Whether send steps require a recorded consent record on the channel.
+    consent_required: bool = True
+
+
+class NodeLayout(BaseModel):
+    """Visual canvas coordinates for a node. Purely presentational — never read by
+    the runtime (execution semantics come from node ids/edges, not coordinates)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    x: float
+    y: float
+
+
+# ---------------------------------------------------------------------------
 # Top-level definition
 # ---------------------------------------------------------------------------
 
@@ -187,6 +216,9 @@ class WorkflowDefinition(BaseModel):
     trigger: WorkflowTrigger
     entry_node_id: str
     nodes: list[WorkflowNode] = Field(min_length=1)
+    compliance: ComplianceMetadata | None = None
+    # node_id -> {x, y}; presentational only, ignored by the runtime.
+    layout: dict[str, NodeLayout] | None = None
 
     @model_validator(mode="after")
     def validate_graph_structure(self) -> "WorkflowDefinition":

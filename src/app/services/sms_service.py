@@ -21,6 +21,7 @@ from src.app.config import settings
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.services.dead_letter import should_retry_vendor_error
+from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
 from src.app.services.retention_policy import (
     default_sms_body_retain_until,
     default_sms_row_retain_until,
@@ -197,9 +198,10 @@ class SmsService:
         await self.session.flush()
 
         try:
+            creds = TenantTwilioCredentialResolver.resolve_sms(institution, location)
             client = self._get_twilio_client(
-                account_sid=institution.twilio_account_sid if institution else None,
-                auth_token=institution.twilio_auth_token if institution else None,
+                account_sid=creds.account_sid,
+                auth_token=creds.auth_token,
             )
 
             # Using asyncio to offload the blocking Twilio client network call

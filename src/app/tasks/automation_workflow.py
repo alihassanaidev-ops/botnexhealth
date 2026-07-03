@@ -4,34 +4,39 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+import random
+from datetime import datetime, timedelta, timezone
 
 from src.app.database import get_system_db_session, init_database, is_database_initialized
 from src.app.models.automation_workflow import (
     AutomationRunStatus,
     AutomationTimerStatus,
+    AutomationWorkflow,
     AutomationWorkflowRun,
+    AutomationWorkflowStatus,
     AutomationWorkflowTimer,
     AutomationWorkflowVersion,
 )
-from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.appointment_trigger_service import (
     AppointmentTriggerService,
     compute_enrollment_eta,
     make_appointment_idempotency_key,
+    make_recall_idempotency_key,
 )
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
-from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+from src.app.services.automation.revalidation import PmsLiveRevalidationService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
-from src.app.services.automation.compliance_gate_service import ComplianceGateService
-from src.app.services.automation.step_dispatcher import WorkflowStepDispatcher
+from src.app.services.automation.step_dispatcher import build_dispatcher
+from src.app.services.dead_letter import capture_dead_letter
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
 
 _CLAIM_BATCH = 50
 _CLAIM_TTL_SECONDS = 120
+# How long to defer a waiting run whose workflow is currently paused.
+_PAUSED_DEFER_SECONDS = 300
 
 # Run statuses that can be advanced by a fired timer.
 _ADVANCEABLE_STATUSES = frozenset({
@@ -133,6 +138,20 @@ def dispatch_workflow_timer(
         logger.exception(
             "dispatch_workflow_timer failed: timer=%s run=%s: %s", timer_id, run_id, exc
         )
+        if self.request.retries >= self.max_retries:
+            # Retries exhausted — route to the dead-letter queue for operator replay
+            # (payload is ids only, PHI-free).
+            asyncio.run(
+                capture_dead_letter(
+                    source="workflow_dispatch",
+                    event_type="dispatch_workflow_timer",
+                    error=exc,
+                    payload={"timer_id": timer_id, "run_id": run_id},
+                    attempts=self.request.retries + 1,
+                    institution_id=institution_id,
+                    location_id=location_id,
+                )
+            )
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
 
 
@@ -163,6 +182,23 @@ async def _dispatch_timer_async(
             await session.commit()
             return {"skipped": True, "reason": "run not advanceable"}
 
+        # If the workflow is paused, defer this waiting run instead of advancing
+        # it. Pause must stop in-flight runs, not just new enrollments; re-arm the
+        # timer for a later poll so the run resumes once the workflow is active.
+        workflow = await session.get(AutomationWorkflow, run.workflow_id)
+        if workflow is not None and workflow.status == AutomationWorkflowStatus.PAUSED.value:
+            svc = AutomationWorkflowSchedulerService(session)
+            await svc.reschedule_timer(
+                timer,
+                due_at=datetime.now(tz=timezone.utc)
+                + timedelta(seconds=_PAUSED_DEFER_SECONDS),
+            )
+            await session.commit()
+            logger.info(
+                "dispatch: workflow %s paused — deferred run %s", run.workflow_id, run_id
+            )
+            return {"skipped": True, "reason": "workflow paused", "deferred": True}
+
         # Load workflow version and parse definition.
         version = await session.get(AutomationWorkflowVersion, run.workflow_version_id)
         if version is None:
@@ -171,19 +207,17 @@ async def _dispatch_timer_async(
 
         definition = WorkflowDefinition.model_validate(version.definition)
 
-        # Resolve location timezone.
-        location_timezone = "UTC"
-        if run.location_id:
-            location = await session.get(InstitutionLocation, run.location_id)
-            if location and location.timezone:
-                location_timezone = location.timezone
-
-        # Build services and fire timer before dispatch.
-        runtime = AutomationWorkflowRuntimeService(session)
-        scheduler = AutomationWorkflowSchedulerService(session)
-        dispatcher = WorkflowStepDispatcher(session, runtime, scheduler, gate=ComplianceGateService(session))
-
-        await scheduler.fire_timer(timer)
+        # Build the dispatcher (real compliance gate + resolved location timezone)
+        # via the single wiring path, then fire the timer before dispatch.
+        # Inject the live PMS revalidator so an appointment-triggered run is
+        # re-checked against NexHealth immediately before send (skips cancelled/
+        # rescheduled appointments); no-op for recall/manual runs.
+        dispatcher, location_timezone = await build_dispatcher(
+            session,
+            location_id=run.location_id,
+            revalidator=PmsLiveRevalidationService(session),
+        )
+        await dispatcher.scheduler.fire_timer(timer)
 
         result = await dispatcher.resume_after_timer(
             run,
@@ -205,6 +239,67 @@ async def _dispatch_timer_async(
         "steps_advanced": result.steps_advanced,
         "outcome": result.outcome,
     }
+
+
+# ---------------------------------------------------------------------------
+# Stale-claim recovery task — runs on Celery beat, faster than the claim TTL
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.recover_stale_workflow_timers",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def recover_stale_workflow_timers(self) -> dict:
+    """Reset timers claimed by a worker that crashed before firing them.
+
+    Without this, a crash in the window between claim and dispatch strands a timer
+    in CLAIMED forever and its run silently never fires — defeating the durable
+    scheduler's core guarantee. Scheduled more frequently than the claim TTL.
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(_recover_stale_async())
+    except Exception as exc:
+        logger.exception("recover_stale_workflow_timers failed: %s", exc)
+        raise self.retry(exc=exc, countdown=15)
+
+
+async def _recover_stale_async() -> dict:
+    async with get_system_db_session(
+        "celery", external_id="workflow_stale_recovery"
+    ) as session:
+        svc = AutomationWorkflowSchedulerService(session)
+        count = await svc.recover_stale_claims()
+        await session.commit()
+    logger.info("recover_stale_workflow_timers: recovered %d timer(s)", count)
+    return {"recovered": count}
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.publish_workflow_metrics",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def publish_workflow_metrics(self) -> dict:
+    """Emit workflow-engine health metrics to CloudWatch on Celery beat.
+
+    Thin wrapper around the ``publish_workflow_metrics`` script so backlog,
+    stale-timer, and failure signals surface as CloudWatch alarms.
+    """
+    _ensure_db()
+    try:
+        from src.app.scripts.publish_workflow_metrics import (
+            publish_workflow_metrics as _publish,
+        )
+
+        return asyncio.run(_publish())
+    except Exception as exc:
+        logger.exception("publish_workflow_metrics failed: %s", exc)
+        raise self.retry(exc=exc, countdown=15)
 
 
 def _retry_countdown(retries: int) -> int:
@@ -262,6 +357,22 @@ def enroll_and_start_workflow_run(
             "enroll_and_start_workflow_run failed: workflow=%s contact=%s: %s",
             workflow_id, contact_id, exc,
         )
+        if self.request.retries >= self.max_retries:
+            asyncio.run(
+                capture_dead_letter(
+                    source="workflow_enroll",
+                    event_type="enroll_and_start_workflow_run",
+                    error=exc,
+                    payload={
+                        "workflow_id": workflow_id,
+                        "contact_id": contact_id,
+                        "idempotency_key": idempotency_key,
+                    },
+                    attempts=self.request.retries + 1,
+                    institution_id=institution_id,
+                    location_id=location_id,
+                )
+            )
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
 
 
@@ -314,18 +425,14 @@ async def _enroll_and_start_async(
             await session.commit()
             return {"run_id": str(run.id), "created": True, "skipped": True}
 
-        location_timezone = "UTC"
-        if location_id:
-            location = await session.get(InstitutionLocation, location_id)
-            if location and location.timezone:
-                location_timezone = location.timezone
-
         definition = WorkflowDefinition.model_validate(version.definition)
-        runtime = AutomationWorkflowRuntimeService(session)
-        scheduler = AutomationWorkflowSchedulerService(session)
-        dispatcher = WorkflowStepDispatcher(session, runtime, scheduler, gate=ComplianceGateService(session))
+        dispatcher, location_timezone = await build_dispatcher(
+            session,
+            location_id=location_id,
+            revalidator=PmsLiveRevalidationService(session),
+        )
 
-        await runtime.start_run(run)
+        await dispatcher.runtime.start_run(run)
         result = await dispatcher.advance(
             run, definition, context=trigger_metadata, location_timezone=location_timezone
         )
@@ -472,13 +579,14 @@ async def _trigger_appointment_async(
     queue="workflow",
 )
 def scan_recall_workflows(self) -> dict:
-    """Find active recall_scan workflows and trigger patient enrollment.
+    """Enroll patients overdue for recall into active recall_scan workflows.
 
-    Stub: identifies institutions with active recall workflows and emits a
-    per-institution scan task. The actual patient query (patients overdue for
-    a visit by recall_interval_months) requires NexHealth patient/appointment
-    history data which is resolved in a later Plan 09 slice once the
-    NexHealth sync layer is in place.
+    For each institution with active recall workflows, pulls the patient recall
+    queue from NexHealth per configured location (paced/jittered so the shared
+    NexHealth key is not hammered), derives overdue patients from their recall
+    due date, and enqueues ``enroll_and_start_workflow_run`` per (patient,
+    workflow) with a stable ``recall:{version}:{patient}:{period}`` idempotency
+    key so a persistently-overdue patient is enrolled at most once per period.
     """
     _ensure_db()
     try:
@@ -486,6 +594,40 @@ def scan_recall_workflows(self) -> dict:
     except Exception as exc:
         logger.exception("scan_recall_workflows failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+# Per-institution pacing between NexHealth recall pulls (jittered) so the
+# shared API key is not saturated when many institutions scan on the same beat.
+_RECALL_PACING_MIN_SECONDS = 0.5
+_RECALL_PACING_MAX_SECONDS = 2.0
+
+
+def _recall_patient_id(recall: dict) -> str | None:
+    """Extract the NexHealth patient id from a recall record."""
+    pid = recall.get("patient_id")
+    if pid is None:
+        patient = recall.get("patient")
+        if isinstance(patient, dict):
+            pid = patient.get("id")
+    return str(pid) if pid not in (None, "") else None
+
+
+def _recall_is_due(recall: dict, *, now: datetime) -> bool:
+    """A recall is due when it has no future due date (overdue / due today).
+
+    Records with a due date strictly in the future are skipped; a missing/
+    unparseable due date is treated as due (the record is on the recall queue).
+    """
+    raw = recall.get("due_date") or recall.get("due") or recall.get("next_visit_date")
+    if not raw:
+        return True
+    try:
+        due = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    return due <= now
 
 
 async def _scan_recall_async() -> dict:
@@ -502,26 +644,134 @@ async def _scan_recall_async() -> dict:
                 AutomationWorkflow.current_version_id.is_not(None),
             )
         )
-        rows = [
-            (wf.institution_id, wf.id, wf.current_version_id)
-            for wf in result.scalars().all()
-            if wf.trigger_type == "recall_scan"
-        ]
+        by_institution: dict[str, list[dict]] = {}
+        for wf in result.scalars().all():
+            if wf.trigger_type != "recall_scan":
+                continue
+            by_institution.setdefault(str(wf.institution_id), []).append(
+                {
+                    "workflow_id": str(wf.id),
+                    "version_id": str(wf.current_version_id),
+                }
+            )
 
-    institution_workflow_counts: dict[str, int] = {}
-    for institution_id, _wf_id, _version_id in rows:
-        institution_workflow_counts[str(institution_id)] = (
-            institution_workflow_counts.get(str(institution_id), 0) + 1
-        )
+    active_workflows = sum(len(w) for w in by_institution.values())
+    total_enrolled = 0
+    for idx, (institution_id, workflows) in enumerate(by_institution.items()):
+        if idx > 0:
+            # Jittered pacing between institutions to spread load on the shared key.
+            await asyncio.sleep(
+                random.uniform(_RECALL_PACING_MIN_SECONDS, _RECALL_PACING_MAX_SECONDS)
+            )
+        try:
+            total_enrolled += await _enroll_recalls_for_institution(
+                institution_id, workflows
+            )
+        except Exception as exc:  # noqa: BLE001 — one institution must not abort the sweep
+            logger.exception(
+                "scan_recall_workflows: institution=%s failed: %s", institution_id, exc
+            )
 
-    # NOTE: Real recall enrollment requires querying patient visit history from
-    # NexHealth per institution. Stub here logs discovered workflows and returns
-    # a summary. Wire in per-institution scan tasks when NexHealth sync is ready.
     logger.info(
-        "scan_recall_workflows: found %d active recall workflows across %d institution(s)",
-        len(rows), len(institution_workflow_counts),
+        "scan_recall_workflows: institutions=%d workflows=%d enrolled=%d",
+        len(by_institution), active_workflows, total_enrolled,
     )
     return {
-        "active_recall_workflows": len(rows),
-        "institutions": len(institution_workflow_counts),
+        "active_recall_workflows": active_workflows,
+        "institutions": len(by_institution),
+        "enrolled": total_enrolled,
     }
+
+
+async def _enroll_recalls_for_institution(
+    institution_id: str, workflows: list[dict]
+) -> int:
+    """Pull NexHealth recalls for an institution's locations and enqueue enrollments.
+
+    Returns the number of enrollment tasks enqueued.
+    """
+    from sqlalchemy import select as sa_select
+
+    from src.app.models.contact import Contact
+    from src.app.models.institution import Institution
+    from src.app.models.institution_location import InstitutionLocation
+    from src.app.pms.nexhealth.adapter import NexHealthAdapter
+
+    now = datetime.now(tz=timezone.utc)
+    period = now.strftime("%Y-%m")
+    enrolled = 0
+
+    async with get_system_db_session(
+        "celery", institution_id=institution_id, external_id=f"recall_scan:{institution_id}"
+    ) as session:
+        institution = await session.get(Institution, institution_id)
+        if institution is None:
+            return 0
+
+        loc_result = await session.execute(
+            sa_select(InstitutionLocation).where(
+                InstitutionLocation.institution_id == institution_id,
+                InstitutionLocation.nexhealth_subdomain.is_not(None),
+                InstitutionLocation.nexhealth_location_id.is_not(None),
+            )
+        )
+        locations = list(loc_result.scalars().all())
+
+        for location in locations:
+            try:
+                adapter = await NexHealthAdapter.create(institution, location)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "recall_scan: adapter build failed inst=%s loc=%s: %s",
+                    institution_id, location.id, exc,
+                )
+                continue
+            try:
+                recalls = await adapter.list_patient_recalls()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "recall_scan: recall pull failed inst=%s loc=%s: %s",
+                    institution_id, location.id, exc,
+                )
+                continue
+            finally:
+                await adapter.close()
+
+            for recall in recalls:
+                patient_id = _recall_patient_id(recall)
+                if not patient_id or not _recall_is_due(recall, now=now):
+                    continue
+
+                contact_row = await session.execute(
+                    sa_select(Contact).where(
+                        Contact.institution_id == institution_id,
+                        Contact.nexhealth_patient_id == patient_id,
+                    )
+                )
+                contact = contact_row.scalar_one_or_none()
+                contact_id = str(contact.id) if contact else None
+
+                for wf in workflows:
+                    key = make_recall_idempotency_key(wf["version_id"], patient_id, period)
+                    enroll_and_start_workflow_run.apply_async(
+                        kwargs={
+                            "institution_id": institution_id,
+                            "workflow_id": wf["workflow_id"],
+                            "workflow_version_id": wf["version_id"],
+                            "contact_id": contact_id,
+                            "location_id": str(location.id),
+                            "trigger_type": "recall_scan",
+                            "trigger_ref_type": "recall",
+                            "trigger_ref_id": patient_id,
+                            "idempotency_key": key,
+                            "trigger_metadata": {
+                                "nexhealth_patient_id": patient_id,
+                                "recall_due_date": recall.get("due_date"),
+                                "recall_period": period,
+                            },
+                        },
+                        queue="workflow",
+                    )
+                    enrolled += 1
+
+    return enrolled
