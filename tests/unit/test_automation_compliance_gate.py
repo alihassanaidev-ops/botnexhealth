@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -124,7 +124,12 @@ def test_dispatcher_allow_gate_send_proceeds():
     dispatcher = WorkflowStepDispatcher(session, rt, sched, gate=_AllowGate())
 
     run = _make_run()
-    result = asyncio.run(dispatcher.advance(run, _sms_to_exit_definition(), context={}))
+    # Patch the SMS executor — this test covers gate logic, not send execution.
+    with patch(
+        "src.app.services.automation.step_dispatcher.SmsNodeExecutor"
+    ) as MockExecutor:
+        MockExecutor.return_value.execute = AsyncMock(return_value="exit-1")
+        result = asyncio.run(dispatcher.advance(run, _sms_to_exit_definition(), context={}))
 
     assert result.status == "completed"
     assert result.outcome == "sent"

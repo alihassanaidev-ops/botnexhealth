@@ -1,7 +1,7 @@
 """Workflow step dispatcher: advances a run through its definition until wait or exit.
 
-Does not send messages. send_* nodes are stubbed here; real action handlers
-are registered in Plans 03/04/05 when channels are wired in.
+SMS sends are live (Plan 04). Voice and email send nodes remain stubbed until
+Plans 03 and 05 are implemented.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from src.app.services.automation.definition_schema import (
     WaitNode,
     WorkflowDefinition,
 )
+from src.app.services.automation.sms_node_executor import SmsNodeExecutor
 from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
@@ -126,7 +127,12 @@ class WorkflowStepDispatcher:
                     return DispatchResult(
                         status="completed", outcome="compliance_hold", steps_advanced=steps_advanced
                     )
-                current_node_id = await self._dispatch_send_stub(run, node)
+                if isinstance(node, SendSmsNode):
+                    current_node_id = await SmsNodeExecutor(
+                        self.session, self.runtime
+                    ).execute(run, node, context)
+                else:
+                    current_node_id = await self._dispatch_send_stub(run, node)
 
             elif isinstance(node, ConditionNode):
                 branch = _evaluate_condition(node, context)
