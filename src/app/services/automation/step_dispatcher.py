@@ -1,7 +1,8 @@
 """Workflow step dispatcher: advances a run through its definition until wait or exit.
 
-SMS sends are live (Plan 04). Voice and email send nodes remain stubbed until
-Plans 03 and 05 are implemented.
+All send channels are live: SMS (Plan 04), email (Plan 05), and voice (Plan 03).
+The `_dispatch_send_stub` fallback remains only as a defensive no-op for any
+unrecognized send node type.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from src.app.services.automation.definition_schema import (
 )
 from src.app.services.automation.email_node_executor import EmailNodeExecutor
 from src.app.services.automation.sms_node_executor import SmsNodeExecutor
+from src.app.services.automation.voice_node_executor import VoiceNodeExecutor
 from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
@@ -134,6 +136,10 @@ class WorkflowStepDispatcher:
                     ).execute(run, node, context)
                 elif isinstance(node, SendEmailNode):
                     current_node_id = await EmailNodeExecutor(
+                        self.session, self.runtime
+                    ).execute(run, node, context)
+                elif isinstance(node, SendVoiceNode):
+                    current_node_id = await VoiceNodeExecutor(
                         self.session, self.runtime
                     ).execute(run, node, context)
                 else:

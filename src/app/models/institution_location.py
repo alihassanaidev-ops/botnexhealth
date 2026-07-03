@@ -60,6 +60,11 @@ class InstitutionLocation(Base):
     # Twilio — outbound SMS number for this location (E.164, e.g. +12125551234)
     twilio_from_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # Retell — outbound voice caller-ID for this location. Must be a number
+    # imported into Retell (E.164). Distinct from twilio_from_number; used by
+    # VoiceNodeExecutor for create-phone-call (Plan 03).
+    retell_from_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     # Configuration
     timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
 
