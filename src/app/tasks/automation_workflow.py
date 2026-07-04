@@ -23,6 +23,11 @@ from src.app.services.automation.appointment_trigger_service import (
     make_appointment_idempotency_key,
     make_recall_idempotency_key,
 )
+from src.app.services.automation.callback_trigger_service import (
+    CallbackTriggerService,
+    compute_callback_eta,
+    make_callback_idempotency_key,
+)
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
@@ -565,6 +570,115 @@ async def _trigger_appointment_async(
         institution_id, appointment_id, scheduled, skipped,
     )
     return {"appointment_id": appointment_id, "scheduled": scheduled, "skipped": skipped}
+
+
+# ---------------------------------------------------------------------------
+# Callback trigger — AI Callback (Plan 07)
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.trigger_callback_workflows",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def trigger_callback_workflows(
+    self,
+    *,
+    institution_id: str,
+    call_id: str,
+    contact_id: str | None = None,
+    location_id: str | None = None,
+    preferred_callback_at_iso: str | None = None,
+    trigger_metadata: dict | None = None,
+) -> dict:
+    """Find active callback_requested workflows and schedule an AI callback.
+
+    Enqueued from the Retell webhook when an inbound call is classified
+    needs_callback (and the clinic has opted in by activating such a workflow).
+    Each matching workflow gets an enroll_and_start_workflow_run scheduled at the
+    patient's requested callback time (or immediately if none / already passed).
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(
+            _trigger_callback_async(
+                institution_id=institution_id,
+                call_id=call_id,
+                contact_id=contact_id,
+                location_id=location_id,
+                preferred_callback_at_iso=preferred_callback_at_iso,
+                trigger_metadata=trigger_metadata or {},
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "trigger_callback_workflows failed: institution=%s call=%s: %s",
+            institution_id, call_id, exc,
+        )
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _trigger_callback_async(
+    *,
+    institution_id: str,
+    call_id: str,
+    contact_id: str | None,
+    location_id: str | None,
+    preferred_callback_at_iso: str | None,
+    trigger_metadata: dict,
+) -> dict:
+    now = datetime.now(tz=timezone.utc)
+
+    preferred_at: datetime | None = None
+    if preferred_callback_at_iso:
+        preferred_at = datetime.fromisoformat(preferred_callback_at_iso)
+        if preferred_at.tzinfo is None:
+            preferred_at = preferred_at.replace(tzinfo=timezone.utc)
+
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        external_id=f"callback_trigger:{call_id}",
+    ) as session:
+        svc = CallbackTriggerService(session)
+        workflows = await svc.find_active_callback_workflows(institution_id)
+
+    eta = compute_callback_eta(preferred_at, now)
+
+    scheduled = 0
+    for wf in workflows:
+        if not wf.current_version_id:
+            continue
+        idempotency_key = make_callback_idempotency_key(str(wf.current_version_id), call_id)
+        enroll_and_start_workflow_run.apply_async(
+            kwargs={
+                "institution_id": institution_id,
+                "workflow_id": str(wf.id),
+                "workflow_version_id": str(wf.current_version_id),
+                "contact_id": contact_id,
+                "location_id": location_id,
+                "trigger_type": "callback_requested",
+                "trigger_ref_type": "call",
+                "trigger_ref_id": call_id,
+                "idempotency_key": idempotency_key,
+                "trigger_metadata": {
+                    **trigger_metadata,
+                    "call_id": call_id,
+                    "preferred_callback_at": preferred_callback_at_iso,
+                },
+            },
+            eta=eta,  # None → runs immediately
+            queue="workflow",
+        )
+        scheduled += 1
+
+    logger.info(
+        "trigger_callback: institution=%s call=%s scheduled=%d eta=%s",
+        institution_id, call_id, scheduled, eta.isoformat() if eta else "now",
+    )
+    return {"call_id": call_id, "scheduled": scheduled}
 
 
 # ---------------------------------------------------------------------------

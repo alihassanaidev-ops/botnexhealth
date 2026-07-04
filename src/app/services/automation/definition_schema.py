@@ -1,7 +1,7 @@
 """Pydantic schema for workflow definition JSON stored in AutomationWorkflowVersion.definition.
 
 Definitions are immutable once published. Schema version "1.0" supports:
-  Triggers: appointment_offset, recall_scan, manual, bulk_import
+  Triggers: appointment_offset, recall_scan, manual, bulk_import, callback_requested
   Nodes:    wait, send_sms, send_voice, send_email, condition, exit
 """
 
@@ -43,12 +43,25 @@ class BulkImportTrigger(BaseModel):
     type: Literal["bulk_import"] = "bulk_import"
 
 
+class CallbackRequestedTrigger(BaseModel):
+    """Enroll when an inbound call is classified 'needs_callback' (Plan 07).
+
+    A clinic opts into AI-handled callbacks by activating a workflow with this
+    trigger; with none active, callbacks stay in the manual queue (default).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["callback_requested"] = "callback_requested"
+
+
 WorkflowTrigger = Annotated[
     Union[
         AppointmentOffsetTrigger,
         RecallScanTrigger,
         ManualTrigger,
         BulkImportTrigger,
+        CallbackRequestedTrigger,
     ],
     Field(discriminator="type"),
 ]
