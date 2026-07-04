@@ -21,6 +21,7 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
 - **P0-1** NexHealth webhook fails closed in prod (startup guard in `config.py` + 403 in `_verify_signature`).
 - **P0-2** Email consent keyed on an **email identity** (`ConsentRecord.email_hash` + `hash_email`; gate split
   email vs phone; migration `20260705_consent_email_identity`) — email-only contacts no longer blocked `no_phone`.
+  *(Fixed the consent key/identity; the separate email/voice consent-**capture** gap is XC-6.)*
 - **P0-3** Voice **idempotency guard** — `VoiceNodeExecutor` skips re-dial if a completed `call_placed` step exists.
 - **XC-1** Send-time idempotency for **all three channels** (`runtime.already_sent` checked first in the SMS/
   email/voice executors → skip + advance if already sent), **plus** a latent quiet-hours hold→resume
@@ -52,12 +53,10 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
 ## ⬜ Open work — by plan
 
 ### Cross-cutting (highest-leverage)
-- **XC-1b (P1) Crash-window idempotency (residual of XC-1, which is ✅ done — see Done above).** XC-1's guard is
-  same-transaction; a hard worker crash
-  *between* the vendor send and the task commit rolls back the claim, so a retry could re-send (vendor may
-  already have sent). Close with a **committed-before-send claim** (own session, like `record_usage_event`)
-  and/or a **provider idempotency key** keyed `{run.id}:{node.id}` (Resend `Idempotency-Key` header; Twilio/
-  Retell where supported).
+- **XC-1b (P1/P2) Crash-window idempotency — EMAIL ✅ done, SMS/voice open.** Closeout 2026-07-04: email now
+  sends a Resend `Idempotency-Key: email:{run}:{node}` header, so a crash-retry is vendor-deduped. **Still open:**
+  SMS (Twilio) and voice (Retell) provider idempotency keys (support varies), and/or a committed-before-send
+  claim (own session) for full crash-safety across all channels.
 - **XC-2 (P2) Channel integration tests.** SMS/email/voice are unit-tested with mocked vendors only; extend the
   real-Postgres engine integration pattern to a sandboxed Twilio/Resend/Retell path.
 - **XC-3 (P2) Migration convention.** Every post-baseline migration must be idempotent (`IF NOT EXISTS`) — the
@@ -66,6 +65,14 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
   operator runbooks (pause/halt/dead-letter replay); feature-flag the scheduler for staged go-live.
 - **XC-5 (P2) Non-cap paced dispatch.** Global smoothing against the shared NexHealth ~1000/min key + Twilio/Retell
   limits (not a per-clinic cap). Only jitter ships today. Coordinate with Plan 09 backfill.
+- **XC-6 (P0/P1) Consent-CAPTURE path — VOICE ✅ done, EMAIL still open.** The gate enforces per-channel
+  consent but the writers only wrote SMS. **Closeout 2026-07-04:** made `record_consent`/`record_consent_identity`
+  channel-generic + added `has_consent_record`; the AI-callback path now records an express **VOICE** consent on
+  the inbound callback request (if none exists), so **Plan 07 voice callbacks are functional end-to-end** (real-DB
+  test). **Still open — EMAIL capture (P1):** the writer is now channel-generic, but nothing captures email
+  consent, so **Plan 05 email sends remain blocked-by-default** until an email opt-in/intake flow records it
+  (Plan 05 / Plan 12). General voice consent (non-callback triggers, e.g. Recall/Sales) also still needs an
+  intake path. *(P0-2 fixed the email consent key, not this capture gap.)*
 
 ### Plan 03 — Outbound Voice (~35%)
 - **V-1 (P1) Outcome feedback loop — the central gap.** The Retell webhook never reads `metadata.workflow_run_id`
@@ -117,11 +124,13 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
 - **CB-1 ✅ (core merged)** — `callback_requested` trigger + `CallbackTriggerService` + `trigger_callback_workflows`
   task + Retell webhook hook (loop-guarded). Enrolls via `enroll_and_start_workflow_run` → inherits the gate,
   revalidation, and XC-1 idempotency. Opt-in = activating a `callback_requested` workflow.
-- **CB-2 (P1) Confirm quiet-hours callback behavior.** Their design assumed `hold`=terminate→manual queue (old
-  engine); on this branch `hold` **defers-and-resumes**, so a quiet-hours callback is placed at the next window.
-  Confirm that's the intended product behavior (and update their session `findings.md` D2/D4 notes).
-- **CB-3 (P1) Voice-consent path for callbacks.** A callback voice call needs a VOICE `ConsentRecord` or the gate
-  blocks it (`no_voice_consent`) → stays in the manual queue. Confirm callback-eligible patients get voice consent captured.
+- **CB-2 ✅ (closeout 2026-07-04).** Quiet-hours defer-and-resume is the intended behavior — documented and the
+  dev's `outbound-07-ai-callback/findings.md` D2/D4 notes reconciled. Added a **double-contact guard**:
+  `_trigger_callback_async` skips if the source Call is already `callback_resolved` (residual: a resolve during
+  the ETA delay isn't caught).
+- **CB-3 ✅ (closeout 2026-07-04).** Voice-consent capture landed (see XC-6) — the AI-callback path records an
+  express VOICE consent on the inbound request, so callbacks now pass the gate and place calls end-to-end. Verified
+  by a real-DB test. (Still fire-and-forget until Plan 03's outcome loop, V-1.)
 - **CB-4 (P2) Packaged AI-callback template + optional `callback_workflow_links`/settings tables** (deferred by the
   leaner opt-in-via-activation design). Also inherits Plan 03's fire-and-forget voice limits (see V-1).
 
@@ -145,8 +154,8 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
 - **D-4 (P2) Perf** — whole-table workflow scan per webhook; no event-level idempotency (dup deliveries re-run).
 
 ### Plan 10 — Per-Tenant Provisioning (~25%)
-- **PR-1 (P1) Audit-log provisioning credential changes** — `admin_institutions.py` PATCH/DELETE of Twilio/email
-  creds are NOT audited (violates the plan's audit requirement). Quick fix.
+- **PR-1 ✅ (closeout 2026-07-04).** Provisioning credential changes (`admin_institutions` PATCH + DELETE) now
+  `log_audit(INSTITUTION_UPDATE)` with the actor + masked metadata (never the token/SID).
 - **PR-2 (P2) First-class readiness *state* model** — readiness is computed on read; no persisted status/lifecycle.
 - **PR-3 (P2) Provisioning automation** — Twilio sub-account creation, A2P 10DLC / toll-free registration, email
   domain SPF/DKIM/DMARC + warm-up (all manual today); Secrets Manager for tenant creds; per-location sub-account scoping.

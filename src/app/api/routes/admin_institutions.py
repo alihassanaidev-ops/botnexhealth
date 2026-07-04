@@ -1607,7 +1607,7 @@ async def get_provisioning(
 async def update_provisioning(
     slug: str,
     body: ProvisioningUpdateRequest,
-    _: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_admin),
 ):
     """Set or update per-institution Twilio sub-account and email from-address."""
     async with get_db_session() as session:
@@ -1627,6 +1627,27 @@ async def update_provisioning(
 
         await session.flush()
 
+        # Audit the credential/config change (PR-1). Never log the token or raw SID —
+        # only which fields changed + the masked SID.
+        changed = [
+            f for f in ("twilio_account_sid", "twilio_auth_token", "email_from_address", "email_from_name")
+            if getattr(body, f) is not None
+        ]
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
+            action=AuditAction.INSTITUTION_UPDATE,
+            target_resource=f"institution:{institution.id}:provisioning",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": str(institution.id),
+                "fields_changed": changed,
+                "twilio_configured": bool(institution.twilio_account_sid),
+                "twilio_account_sid_masked": _mask_sid(institution.twilio_account_sid),
+            },
+        )
+
         return ProvisioningStatusResponse(
             twilio_configured=bool(institution.twilio_account_sid),
             twilio_account_sid_masked=_mask_sid(institution.twilio_account_sid),
@@ -1638,7 +1659,7 @@ async def update_provisioning(
 @router.delete("/{slug}/provisioning/twilio", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_twilio_provisioning(
     slug: str,
-    _: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_admin),
 ):
     """Clear per-institution Twilio sub-account credentials (reverts to platform credentials)."""
     async with get_db_session() as session:
@@ -1650,3 +1671,18 @@ async def clear_twilio_provisioning(
         institution.twilio_account_sid = None
         institution.twilio_auth_token = None
         await session.flush()
+
+        # Audit the credential clear (PR-1).
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
+            action=AuditAction.INSTITUTION_UPDATE,
+            target_resource=f"institution:{institution.id}:provisioning",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": str(institution.id),
+                "fields_changed": ["twilio_account_sid", "twilio_auth_token"],
+                "action_detail": "cleared_twilio_credentials",
+            },
+        )

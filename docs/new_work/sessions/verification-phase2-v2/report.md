@@ -128,8 +128,9 @@ marketing express-consent.
   `metadata`/`workflow_run_id` (`RetellCallWebhook` uses `extra="ignore"`); it correlates only by
   `agent_id`→location. So **no dial-outcome branching, no retry-on-no-answer, no voicemail→SMS fallback,
   no book→exit** — the run advances immediately on placement.
-- **⚠️ Marketing consent basis not hard-enforced** — the gate checks only that a ConsentRecord exists and
-  isn't revoked; Recall/Sales express/written consent is a publish-time **warning** only.
+- **⚠️ Voice is blocked-by-default in production** — the gate requires a granted VOICE `ConsentRecord`, but
+  nothing captures voice consent (§5 item 8), so voice sends are blocked `no_voice_consent`. (Separately,
+  marketing consent-*basis* is a publish-time **warning** only, not a hard block.)
 - **⚠️ Disclosure supplied but not proven spoken** — the live Retell agent prompt is not shown to reference
   `{{compliance_disclosure}}`; delivery depends on a per-location Retell-dashboard prompt update (onboarding step).
 - `OutboundVoiceService` / `RetellOutboundClient` / concurrency service — do not exist (HTTP inline in executor).
@@ -158,6 +159,8 @@ remains**); `sms_history_logs` workflow-linkage columns (run/step/campaign/segme
 **Built:** `EmailNodeExecutor` sends plain-text Resend email, gated + metered; from-address institution
 override + platform fallback (`messaging_credentials.resolve_email_from`); reuses sandboxed SMS renderer;
 **email consent bug FIXED** (email-identity keyed). **UsageEvents emitted** (`emails=1`). Tests pass.
+⚠️ **But email is blocked-by-default in production:** the gate requires a granted EMAIL `ConsentRecord` and
+nothing captures one (§5 item 8) — the P0-2 fix corrected the consent *key*, not the missing *capture*.
 **Missing:** the entire data model (`email_sending_profiles`, `workflow_email_templates`,
 `workflow_email_attempts` — **no attempt/audit log**); `EmailWebhookService` + bounce/complaint/delivered
 ingestion; **unsubscribe** (CASL/CAN-SPAM legal minimum); HTML/branded body; per-tenant sending domain
@@ -191,13 +194,18 @@ honored via Celery `eta`. 11 unit tests. Merge verified: 1340 unit green, single
 **Deviations from the plan (leaner design):** no `callback_automation_settings` / `callback_workflow_links`
 tables (opt-in = workflow activation; idempotency via `callback:{version}:{call_id}`); no packaged 5th
 AI-callback template (the clinic builds/activates a workflow).
-**Behavioral notes — built on the pre-finalize engine; confirm before enabling real callbacks:**
-(1) their design assumed quiet-hours `hold` = terminate → manual queue, but on `ali/phase-2` `hold` now
-**defers-and-resumes**, so a callback requested in quiet hours is placed at the next permitted window rather
-than dropping to the queue; (2) callback voice calls require a **VOICE `ConsentRecord`** (else gate-blocked
-`no_voice_consent`) and use Plan-03's **fire-and-forget** voice (no dial-outcome loop / voicemail→SMS yet).
-**Verdict:** functional core v1, merged and integrated cleanly; the packaged template + dedicated tables and
-the two behavioral confirmations remain.
+**Investigated + RESOLVED in the closeout (`outbound-07-followups-closeout/`, 2026-07-04):**
+- ✅ **Now functional end-to-end (CB-3 / XC-6).** The gate requires a granted VOICE `ConsentRecord`, and the
+  consent writers previously only wrote SMS. Fixed: `record_consent` / `record_consent_identity` are now
+  channel-generic (+ `has_consent_record`), and the AI-callback path records an **express VOICE consent on the
+  inbound callback request** (only if none exists → respects a prior opt-out). A callback now passes the gate and
+  places the call. Verified by a real-Postgres test. *(Legal-review note in code: inbound callback request = express basis.)*
+- ✅ **Double-contact guard (CB-2).** `_trigger_callback_async` skips if the source Call is already
+  `callback_resolved` (residual: a resolve during the ETA delay isn't caught). Quiet-hours now **defers-and-resumes**
+  (intended); the dev's `outbound-07-ai-callback/findings.md` D2/D4 notes were reconciled.
+- Still uses Plan-03 **fire-and-forget** voice (no dial-outcome loop / voicemail→SMS yet — Plan 03, V-1).
+**Verdict:** functional core v1 (~60%), now working **end-to-end** (the call is actually placed). Remaining: the
+packaged template + dedicated tables (CB-4) and the fire-and-forget→outcome-loop upgrade inherited from Plan 03.
 
 ### Plan 08 — Campaign Mgmt / Progress / Analytics UI — 🟠 ~22%
 **Built:** interactive campaign list (`Campaigns.tsx` → `GET /automation/workflows`; pause/resume/archive;
@@ -235,8 +243,8 @@ FIXED** (validates with the resolved sub-account token). **9 tests pass.**
 **Missing:** all 6 provisioning tables; **first-class readiness *state* model** (readiness is computed on read,
 no persisted status/lifecycle); A2P 10DLC / toll-free registration; email domain SPF/DKIM/DMARC + warm-up;
 provisioning vendor automation (creds entered manually); AWS Secrets Manager for tenant creds; per-channel feature flags.
-**Bugs:** **provisioning credential changes are NOT audit-logged** (`admin_institutions.py` PATCH/DELETE) —
-violates the plan's audit requirement for credential changes.
+**Bugs:** ✅ **FIXED (closeout 2026-07-04)** — provisioning credential changes (`admin_institutions.py`
+PATCH/DELETE) now `log_audit(INSTITUTION_UPDATE)` with actor + masked metadata (was unaudited).
 **Verdict:** a clean, secure credential-storage + computed-readiness MVP; the provisioning *system* (tables,
 vendor APIs, verification, readiness state) is unbuilt.
 
@@ -261,10 +269,13 @@ PHI/financial = error, clinical = warning) wired into publish + `/validate`; **A
 tokenizer); **do-not-contact scope tiers** (`DoNotContact.scope` = location/institution/group; scope-aware
 enforcement; privileged `set_do_not_contact` writer); **email-identity consent** (Finding D); emergency-halt
 model + routes; multi-channel consent enum + constraints. **Gate/validator/DNC tests pass.**
-**Missing / deliberately excluded:** **frequency caps, spend caps, blast-radius gates — DROPPED (no-caps
-decision)**; named `ConsentService`/`SuppressionService` (logic lives in the gate + `SmsComplianceService`);
-consent-*basis*-level enforcement for marketing voice (warning only, not hard block); privileged institution/DSO
-DNC admin HTTP endpoint (writer exists; endpoint is a thin Plan-08 follow-up); US cross-timezone quiet-hours (clinic TZ only).
+**Missing / deliberately excluded:** ⚠️ **no email/voice consent-*capture* path (§5 item 8)** — consent is
+*enforced* per channel but only *written* for SMS (`record_consent*` hardcode `channel=sms`), so voice/email
+sends are blocked-by-default; this is the biggest real compliance gap now that the gate is correct. Also:
+**frequency caps, spend caps, blast-radius gates — DROPPED (no-caps decision)**; named
+`ConsentService`/`SuppressionService` (logic lives in the gate + `SmsComplianceService`); consent-*basis*-level
+enforcement for marketing voice (warning only, not hard block); privileged institution/DSO DNC admin HTTP
+endpoint (writer exists; endpoint is a thin Plan-08 follow-up); US cross-timezone quiet-hours (clinic TZ only).
 **Verdict:** advanced from a bare gate to a real, authoritative, on-every-dispatch semantic layer; the excluded
 pieces are the caps the product owner removed, not oversights.
 
@@ -278,13 +289,14 @@ pieces are the caps the product owner removed, not oversights.
 - ✅ **FE/BE contract drift fixed** for Plan 02 (merge fields + validate/versions endpoints wired).
 
 **Still open / systemic:**
-1. **No send-time idempotency for SMS/email/voice** — retry/hold-resume/crash can double-contact; only the delivery-log or metering keys dedupe *billing*, and the voice guard is not crash-safe. The single most important remaining correctness gap.
+1. ✅ **Send-time idempotency (SMS/email/voice)** — DONE (XC-1, 2026-07-04): `runtime.already_sent` skips a re-send on redelivery/re-advance/hold-resume, plus a latent hold→resume unique-index collision fixed. Residual: **XC-1b** crash-window (committed-before-send claim / provider idempotency key).
 2. **The event-driven read model (Plan 09) was not built** — direct webhook→enroll passthrough, no projection/backfill/reconciliation/event-ledger. Only appointments created *after* subscription can trigger; a reschedule silently drops the reminder.
 3. **No revalidation freshness window** → burst NexHealth load at batch times (Plan 09).
 4. **Usage model under-tagged + voice/email cost gaps** → per-campaign spend and voice/email cost reporting are impossible without a retrofit (Plan 11).
 5. **Test suites remain mock-heavy** for channel wiring; the real-Postgres integration suite (engine) is the exception and should be extended to channels.
 6. **Two dead-code campaign branches** (Confirmation/Reactivation) — conditions on run state that nothing populates (Plan 06).
-7. **Provisioning credential changes are not audited** (Plan 10); **Twilio sub-account webhook** now fixed.
+7. ✅ **Provisioning credential changes now audited** (Plan 10, closeout 2026-07-04 — `log_audit(INSTITUTION_UPDATE)` on PATCH/DELETE); **Twilio sub-account webhook** already fixed.
+8. **Consent-CAPTURE — voice ✅ (callback path), email still open.** The gate enforces per-channel consent, but the writers only wrote SMS. Closeout (2026-07-04) made them channel-generic (+ `has_consent_record`) and the AI-callback path now records an **express VOICE consent on the inbound request** → **Plan 07 voice callbacks work end-to-end**. STILL OPEN: **email consent capture** (no opt-in/intake trigger → **Plan 05 email remains blocked-by-default**), and general (non-callback) voice consent for Recall/Sales — both need an intake path (Plan 05 / Plan 12). SMS unaffected.
 
 ---
 
@@ -333,11 +345,11 @@ current code (`file:line`) → check the deltas since 2026-07-03 → run relevan
 `file:line` detail: `plan-03-findings.md` is **current (2026-07-04)**; `plan-01`…`plan-12-findings.md` (excl. 03)
 are the **2026-07-03** evidence base and are historical — this report's per-plan sections supersede them.
 
-## Appendix B — Test status (2026-07-04)
-- **Unit:** 1325 passed, 0 failed, 0 collection errors (full suite).
-- **Integration (real Postgres, testcontainers):** 6/6 passed — migration chain applies cleanly on a fresh DB
+## Appendix B — Test status (2026-07-04, latest)
+- **Unit:** 1341 passed, 0 failed, 0 collection errors (full suite).
+- **Integration (real Postgres, testcontainers):** 8/8 passed — migration chain applies cleanly on a fresh DB
   through head `20260706_dnc_scope`; engine mechanics (version pinning, wait→resume→exit, stale-claim recovery,
-  emergency-halt cascade, idempotency, RLS) all verified.
+  emergency-halt cascade, idempotency, RLS) + send-idempotency/hold-resume + voice-consent channel-scoping all verified.
 
 ## Appendix C — Confidence
 High across all 12 (direct code inspection + passing tests). Per-plan percentages are the reliable figures;

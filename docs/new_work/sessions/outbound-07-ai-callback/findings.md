@@ -65,6 +65,17 @@ enqueue as one more such block. Available: `saved_call.id/.contact_id/.call_stat
   `max_attempts` (node field, 1-3) bounds dial retries. Loop prevention via direction
   guard + idempotency_key = the retell call id.
 
+## Reconciliation after merge into `ali/phase-2` (2026-07-04, closeout session)
+This branch was built on `0519e28` (pre-finalize). On the merged `ali/phase-2` engine the assumptions above
+shifted — reconciled by `outbound-07-followups-closeout/`:
+- **D2 quiet-hours no longer terminates.** `hold` now **defers-and-resumes** (Finding B fix), so a callback
+  due in quiet hours is placed at the **next permitted window**, not dropped to the manual queue. Intended behavior.
+- **Double-contact guard added (CB-2).** `_trigger_callback_async` now skips if the source Call is already
+  `callback_resolved`, so staff+AI don't both dial (residual: a resolve during the ETA delay isn't caught).
+- **Voice consent now captured (CB-3/XC-6).** The merged gate requires a VOICE `ConsentRecord`; nothing recorded
+  one, so callbacks were gate-blocked. The closeout records an express VOICE consent on the inbound callback
+  request (if none exists), making callbacks functional end-to-end.
+
 ## Slice mechanics
 - New file `callback_trigger_service.py`: `find_active_callback_workflows(institution_id)`,
   `compute_callback_eta(preferred_dt, now)`, `make_callback_idempotency_key(version_id, call_id)`.

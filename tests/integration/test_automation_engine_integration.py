@@ -357,6 +357,33 @@ async def test_send_step_idempotency_and_reclaim_after_hold(session):
 
 
 @pytest.mark.asyncio
+async def test_voice_consent_capture_is_channel_scoped(session):
+    """XC-6 (real DB): the channel-generic consent writer + `has_consent_record` let a
+    granted VOICE consent be recorded and detected, scoped to the VOICE channel only —
+    this is what unblocks the voice gate for AI callbacks."""
+    from src.app.models.sms_consent import ConsentChannel, ConsentStatus
+    from src.app.services.sms_compliance import SmsComplianceService
+
+    comp = SmsComplianceService(session)
+    phone = "+14165551234"
+
+    assert await comp.has_consent_record(INST_A, phone, ConsentChannel.VOICE) is False
+    await comp.record_consent(
+        institution_id=INST_A,
+        phone=phone,
+        status=ConsentStatus.GRANTED,
+        channel=ConsentChannel.VOICE,
+        source="system",
+        reason="inbound_callback_request",
+    )
+    await session.commit()
+
+    assert await comp.has_consent_record(INST_A, phone, ConsentChannel.VOICE) is True
+    # Channel-scoped: recording VOICE consent does NOT imply SMS consent.
+    assert await comp.has_consent_record(INST_A, phone, ConsentChannel.SMS) is False
+
+
+@pytest.mark.asyncio
 async def test_rls_isolates_runs_across_institutions(pg_url, superuser_engine):
     """As the non-superuser app role under a celery/INST_A context, only INST_A's
     runs are visible — cross-tenant automation runs are RLS-isolated."""

@@ -43,7 +43,10 @@ def _make_workflow(trigger_type="callback_requested", version_id="ver-1"):
     return wf
 
 
-def _make_session(workflows=None):
+def _make_session(workflows=None, callback_resolved=False):
+    from src.app.models.call import Call
+    from src.app.models.contact import Contact
+
     session = AsyncMock()
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
@@ -51,6 +54,23 @@ def _make_session(workflows=None):
     result = MagicMock()
     result.scalars.return_value.all.return_value = workflows or []
     session.execute = AsyncMock(return_value=result)
+
+    # Callback trigger now loads the source Call (skip if resolved) and the Contact
+    # (for voice-consent capture). Default: unresolved call, phone-less contact so the
+    # consent-capture branch is a no-op in these scheduling-focused tests.
+    call = MagicMock()
+    call.callback_resolved = callback_resolved
+    contact = MagicMock()
+    contact.phone = None
+
+    async def _get(model, pk):
+        if model is Call:
+            return call
+        if model is Contact:
+            return contact
+        return None
+
+    session.get = AsyncMock(side_effect=_get)
     return session
 
 
@@ -192,6 +212,37 @@ async def test_trigger_callback_schedules_with_immediate_eta():
     assert task_kwargs["trigger_ref_id"] == "call-1"
     assert task_kwargs["idempotency_key"] == "callback:ver-1:call-1"
     assert task_kwargs["contact_id"] == "c-1"
+
+
+@pytest.mark.asyncio
+async def test_trigger_callback_skips_when_call_already_resolved():
+    """CB-2: if staff already resolved the callback in the manual queue, the AI
+    trigger must not also enroll/dial (no double-contact)."""
+    wf = _make_workflow()
+    mock_session = _make_session(workflows=[wf], callback_resolved=True)
+    with patch(
+        "src.app.tasks.automation_workflow.get_system_db_session",
+        return_value=mock_session,
+    ), patch(
+        "src.app.tasks.automation_workflow.CallbackTriggerService"
+    ) as MockSvc, patch(
+        "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+    ) as mock_task:
+        MockSvc.return_value.find_active_callback_workflows = AsyncMock(return_value=[wf])
+        mock_task.apply_async = MagicMock()
+
+        result = await _trigger_callback_async(
+            institution_id="inst-1",
+            call_id="call-1",
+            contact_id="c-1",
+            location_id="l-1",
+            preferred_callback_at_iso=None,
+            trigger_metadata={},
+        )
+
+    assert result["scheduled"] == 0
+    assert result.get("skipped") == "resolved_or_missing"
+    mock_task.apply_async.assert_not_called()
 
 
 @pytest.mark.asyncio

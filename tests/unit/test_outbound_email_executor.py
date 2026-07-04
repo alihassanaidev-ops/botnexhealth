@@ -148,6 +148,7 @@ def test_executor_uses_institution_from_address():
 
     async def _fake_post(url, headers, json):
         captured["payload"] = json
+        captured["headers"] = headers
         resp = MagicMock()
         resp.status_code = 200
         return resp
@@ -170,6 +171,8 @@ def test_executor_uses_institution_from_address():
     assert result == "node-2"
     assert captured["payload"]["from"] == "My Clinic <clinic@example.com>"
     assert captured["payload"]["to"] == [contact.email]
+    # XC-1b: stable per-(run,node) idempotency key sent to Resend.
+    assert captured["headers"]["Idempotency-Key"] == "email:run-1:node-1"
     runtime.complete_step.assert_called_once()
     assert runtime.complete_step.call_args.kwargs.get("result_code") == "sent"
     runtime.fail_run.assert_not_called()
@@ -184,6 +187,7 @@ def test_executor_falls_back_to_platform_from_address():
 
     async def _fake_post(url, headers, json):
         captured["payload"] = json
+        captured["headers"] = headers
         resp = MagicMock()
         resp.status_code = 200
         return resp

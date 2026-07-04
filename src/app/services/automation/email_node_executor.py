@@ -103,6 +103,10 @@ class EmailNodeExecutor:
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                # Crash-window idempotency (XC-1b): a stable per-(run, node) key so a
+                # retry after a crash between send and commit is deduped by Resend
+                # rather than emailing the patient twice.
+                "Idempotency-Key": f"email:{run.id}:{node.id}",
             }
             payload = {
                 "from": _build_from(from_address, from_name),

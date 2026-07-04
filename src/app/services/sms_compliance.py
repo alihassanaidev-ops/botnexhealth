@@ -335,6 +335,7 @@ class SmsComplianceService:
         institution_id: str,
         phone: str,
         status: ConsentStatus | str,
+        channel: ConsentChannel | str = ConsentChannel.SMS,
         location_id: str | None = None,
         contact_id: str | None = None,
         source: ConsentSource | str = ConsentSource.MANUAL,
@@ -346,7 +347,7 @@ class SmsComplianceService:
             institution_id=institution_id,
             location_id=location_id,
             contact_id=contact_id,
-            channel=ConsentChannel.SMS.value,
+            channel=channel.value if isinstance(channel, ConsentChannel) else channel,
             phone_hash=identity.phone_hash,
             phone_masked=identity.phone_masked,
             status=status.value if isinstance(status, ConsentStatus) else status,
@@ -356,6 +357,30 @@ class SmsComplianceService:
         )
         self.session.add(row)
         return row
+
+    async def has_consent_record(
+        self,
+        institution_id: str,
+        phone: str,
+        channel: ConsentChannel | str,
+    ) -> bool:
+        """True if ANY consent record (granted or revoked) already exists for this
+        (institution, channel, phone). Used before auto-capturing consent so a prior
+        opt-out is never overwritten and no duplicate rows accumulate."""
+        phone_hash = hash_phone(phone)
+        if not phone_hash:
+            return False
+        channel_value = channel.value if isinstance(channel, ConsentChannel) else channel
+        row = (
+            await self.session.execute(
+                select(ConsentRecord.id).where(
+                    ConsentRecord.institution_id == institution_id,
+                    ConsentRecord.channel == channel_value,
+                    ConsentRecord.phone_hash == phone_hash,
+                ).limit(1)
+            )
+        ).first()
+        return row is not None
 
     async def _active_suppression(self, *, institution_id: str, phone_hash: str) -> SmsSuppression | None:
         return (
@@ -376,6 +401,7 @@ class SmsComplianceService:
         phone_hash: str,
         phone_masked: str,
         status: ConsentStatus | str,
+        channel: ConsentChannel | str = ConsentChannel.SMS,
         location_id: str | None = None,
         contact_id: str | None = None,
         source: ConsentSource | str = ConsentSource.MANUAL,
@@ -386,7 +412,7 @@ class SmsComplianceService:
             institution_id=institution_id,
             location_id=location_id,
             contact_id=contact_id,
-            channel=ConsentChannel.SMS.value,
+            channel=channel.value if isinstance(channel, ConsentChannel) else channel,
             phone_hash=phone_hash,
             phone_masked=phone_masked,
             status=status.value if isinstance(status, ConsentStatus) else status,

@@ -637,13 +637,52 @@ async def _trigger_callback_async(
         if preferred_at.tzinfo is None:
             preferred_at = preferred_at.replace(tzinfo=timezone.utc)
 
+    from src.app.models.call import Call
+    from src.app.models.contact import Contact
+    from src.app.models.sms_consent import ConsentChannel, ConsentSource, ConsentStatus
+    from src.app.services.sms_compliance import SmsComplianceService
+
     async with get_system_db_session(
         "celery",
         institution_id=institution_id,
         external_id=f"callback_trigger:{call_id}",
     ) as session:
+        # Double-contact guard (CB-2): if staff already resolved this callback in the
+        # manual queue, don't also AI-dial. (Residual: a resolve during the ETA delay
+        # is not caught here.)
+        call = await session.get(Call, call_id)
+        if call is None or call.callback_resolved:
+            logger.info(
+                "trigger_callback: skip institution=%s call=%s (missing or already resolved)",
+                institution_id, call_id,
+            )
+            return {"call_id": call_id, "scheduled": 0, "skipped": "resolved_or_missing"}
+
         svc = CallbackTriggerService(session)
         workflows = await svc.find_active_callback_workflows(institution_id)
+
+        # Consent capture (XC-6 / CB-3): a patient's inbound request to be called back is
+        # an express basis to place that AI callback. Record a granted VOICE consent so the
+        # compliance gate permits the outbound voice call — but ONLY if no voice consent
+        # record exists yet, so a prior opt-out (REVOKED) is never overwritten and rows
+        # don't accumulate. LEGAL-REVIEW NOTE: treats the inbound callback request as express
+        # voice consent for this callback.
+        if workflows and contact_id:
+            contact = await session.get(Contact, contact_id)
+            phone = contact.phone if contact else None
+            if phone:
+                comp = SmsComplianceService(session)
+                if not await comp.has_consent_record(institution_id, phone, ConsentChannel.VOICE):
+                    await comp.record_consent(
+                        institution_id=institution_id,
+                        phone=phone,
+                        status=ConsentStatus.GRANTED,
+                        channel=ConsentChannel.VOICE,
+                        location_id=location_id,
+                        contact_id=contact_id,
+                        source=ConsentSource.SYSTEM,
+                        reason="inbound_callback_request",
+                    )
 
     eta = compute_callback_eta(preferred_at, now)
 
