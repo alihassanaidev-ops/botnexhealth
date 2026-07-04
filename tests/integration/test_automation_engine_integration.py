@@ -356,6 +356,65 @@ async def test_send_step_idempotency_and_reclaim_after_hold(session):
     assert await runtime.already_sent(run, "n-send") is True
 
 
+_VOICE_OUTCOME_DEF = {
+    "trigger": {"type": "manual"},
+    "entry_node_id": "v1",
+    "nodes": [
+        {"type": "send_voice", "id": "v1", "retell_agent_id": "agent_1",
+         "next_node_id": "c1", "wait_for_outcome": True},
+        {"type": "condition", "id": "c1", "logic": "AND",
+         "rules": [{"field": "call_outcome", "op": "eq", "value": "answered"}],
+         "true_next_node_id": "x_done", "false_next_node_id": "x_other"},
+        {"type": "exit", "id": "x_done", "outcome": "answered"},
+        {"type": "exit", "id": "x_other", "outcome": "other"},
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_voice_wait_for_outcome_resume_advances_and_branches(session):
+    """Plan 03 outcome loop: a voice node parked WAITING resumes on the outcome,
+    advances PAST the send node (does NOT re-dial), and a ConditionNode branches on
+    the `call_outcome` written into run context."""
+    from src.app.models.automation_workflow import AutomationRunStatus, AutomationStepStatus
+    from src.app.services.automation.definition_schema import WorkflowDefinition
+    from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+    from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+    from src.app.services.automation.step_dispatcher import build_dispatcher
+
+    wf, v1 = await _make_published_workflow(session, _VOICE_OUTCOME_DEF, name="voice-outcome")
+    enroll = AutomationWorkflowEnrollmentService(session)
+    run, _ = await enroll.enroll(
+        institution_id=INST_A, workflow_id=str(wf.id),
+        workflow_version_id=str(v1.id), location_id=LOC_A, idempotency_key="voc-1",
+    )
+    runtime = AutomationWorkflowRuntimeService(session)
+    await runtime.start_run(run)
+
+    # Simulate the executor having placed the call and parked the run.
+    step = await runtime.begin_step(run, step_id="v1", step_type="send_voice")
+    await runtime.mark_step_awaiting_outcome(
+        step, result_code="call_placed_awaiting_outcome",
+        result_metadata={"retell_call_id": "call_1"},
+    )
+    await runtime.wait_run(run, step)
+    await session.commit()
+    assert run.status == AutomationRunStatus.WAITING.value
+
+    # Resume with outcome=answered → advance past v1, branch true → exit "answered".
+    md = {"call_outcome": "answered"}
+    run.trigger_metadata = md
+    await session.flush()
+    dispatcher, tz = await build_dispatcher(session, location_id=LOC_A)
+    definition = WorkflowDefinition.model_validate(_VOICE_OUTCOME_DEF)
+    result = await dispatcher.resume_after_timer(run, definition, context=md, location_timezone=tz)
+    await session.commit()
+
+    assert result.status == "completed"
+    assert result.outcome == "answered"  # branched on call_outcome, did not re-dial
+    assert run.status == AutomationRunStatus.COMPLETED.value
+
+
 @pytest.mark.asyncio
 async def test_voice_consent_capture_is_channel_scoped(session):
     """XC-6 (real DB): the channel-generic consent writer + `has_consent_record` let a

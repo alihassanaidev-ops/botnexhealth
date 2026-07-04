@@ -148,6 +148,11 @@ class SendVoiceNode(BaseModel):
     next_node_id: str
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
+    # When true, after the call is placed the run PARKS (WAITING) until the Retell
+    # post-call webhook resumes it with the dial outcome (written to run context as
+    # `call_outcome` for a following ConditionNode to branch on). When false the node
+    # is fire-and-forget (advances immediately). Plan 03 outcome-feedback loop.
+    wait_for_outcome: bool = False
 
 
 class SendEmailNode(BaseModel):

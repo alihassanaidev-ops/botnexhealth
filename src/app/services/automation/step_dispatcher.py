@@ -39,6 +39,10 @@ from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComp
 from src.app.services.automation.revalidation import NoOpRevalidator, RunRevalidator
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
+from src.app.services.automation.voice_node_executor import (
+    _CALL_PLACED_AWAITING,
+    VoiceParked,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -193,16 +197,35 @@ class WorkflowStepDispatcher:
                 # by registering an executor (see action_registry). Any unregistered
                 # send type falls back to the defensive stub.
                 executor_cls = get_action_executor(node.type)
-                if executor_cls is not None:
-                    current_node_id = await executor_cls(
-                        self.session, self.runtime
-                    ).execute(run, node, context)
-                elif isinstance(node, SendVoiceNode):
-                    current_node_id = await VoiceNodeExecutor(
-                        self.session, self.runtime
-                    ).execute(run, node, context)
-                else:
+                if executor_cls is None:
                     current_node_id = await self._dispatch_send_stub(run, node)
+                else:
+                    dispatch_result = await executor_cls(
+                        self.session, self.runtime
+                    ).execute(run, node, context)
+                    if isinstance(dispatch_result, VoiceParked):
+                        # Voice node placed a call and is parking for its outcome
+                        # webhook. Set a safety-timeout timer so a never-arriving
+                        # webhook can't hang the run, then wait; the webhook (or the
+                        # timer) resumes via resume_after_timer.
+                        resume_at = now + timedelta(minutes=dispatch_result.timeout_minutes)
+                        timer = await self.scheduler.create_timer(
+                            institution_id=run.institution_id,
+                            location_id=run.location_id,
+                            workflow_run_id=run.id,
+                            step_execution_id=dispatch_result.step.id,
+                            due_at=resume_at,
+                            timezone_name=location_timezone,
+                        )
+                        await self.runtime.wait_run(run, dispatch_result.step)
+                        logger.info(
+                            "dispatch: voice parked for outcome run=%s node=%s timeout_at=%s",
+                            run.id, node.id, resume_at,
+                        )
+                        return DispatchResult(
+                            status="waiting", timer_id=timer.id, steps_advanced=steps_advanced
+                        )
+                    current_node_id = dispatch_result
 
             elif isinstance(node, ConditionNode):
                 branch = _evaluate_condition(node, context)
@@ -289,10 +312,17 @@ class WorkflowStepDispatcher:
             return DispatchResult(status="failed")
 
         await self.runtime.resume_run(run, waiting_step)
-        if is_wait:
-            # Move past the wait node. A held send stays put so advance()
-            # re-evaluates the compliance gate at the same node.
+        is_parked_voice = is_held_send and waiting_step.result_code == _CALL_PLACED_AWAITING
+        if is_wait or is_parked_voice:
+            # WaitNode: move past the wait. Parked voice: the call already went out,
+            # so advance PAST the send node (never re-dial) into whatever follows —
+            # typically a ConditionNode that branches on `call_outcome`.
             run.current_step_id = current_node.next_node_id
+            if is_parked_voice and "call_outcome" not in context:
+                # Safety-timeout fired before any outcome webhook arrived → treat as
+                # no outcome so a downstream branch can route it (e.g. retry/exit).
+                context = {**context, "call_outcome": "timeout"}
+        # else: a genuine quiet-hours held send stays put so advance() re-runs the gate.
         await self.session.flush()
 
         return await self.advance(

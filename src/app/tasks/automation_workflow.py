@@ -721,6 +721,122 @@ async def _trigger_callback_async(
 
 
 # ---------------------------------------------------------------------------
+# Voice outcome resume — AI Voice outcome-feedback loop (Plan 03)
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.resume_voice_outcome",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def resume_voice_outcome(
+    self,
+    *,
+    institution_id: str,
+    retell_call_id: str,
+    call_outcome: str,
+) -> dict:
+    """Resume a run parked WAITING for a voice-call outcome (Plan 03 §7.2).
+
+    Enqueued from the Retell post-call webhook for outbound calls. Finds the parked
+    voice step by retell_call_id, writes ``call_outcome`` into the run context, cancels
+    the safety-timeout timer, and resumes the run so a downstream ConditionNode can
+    branch (no-answer→retry, voicemail→SMS, answered→done). No-ops if no parked step
+    matches (e.g. a fire-and-forget or non-campaign outbound call).
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(
+            _resume_voice_outcome_async(
+                institution_id=institution_id,
+                retell_call_id=retell_call_id,
+                call_outcome=call_outcome,
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "resume_voice_outcome failed: institution=%s call=%s: %s",
+            institution_id, retell_call_id, exc,
+        )
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _resume_voice_outcome_async(
+    *,
+    institution_id: str,
+    retell_call_id: str,
+    call_outcome: str,
+) -> dict:
+    from sqlalchemy import select
+
+    from src.app.models.automation_workflow import (
+        AutomationStepStatus,
+        AutomationWorkflowStepExecution,
+    )
+    from src.app.services.automation.voice_node_executor import _CALL_PLACED_AWAITING
+
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        external_id=f"voice_outcome:{retell_call_id}",
+    ) as session:
+        # Find the parked voice step by retell_call_id (dialect-safe: filter in Python
+        # over the few awaiting steps rather than a JSON query).
+        rows = (
+            await session.execute(
+                select(AutomationWorkflowStepExecution).where(
+                    AutomationWorkflowStepExecution.institution_id == institution_id,
+                    AutomationWorkflowStepExecution.status == AutomationStepStatus.WAITING.value,
+                    AutomationWorkflowStepExecution.result_code == _CALL_PLACED_AWAITING,
+                )
+            )
+        ).scalars().all()
+        step = next(
+            (s for s in rows if (s.result_metadata or {}).get("retell_call_id") == retell_call_id),
+            None,
+        )
+        if step is None:
+            return {"resumed": False, "reason": "no_parked_step"}
+
+        run = await session.get(AutomationWorkflowRun, step.workflow_run_id)
+        if run is None or run.status != AutomationRunStatus.WAITING.value:
+            return {"resumed": False, "reason": "run_not_waiting"}
+
+        # Cancel the safety-timeout timer (best-effort); the run.status==WAITING guard
+        # in resume_after_timer makes a timer/webhook race at-most-once regardless.
+        await AutomationWorkflowSchedulerService(session).cancel_timers_for_run(run.id)
+
+        # Write the outcome into the run context so the downstream branch reads it.
+        md = dict(run.trigger_metadata or {})
+        md["call_outcome"] = call_outcome
+        run.trigger_metadata = md
+        await session.flush()
+
+        version = await session.get(AutomationWorkflowVersion, run.workflow_version_id)
+        if version is None:
+            return {"resumed": False, "reason": "version_not_found"}
+        definition = WorkflowDefinition.model_validate(version.definition)
+
+        dispatcher, location_timezone = await build_dispatcher(
+            session,
+            location_id=run.location_id,
+            revalidator=PmsLiveRevalidationService(session),
+        )
+        result = await dispatcher.resume_after_timer(
+            run, definition, context=md, location_timezone=location_timezone
+        )
+        await session.commit()
+
+    logger.info(
+        "resume_voice_outcome: institution=%s call=%s outcome=%s status=%s",
+        institution_id, retell_call_id, call_outcome, result.status,
+    )
+    return {"resumed": True, "status": result.status, "call_outcome": call_outcome}
+
+
+# ---------------------------------------------------------------------------
 # Recall scanner — Slice 11 (Plan 09)
 # ---------------------------------------------------------------------------
 

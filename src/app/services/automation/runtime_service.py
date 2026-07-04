@@ -142,6 +142,22 @@ class AutomationWorkflowRuntimeService:
         await self.session.flush()
         return step
 
+    async def mark_step_awaiting_outcome(
+        self,
+        step: AutomationWorkflowStepExecution,
+        *,
+        result_code: str | None = None,
+        result_metadata: dict | None = None,
+    ) -> AutomationWorkflowStepExecution:
+        """Record a placed call's result_code + metadata (e.g. retell_call_id) on a
+        step WITHOUT completing it — the run then parks WAITING (via wait_run) for the
+        outcome webhook. The marker lets resume tell a placed-and-parked voice step
+        (advance past) from a quiet-hours hold step (re-run the gate)."""
+        step.result_code = result_code
+        step.result_metadata = result_metadata
+        await self.session.flush()
+        return step
+
     async def fail_step(
         self,
         step: AutomationWorkflowStepExecution,

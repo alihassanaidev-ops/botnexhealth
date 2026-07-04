@@ -508,6 +508,37 @@ async def process_retell_call_analyzed_event(
                     safe_error_summary(callback_enqueue_err),
                 )
 
+            # ── Outbound voice outcome: resume a parked workflow run (Plan 03) ──
+            # For an outbound campaign call, map the dial outcome and resume the run
+            # that is parked WAITING on this call (matched by retell_call_id). The
+            # task no-ops for fire-and-forget / non-campaign outbound calls.
+            try:
+                from src.app.models.call import CallDirection
+                from src.app.services.automation.voice_outcome import map_disconnection_reason
+                from src.app.tasks.automation_workflow import resume_voice_outcome
+
+                if (
+                    saved_call.call_direction == CallDirection.OUTBOUND.value
+                    and saved_call.retell_call_id
+                ):
+                    outcome = map_disconnection_reason(
+                        event.call.disconnection_reason, event.call.call_status
+                    )
+                    resume_voice_outcome.apply_async(
+                        kwargs={
+                            "institution_id": institution.id,
+                            "retell_call_id": saved_call.retell_call_id,
+                            "call_outcome": outcome,
+                        },
+                        queue="workflow",
+                    )
+            except Exception as voice_outcome_err:
+                logger.error(
+                    "Failed to enqueue voice outcome resume: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(voice_outcome_err),
+                )
+
             # ── Auto-SMS: enqueue after commit (durable via Celery) ────────
             # The AI generates the SMS body as part of custom_analysis_data;
             # Retell preserves agent-generated outbound text through scrubbing
