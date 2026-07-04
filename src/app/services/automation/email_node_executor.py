@@ -150,6 +150,8 @@ class EmailNodeExecutor:
             await UsageMeteringService(self.session).record(
                 institution_id=str(run.institution_id),
                 location_id=str(run.location_id) if run.location_id else None,
+                workflow_run_id=str(run.id),
+                workflow_id=str(run.workflow_id) if run.workflow_id else None,
                 channel="email",
                 direction="outbound",
                 provider="resend",

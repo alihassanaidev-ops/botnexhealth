@@ -68,6 +68,13 @@ class UsageEvent(Base):
         ),
         Index("ix_usage_events_institution_occurred", "institution_id", "occurred_at"),
         Index("ix_usage_events_channel", "channel"),
+        # Per-campaign spend queries filter by the originating workflow.
+        Index(
+            "ix_usage_events_workflow",
+            "workflow_id",
+            "occurred_at",
+            postgresql_where=text("workflow_id IS NOT NULL"),
+        ),
         Index(
             "uq_usage_events_idempotency",
             "institution_id",
@@ -93,6 +100,19 @@ class UsageEvent(Base):
         ForeignKey("institution_locations.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+
+    # Campaign attribution (Plan 11 M-4). Populated when the usage originates
+    # inside a workflow run (voice/email emit sites); NULL for provider webhooks
+    # that can't yet be traced back to a run (e.g. SMS status callbacks — pending
+    # the Plan 04 sms_history→workflow linkage). institution_group_id is NOT
+    # denormalized here — group/DSO rollups JOIN institutions.group_id so a clinic
+    # changing groups is always reflected.
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), nullable=True, index=True
+    )
+    workflow_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), nullable=True
     )
 
     channel: Mapped[str] = mapped_column(String(20), nullable=False)

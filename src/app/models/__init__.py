@@ -61,6 +61,9 @@ from src.app.models.sms_consent import (
 )
 from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
 from src.app.models.outbound_halt import OutboundEmergencyHalt
+from src.app.models.usage_cost_rollup import (  # noqa: F401 — model registration
+    UsageCostRollup,
+)
 from src.app.models.usage_event import (
     UsageChannel,
     UsageDirection,
@@ -134,6 +137,7 @@ __all__ = [
     "DeadLetterEvent",
     "DeadLetterStatus",
     "OutboundEmergencyHalt",
+    "UsageCostRollup",
     "UsageEvent",
     "UsageChannel",
     "UsageDirection",
