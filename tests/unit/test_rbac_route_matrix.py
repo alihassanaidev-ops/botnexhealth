@@ -117,6 +117,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/contacts/{contact_id}/reveal/phone",
         "GET /api/institution/dashboard/summary",
         "GET /api/institution/dashboard/monthly-metrics",
+        "GET /api/institution/usage/summary",
+        "GET /api/institution/usage/by-campaign",
         "GET /api/institution/custom-fields/definitions",
         "GET /api/institution/notifications",
         "GET /api/institution/notifications/unread-count",

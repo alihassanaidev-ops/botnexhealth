@@ -73,6 +73,10 @@ class RetellCallWebhook(BaseModel):
     scrubbed_call_analysis: CallAnalysisData | None = None
     # Dynamic variables collected during the call (name, email, etc.)
     collected_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
+    # Non-PHI call metadata Retell echoes back. Outbound campaign calls stamp
+    # workflow_run_id here (VoiceNodeExecutor) so usage metering can attribute
+    # the call's minutes to its workflow run (Plan 11 M-1/M-4).
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetellWebhookEvent(BaseModel):
@@ -408,6 +412,37 @@ async def process_retell_call_analyzed_event(
 
                 # Commit the transaction so contacts and calls are saved!
                 await session.commit()
+
+            # ── Usage metering: record voice minutes after DB commit (Plan 11 M-1) ──
+            # Retell bills connected minutes; meter every analyzed call with a
+            # duration. Idempotent on the Retell call id so replayed webhooks
+            # never double-count. workflow_run_id (stamped by VoiceNodeExecutor)
+            # attributes outbound campaign minutes to their run.
+            try:
+                from decimal import Decimal
+
+                from src.app.services.usage_metering_service import record_usage_event
+
+                _dur_ms = event.call.duration_ms
+                if _dur_ms and _dur_ms > 0:
+                    await record_usage_event(
+                        institution_id=institution.id,
+                        location_id=location.id if location else None,
+                        channel="voice",
+                        direction=(mapped_call_data.direction or "outbound"),
+                        provider="retell",
+                        minutes=Decimal(_dur_ms) / Decimal(60000),
+                        dials=1,
+                        provider_message_id=event.call.call_id,
+                        idempotency_key=f"retell:{event.call.call_id}",
+                        workflow_run_id=event.call.metadata.get("workflow_run_id"),
+                    )
+            except Exception as usage_err:
+                logger.error(
+                    "Failed to record voice usage: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(usage_err),
+                )
 
             # ── Recording upload: enqueue S3 upload after DB commit ──
             _rec_url = event.call.scrubbed_recording_url
