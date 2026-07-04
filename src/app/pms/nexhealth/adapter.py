@@ -333,6 +333,37 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             return None
         return data
 
+    async def list_appointments(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        max_items: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """List raw NexHealth appointments for this location/date window.
+
+        Used by Plan 09 backfill and reconciliation. This intentionally returns
+        raw appointment dictionaries because the projection only needs a small
+        scheduling subset and NexHealth payloads vary by PMS. The call still
+        goes through ``handle_nexhealth_request`` + ``fetch_all_pages`` so the
+        shared client, auth, and rate limiter remain authoritative.
+        """
+        params = self._default_params()
+
+        async def fetch(page: int, per_page: int) -> dict[str, Any]:
+            p = {
+                **params,
+                "start_date": start_date,
+                "end_date": end_date,
+                "page": page,
+                "per_page": per_page,
+            }
+            return await handle_nexhealth_request(
+                self._client, "GET", "/appointments", params=p
+            )
+
+        return await fetch_all_pages(fetch, per_page=50, max_items=max_items)
+
     async def list_patient_recalls(self, *, max_items: int = 500) -> list[dict[str, Any]]:
         """List patient recall records for this location from NexHealth.
 

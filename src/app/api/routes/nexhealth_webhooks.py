@@ -199,10 +199,17 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     from src.app.services.automation.nexhealth_projection_service import (
         NexHealthProjectionService,
     )
+    from src.app.services.automation.nexhealth_subscription_service import (
+        NexHealthSubscriptionLifecycleService,
+    )
 
     async with get_system_db_session(
         "nexhealth_webhooks", institution_id=institution_id, external_id=appointment_id
     ) as session:
+        await NexHealthSubscriptionLifecycleService(session).record_event_seen(
+            institution_id=institution_id,
+            location_id=location_id,
+        )
         proj = NexHealthProjectionService(session)
         claimed = await proj.claim_event(
             institution_id=institution_id,

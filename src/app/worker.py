@@ -62,6 +62,17 @@ def _build_celery_app() -> Celery:
                 "task": "src.app.tasks.automation_workflow.scan_recall_workflows",
                 "schedule": 3600.0,  # hourly — patient visit history changes slowly
             },
+            "ensure-nexhealth-webhook-subscriptions": {
+                "task": "src.app.tasks.automation_workflow.ensure_nexhealth_webhook_subscriptions",
+                # Lifecycle/health is cheap and keeps setup state current.
+                "schedule": 3600.0,
+            },
+            "reconcile-nexhealth-appointments": {
+                "task": "src.app.tasks.automation_workflow.reconcile_nexhealth_appointments",
+                # Low-frequency repair sweep; initial backfill is task-triggered
+                # after subscription setup or manually by operators.
+                "schedule": 6 * 3600.0,
+            },
             "recover-stale-workflow-timers": {
                 "task": "src.app.tasks.automation_workflow.recover_stale_workflow_timers",
                 # Faster than the 120 s claim TTL so a crashed-worker timer is

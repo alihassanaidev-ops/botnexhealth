@@ -21,6 +21,10 @@ from src.app.models.nexhealth_webhook_event import (  # noqa: F401 — model reg
     NexHealthWebhookEvent,
     NexHealthWebhookStatus,
 )
+from src.app.models.nexhealth_webhook_subscription import (  # noqa: F401 — model registration
+    NexHealthWebhookSubscription,
+    NexHealthWebhookSubscriptionStatus,
+)
 from src.app.models.call_metrics_daily import (  # noqa: F401 — model registration
     CallMetricsDaily,
     NULL_LOCATION_SENTINEL,
@@ -147,6 +151,8 @@ __all__ = [
     "AppointmentWorkingSet",
     "NexHealthWebhookEvent",
     "NexHealthWebhookStatus",
+    "NexHealthWebhookSubscription",
+    "NexHealthWebhookSubscriptionStatus",
     "UsageCostRollup",
     "UsageEvent",
     "UsageChannel",

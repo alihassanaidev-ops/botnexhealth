@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
     nexhealth_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound webhook signatures
+    nexhealth_webhook_callback_url: str | None = None
 
     # Retell AI settings
     retell_api_secret: str | None = None
@@ -257,6 +258,12 @@ class Settings(BaseSettings):
                 "NEXHEALTH_WEBHOOK_SECRET must be set in production. "
                 "Without it, inbound appointment webhooks are unauthenticated."
             )
+        if (
+            self.is_production
+            and self.nexhealth_webhook_callback_url
+            and urlparse(self.nexhealth_webhook_callback_url).scheme != "https"
+        ):
+            raise ValueError("NEXHEALTH_WEBHOOK_CALLBACK_URL must use https in production")
 
         for cidr in self._split_csv(self.trusted_proxy_cidrs):
             ipaddress.ip_network(cidr, strict=False)

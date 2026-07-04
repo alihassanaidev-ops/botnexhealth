@@ -103,6 +103,32 @@ async def test_has_provider_appointments_safe_fallback_on_unexpected_payload(mon
 
 
 @pytest.mark.asyncio
+async def test_list_appointments_paginates_date_window(monkeypatch: pytest.MonkeyPatch):
+    adapter = _make_adapter()
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(params or {})
+        if params["page"] == 1:
+            return {"count": 2, "data": [{"id": 1}]}
+        return {"count": 2, "data": [{"id": 2}]}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.list_appointments(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+    )
+
+    assert [row["id"] for row in result] == [1, 2]
+    assert calls[0]["subdomain"] == "test-subdomain"
+    assert calls[0]["location_id"] == "test-location"
+    assert calls[0]["start_date"] == "2026-08-01"
+    assert calls[0]["end_date"] == "2026-08-31"
+    assert calls[1]["page"] == 2
+
+
+@pytest.mark.asyncio
 async def test_list_availabilities_uses_provider_embedded_windows_when_endpoint_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ):

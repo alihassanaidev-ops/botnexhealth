@@ -30,6 +30,13 @@ from src.app.services.automation.callback_trigger_service import (
 )
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+from src.app.services.automation.nexhealth_backfill_service import (
+    AppointmentSyncSummary,
+    NexHealthAppointmentSyncService,
+)
+from src.app.services.automation.nexhealth_subscription_service import (
+    NexHealthSubscriptionLifecycleService,
+)
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.step_dispatcher import build_dispatcher
@@ -50,11 +57,22 @@ _ADVANCEABLE_STATUSES = frozenset({
     AutomationRunStatus.RUNNING.value,
 })
 
+_APPOINTMENT_SYNC_LOOKAHEAD_DAYS = 90
+
 
 def _ensure_db() -> None:
     from src.app.config import settings
     if not is_database_initialized() and settings.database_url:
         init_database(settings.database_url, use_null_pool=True)
+
+
+def _merge_sync_summary(total: AppointmentSyncSummary, part: AppointmentSyncSummary) -> None:
+    total.locations_scanned += part.locations_scanned
+    total.appointments_seen += part.appointments_seen
+    total.projected += part.projected
+    total.triggered += part.triggered
+    total.cancelled_runs += part.cancelled_runs
+    total.failed_locations += part.failed_locations
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +589,128 @@ async def _trigger_appointment_async(
         institution_id, appointment_id, scheduled, skipped,
     )
     return {"appointment_id": appointment_id, "scheduled": scheduled, "skipped": skipped}
+
+
+# ---------------------------------------------------------------------------
+# NexHealth subscription/backfill/reconciliation — Plan 09 resilient core
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.ensure_nexhealth_webhook_subscriptions",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def ensure_nexhealth_webhook_subscriptions(self) -> dict:
+    """Ensure local subscription lifecycle rows and refresh health status."""
+    _ensure_db()
+    try:
+        return asyncio.run(_ensure_nexhealth_webhook_subscriptions_async())
+    except Exception as exc:
+        logger.exception("ensure_nexhealth_webhook_subscriptions failed: %s", exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _ensure_nexhealth_webhook_subscriptions_async() -> dict:
+    from src.app.config import settings
+
+    async with get_system_db_session(
+        "celery", external_id="nexhealth_subscription_lifecycle"
+    ) as session:
+        svc = NexHealthSubscriptionLifecycleService(session)
+        ensure_summary = await svc.ensure_for_configured_locations(
+            callback_url=settings.nexhealth_webhook_callback_url,
+        )
+        health = await svc.health_check()
+        await session.commit()
+
+    return {
+        **ensure_summary,
+        "health_total": health.total,
+        "health_active": health.active,
+        "health_pending": health.pending,
+        "health_disabled": health.disabled,
+        "health_failed": health.failed,
+        "stale_marked": health.stale_marked,
+    }
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.backfill_nexhealth_appointments",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def backfill_nexhealth_appointments(self) -> dict:
+    """Initial REST backfill for configured NexHealth appointment subscriptions."""
+    _ensure_db()
+    try:
+        return asyncio.run(_sync_nexhealth_appointments_async(mode="backfill"))
+    except Exception as exc:
+        logger.exception("backfill_nexhealth_appointments failed: %s", exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.reconcile_nexhealth_appointments",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def reconcile_nexhealth_appointments(self) -> dict:
+    """Paced reconciliation sweep repairing stale/missing appointment projection rows."""
+    _ensure_db()
+    try:
+        return asyncio.run(_sync_nexhealth_appointments_async(mode="reconciliation"))
+    except Exception as exc:
+        logger.exception("reconcile_nexhealth_appointments failed: %s", exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _sync_nexhealth_appointments_async(*, mode: str) -> dict:
+    async with get_system_db_session(
+        "celery", external_id=f"nexhealth_{mode}_target_scan"
+    ) as session:
+        targets = await NexHealthSubscriptionLifecycleService(session).active_or_pending_targets()
+
+    total = AppointmentSyncSummary()
+    for institution_id, subscription_id in targets:
+        async with get_system_db_session(
+            "celery",
+            institution_id=institution_id,
+            external_id=f"nexhealth_{mode}:{subscription_id}",
+        ) as session:
+            svc = NexHealthAppointmentSyncService(session)
+            part = await svc.sync_subscription(
+                subscription_id=subscription_id,
+                mode="backfill" if mode == "backfill" else "reconciliation",
+                lookahead_days=_APPOINTMENT_SYNC_LOOKAHEAD_DAYS,
+            )
+            await session.commit()
+            _merge_sync_summary(total, part)
+
+    logger.info(
+        "nexhealth_%s: subscriptions=%d locations=%d appointments=%d projected=%d triggered=%d cancelled_runs=%d failed_locations=%d",
+        mode,
+        len(targets),
+        total.locations_scanned,
+        total.appointments_seen,
+        total.projected,
+        total.triggered,
+        total.cancelled_runs,
+        total.failed_locations,
+    )
+    return {
+        "mode": mode,
+        "subscriptions": len(targets),
+        "locations_scanned": total.locations_scanned,
+        "appointments_seen": total.appointments_seen,
+        "projected": total.projected,
+        "triggered": total.triggered,
+        "cancelled_runs": total.cancelled_runs,
+        "failed_locations": total.failed_locations,
+    }
 
 
 # ---------------------------------------------------------------------------
