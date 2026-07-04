@@ -191,10 +191,48 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
             if contact:
                 contact_id = str(contact.id)
 
-    # Cancellation path: terminate any already-scheduled runs/timers for this
-    # appointment instead of enrolling. (Reschedules keep their enrollment; the
-    # dispatch-time PmsLiveRevalidationService is the backstop that skips a send
-    # whose appointment time no longer matches at fire time.)
+    # ── Event-ledger claim + projection upsert (Plan 09 D-1/D-2/D-4) ──
+    # dedup_key is the event's semantic identity: a redelivery of the same logical
+    # change collides (skipped); a genuine reschedule (new start_time) does not.
+    dedup_key = f"{event}:{appointment_id}:{'cancelled' if is_cancelled else (start_time or 'none')}"
+
+    from src.app.services.automation.nexhealth_projection_service import (
+        NexHealthProjectionService,
+    )
+
+    async with get_system_db_session(
+        "nexhealth_webhooks", institution_id=institution_id, external_id=appointment_id
+    ) as session:
+        proj = NexHealthProjectionService(session)
+        claimed = await proj.claim_event(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            event_type=event,
+            dedup_key=dedup_key,
+        )
+        if not claimed:
+            await session.commit()
+            logger.info(
+                "nexhealth_appointment_webhook: duplicate event institution=%s appt=%s dedup=%s",
+                institution_id, appointment_id, dedup_key,
+            )
+            return {"status": "duplicate", "appointment_id": appointment_id}
+
+        upsert = await proj.upsert_appointment(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            location_id=location_id,
+            nexhealth_patient_id=nexhealth_patient_id,
+            contact_id=contact_id,
+            start_time=start_time,
+            event=event,
+            cancelled=is_cancelled,
+        )
+        change = upsert.change
+        await proj.complete_event(institution_id=institution_id, dedup_key=dedup_key)
+        await session.commit()
+
+    # Cancellation: terminate any already-scheduled runs/timers for this appointment.
     if is_cancelled:
         runs_cancelled = await _cancel_runs_for_appointment(
             institution_id, appointment_id, reason="appointment_cancelled"
@@ -209,6 +247,23 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
             "institution_id": institution_id,
             "runs_cancelled": runs_cancelled,
         }
+
+    # Unchanged update (same start_time): projection refreshed for the freshness
+    # window, but no new enrollment needed — the existing run stands.
+    if change == "unchanged":
+        logger.info(
+            "nexhealth_appointment_webhook: unchanged institution=%s appt=%s", institution_id, appointment_id,
+        )
+        return {"status": "unchanged", "appointment_id": appointment_id}
+
+    # Reschedule: the old run was enrolled for the previous time. Cancel it + its
+    # timers, then re-trigger — the time-aware idempotency key enrolls fresh at the
+    # new time (Plan 09 D-1: previously the send was silently dropped).
+    runs_cancelled = 0
+    if change == "rescheduled":
+        runs_cancelled = await _cancel_runs_for_appointment(
+            institution_id, appointment_id, reason="appointment_rescheduled"
+        )
 
     from src.app.tasks.automation_workflow import trigger_appointment_workflows
 
@@ -226,14 +281,12 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     )
 
     logger.info(
-        "nexhealth_appointment_webhook: queued trigger institution=%s appt=%s event=%s contact=%s",
-        institution_id,
-        appointment_id,
-        event,
-        contact_id or "none",
+        "nexhealth_appointment_webhook: queued trigger institution=%s appt=%s event=%s change=%s contact=%s reenrolled_after_cancel=%d",
+        institution_id, appointment_id, event, change, contact_id or "none", runs_cancelled,
     )
     return {
         "status": "queued",
+        "change": change,
         "appointment_id": appointment_id,
         "institution_id": institution_id,
     }

@@ -55,6 +55,30 @@ def _make_location(institution_id="inst-1", location_id="loc-1"):
     return loc
 
 
+def _patch_projection(change="new"):
+    """Patch NexHealthProjectionService (imported at call-time) with a mock whose
+    claim_event→True, upsert_appointment→change, complete_event→noop."""
+    from types import SimpleNamespace
+
+    inst = MagicMock()
+    inst.claim_event = AsyncMock(return_value=True)
+    inst.upsert_appointment = AsyncMock(return_value=SimpleNamespace(change=change))
+    inst.complete_event = AsyncMock()
+    return patch(
+        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+        return_value=inst,
+    )
+
+
+def _make_cm_session():
+    """A bare async-context-manager session (for the projection block)."""
+    s = AsyncMock()
+    s.__aenter__ = AsyncMock(return_value=s)
+    s.__aexit__ = AsyncMock(return_value=False)
+    s.commit = AsyncMock()
+    return s
+
+
 _VALID_PAYLOAD = {
     "event": "appointment.created",
     "data": {
@@ -138,8 +162,8 @@ async def test_webhook_queues_task_for_created_event():
 
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
         "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        return_value=mock_session,
-    ), patch(
+        side_effect=[mock_session, _make_cm_session()],
+    ), _patch_projection(change="new"), patch(
         "src.app.tasks.automation_workflow.trigger_appointment_workflows"
     ) as mock_task:
         mock_settings.nexhealth_webhook_secret = ""
@@ -165,8 +189,8 @@ async def test_webhook_queues_task_with_no_contact():
 
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
         "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        return_value=mock_session,
-    ), patch(
+        side_effect=[mock_session, _make_cm_session()],
+    ), _patch_projection(change="new"), patch(
         "src.app.tasks.automation_workflow.trigger_appointment_workflows"
     ) as mock_task:
         mock_settings.nexhealth_webhook_secret = ""
@@ -240,8 +264,8 @@ async def test_webhook_cancels_runs_on_cancelled_update():
 
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
         "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[lookup_session, cancel_session],
-    ), patch(
+        side_effect=[lookup_session, _make_cm_session(), cancel_session],
+    ), _patch_projection(change="cancelled"), patch(
         "src.app.services.automation.enrollment_service.AutomationWorkflowEnrollmentService",
         return_value=mock_enroll_svc,
     ), patch(

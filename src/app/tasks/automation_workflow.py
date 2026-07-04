@@ -542,7 +542,7 @@ async def _trigger_appointment_async(
             continue
 
         idempotency_key = make_appointment_idempotency_key(
-            str(wf.current_version_id), appointment_id
+            str(wf.current_version_id), appointment_id, appointment_at_iso
         )
         enroll_and_start_workflow_run.apply_async(
             kwargs={

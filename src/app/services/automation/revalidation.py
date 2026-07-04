@@ -17,6 +17,8 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from sqlalchemy import select
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,16 +69,27 @@ def _same_instant(expected: object, current: object) -> bool:
     return a == b
 
 
+# A projection row synced within this window is trusted without a live NexHealth
+# read (Plan 09 D-2 freshness window). Cuts the ~800-call burst when a large
+# fixed-time batch all dispatches at once. Tunable.
+_FRESHNESS_WINDOW_SECONDS = 900  # 15 minutes
+
+
 class PmsLiveRevalidationService:
-    """Plan 09 dispatch-time revalidator backed by live NexHealth reads.
+    """Plan 09 dispatch-time revalidator backed by the appointment working set +
+    live NexHealth reads.
 
     Immediately before an appointment-triggered run sends, this checks the
-    appointment's current status in NexHealth:
+    appointment's current status:
 
     * ``"skipped_cancelled"`` — the appointment was cancelled.
     * ``"skipped_rescheduled"`` — its start time no longer matches the time the
       run was enrolled against (``trigger_metadata['appointment_at']``).
     * ``None`` — still valid, proceed with the send.
+
+    A recently-synced ``appointment_working_set`` row (within the freshness window)
+    is trusted directly, avoiding a live NexHealth call per send (D-2). Only a
+    missing/stale projection falls through to a live ``get_appointment``.
 
     Fail-open: any lookup/build error returns ``None`` so a transient NexHealth
     blip never drops a legitimate send (it is logged instead). Recall/manual
@@ -108,6 +121,13 @@ class PmsLiveRevalidationService:
         from src.app.models.institution_location import InstitutionLocation
         from src.app.pms.nexhealth.adapter import NexHealthAdapter
 
+        # Freshness window (D-2): trust a recently-synced projection row instead of
+        # a live NexHealth read. Returns (decided, outcome); decided=False → stale
+        # or missing, fall through to the live read below.
+        decided, outcome = await self._check_projection(run, appointment_id)
+        if decided:
+            return outcome
+
         if not run.location_id:
             return None
         location = await self._session.get(InstitutionLocation, run.location_id)
@@ -136,3 +156,41 @@ class PmsLiveRevalidationService:
         if expected_at and current_at and not _same_instant(expected_at, current_at):
             return "skipped_rescheduled"
         return None
+
+    async def _check_projection(
+        self, run: "AutomationWorkflowRun", appointment_id: str
+    ) -> tuple[bool, str | None]:
+        """Decide from the working set if a fresh row exists.
+
+        Returns ``(decided, outcome)``: ``decided=True`` means the projection was
+        fresh enough to trust — ``outcome`` is the skip string or None (proceed).
+        ``decided=False`` means missing/stale — the caller falls through to a
+        live NexHealth read.
+        """
+        from src.app.models.appointment_working_set import AppointmentWorkingSet
+
+        row = (
+            await self._session.execute(
+                select(AppointmentWorkingSet).where(
+                    AppointmentWorkingSet.institution_id == run.institution_id,
+                    AppointmentWorkingSet.nexhealth_appointment_id == appointment_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None or row.last_synced_at is None:
+            return False, None
+
+        synced = row.last_synced_at
+        if synced.tzinfo is None:
+            synced = synced.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - synced).total_seconds()
+        if age > _FRESHNESS_WINDOW_SECONDS:
+            return False, None  # stale — revalidate live
+
+        if row.status == "cancelled":
+            return True, "skipped_cancelled"
+
+        expected_at = (run.trigger_metadata or {}).get("appointment_at")
+        if expected_at and row.start_time and not _same_instant(expected_at, row.start_time.isoformat()):
+            return True, "skipped_rescheduled"
+        return True, None

@@ -85,10 +85,31 @@ def compute_enrollment_eta(
 
 
 def make_appointment_idempotency_key(
-    workflow_version_id: str, appointment_id: str
+    workflow_version_id: str,
+    appointment_id: str,
+    appointment_at_iso: str | None = None,
 ) -> str:
-    """Stable idempotency key preventing double-enrollment per appointment per version."""
-    return f"appt:{workflow_version_id}:{appointment_id}"
+    """Idempotency key for one appointment enrollment per version.
+
+    The key is **time-aware** (Plan 09 D-1): including the normalized start
+    instant means a *reschedule* to a new time produces a NEW key, so the
+    re-enroll is not deduped against the (now-cancelled) run for the old time.
+    Redeliveries at the *same* time normalise to the same key and still dedupe.
+    Falls back to the time-independent key when no start time is available.
+    """
+    if not appointment_at_iso:
+        return f"appt:{workflow_version_id}:{appointment_id}"
+    dt = _parse_instant(appointment_at_iso)
+    stamp = dt.isoformat() if dt else appointment_at_iso
+    return f"appt:{workflow_version_id}:{appointment_id}:{stamp}"
+
+
+def _parse_instant(value: str) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
 
 
 def make_recall_idempotency_key(

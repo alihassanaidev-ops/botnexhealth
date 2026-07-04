@@ -36,7 +36,7 @@ def _make_run(
     return run
 
 
-def _make_session(*, location=True, institution=True):
+def _make_session(*, location=True, institution=True, projection=None):
     session = AsyncMock()
     loc = MagicMock()
     loc.nexhealth_subdomain = "clinic-sub"
@@ -52,6 +52,12 @@ def _make_session(*, location=True, institution=True):
         return None
 
     session.get = AsyncMock(side_effect=_get)
+
+    # The freshness-window check queries appointment_working_set first. Default:
+    # no projection row → fall through to the live NexHealth read these tests cover.
+    proj_result = MagicMock()
+    proj_result.scalar_one_or_none.return_value = projection
+    session.execute = AsyncMock(return_value=proj_result)
     return session
 
 
@@ -125,6 +131,69 @@ async def test_revalidate_skips_rescheduled_appointment():
         result = await svc.revalidate(run)
 
     assert result == "skipped_rescheduled"
+
+
+# ---------------------------------------------------------------------------
+# Freshness window (D-2) — a fresh projection row is trusted; no live call
+# ---------------------------------------------------------------------------
+
+
+def _fresh_projection(*, status="scheduled", start_time="2026-08-01T10:00:00Z"):
+    from datetime import datetime, timezone
+    row = MagicMock()
+    row.status = status
+    row.last_synced_at = datetime.now(timezone.utc)
+    row.start_time = (
+        datetime.fromisoformat(start_time.replace("Z", "+00:00")) if start_time else None
+    )
+    return row
+
+
+@pytest.mark.asyncio
+async def test_fresh_projection_cancelled_skips_without_live_call():
+    run = _make_run()
+    session = _make_session(projection=_fresh_projection(status="cancelled"))
+    svc = PmsLiveRevalidationService(session)
+
+    # Patch create to blow up if called — proves no live NexHealth read happened.
+    with patch(
+        "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+        AsyncMock(side_effect=AssertionError("live call must not happen when projection is fresh")),
+    ):
+        result = await svc.revalidate(run)
+    assert result == "skipped_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_fresh_projection_matching_time_proceeds_without_live_call():
+    run = _make_run(appointment_at="2026-08-01T10:00:00Z")
+    session = _make_session(projection=_fresh_projection(start_time="2026-08-01T10:00:00Z"))
+    svc = PmsLiveRevalidationService(session)
+    with patch(
+        "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+        AsyncMock(side_effect=AssertionError("live call must not happen when projection is fresh")),
+    ):
+        result = await svc.revalidate(run)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_stale_projection_falls_through_to_live_read():
+    from datetime import datetime, timedelta, timezone
+    run = _make_run()
+    stale = MagicMock()
+    stale.status = "scheduled"
+    stale.last_synced_at = datetime.now(timezone.utc) - timedelta(hours=1)  # stale
+    stale.start_time = datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc)
+    session = _make_session(projection=stale)
+    svc = PmsLiveRevalidationService(session)
+
+    appt = {"id": "appt-1", "cancelled": True, "start_time": "2026-08-01T10:00:00Z"}
+    p, adapter = _patch_adapter(appt)
+    with p:
+        result = await svc.revalidate(run)
+    assert result == "skipped_cancelled"  # came from the live read
+    adapter.get_appointment.assert_awaited_once()
 
 
 @pytest.mark.asyncio

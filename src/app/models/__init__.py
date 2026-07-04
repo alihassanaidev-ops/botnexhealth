@@ -13,7 +13,14 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowTimer,
     AutomationWorkflowVersion,
 )
+from src.app.models.appointment_working_set import (  # noqa: F401 — model registration
+    AppointmentWorkingSet,
+)
 from src.app.models.call import Call, CallDirection, CallStatus, PatientStatus
+from src.app.models.nexhealth_webhook_event import (  # noqa: F401 — model registration
+    NexHealthWebhookEvent,
+    NexHealthWebhookStatus,
+)
 from src.app.models.call_metrics_daily import (  # noqa: F401 — model registration
     CallMetricsDaily,
     NULL_LOCATION_SENTINEL,
@@ -137,6 +144,9 @@ __all__ = [
     "DeadLetterEvent",
     "DeadLetterStatus",
     "OutboundEmergencyHalt",
+    "AppointmentWorkingSet",
+    "NexHealthWebhookEvent",
+    "NexHealthWebhookStatus",
     "UsageCostRollup",
     "UsageEvent",
     "UsageChannel",
