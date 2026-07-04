@@ -93,7 +93,8 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   attempt row per placed call; `resume_voice_outcome` stamps the outcome (incl. raw `disconnection_reason`,
   threaded webhook → task → `stamp_attempt_outcome` on 2026-07-05). *Deferred sub-item:* optional
   `calls`→run linkage columns (not required by P9/V-8; no consumer — skipped).
-- **V-5 (P1) Voice usage metering** — deferred to **Plan 11** (M-1; voice emits no `UsageEvent`).
+- **V-5 ✅ Voice usage metering** — shipped via Plan 11 **M-1** (Retell post-call webhook emits voice minutes/dials,
+  attributed to the run via `metadata.workflow_run_id`). Residual: voice **cost** is $0 (no Retell pricing → M-6).
 - **V-6 ✅ Transient retry** (refined by XC-1b option A, 2026-07-05). Executor classifies **5xx → transient**
   (re-raise for Celery retry until `max_attempts`, then fail), **4xx → permanent** (fail), **timeout/network →
   ambiguous** (`RetellAmbiguousError`: fail, NO retry, keep P9 claim blocking). Wires `SendVoiceNode.max_attempts`.
@@ -158,7 +159,8 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   single/bulk enroll exists but is unconsumed by the UI.
 - **U-2 (P1) Emergency-halt UI** — backend routes exist, no frontend surface.
 - **U-2b (P1) Privileged institution/DSO-wide DNC admin endpoint + UI** — the `set_do_not_contact` writer exists (Plan 12); expose it.
-- **U-3 (P2) Analytics/reporting page + attributed revenue** — blocked on Plan 11 rollups (M-2).
+- **U-3 (P2) Analytics/reporting page + attributed revenue** — **backend now unblocked**: Plan 11 rollups +
+  `/institution/usage` API (`/summary`, `/by-campaign`) exist (M-2). The FE analytics page that consumes them remains.
 - **U-4 (P2) Operations page** — dead-letter/replay, stale-timers, run-detail timeline.
 - **U-5 (P2) SSE real-time** — pages are manual-refresh; wire `workflow_run_updated`. Fix native `confirm()` → app Dialog; add location scoping.
 
@@ -179,13 +181,30 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
 - **PR-3 (P2) Provisioning automation** — Twilio sub-account creation, A2P 10DLC / toll-free registration, email
   domain SPF/DKIM/DMARC + warm-up (all manual today); Secrets Manager for tenant creds; per-location sub-account scoping.
 
-### Plan 11 — Usage & Cost Reporting (~15%)
-- **M-1 (P1) Voice usage metering** — voice emits no `UsageEvent`; wire it in the Retell **post-call webhook** (has duration/minutes).
-- **M-2 (P1) `usage_cost_rollups`** (location→institution→DSO) + `UsageRollupService` + reporting API — **blocks Plan 08 analytics (U-3)**.
-- **M-3 (P1) Capture email cost** (Resend cost currently unmetered → $0); handle late price-update webhooks (currently dropped by idempotency no-op).
-- **M-4 (P1) Re-tag `usage_events`** — add `workflow_run_id`/`campaign_key`/`institution_group_id`; **without this,
-  per-campaign spend is impossible even once rollups exist.**
-- **M-5 (P2) `usage_budgets` + dashboards** (read side; note: budget *caps* are dropped, but budget *visibility* is not).
+### Plan 11 — Usage & Cost Reporting (~65%) — most core items landed via Hammad's merge (2026-07-05)
+- **M-1 ✅ Voice usage metering.** Retell post-call webhook emits `channel=voice` usage (minutes + dials),
+  attributed to the workflow run via echoed `metadata.workflow_run_id` (`retell/webhooks.py:416-445`;
+  `VoiceNodeExecutor` stamps the metadata). *Residual → M-6: voice **cost** is $0 (no Retell pricing applied).*
+- **M-2 ✅ Rollups + reporting API (partial).** `usage_cost_rollups` table + `UsageRollupService`
+  (UPSERT-from-SELECT, location + institution daily rollups; `services/usage_rollup.py`, migration
+  `20260706_usage_cost_rollups`) + runner `recompute_usage_rollup.py`; reporting API `/institution/usage`
+  (`GET /summary`, `GET /by-campaign`, RLS-enforced). **Unblocks Plan 08 analytics (U-3) — backend ready, FE remains.**
+  *Residuals → M-7: DSO/group aggregation level is designed (JOIN institutions.group_id) but not exposed by an
+  endpoint; no beat entry for the rollup recompute (runs as an external script only).*
+- **M-3 ⬜ (P1) Cost fidelity.** Email cost still $0 (Resend has no send-time price / no status webhook); **SMS
+  late-price-update still dropped** — the first terminal status (often price-null `sent`) records the event and a
+  later `delivered` carrying `Price` hits the MessageSid idempotency no-op (`twilio_webhooks.py:189-201`). Fix by
+  keying the SMS price event distinctly or updating on the price-bearing callback.
+- **M-4 ✅ Campaign attribution.** `usage_events.workflow_run_id` + `workflow_id` added (migration
+  `20260706_usage_event_campaign_tags`); `record()` persists them; per-campaign spend works via `/by-campaign`.
+  (`institution_group_id` intentionally omitted → group rollups JOIN `institutions.group_id`.)
+- **M-5 ⬜ (P2) `usage_budgets` + dashboards** — budgets table absent; FE dashboards absent (Plan 08 U-3).
+  (Budget *caps* are dropped; budget *visibility* is not.)
+- **M-6 ⬜ (P2) Cost estimation + `estimated` flag** — no estimation when a provider omits price; no `estimated`
+  column. Plus voice cost pricing (see M-1 residual).
+- **M-7 ⬜ (P2) DSO/group rollup endpoint + rollup alarms** — expose the group aggregation; add a beat schedule for
+  `recompute_recent` + ingestion-lag/rollup-failure alarms; add end-to-end/RLS integration tests (current tests are
+  helper/mock-level).
 
 ### Plan 12 — Compliance & Consent (~60%)
 - **CO-1 (P2) Named `ConsentService`/`SuppressionService`** — logic currently lives in the gate + `SmsComplianceService`.
@@ -198,7 +217,8 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
 1. ✅ **P0 send-safety bundle** + **Plan 12 semantic layer** — DONE.
 2. ✅ **XC-1 send-time idempotency (all channels)** — DONE (+ latent hold-resume collision fixed).
    Remaining: **XC-1b** crash-window (committed-before-send claim / provider idempotency key) before high volume.
-3. **Plan 11 rollups + voice metering + re-tagging** (M-1..M-4) — unblocks Plan 08 analytics.
+3. **Plan 11 residuals** — M-1 (voice metering), M-2 (rollups + reporting API), M-4 (campaign attribution) **DONE**;
+   remaining: M-3 cost fidelity (email/voice $0, SMS late-price), M-5 budgets, M-6 estimation, M-7 group endpoint/alarms.
 4. **Plan 09 resilient core** (D-1..D-4) — reschedule re-enroll, freshness window, projections/backfill/reconciliation.
 5. **Plan 05 email hardening** (E-1/E-2) — unsubscribe + bounce/complaint; independent, legal minimum.
 6. **Plan 06 differentiators** (C-1..C-3) — PMS write-back (fixes dead confirm-branch), Sales Qualification.
