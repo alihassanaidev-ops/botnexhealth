@@ -33,6 +33,7 @@ from src.app.services.automation.enrollment_service import AutomationWorkflowEnr
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.step_dispatcher import build_dispatcher
+from src.app.services.automation.voice_attempt_recorder import stamp_attempt_outcome
 from src.app.services.dead_letter import capture_dead_letter
 from src.app.worker import celery_app
 
@@ -819,6 +820,15 @@ async def _resume_voice_outcome_async(
         md["call_outcome"] = call_outcome
         run.trigger_metadata = md
         await session.flush()
+
+        # Resolve the voice-attempt row (V-4) to COMPLETED with its dial outcome so
+        # the attempt/outcome history reflects how the call went (best-effort).
+        await stamp_attempt_outcome(
+            session,
+            institution_id=institution_id,
+            retell_call_id=retell_call_id,
+            dial_outcome=call_outcome,
+        )
 
         version = await session.get(AutomationWorkflowVersion, run.workflow_version_id)
         if version is None:

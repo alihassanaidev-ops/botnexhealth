@@ -31,6 +31,13 @@ from src.app.services.automation.retell_outbound_client import (
     RetellTransientError,
 )
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+from src.app.services.automation.voice_attempt_recorder import (
+    claim_voice_attempt,
+    mark_attempt_failed,
+    mark_attempt_placed,
+    resolve_outbound_voice_profile,
+    voice_send_already_claimed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +99,17 @@ class VoiceNodeExecutor:
             )
             return node.next_node_id
 
+        # Crash-safe idempotency (P9): a committed non-FAILED voice-attempt claim means
+        # a call was (or may have been, if we crashed between the Retell POST and the
+        # commit) already placed for this (run, step). Bias to at-most-once — do NOT
+        # re-dial. A FAILED claim doesn't count, so a V-6 transient retry still re-dials.
+        if await voice_send_already_claimed(self.session, run.id, node.id):
+            logger.info(
+                "send_voice idempotent skip: committed claim exists institution=%s run=%s node=%s",
+                run.institution_id, run.id, node.id,
+            )
+            return node.next_node_id
+
         step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
 
         # --- Resolve contact / phone / location / creds (all permanent failures) ---
@@ -117,11 +135,20 @@ class VoiceNodeExecutor:
             if run.location_id
             else None
         )
-        from_number = location.retell_from_number if location else None
+        # A per-location outbound profile (V-4) overrides the node/location defaults
+        # when present; an absent or inactive profile leaves resolution unchanged.
+        profile = await resolve_outbound_voice_profile(self.session, run.location_id)
+        from_number = (
+            (profile.retell_from_number if profile and profile.retell_from_number else None)
+            or (location.retell_from_number if location else None)
+        )
         if not from_number:
             await self.runtime.fail_step(step, result_code="no_from_number")
             await self.runtime.fail_run(run, reason="send_voice: location has no retell_from_number")
             return node.next_node_id
+        agent_id = (
+            profile.retell_agent_id if profile and profile.retell_agent_id else node.retell_agent_id
+        )
 
         api_key = settings.retell_api_secret
         if not api_key:
@@ -145,18 +172,29 @@ class VoiceNodeExecutor:
             "ai_automated_call": True,
         }
 
+        # --- Crash-safe claim (P9): commit an INITIATING attempt BEFORE the POST so a
+        # crash between the Retell POST and the task commit leaves a durable claim that
+        # blocks a re-dial. Retell has no idempotency key (A-4), so this is the mechanism. ---
+        attempt = await claim_voice_attempt(
+            self.session, run, step, from_number=from_number, to_number=to_number
+        )
+        await self.session.commit()
+
         # --- Place the call via the mockable client ---
         try:
             result = await RetellOutboundClient(api_key).create_phone_call(
                 from_number=from_number,
                 to_number=to_number,
-                override_agent_id=node.retell_agent_id,
+                override_agent_id=agent_id,
                 dynamic_variables=dynamic_variables,
                 metadata=metadata,
             )
         except RetellTransientError as exc:
-            # Recoverable vendor blip. Retry via the Celery task until max_attempts
-            # is exhausted, then give up (fail the run rather than loop forever).
+            # Recoverable vendor blip. The POST did not succeed → mark the claim FAILED
+            # (committed) so the V-6 retry sees no active claim and can re-dial. Then
+            # retry via the Celery task until max_attempts, then give up.
+            await mark_attempt_failed(attempt, error_message=str(exc))
+            await self.session.commit()
             await self.runtime.fail_step(step, result_code="retrying_transient", error_message=str(exc))
             if step.attempt_number >= node.max_attempts:
                 logger.error(
@@ -175,11 +213,20 @@ class VoiceNodeExecutor:
                 "send_voice permanent failure: institution=%s run=%s node=%s error=%s",
                 run.institution_id, run.id, node.id, exc,
             )
+            await mark_attempt_failed(attempt, error_message=str(exc))
+            await self.session.commit()
             await self.runtime.fail_step(step, result_code="send_failed", error_message=str(exc))
             await self.runtime.fail_run(run, reason=f"send_voice error: {type(exc).__name__}")
             return node.next_node_id
 
-        # --- Placed successfully: store retell_call_id for webhook correlation ---
+        # --- Placed successfully: transition the committed claim to placed/awaiting
+        # (V-4) + store the retell_call_id on the step for webhook correlation. A crash
+        # before the task commit leaves the claim INITIATING, which still blocks a
+        # re-dial on redelivery (at-most-once). ---
+        await mark_attempt_placed(
+            attempt, retell_call_id=result.call_id, awaiting_outcome=node.wait_for_outcome
+        )
+
         if node.wait_for_outcome:
             # Park WAITING for the outcome webhook. Keep the step WAITING with the
             # placed-call marker + retell_call_id so resume advances past (never re-dials).

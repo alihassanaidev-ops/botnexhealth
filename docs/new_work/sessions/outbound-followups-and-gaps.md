@@ -85,18 +85,26 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   **blocked (A-8, ambiguity-review)** — the Retell post-call DNC-intent field shape is unconfirmed.
 - **V-3 ✅ Consent basis.** `ConsentRecord.basis` + gate content-class matrix (marketing→express_written,
   recall→express, care→any); migration `20260707`.
-- **V-4 ⬜ Dedicated data model (partial).** `retell_call_id` now captured on the attempt (`result_metadata`);
-  the dedicated `outbound_voice_profiles` / `workflow_voice_attempts` tables + `calls` linkage remain — needed
-  for per-clinic setup, attempt/outcome history/UI, and the crash-safe committed claim (P9 below).
+- **V-4 ✅ Dedicated data model.** `outbound_voice_profiles` (per-location agent/number/config) +
+  `workflow_voice_attempts` (run/step/attempt link, `retell_call_id`, masked endpoints, lifecycle status,
+  `dial_outcome`) landed as models + idempotent RLS migration `20260708_voice_data_model` +
+  `voice_attempt_recorder` seam. Executor resolves the profile (override-with-fallback) and records an
+  attempt row per placed call; `resume_voice_outcome` stamps the outcome. *Deferred sub-item:* optional
+  `calls`→run linkage columns (not required by P9/V-8) and raw `disconnection_reason` threading from the
+  webhook into the attempt row (column exists; resume stamps `dial_outcome` today).
 - **V-5 (P1) Voice usage metering** — deferred to **Plan 11** (M-1; voice emits no `UsageEvent`).
 - **V-6 ✅ Transient retry.** Executor classifies transient (timeout/5xx) → re-raise for Celery retry until
   `max_attempts`, then fail; permanent (4xx) → fail. Wires `SendVoiceNode.max_attempts`.
 - **V-7 ✅ Client extraction.** `RetellOutboundClient` (mockable, error-classifying) extracted; dead voice
   dispatch fallback removed (N-1).
-- **P9 ⬜ Crash-safe committed claim.** `already_sent` covers redelivery/re-advance/hold-resume; the narrow
-  crash-between-POST-and-commit tail needs the committed `initiating` state on the `workflow_voice_attempts`
-  table (V-4-full). Follow-up.
-- **V-8 (P2) Voice UI** — outbound-profile CRUD, readiness status, campaign call-attempt drill-down (needs V-4).
+- **P9 ✅ Crash-safe committed claim.** Executor commits an `INITIATING` `workflow_voice_attempts` row
+  before the Retell POST; `voice_send_already_claimed` skips a re-dial when a committed non-FAILED claim
+  exists (closes the crash-between-POST-and-commit tail, at-most-once); transient/permanent errors mark the
+  claim FAILED + commit so a V-6 retry re-dials (V-6 unchanged). *Residual (needs product decision, = XC-1b):*
+  a **timeout** where Retell placed the call but the response was lost still re-dials on V-6 retry — Retell has
+  no idempotency key (A-4); resolving it means deciding timeout = terminal/at-most-once. Not guessed.
+- **V-8 (P2) Voice UI (V-4 dep now satisfied)** — outbound-profile CRUD (`outbound_voice_profiles`), readiness
+  status, campaign call-attempt drill-down (`workflow_voice_attempts`). Backend tables exist; UI + API remain.
 - **V-9 (P2, non-cap) Per-clinic Retell workspace isolation (BYO-SIP)** — single platform `retell_api_secret` today
   (scope §3.5/§7.2). Isolation, not a numeric cap.
 

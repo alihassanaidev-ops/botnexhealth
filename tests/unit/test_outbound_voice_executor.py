@@ -56,7 +56,10 @@ def _make_location(retell_from_number="+15005550000", name="Bright Smiles Dental
     return loc
 
 
-def _make_executor(contact=None, location=None, already_placed=False, attempt_number=1):
+def _make_executor(
+    contact=None, location=None, already_placed=False, attempt_number=1, profile=None,
+    claim_id=None,
+):
     from src.app.services.automation.voice_node_executor import VoiceNodeExecutor
 
     session = AsyncMock()
@@ -72,6 +75,15 @@ def _make_executor(contact=None, location=None, already_placed=False, attempt_nu
         return None
 
     session.get = AsyncMock(side_effect=_get)
+    # Query results: profile lookup reads scalar_one_or_none() (None = fall back to
+    # node/location defaults); the P9 claim check reads scalar() (None = not claimed).
+    # Distinct accessors on the shared result mock keep the two queries independent.
+    exec_result = MagicMock()
+    exec_result.scalar_one_or_none = MagicMock(return_value=profile)
+    exec_result.scalar = MagicMock(return_value=claim_id)
+    session.execute = AsyncMock(return_value=exec_result)
+    session.add = MagicMock()  # sync in SQLAlchemy — keep it non-awaitable
+    session.commit = AsyncMock()
     runtime.already_sent = AsyncMock(return_value=already_placed)
     step = MagicMock()
     step.id = "step-1"
@@ -182,6 +194,69 @@ def test_executor_places_call_and_stores_call_id():
     runtime.fail_run.assert_not_called()
 
 
+def _make_profile(agent_id="agent_profile", from_number="+15559990000"):
+    p = MagicMock()
+    p.retell_agent_id = agent_id
+    p.retell_from_number = from_number
+    return p
+
+
+def test_executor_profile_overrides_agent_and_from_number():
+    """An active outbound-voice profile (V-4) overrides the node agent + location number."""
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        profile=_make_profile(agent_id="agent_profile", from_number="+15559990000"),
+    )
+    with _patch_client(result=RetellCallResult(call_id="c1")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_node"), {}))
+    kw = call_mock.call_args.kwargs
+    assert kw["from_number"] == "+15559990000"      # profile wins over location
+    assert kw["override_agent_id"] == "agent_profile"  # profile wins over node
+
+
+def test_executor_falls_back_when_profile_fields_blank():
+    """A profile with empty agent/number falls back to node/location defaults."""
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(retell_from_number="+15005550000"),
+        profile=_make_profile(agent_id=None, from_number=None),
+    )
+    with _patch_client(result=RetellCallResult(call_id="c1")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_node"), {}))
+    kw = call_mock.call_args.kwargs
+    assert kw["from_number"] == "+15005550000"
+    assert kw["override_agent_id"] == "agent_node"
+
+
+def test_executor_records_voice_attempt_on_success():
+    """A placed fire-and-forget call inserts a WorkflowVoiceAttempt row (status=placed)."""
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_rec")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempts = [o for o in added if isinstance(o, WorkflowVoiceAttempt)]
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert attempt.retell_call_id == "call_rec"
+    assert attempt.status == VoiceAttemptStatus.PLACED.value
+    assert attempt.to_number_masked and attempt.to_number_masked.endswith("1234")
+
+
+def test_executor_records_awaiting_attempt_when_wait_for_outcome():
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_wait")):
+        asyncio.run(executor.execute(_make_run(), _make_node(wait_for_outcome=True), {}))
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempts = [o for o in added if isinstance(o, WorkflowVoiceAttempt)]
+    assert len(attempts) == 1
+    assert attempts[0].status == VoiceAttemptStatus.AWAITING_OUTCOME.value
+
+
 def test_executor_idempotent_when_already_placed():
     executor, runtime, _ = _make_executor(
         contact=_make_contact(), location=_make_location(), already_placed=True
@@ -215,6 +290,70 @@ def test_executor_parks_when_wait_for_outcome():
     assert mkw.get("result_metadata") == {"retell_call_id": "call_park"}
     runtime.complete_step.assert_not_called()
     runtime.fail_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# P9 — crash-safe committed claim
+# ---------------------------------------------------------------------------
+
+
+def test_executor_commits_claim_before_placing_call():
+    """A committed INITIATING claim is written (and the session committed) BEFORE the
+    Retell POST, so a crash between POST and task-commit leaves a durable claim."""
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="c1")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    # A voice-attempt row was added and the session committed (the pre-POST claim).
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    assert any(isinstance(o, WorkflowVoiceAttempt) for o in added)
+    executor.session.commit.assert_called()  # claim committed before the POST
+    # Final state is placed (claim → placed after success).
+    attempt = next(o for o in added if isinstance(o, WorkflowVoiceAttempt))
+    assert attempt.status == VoiceAttemptStatus.PLACED.value
+
+
+def test_executor_skips_when_committed_claim_exists():
+    """Crash-tail redelivery: a committed non-FAILED claim → skip the dial entirely
+    (at-most-once), without beginning a new step or placing a call."""
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), claim_id="existing-attempt",
+    )
+    with _patch_client(result=RetellCallResult(call_id="x")) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    assert result == "node-2"
+    call_mock.assert_not_called()      # no re-dial
+    runtime.begin_step.assert_not_called()
+    runtime.complete_step.assert_not_called()
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_transient_error_marks_claim_failed_for_retry():
+    """A transient error marks the claim FAILED so the V-6 retry can re-dial (a FAILED
+    claim is excluded from the skip check)."""
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), attempt_number=1
+    )
+    with _patch_client(side_effect=RetellTransientError("retell_5xx: 503")):
+        with pytest.raises(RetellTransientError):
+            asyncio.run(executor.execute(_make_run(), _make_node(max_attempts=3), {}))
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempt = next(o for o in added if isinstance(o, WorkflowVoiceAttempt))
+    assert attempt.status == VoiceAttemptStatus.FAILED.value
+
+
+def test_executor_permanent_error_marks_claim_failed():
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(side_effect=RetellPermanentError("retell_4xx: 422")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempt = next(o for o in added if isinstance(o, WorkflowVoiceAttempt))
+    assert attempt.status == VoiceAttemptStatus.FAILED.value
 
 
 # ---------------------------------------------------------------------------

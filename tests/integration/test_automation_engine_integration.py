@@ -416,6 +416,115 @@ async def test_voice_wait_for_outcome_resume_advances_and_branches(session):
 
 
 @pytest.mark.asyncio
+async def test_voice_attempt_row_records_and_stamps_outcome(session):
+    """V-4 data model against real Postgres: a placed call inserts a
+    workflow_voice_attempts row (masked endpoints, AWAITING_OUTCOME) keyed on
+    retell_call_id; the outcome resume stamps it COMPLETED with the dial outcome; an
+    unknown call id is a no-op; and an active outbound_voice_profile resolves."""
+    from sqlalchemy import select
+
+    from src.app.models.outbound_voice import (
+        OutboundVoiceProfile,
+        VoiceAttemptStatus,
+        WorkflowVoiceAttempt,
+    )
+    from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+    from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+    from src.app.services.automation.voice_attempt_recorder import (
+        record_placed_attempt,
+        resolve_outbound_voice_profile,
+        stamp_attempt_outcome,
+    )
+
+    wf, v1 = await _make_published_workflow(session, _VOICE_OUTCOME_DEF, name="voice-attempt")
+    enroll = AutomationWorkflowEnrollmentService(session)
+    run, _ = await enroll.enroll(
+        institution_id=INST_A, workflow_id=str(wf.id),
+        workflow_version_id=str(v1.id), location_id=LOC_A, idempotency_key="vatt-1",
+    )
+    runtime = AutomationWorkflowRuntimeService(session)
+    await runtime.start_run(run)
+    step = await runtime.begin_step(run, step_id="v1", step_type="send_voice")
+
+    attempt = await record_placed_attempt(
+        session, run, step, retell_call_id="call_att_1",
+        from_number="+15550000001", to_number="+14165551234", awaiting_outcome=True,
+    )
+    await session.commit()
+    assert attempt.status == VoiceAttemptStatus.AWAITING_OUTCOME.value
+    assert attempt.step_execution_id == step.id
+    assert attempt.to_number_masked.endswith("1234") and "*" in attempt.to_number_masked
+
+    # Correlate + resolve by retell_call_id.
+    assert await stamp_attempt_outcome(
+        session, institution_id=INST_A, retell_call_id="call_att_1", dial_outcome="answered",
+    ) is True
+    await session.commit()
+    row = (
+        await session.execute(
+            select(WorkflowVoiceAttempt).where(WorkflowVoiceAttempt.retell_call_id == "call_att_1")
+        )
+    ).scalar_one()
+    assert row.status == VoiceAttemptStatus.COMPLETED.value
+    assert row.dial_outcome == "answered"
+
+    # Unknown call id → no-op (fire-and-forget / non-campaign), never raises.
+    assert await stamp_attempt_outcome(
+        session, institution_id=INST_A, retell_call_id="does-not-exist", dial_outcome="busy",
+    ) is False
+
+    # Profile resolution: none active → None; an active profile resolves.
+    assert await resolve_outbound_voice_profile(session, LOC_A) is None
+    session.add(
+        OutboundVoiceProfile(
+            institution_id=INST_A, location_id=LOC_A,
+            retell_agent_id="agent_prof", retell_from_number="+15559990000", is_active=True,
+        )
+    )
+    await session.commit()
+    prof = await resolve_outbound_voice_profile(session, LOC_A)
+    assert prof is not None and prof.retell_agent_id == "agent_prof"
+
+
+@pytest.mark.asyncio
+async def test_voice_claim_blocks_redial_but_failed_allows_retry(session):
+    """P9 crash-safe idempotency against real Postgres: a committed non-FAILED claim
+    (the crash-between-POST-and-commit tail) blocks a re-dial; marking it FAILED (a
+    transient error) releases the block so a V-6 retry can re-dial."""
+    from src.app.models.outbound_voice import VoiceAttemptStatus
+    from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+    from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+    from src.app.services.automation.voice_attempt_recorder import (
+        claim_voice_attempt,
+        mark_attempt_failed,
+        voice_send_already_claimed,
+    )
+
+    wf, v1 = await _make_published_workflow(session, _VOICE_OUTCOME_DEF, name="voice-claim")
+    enroll = AutomationWorkflowEnrollmentService(session)
+    run, _ = await enroll.enroll(
+        institution_id=INST_A, workflow_id=str(wf.id),
+        workflow_version_id=str(v1.id), location_id=LOC_A, idempotency_key="vclaim-1",
+    )
+    runtime = AutomationWorkflowRuntimeService(session)
+    await runtime.start_run(run)
+    step = await runtime.begin_step(run, step_id="v1", step_type="send_voice")
+
+    # Committed INITIATING claim, then "crash" (no mark_placed) — the redial guard trips.
+    attempt = await claim_voice_attempt(
+        session, run, step, from_number="+15550000001", to_number="+14165551234"
+    )
+    await session.commit()
+    assert attempt.status == VoiceAttemptStatus.INITIATING.value
+    assert await voice_send_already_claimed(session, str(run.id), "v1") is True
+
+    # A transient error marks the claim FAILED → the guard releases (V-6 retry re-dials).
+    await mark_attempt_failed(attempt, error_message="retell_5xx: 503")
+    await session.commit()
+    assert await voice_send_already_claimed(session, str(run.id), "v1") is False
+
+
+@pytest.mark.asyncio
 async def test_voice_consent_capture_is_channel_scoped(session):
     """XC-6 (real DB): the channel-generic consent writer + `has_consent_record` let a
     granted VOICE consent be recorded and detected, scoped to the VOICE channel only —

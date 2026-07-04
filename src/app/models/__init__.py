@@ -67,6 +67,11 @@ from src.app.models.usage_event import (
     UsageEvent,
     UsageProvider,
 )
+from src.app.models.outbound_voice import (
+    OutboundVoiceProfile,
+    VoiceAttemptStatus,
+    WorkflowVoiceAttempt,
+)
 
 __all__ = [
     "Institution",
@@ -133,4 +138,7 @@ __all__ = [
     "UsageChannel",
     "UsageDirection",
     "UsageProvider",
+    "OutboundVoiceProfile",
+    "WorkflowVoiceAttempt",
+    "VoiceAttemptStatus",
 ]
