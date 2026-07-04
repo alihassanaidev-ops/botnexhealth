@@ -35,6 +35,8 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
   recovery wired; enrollment idempotency race fixed; template instantiate fixed; two fresh-deploy migration bugs +
   two Alembic heads fixed.
 - **Plan 09 (finalize):** cancellation handling + `PmsLiveRevalidationService` at dispatch (Finding E, minus reschedule re-enroll); real recall pull.
+- **Plan 07 (merged 2026-07-04, `97fe227`):** AI-callback core — `callback_requested` trigger, `CallbackTriggerService`,
+  `trigger_callback_workflows` task, Retell webhook hook. Merged into `ali/phase-2` with zero conflicts; 1340 unit green. Residual: CB-2..CB-4.
 - **Test-suite green (2026-07-04):** 1325 unit + 6 integration, 0 failures. Cleared: a **real auth bug**
   (`RefreshTokenService._encode_session` stacked decorator broke login on Python 3.13+; fixed — *auth subsystem,
   flag to auth owner*); re-enabled the PHI tenant-scope invariant (was silently disabled by a cp1252 read) + fixed a
@@ -111,9 +113,17 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
 - **C-4 (P2) DB-backed versioned templates** — templates are in-code dataclasses, not `workflow_templates`/`_versions`; edits can't be versioned/propagated safely.
 - **C-5 (P2) Normalized outcome mapping** + channel-order/fallback/attempt-ceiling config.
 
-### Plan 07 — AI Callback Handling (0%, now unblocked)
-- **CB-1 (P2) Build Plan 07** — `callback_requested` trigger, per-location manual/AI toggle, `callback_workflow_links`,
-  the AI-callback template. **Unblocked now that voice (Plan 03) is merged**; small once Plan 03's outcome loop (V-1) exists.
+### Plan 07 — AI Callback Handling (~60% — core v1 merged 2026-07-04, Hammad `97fe227`)
+- **CB-1 ✅ (core merged)** — `callback_requested` trigger + `CallbackTriggerService` + `trigger_callback_workflows`
+  task + Retell webhook hook (loop-guarded). Enrolls via `enroll_and_start_workflow_run` → inherits the gate,
+  revalidation, and XC-1 idempotency. Opt-in = activating a `callback_requested` workflow.
+- **CB-2 (P1) Confirm quiet-hours callback behavior.** Their design assumed `hold`=terminate→manual queue (old
+  engine); on this branch `hold` **defers-and-resumes**, so a quiet-hours callback is placed at the next window.
+  Confirm that's the intended product behavior (and update their session `findings.md` D2/D4 notes).
+- **CB-3 (P1) Voice-consent path for callbacks.** A callback voice call needs a VOICE `ConsentRecord` or the gate
+  blocks it (`no_voice_consent`) → stays in the manual queue. Confirm callback-eligible patients get voice consent captured.
+- **CB-4 (P2) Packaged AI-callback template + optional `callback_workflow_links`/settings tables** (deferred by the
+  leaner opt-in-via-activation design). Also inherits Plan 03's fire-and-forget voice limits (see V-1).
 
 ### Plan 08 — Campaign Management / Analytics UI (~22%)
 - **U-1 (P1) Enrollment UI + CSV import** (mapping/validate/preview) + `campaign_enrollment_batches`. Backend
@@ -164,6 +174,6 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
 4. **Plan 09 resilient core** (D-1..D-4) — reschedule re-enroll, freshness window, projections/backfill/reconciliation.
 5. **Plan 05 email hardening** (E-1/E-2) — unsubscribe + bounce/complaint; independent, legal minimum.
 6. **Plan 06 differentiators** (C-1..C-3) — PMS write-back (fixes dead confirm-branch), Sales Qualification.
-7. **Plan 07 AI callback** (CB-1) — now unblocked by voice.
+7. ✅ **Plan 07 AI callback** — core v1 merged (2026-07-04). Remaining: CB-2/CB-3 confirmations + CB-4 template/tables.
 8. **Plan 03 outcome feedback loop** (V-1..V-3) + **Plan 10** (PR-1 quick audit fix, then PR-2/PR-3).
 9. **Plan 08 full UI** (U-1..U-5) + **Ops** (XC-4) + remaining P2 polish alongside.

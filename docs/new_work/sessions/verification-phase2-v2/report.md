@@ -60,7 +60,7 @@ paced dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain val
 | 04 | Outbound SMS | 🟢 Substantial | **~70%** | ↑ from ~55% |
 | 05 | Outbound Email | 🟠 Minimal MVP+ | **~30–35%** | ↑ from ~20% |
 | 06 | Four Live Campaigns | 🟡 Partial | **~50–55%** | ↑ from ~40% |
-| 07 | AI Callback Handling | 🔴 Not started (now unblocked) | **0%** | unchanged |
+| 07 | AI Callback Handling | 🟢 Merged — core v1 | **~60%** | ↑ from 0% — merged 2026-07-04 (Hammad, `97fe227`) |
 | 08 | Campaign Mgmt / Analytics UI | 🟠 Read-only slice | **~22%** | unchanged |
 | 09 | Integration & Data Layer | 🟡 Passthrough + revalidation | **~40%** | ↑ from ~27% |
 | 10 | Per-Tenant Provisioning | 🟡 Cred-storage + readiness MVP | **~25%** | ↑ from ~20% |
@@ -180,12 +180,24 @@ state, so the confirm branch is unreachable and the run always exits `no_respons
 **Verdict:** Reminder is fully live; Recall now really enrolls; Confirmation is send-only (confirm/write-back
 non-functional); Sales Qualification dropped.
 
-### Plan 07 — AI Callback Handling — 🔴 0% (now unblocked)
-**Status:** none of the Plan-07-specific work exists (`callback_automation_settings`, `callback_workflow_links`,
-`callback_requested` trigger, the 5th AI-callback template). Only the pre-existing inbound callback queue
-(listed as "Existing System Context") is present. It was correctly blocked on Plan 03; **the voice merge now
-unblocks it.** Supported triggers today are `appointment_offset` and `recall_scan`.
-**Verdict:** 0% is expected and appropriate; ready to start now that voice exists.
+### Plan 07 — AI Callback Handling — 🟢 ~60% (merged 2026-07-04, Hammad `97fe227`)
+**Built:** `callback_requested` trigger type (`definition_schema.py`); `CallbackTriggerService`
+(mirrors `AppointmentTriggerService`); `trigger_callback_workflows` Celery task; a Retell post-call
+webhook hook that enqueues the trigger when an inbound call is classified `needs_callback` (loop-guarded —
+skips outbound-originated calls). Enrollment delegates to the existing `enroll_and_start_workflow_run`, so
+callback runs **inherit the compliance gate, dispatch-time revalidation, and send-time idempotency**. Opt-in
+is by activating a `callback_requested` workflow (no separate settings table); preferred callback time
+honored via Celery `eta`. 11 unit tests. Merge verified: 1340 unit green, single Alembic head, zero conflicts.
+**Deviations from the plan (leaner design):** no `callback_automation_settings` / `callback_workflow_links`
+tables (opt-in = workflow activation; idempotency via `callback:{version}:{call_id}`); no packaged 5th
+AI-callback template (the clinic builds/activates a workflow).
+**Behavioral notes — built on the pre-finalize engine; confirm before enabling real callbacks:**
+(1) their design assumed quiet-hours `hold` = terminate → manual queue, but on `ali/phase-2` `hold` now
+**defers-and-resumes**, so a callback requested in quiet hours is placed at the next permitted window rather
+than dropping to the queue; (2) callback voice calls require a **VOICE `ConsentRecord`** (else gate-blocked
+`no_voice_consent`) and use Plan-03's **fire-and-forget** voice (no dial-outcome loop / voicemail→SMS yet).
+**Verdict:** functional core v1, merged and integrated cleanly; the packaged template + dedicated tables and
+the two behavioral confirmations remain.
 
 ### Plan 08 — Campaign Mgmt / Progress / Analytics UI — 🟠 ~22%
 **Built:** interactive campaign list (`Campaigns.tsx` → `GET /automation/workflows`; pause/resume/archive;
@@ -282,7 +294,8 @@ pieces are the caps the product owner removed, not oversights.
 - **Substantial (50–70%):** Plan 04 (~70%), Plan 12 (~60%), Plan 06 (~50–55%).
 - **Partial (35–40%):** Plan 09 (~40%), Plan 03 (~35%), Plan 05 (~30–35%).
 - **Minimal (15–25%):** Plan 10 (~25%), Plan 08 (~22%), Plan 11 (~15%).
-- **Not started (0%):** Plan 07 (unblocked, ready).
+- **Merged core v1 (~60%):** Plan 07 (AI callback — 2026-07-04).
+- **Not started (0%):** none.
 
 **Biggest remaining milestones (largest → smallest):** Plan 09 resilient core (projections/backfill/
 reconciliation/subscriptions/event-ledger); Plan 11 rollups + voice metering (+ model re-tagging); Plan 06
