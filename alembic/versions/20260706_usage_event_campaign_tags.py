@@ -9,7 +9,7 @@ baseline builds schema from live model metadata on a fresh ``upgrade head``, so 
 columns may already exist.
 
 Revision ID: 20260706_usage_event_tags
-Revises: 20260706_dnc_scope
+Revises: 20260708_voice_data_model
 """
 
 from __future__ import annotations
@@ -17,7 +17,11 @@ from __future__ import annotations
 from alembic import op
 
 revision = "20260706_usage_event_tags"
-down_revision = "20260706_dnc_scope"
+# Re-rooted onto the voice-data-model head during the Plan-03 / Plan-11 branch merge
+# (was 20260706_dnc_scope) so the two independent chains linearize into a single
+# Alembic head. The two migrations are order-independent (usage tables vs voice
+# tables don't reference each other), so sequencing this chain after voice is safe.
+down_revision = "20260708_voice_data_model"
 branch_labels = None
 depends_on = None
 
