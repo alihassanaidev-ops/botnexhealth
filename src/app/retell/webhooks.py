@@ -475,6 +475,39 @@ async def process_retell_call_analyzed_event(
                     safe_error_summary(in_app_enqueue_err),
                 )
 
+            # ── AI callback: enqueue after commit (durable via Celery) ─────
+            # If this inbound call was classified needs_callback and the clinic
+            # has opted into AI callbacks (an active callback_requested workflow),
+            # schedule an outbound callback. Skip outbound-originated calls so an
+            # AI callback that itself asks for a callback can't loop.
+            try:
+                from src.app.models.call import CallDirection, CallStatus
+                from src.app.tasks.automation_workflow import trigger_callback_workflows
+
+                if (
+                    saved_call.call_status == CallStatus.NEEDS_CALLBACK.value
+                    and saved_call.call_direction != CallDirection.OUTBOUND.value
+                ):
+                    _preferred = saved_call.preferred_callback_datetime
+                    trigger_callback_workflows.apply_async(
+                        kwargs={
+                            "institution_id": institution.id,
+                            "call_id": saved_call.id,
+                            "contact_id": saved_call.contact_id,
+                            "location_id": location.id if location else None,
+                            "preferred_callback_at_iso": (
+                                _preferred.isoformat() if _preferred else None
+                            ),
+                        },
+                        queue="workflow",
+                    )
+            except Exception as callback_enqueue_err:
+                logger.error(
+                    "Failed to enqueue AI callback trigger: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(callback_enqueue_err),
+                )
+
             # ── Auto-SMS: enqueue after commit (durable via Celery) ────────
             # The AI generates the SMS body as part of custom_analysis_data;
             # Retell preserves agent-generated outbound text through scrubbing
