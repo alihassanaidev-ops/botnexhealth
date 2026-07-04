@@ -74,23 +74,28 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
   (Plan 05 / Plan 12). General voice consent (non-callback triggers, e.g. Recall/Sales) also still needs an
   intake path. *(P0-2 fixed the email consent key, not this capture gap.)*
 
-### Plan 03 — Outbound Voice (~35%)
-- **V-1 (P1) Outcome feedback loop — the central gap.** The Retell webhook never reads `metadata.workflow_run_id`
-  (`RetellCallWebhook` uses `extra="ignore"`; correlates only by `agent_id`→location). Wire the webhook back to the
-  run, record a **dial outcome**, and enable **branch-on-outcome** (busy/no-answer/voicemail/answered/booked),
-  **retry-on-no-answer**, **voicemail→SMS fallback** (re-checking the SMS channel's own consent), and **book→exit**.
-  Without this, outbound voice can't do the campaign behavior scope §7.2 requires.
-- **V-2 (P1) Disclosure not proven spoken.** Executor injects `compliance_disclosure`, but the live Retell agent
-  prompt only reads `first_name`/`user_number`. Update each location's Retell prompt to speak
-  `{{compliance_disclosure}}` (onboarding step) — it's a TCPA/CASL AI-voice legal requirement.
-- **V-3 (P1) Marketing consent-basis not hard-enforced.** The gate only checks a ConsentRecord exists/isn't revoked;
-  Recall/Sales express/written consent is a publish-time **warning** only. Hard-block marketing-class voice without an express basis.
-- **V-4 (P2) Dedicated data model.** No `outbound_voice_profiles`, `workflow_voice_attempts`, or `calls` linkage
-  columns (reuses the generic step ledger). Needed for per-clinic setup + attempt/outcome history + UI.
-- **V-5 (P1) Voice usage metering** — see M-1 (voice emits no `UsageEvent`; highest-cost channel).
-- **V-6 (P2) Transient Retell errors fail the whole run** (executor catches + `fail_run`, no re-raise → no task
-  retry/dead-letter). Re-raise for a bounded retry; distinguish vendor failure from patient outcome.
-- **V-7 (P2) Extract `OutboundVoiceService` / `RetellOutboundClient`** — HTTP + payload + error handling are inline in the executor.
+### Plan 03 — Outbound Voice (~70–75% — outcome loop + consent basis built 2026-07-04)
+Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈70–75%.
+- **V-1 ✅ Outcome feedback loop.** Wait-for-outcome park (`SendVoiceNode.wait_for_outcome`) → dispatcher parks
+  WAITING with a safety timer → the post-call webhook correlates by `retell_call_id` → `voice_outcome` maps the
+  Retell `disconnection_reason` → `resume_voice_outcome` writes `call_outcome` and resumes → a ConditionNode
+  branches (no-answer→retry, voicemail→SMS, answered→done). Real-DB integration test.
+- **V-2 ⬜ Disclosure ENFORCEMENT (text done).** The `compliance_disclosure` dynamic variable is injected; the
+  prompt-speaks-it verification (via get-retell-llm) is brittle → follow-up; spoken-opt-out→suppression is
+  **blocked (A-8, ambiguity-review)** — the Retell post-call DNC-intent field shape is unconfirmed.
+- **V-3 ✅ Consent basis.** `ConsentRecord.basis` + gate content-class matrix (marketing→express_written,
+  recall→express, care→any); migration `20260707`.
+- **V-4 ⬜ Dedicated data model (partial).** `retell_call_id` now captured on the attempt (`result_metadata`);
+  the dedicated `outbound_voice_profiles` / `workflow_voice_attempts` tables + `calls` linkage remain — needed
+  for per-clinic setup, attempt/outcome history/UI, and the crash-safe committed claim (P9 below).
+- **V-5 (P1) Voice usage metering** — deferred to **Plan 11** (M-1; voice emits no `UsageEvent`).
+- **V-6 ✅ Transient retry.** Executor classifies transient (timeout/5xx) → re-raise for Celery retry until
+  `max_attempts`, then fail; permanent (4xx) → fail. Wires `SendVoiceNode.max_attempts`.
+- **V-7 ✅ Client extraction.** `RetellOutboundClient` (mockable, error-classifying) extracted; dead voice
+  dispatch fallback removed (N-1).
+- **P9 ⬜ Crash-safe committed claim.** `already_sent` covers redelivery/re-advance/hold-resume; the narrow
+  crash-between-POST-and-commit tail needs the committed `initiating` state on the `workflow_voice_attempts`
+  table (V-4-full). Follow-up.
 - **V-8 (P2) Voice UI** — outbound-profile CRUD, readiness status, campaign call-attempt drill-down (needs V-4).
 - **V-9 (P2, non-cap) Per-clinic Retell workspace isolation (BYO-SIP)** — single platform `retell_api_secret` today
   (scope §3.5/§7.2). Isolation, not a numeric cap.

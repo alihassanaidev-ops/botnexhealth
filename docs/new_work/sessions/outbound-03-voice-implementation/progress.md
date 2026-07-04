@@ -26,8 +26,26 @@ The defining ~65% gap. Fire-and-forget → wait-for-outcome with an **external-e
   exhausted-attempts, permanent fail). New real-Postgres integration test: park→resume advances past + branches
   on `call_outcome`. **1344 unit + 9 integration pass.** No migration needed (uses `result_metadata` JSON).
 
-### Remaining increments (this session, in progress)
-- **P6** V-3 consent basis (column + gate content-class threading + validator hard-block + matrix — A-5 signed off).
-- **P7** disclosure enforcement (prompt verification via get-retell-llm) + spoken-opt-out→voice suppression.
-- **P9** crash-safe idempotency (committed-before-send claim; A-4 = no provider key).
-- Deferred: V-5 voice metering → Plan 11.
+### Increment 2 — V-3 consent basis ✅ (committed `450d01e`)
+- `ConsentBasis` enum + `ConsentRecord.basis` column + migration `20260707_consent_basis` (idempotent).
+- `record_consent`/`record_consent_identity` accept `basis`; the callback auto-consent records `EXPRESS`.
+- `ComplianceGateService.check` threads `content_class`; `_resolve_consent` enforces the matrix
+  (sales/marketing → express_written; recall → express; care/unset → any; NULL basis = implied). `ComplianceGate`
+  protocol + `NoOpComplianceGate` accept `content_class`. Dispatcher passes the workflow's content_class.
+- Tests: basis allow/block per content class. **1348 unit + 9 integration pass.**
+
+### Delivered this session (committed)
+Outcome-feedback loop (P1/P2/P3/P4/P5/P8) + consent basis (P6/V-3) — the two defining pieces (~65% of the gap).
+Plan 03 now ≈ **70–75%** (was ~35%): outbound voice reacts to the call outcome, branches, retries, and enforces
+content-class-aware consent.
+
+### Remaining (staged with honest reasons — NOT implemented, see ambiguity-review A-6/A-8 + register)
+- **P7 disclosure — spoken-opt-out→suppression: BLOCKED (A-8).** Routing a patient's spoken "stop" into a VOICE
+  suppression requires knowing how the Retell post-call analysis surfaces a DNC intent (tag/field shape) — not
+  confirmed in code or docs. Per the rules, not implemented; needs a sample analyzed payload. (The disclosure
+  TEXT is already injected; prompt-speaks-it verification via get-retell-llm is brittle → follow-up.)
+- **P9 crash-safe committed claim:** correct form needs the dedicated `workflow_voice_attempts` table (V-4-full)
+  with a committed `initiating` state before the POST; the common double-dial vectors (redelivery / re-advance /
+  hold-resume) are already covered by `already_sent`, so this narrow tail is a documented follow-up.
+- **V-4-full** (outbound_voice_profiles + workflow_voice_attempts + calls linkage) and **V-5** (voice metering →
+  Plan 11) — follow-ups.

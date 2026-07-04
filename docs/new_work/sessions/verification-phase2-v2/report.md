@@ -56,7 +56,7 @@ paced dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain val
 |---|---|---|---|---|
 | 01 | Workflow Engine | ✅ Complete | **100%** | ↑ from ~88% |
 | 02 | Visual Builder UI | ✅ Complete | **100%** | ↑ from ~75% |
-| 03 | Outbound Voice | 🟡 Merged; fire-and-forget v1 | **~35%** | newly audited (was excluded) |
+| 03 | Outbound Voice | 🟢 Outcome loop + consent basis built | **~70–75%** ↑↑ | **Implemented 2026-07-04** (`outbound-03-voice-implementation/`): dial-outcome feedback loop, transient retry (V-6), client extraction (V-7), content-class consent basis (V-3). Remaining: data-model tables (V-4), spoken-opt-out→suppression (**blocked A-8**), crash-safe claim (P9), voice metering (Plan 11) |
 | 04 | Outbound SMS | 🟢 Substantial | **~70%** | ↑ from ~55% |
 | 05 | Outbound Email | 🟠 Minimal MVP+ | **~30–35%** | ↑ from ~20% |
 | 06 | Four Live Campaigns | 🟡 Partial | **~50–55%** | ↑ from ~40% |

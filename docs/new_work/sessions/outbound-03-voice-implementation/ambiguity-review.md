@@ -100,6 +100,15 @@ matrix values** in P6 (the column + threading remain buildable now).
   channel independently — correct by design). No new decision, but note the fallback only fires for
   SMS-consented contacts; the voicemail-detection half is blocked by A-1.
 
+## A-8 — Spoken-opt-out → suppression: how does Retell surface a DNC intent? — **BLOCKING (P7 opt-out half)**
+- **Why blocking:** scope §7/§11 require routing a patient's spoken "stop" during an AI call into a VOICE
+  suppression/DNC. The post-call webhook has `call_analysis`/`custom_analysis_data`, but **how a "do-not-call"
+  intent is represented (a specific tag, a boolean field, a classification value) is not confirmed** in code or
+  docs. Encoding a compliance suppression trigger by guessing the field is unacceptable.
+- **Evidence needed:** a real Retell `call_analyzed` payload for a call where the patient opted out, or the
+  agent's configured post-call analysis schema, showing the exact field/value for DNC intent.
+- **Until resolved:** not implemented. (Discovered during implementation, 2026-07-04.)
+
 ## Product/scope confirmations (low-risk, recommend confirming)
 - **Run lifecycle change:** wait-for-outcome makes a voice send an **async wait** (run parks, resumes on
   webhook) instead of advancing immediately. Scope §7.2 clearly wants outcome feedback, so this is intended —
