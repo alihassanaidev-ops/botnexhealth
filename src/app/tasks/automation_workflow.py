@@ -744,6 +744,7 @@ def resume_voice_outcome(
     institution_id: str,
     retell_call_id: str,
     call_outcome: str,
+    disconnection_reason: str | None = None,
 ) -> dict:
     """Resume a run parked WAITING for a voice-call outcome (Plan 03 §7.2).
 
@@ -760,6 +761,7 @@ def resume_voice_outcome(
                 institution_id=institution_id,
                 retell_call_id=retell_call_id,
                 call_outcome=call_outcome,
+                disconnection_reason=disconnection_reason,
             )
         )
     except Exception as exc:
@@ -775,6 +777,7 @@ async def _resume_voice_outcome_async(
     institution_id: str,
     retell_call_id: str,
     call_outcome: str,
+    disconnection_reason: str | None = None,
 ) -> dict:
     from sqlalchemy import select
 
@@ -828,6 +831,7 @@ async def _resume_voice_outcome_async(
             institution_id=institution_id,
             retell_call_id=retell_call_id,
             dial_outcome=call_outcome,
+            disconnection_reason=disconnection_reason,
         )
 
         version = await session.get(AutomationWorkflowVersion, run.workflow_version_id)

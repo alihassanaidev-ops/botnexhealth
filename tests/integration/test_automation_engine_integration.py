@@ -455,9 +455,10 @@ async def test_voice_attempt_row_records_and_stamps_outcome(session):
     assert attempt.step_execution_id == step.id
     assert attempt.to_number_masked.endswith("1234") and "*" in attempt.to_number_masked
 
-    # Correlate + resolve by retell_call_id.
+    # Correlate + resolve by retell_call_id, threading the raw disconnection_reason (F-3).
     assert await stamp_attempt_outcome(
         session, institution_id=INST_A, retell_call_id="call_att_1", dial_outcome="answered",
+        disconnection_reason="user_hangup",
     ) is True
     await session.commit()
     row = (
@@ -467,6 +468,7 @@ async def test_voice_attempt_row_records_and_stamps_outcome(session):
     ).scalar_one()
     assert row.status == VoiceAttemptStatus.COMPLETED.value
     assert row.dial_outcome == "answered"
+    assert row.disconnection_reason == "user_hangup"
 
     # Unknown call id → no-op (fire-and-forget / non-campaign), never raises.
     assert await stamp_attempt_outcome(
@@ -522,6 +524,64 @@ async def test_voice_claim_blocks_redial_but_failed_allows_retry(session):
     await mark_attempt_failed(attempt, error_message="retell_5xx: 503")
     await session.commit()
     assert await voice_send_already_claimed(session, str(run.id), "v1") is False
+
+
+@pytest.mark.asyncio
+async def test_outbound_voice_profile_unique_active_and_attempt_list(session):
+    """V-8 DB guarantees against real Postgres: at most one ACTIVE outbound-voice
+    profile per location (the API's 409 path), and list_voice_attempts filters by
+    run/status (the drill-down read)."""
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy.exc import IntegrityError
+
+    from src.app.models.outbound_voice import OutboundVoiceProfile
+    from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+    from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+    from src.app.services.automation.voice_attempt_recorder import (
+        list_voice_attempts,
+        record_placed_attempt,
+    )
+
+    # Hermetic start: the module-scoped DB persists rows across tests (another test
+    # seeds a LOC_A profile), so clear LOC_A profiles before asserting the constraint.
+    await session.execute(sa_delete(OutboundVoiceProfile).where(OutboundVoiceProfile.location_id == LOC_A))
+    await session.commit()
+
+    # One active profile per location; a second ACTIVE one violates the partial unique index.
+    session.add(OutboundVoiceProfile(institution_id=INST_A, location_id=LOC_A, retell_agent_id="a1", is_active=True))
+    await session.commit()
+    session.add(OutboundVoiceProfile(institution_id=INST_A, location_id=LOC_A, retell_agent_id="a2", is_active=True))
+    with pytest.raises(IntegrityError):
+        await session.flush()
+    await session.rollback()
+    # ...but an INACTIVE second profile for the same location is allowed.
+    session.add(OutboundVoiceProfile(institution_id=INST_A, location_id=LOC_A, retell_agent_id="a3", is_active=False))
+    await session.commit()
+
+    # Attempt listing: two attempts on one run, filterable by run and status.
+    wf, v1 = await _make_published_workflow(session, _VOICE_OUTCOME_DEF, name="voice-list")
+    enroll = AutomationWorkflowEnrollmentService(session)
+    run, _ = await enroll.enroll(
+        institution_id=INST_A, workflow_id=str(wf.id),
+        workflow_version_id=str(v1.id), location_id=LOC_A, idempotency_key="vlist-1",
+    )
+    runtime = AutomationWorkflowRuntimeService(session)
+    await runtime.start_run(run)
+    step = await runtime.begin_step(run, step_id="v1", step_type="send_voice")
+    await record_placed_attempt(
+        session, run, step, retell_call_id="lc1",
+        from_number="+15550000001", to_number="+14165551234", awaiting_outcome=False,
+    )
+    await record_placed_attempt(
+        session, run, step, retell_call_id="lc2",
+        from_number="+15550000001", to_number="+14165559999", awaiting_outcome=True,
+    )
+    await session.commit()
+
+    by_run = await list_voice_attempts(session, INST_A, workflow_run_id=str(run.id))
+    assert len(by_run) == 2
+    by_status = await list_voice_attempts(session, INST_A, workflow_run_id=str(run.id), status="awaiting_outcome")
+    assert len(by_status) == 1 and by_status[0].retell_call_id == "lc2"
 
 
 @pytest.mark.asyncio

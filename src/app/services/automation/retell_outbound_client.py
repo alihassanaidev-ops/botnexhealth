@@ -19,13 +19,21 @@ _TIMEOUT_SECONDS = 15.0
 
 
 class RetellTransientError(RuntimeError):
-    """A recoverable Retell failure (timeout / network / 5xx). The caller should
-    retry (Celery task-level) rather than permanently failing the run."""
+    """A recoverable Retell failure where the call was DEFINITELY NOT placed
+    (explicit 5xx server error). Safe to retry (Celery task-level)."""
 
 
 class RetellPermanentError(RuntimeError):
     """A non-recoverable Retell failure (4xx / bad request / auth). Retrying will
     not help — the caller should fail the run."""
+
+
+class RetellAmbiguousError(RuntimeError):
+    """A timeout / network failure where we CANNOT know whether Retell placed the
+    call (the request may have reached Retell but the response was lost). Retell has
+    no idempotency key (A-4), so retrying risks double-dialing the patient. Per the
+    at-most-once rule (XC-1b, option A) the caller must NOT retry — it fails the run
+    and leaves the P9 claim blocking so a redelivery can't re-dial either."""
 
 
 @dataclass(frozen=True)
@@ -52,9 +60,10 @@ class RetellOutboundClient:
     ) -> RetellCallResult:
         """Place an outbound call. Returns the Retell call_id on success.
 
-        Raises RetellPermanentError on 4xx (don't retry) and RetellTransientError
-        on timeout/network/5xx (retryable). Retell exposes no idempotency key on
-        this endpoint (confirmed 2026-07-04), so idempotency is the caller's job.
+        Error classification (XC-1b, option A — Retell has no idempotency key):
+          * 4xx            → RetellPermanentError  (bad request/auth; not placed)
+          * 5xx            → RetellTransientError   (server rejected; not placed → retry)
+          * timeout/network→ RetellAmbiguousError   (may have been placed → do NOT retry)
         """
         payload = {
             "from_number": from_number,
@@ -71,11 +80,13 @@ class RetellOutboundClient:
             async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
                 response = await client.post(_CREATE_CALL_URL, headers=headers, json=payload)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
-            # Network-level failure — retryable.
-            raise RetellTransientError(f"retell_network_error: {type(exc).__name__}") from exc
+            # Network-level failure — the request MAY have reached Retell (a call may
+            # have been placed) but the response was lost. Ambiguous → do NOT retry.
+            raise RetellAmbiguousError(f"retell_network_error: {type(exc).__name__}") from exc
 
         status = response.status_code
         if status >= 500:
+            # Explicit server error — the call was NOT placed. Safe to retry.
             raise RetellTransientError(f"retell_5xx: {status}")
         if status >= 400:
             # 4xx = bad request / auth / not-found — retrying won't help.

@@ -529,6 +529,9 @@ async def process_retell_call_analyzed_event(
                             "institution_id": institution.id,
                             "retell_call_id": saved_call.retell_call_id,
                             "call_outcome": outcome,
+                            # Raw provider signal, recorded on the attempt row for the
+                            # UI/debugging (already persisted on the Call row too).
+                            "disconnection_reason": event.call.disconnection_reason,
                         },
                         queue="workflow",
                     )

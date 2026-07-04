@@ -26,6 +26,7 @@ from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import SendVoiceNode
 from src.app.services.automation.retell_outbound_client import (
+    RetellAmbiguousError,
     RetellOutboundClient,
     RetellPermanentError,
     RetellTransientError,
@@ -208,6 +209,23 @@ class VoiceNodeExecutor:
                 step.attempt_number, node.max_attempts, run.id, node.id, exc,
             )
             raise  # propagate → Celery task retries with backoff
+        except RetellAmbiguousError as exc:
+            # Timeout/network (XC-1b): the call MAY have been placed but the response
+            # was lost. Do NOT retry (no idempotency key → double-dial risk). Fail the
+            # run, but leave the claim INITIATING (NOT failed) so a task redelivery is
+            # still blocked by voice_send_already_claimed (at-most-once). Record why.
+            attempt.error_message = str(exc)
+            await self.session.commit()  # persist the ambiguous, still-blocking claim
+            logger.warning(
+                "send_voice ambiguous timeout, not retrying (call may have been placed): "
+                "institution=%s run=%s node=%s err=%s",
+                run.institution_id, run.id, node.id, exc,
+            )
+            await self.runtime.fail_step(step, result_code="send_ambiguous_no_retry", error_message=str(exc))
+            await self.runtime.fail_run(
+                run, reason="send_voice: ambiguous timeout, not retrying (at-most-once)"
+            )
+            return node.next_node_id
         except (RetellPermanentError, Exception) as exc:  # noqa: BLE001
             logger.error(
                 "send_voice permanent failure: institution=%s run=%s node=%s error=%s",

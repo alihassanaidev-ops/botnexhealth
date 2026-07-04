@@ -10,6 +10,7 @@ import pytest
 
 from src.app.services.automation.definition_schema import SendVoiceNode
 from src.app.services.automation.retell_outbound_client import (
+    RetellAmbiguousError,
     RetellCallResult,
     RetellPermanentError,
     RetellTransientError,
@@ -354,6 +355,25 @@ def test_executor_permanent_error_marks_claim_failed():
     added = [c.args[0] for c in executor.session.add.call_args_list]
     attempt = next(o for o in added if isinstance(o, WorkflowVoiceAttempt))
     assert attempt.status == VoiceAttemptStatus.FAILED.value
+
+
+def test_executor_ambiguous_timeout_fails_without_retry_and_keeps_claim_blocking():
+    """XC-1b: a timeout/network error must NOT retry (the call may have been placed).
+    Fail the run, do NOT re-raise, and leave the claim INITIATING (still blocking a
+    redelivery re-dial) with an error_message — NOT marked FAILED."""
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(side_effect=RetellAmbiguousError("retell_network_error: TimeoutException")):
+        result = asyncio.run(executor.execute(_make_run(), _make_node(max_attempts=3), {}))
+    assert result == "node-2"          # returns (no re-raise → no Celery retry)
+    runtime.fail_run.assert_called_once()
+    assert "at-most-once" in _fail_reason(runtime)
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempt = next(o for o in added if isinstance(o, WorkflowVoiceAttempt))
+    # Claim stays blocking (INITIATING, not FAILED) so a redelivery can't re-dial.
+    assert attempt.status == VoiceAttemptStatus.INITIATING.value
+    assert attempt.error_message and "network_error" in attempt.error_message
 
 
 # ---------------------------------------------------------------------------

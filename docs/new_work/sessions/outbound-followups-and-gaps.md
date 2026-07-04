@@ -53,10 +53,11 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
 ## ⬜ Open work — by plan
 
 ### Cross-cutting (highest-leverage)
-- **XC-1b (P1/P2) Crash-window idempotency — EMAIL ✅ done, SMS/voice open.** Closeout 2026-07-04: email now
-  sends a Resend `Idempotency-Key: email:{run}:{node}` header, so a crash-retry is vendor-deduped. **Still open:**
-  SMS (Twilio) and voice (Retell) provider idempotency keys (support varies), and/or a committed-before-send
-  claim (own session) for full crash-safety across all channels.
+- **XC-1b (P1/P2) Crash-window idempotency — EMAIL ✅, VOICE ✅, SMS open.** Email: Resend
+  `Idempotency-Key: email:{run}:{node}` header (vendor-deduped). Voice (2026-07-04/05): P9 committed
+  `INITIATING` claim before the Retell POST + skip-if-claimed, plus XC-1b option A (timeout terminal, no
+  re-dial) — closes both the crash tail and the lost-response-timeout double-dial. **Still open:** SMS (Twilio)
+  crash-window — apply the same committed-claim (a `workflow_sms_attempts` table) and/or terminal-timeout policy.
 - **XC-2 (P2) Channel integration tests.** SMS/email/voice are unit-tested with mocked vendors only; extend the
   real-Postgres engine integration pattern to a sandboxed Twilio/Resend/Retell path.
 - **XC-3 (P2) Migration convention.** Every post-baseline migration must be idempotent (`IF NOT EXISTS`) — the
@@ -89,22 +90,27 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   `workflow_voice_attempts` (run/step/attempt link, `retell_call_id`, masked endpoints, lifecycle status,
   `dial_outcome`) landed as models + idempotent RLS migration `20260708_voice_data_model` +
   `voice_attempt_recorder` seam. Executor resolves the profile (override-with-fallback) and records an
-  attempt row per placed call; `resume_voice_outcome` stamps the outcome. *Deferred sub-item:* optional
-  `calls`→run linkage columns (not required by P9/V-8) and raw `disconnection_reason` threading from the
-  webhook into the attempt row (column exists; resume stamps `dial_outcome` today).
+  attempt row per placed call; `resume_voice_outcome` stamps the outcome (incl. raw `disconnection_reason`,
+  threaded webhook → task → `stamp_attempt_outcome` on 2026-07-05). *Deferred sub-item:* optional
+  `calls`→run linkage columns (not required by P9/V-8; no consumer — skipped).
 - **V-5 (P1) Voice usage metering** — deferred to **Plan 11** (M-1; voice emits no `UsageEvent`).
-- **V-6 ✅ Transient retry.** Executor classifies transient (timeout/5xx) → re-raise for Celery retry until
-  `max_attempts`, then fail; permanent (4xx) → fail. Wires `SendVoiceNode.max_attempts`.
+- **V-6 ✅ Transient retry** (refined by XC-1b option A, 2026-07-05). Executor classifies **5xx → transient**
+  (re-raise for Celery retry until `max_attempts`, then fail), **4xx → permanent** (fail), **timeout/network →
+  ambiguous** (`RetellAmbiguousError`: fail, NO retry, keep P9 claim blocking). Wires `SendVoiceNode.max_attempts`.
 - **V-7 ✅ Client extraction.** `RetellOutboundClient` (mockable, error-classifying) extracted; dead voice
   dispatch fallback removed (N-1).
 - **P9 ✅ Crash-safe committed claim.** Executor commits an `INITIATING` `workflow_voice_attempts` row
   before the Retell POST; `voice_send_already_claimed` skips a re-dial when a committed non-FAILED claim
   exists (closes the crash-between-POST-and-commit tail, at-most-once); transient/permanent errors mark the
-  claim FAILED + commit so a V-6 retry re-dials (V-6 unchanged). *Residual (needs product decision, = XC-1b):*
-  a **timeout** where Retell placed the call but the response was lost still re-dials on V-6 retry — Retell has
-  no idempotency key (A-4); resolving it means deciding timeout = terminal/at-most-once. Not guessed.
-- **V-8 (P2) Voice UI (V-4 dep now satisfied)** — outbound-profile CRUD (`outbound_voice_profiles`), readiness
-  status, campaign call-attempt drill-down (`workflow_voice_attempts`). Backend tables exist; UI + API remain.
+  claim FAILED + commit so a V-6 retry re-dials. **Timeout residual RESOLVED (XC-1b option A, 2026-07-05):** a
+  timeout/network error is now terminal (no retry) and leaves the claim INITIATING/blocking, so a lost-response
+  timeout can neither retry nor be redelivered into a second dial (at-most-once). 5xx (call definitely not placed)
+  still retries.
+- **V-8 API ✅ / FE ⬜.** Backend done (API-first): `src/app/api/routes/outbound_voice.py` — `/api/outbound-voice`
+  profiles CRUD (gate institution/location-admin; 409 on one-active-per-location) + attempts drill-down GET
+  (gate institution/location-user; masked numbers) + `list_voice_attempts` helper; registered + RBAC-matrix
+  classified. **Remaining = React UI** (fast follow): mirrors `LocationAdminPanel` + `CampaignDetail` +
+  `RevealablePhone` (see `outbound-03-voice-ui-and-closeout/findings.md` F-2).
 - **V-9 (P2, non-cap) Per-clinic Retell workspace isolation (BYO-SIP)** — single platform `retell_api_secret` today
   (scope §3.5/§7.2). Isolation, not a numeric cap.
 

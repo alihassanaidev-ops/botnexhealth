@@ -56,7 +56,7 @@ paced dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain val
 |---|---|---|---|---|
 | 01 | Workflow Engine | ✅ Complete | **100%** | ↑ from ~88% |
 | 02 | Visual Builder UI | ✅ Complete | **100%** | ↑ from ~75% |
-| 03 | Outbound Voice | 🟢 Outcome loop + consent basis + data model + crash-safe claim built | **~82–86%** ↑ | **Implemented 2026-07-04** (`outbound-03-voice-implementation/`): dial-outcome feedback loop, transient retry (V-6), client extraction (V-7), content-class consent basis (V-3), dedicated data model (V-4: `outbound_voice_profiles` + `workflow_voice_attempts`, migration `20260708_voice_data_model`), **crash-safe committed idempotency claim (P9)**. Remaining: spoken-opt-out→suppression (**blocked A-8**), voice UI (V-8), timeout-idempotency residual (XC-1b, needs product decision), voice metering (Plan 11) |
+| 03 | Outbound Voice | 🟢 Outcome loop + consent + data model + crash-safe + timeout-safe + API | **~88–90%** ↑ | **Implemented 2026-07-04/05**: outcome loop, V-6 retry, V-7 client, V-3 consent basis, V-4 data model (`20260708_voice_data_model`), **P9 crash-safe claim**, **XC-1b option A (timeout terminal, no double-dial)**, raw `disconnection_reason` capture, and **V-8 API** (`/api/outbound-voice` profiles CRUD + attempts drill-down). Remaining: **V-8 React UI** (fast follow), spoken-opt-out→suppression (**blocked A-8**), voice metering (Plan 11), per-clinic isolation (V-9, infra). Sessions: `outbound-03-voice-implementation/`, `outbound-03-voice-ui-and-closeout/` |
 | 04 | Outbound SMS | 🟢 Substantial | **~70%** | ↑ from ~55% |
 | 05 | Outbound Email | 🟠 Minimal MVP+ | **~30–35%** | ↑ from ~20% |
 | 06 | Four Live Campaigns | 🟡 Partial | **~50–55%** | ↑ from ~40% |

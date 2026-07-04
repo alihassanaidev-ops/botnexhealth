@@ -71,6 +71,34 @@ async def voice_send_already_claimed(
     return claimed is not None
 
 
+async def list_voice_attempts(
+    session: AsyncSession,
+    institution_id: str,
+    *,
+    workflow_run_id: str | None = None,
+    location_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> list[WorkflowVoiceAttempt]:
+    """Read outbound voice attempts for the drill-down UI (V-8), newest first.
+
+    Always filtered by ``institution_id`` (defense-in-depth on top of RLS). Optional
+    filters narrow to a run / location / lifecycle status. Rows carry only masked
+    phone numbers, so no PHI is exposed by the read.
+    """
+    query = select(WorkflowVoiceAttempt).where(
+        WorkflowVoiceAttempt.institution_id == institution_id
+    )
+    if workflow_run_id is not None:
+        query = query.where(WorkflowVoiceAttempt.workflow_run_id == workflow_run_id)
+    if location_id is not None:
+        query = query.where(WorkflowVoiceAttempt.location_id == location_id)
+    if status is not None:
+        query = query.where(WorkflowVoiceAttempt.status == status)
+    query = query.order_by(WorkflowVoiceAttempt.created_at.desc()).limit(limit)
+    return list((await session.execute(query)).scalars().all())
+
+
 async def claim_voice_attempt(
     session: AsyncSession,
     run: AutomationWorkflowRun,
