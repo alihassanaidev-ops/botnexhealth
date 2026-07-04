@@ -50,6 +50,7 @@ from src.app.models.retell_function_invocation import (
 )
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.models.sms_consent import (
+    ConsentBasis,
     ConsentChannel,
     ConsentRecord,
     ConsentSource,
@@ -117,6 +118,7 @@ __all__ = [
     "UserEmailNotificationPreference",
     "SmsHistoryLog",
     "SmsStatus",
+    "ConsentBasis",
     "ConsentChannel",
     "DncScope",
     "ConsentRecord",

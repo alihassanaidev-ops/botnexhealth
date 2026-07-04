@@ -30,6 +30,17 @@ class ConsentSource(str, Enum):
     SYSTEM = "system"
 
 
+class ConsentBasis(str, Enum):
+    """Legal basis of a consent record (TCPA/CASL). Marketing-class outreach
+    requires an express (written, per FCC) basis; exempt-care/transactional can
+    rely on implied/treatment basis. Enforced per content class by the gate."""
+
+    EXPRESS_WRITTEN = "express_written"  # signed/written opt-in (marketing minimum, US)
+    EXPRESS = "express"                  # explicit opt-in (e.g. patient-requested callback)
+    IMPLIED = "implied"                  # implied from the relationship
+    EXEMPT_TREATMENT = "exempt_treatment"  # HIPAA treatment/appointment exemption
+
+
 class ConsentRecord(Base):
     """Append-style consent state record for an institution-scoped contact.
 
@@ -48,6 +59,10 @@ class ConsentRecord(Base):
         CheckConstraint(
             "source IN ('manual', 'twilio_keyword', 'system')",
             name="ck_consent_records_source",
+        ),
+        CheckConstraint(
+            "basis IS NULL OR basis IN ('express_written', 'express', 'implied', 'exempt_treatment')",
+            name="ck_consent_records_basis",
         ),
     )
 
@@ -70,6 +85,9 @@ class ConsentRecord(Base):
     email_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     email_masked: Mapped[str | None] = mapped_column(String(320), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    # Legal basis (TCPA/CASL). NULL = legacy/unspecified → interpreted as "implied"
+    # by the gate, so marketing-class sends require an explicit express(_written) basis.
+    basis: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False, default=ConsentSource.MANUAL.value)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_user_id: Mapped[str | None] = mapped_column(

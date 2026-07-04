@@ -102,9 +102,10 @@ def _make_hours(*, is_open=True, open_time=time(8, 0), close_time=time(20, 0)):
     return hours
 
 
-def _make_consent(status: str = ConsentStatus.GRANTED.value):
+def _make_consent(status: str = ConsentStatus.GRANTED.value, basis=None):
     record = MagicMock(spec=ConsentRecord)
     record.status = status
+    record.basis = basis  # None → interpreted as "implied" by the gate
     return record
 
 
@@ -446,3 +447,46 @@ def test_gate_blocks_on_revoked_email_consent():
 
     assert result.action == "block"
     assert "revoked" in result.reason
+
+
+# ---------------------------------------------------------------------------
+# Consent basis (V-3): marketing-class voice requires an express(_written) basis
+# ---------------------------------------------------------------------------
+
+
+def _voice_check(consent, content_class):
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, consent_record=consent,
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="ph"):
+        return asyncio.run(svc.check(run, "send_voice", now=now, content_class=content_class))
+
+
+def test_gate_blocks_marketing_voice_without_express_basis():
+    # An implied (NULL) basis is insufficient for marketing-class voice.
+    result = _voice_check(_make_consent(basis=None), content_class="marketing")
+    assert result.action == "block"
+    assert "basis_insufficient" in result.reason
+
+
+def test_gate_allows_marketing_voice_with_express_written_basis():
+    result = _voice_check(_make_consent(basis="express_written"), content_class="marketing")
+    assert result.action == "allow"
+
+
+def test_gate_allows_recall_voice_with_express_basis():
+    result = _voice_check(_make_consent(basis="express"), content_class="recall")
+    assert result.action == "allow"
+
+
+def test_gate_allows_care_voice_with_implied_basis():
+    # transactional_care accepts implied/NULL basis (healthcare/exempt).
+    result = _voice_check(_make_consent(basis=None), content_class="transactional_care")
+    assert result.action == "allow"

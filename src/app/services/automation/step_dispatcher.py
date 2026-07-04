@@ -158,7 +158,10 @@ class WorkflowStepDispatcher:
                         status="completed", outcome=skip_outcome, steps_advanced=steps_advanced
                     )
 
-                gate_result = await self.gate.check(run, node.type)
+                content_class = (
+                    definition.compliance.content_class if definition.compliance else None
+                )
+                gate_result = await self.gate.check(run, node.type, content_class=content_class)
                 if gate_result.action == "block":
                     step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
                     await self.runtime.fail_step(step, result_code="compliance_blocked")

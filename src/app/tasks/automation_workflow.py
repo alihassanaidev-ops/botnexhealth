@@ -639,7 +639,12 @@ async def _trigger_callback_async(
 
     from src.app.models.call import Call
     from src.app.models.contact import Contact
-    from src.app.models.sms_consent import ConsentChannel, ConsentSource, ConsentStatus
+    from src.app.models.sms_consent import (
+        ConsentBasis,
+        ConsentChannel,
+        ConsentSource,
+        ConsentStatus,
+    )
     from src.app.services.sms_compliance import SmsComplianceService
 
     async with get_system_db_session(
@@ -678,6 +683,7 @@ async def _trigger_callback_async(
                         phone=phone,
                         status=ConsentStatus.GRANTED,
                         channel=ConsentChannel.VOICE,
+                        basis=ConsentBasis.EXPRESS,  # patient-initiated request = express basis
                         location_id=location_id,
                         contact_id=contact_id,
                         source=ConsentSource.SYSTEM,

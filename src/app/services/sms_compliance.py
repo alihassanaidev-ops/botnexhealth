@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.sms_consent import (
+    ConsentBasis,
     ConsentChannel,
     ConsentRecord,
     ConsentSource,
@@ -336,6 +337,7 @@ class SmsComplianceService:
         phone: str,
         status: ConsentStatus | str,
         channel: ConsentChannel | str = ConsentChannel.SMS,
+        basis: ConsentBasis | str | None = None,
         location_id: str | None = None,
         contact_id: str | None = None,
         source: ConsentSource | str = ConsentSource.MANUAL,
@@ -351,6 +353,7 @@ class SmsComplianceService:
             phone_hash=identity.phone_hash,
             phone_masked=identity.phone_masked,
             status=status.value if isinstance(status, ConsentStatus) else status,
+            basis=basis.value if isinstance(basis, ConsentBasis) else basis,
             source=source.value if isinstance(source, ConsentSource) else source,
             reason=reason,
             created_by_user_id=created_by_user_id,

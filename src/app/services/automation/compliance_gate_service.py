@@ -22,13 +22,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.contact import Contact
 from src.app.models.outbound_halt import OutboundEmergencyHalt
-from src.app.models.sms_consent import ConsentChannel, ConsentRecord, ConsentStatus
+from src.app.models.sms_consent import ConsentBasis, ConsentChannel, ConsentRecord, ConsentStatus
 from src.app.services.automation.compliance_gate import ComplianceGate, GateResult
 from src.app.services.automation.quiet_hours_service import QuietHoursService
 from src.app.services.sms_compliance import SmsSendBlockedError, SmsComplianceService
 from src.app.services.sms_privacy import hash_email, hash_phone
 
 logger = logging.getLogger(__name__)
+
+# Consent-basis matrix by content class (TCPA/CASL; A-5 signed off 2026-07-04).
+# Marketing/sales AI outreach requires express written consent; recall requires at
+# least express; care reminders (transactional_care / unset) accept any basis.
+_MARKETING_CONTENT_CLASSES = {"sales", "marketing"}
+_ALL_BASES = frozenset(b.value for b in ConsentBasis)
+
+
+def _acceptable_bases(content_class: str | None) -> frozenset[str]:
+    if content_class in _MARKETING_CONTENT_CLASSES:
+        return frozenset({ConsentBasis.EXPRESS_WRITTEN.value})
+    if content_class == "recall":
+        return frozenset({ConsentBasis.EXPRESS_WRITTEN.value, ConsentBasis.EXPRESS.value})
+    return _ALL_BASES
 
 
 class ComplianceGateService:
@@ -43,8 +57,13 @@ class ComplianceGateService:
         channel_type: str,
         *,
         now: datetime | None = None,
+        content_class: str | None = None,
     ) -> GateResult:
-        """Run all compliance checks in priority order."""
+        """Run all compliance checks in priority order.
+
+        ``content_class`` (from the workflow's ComplianceMetadata) selects the
+        required consent basis: marketing/sales require an express(_written) basis,
+        recall requires express, care reminders accept implied/exempt (V-3)."""
         # 1. Emergency halt — blocks everything for the institution
         if await self._active_halt(run.institution_id):
             logger.info(
@@ -102,12 +121,12 @@ class ComplianceGateService:
         # Email consent is keyed on the email address, not the phone — an
         # email-only contact must not be blocked "no_phone".
         if channel_type == "send_email":
-            return await self._check_email_consent(run.institution_id, contact)
+            return await self._check_email_consent(run.institution_id, contact, content_class)
 
         # Voice consent is phone-identity based, like SMS.
         if channel_type == "send_voice":
             return await self._check_phone_consent(
-                run.institution_id, contact, ConsentChannel.VOICE.value
+                run.institution_id, contact, ConsentChannel.VOICE.value, content_class
             )
 
         # Unknown channel type — allow and let the send handler decide
@@ -151,6 +170,7 @@ class ComplianceGateService:
         institution_id: str,
         contact: Contact,
         channel: str,
+        content_class: str | None = None,
     ) -> GateResult:
         """Explicit consent keyed on the contact's phone (SMS/VOICE identity)."""
         phone = contact.phone
@@ -170,12 +190,13 @@ class ComplianceGateService:
             .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
             .limit(1)
         )
-        return self._resolve_consent(result.scalar_one_or_none(), channel)
+        return self._resolve_consent(result.scalar_one_or_none(), channel, content_class)
 
     async def _check_email_consent(
         self,
         institution_id: str,
         contact: Contact,
+        content_class: str | None = None,
     ) -> GateResult:
         """Explicit consent keyed on the contact's email address (EMAIL identity).
 
@@ -196,14 +217,25 @@ class ComplianceGateService:
             .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
             .limit(1)
         )
-        return self._resolve_consent(result.scalar_one_or_none(), ConsentChannel.EMAIL.value)
+        return self._resolve_consent(
+            result.scalar_one_or_none(), ConsentChannel.EMAIL.value, content_class
+        )
 
     @staticmethod
-    def _resolve_consent(record: ConsentRecord | None, channel: str) -> GateResult:
+    def _resolve_consent(
+        record: ConsentRecord | None, channel: str, content_class: str | None = None
+    ) -> GateResult:
         if record is None:
             return GateResult(action="block", reason=f"no_{channel}_consent")
         if record.status == ConsentStatus.REVOKED.value:
             return GateResult(action="block", reason=f"{channel}_consent_revoked")
+        # Basis check (V-3): marketing-class outreach needs an express(_written) basis;
+        # care reminders accept implied/exempt. A NULL/legacy basis is treated as
+        # "implied", so it passes care classes but is blocked for marketing.
+        acceptable = _acceptable_bases(content_class)
+        record_basis = record.basis or ConsentBasis.IMPLIED.value
+        if record_basis not in acceptable:
+            return GateResult(action="block", reason=f"{channel}_consent_basis_insufficient")
         return GateResult(action="allow")
 
 

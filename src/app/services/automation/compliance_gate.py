@@ -37,16 +37,33 @@ class ComplianceGate(Protocol):
     Args:
         run: The active workflow run.
         channel_type: One of "send_sms", "send_voice", "send_email".
+        now: Optional evaluation time (for quiet-hours), defaults to now.
+        content_class: Optional workflow content class (transactional_care / recall /
+            sales / marketing) — selects the required consent basis.
 
     Returns:
         GateResult with action "allow", "block", or "hold".
     """
 
-    async def check(self, run: "AutomationWorkflowRun", channel_type: str) -> GateResult: ...
+    async def check(
+        self,
+        run: "AutomationWorkflowRun",
+        channel_type: str,
+        *,
+        now: datetime | None = None,
+        content_class: str | None = None,
+    ) -> GateResult: ...
 
 
 class NoOpComplianceGate:
     """Default stub — always allows. Replaced by Plan 12 implementation."""
 
-    async def check(self, run: "AutomationWorkflowRun", channel_type: str) -> GateResult:
+    async def check(
+        self,
+        run: "AutomationWorkflowRun",
+        channel_type: str,
+        *,
+        now: datetime | None = None,
+        content_class: str | None = None,
+    ) -> GateResult:
         return GateResult(action="allow")

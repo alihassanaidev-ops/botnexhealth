@@ -66,17 +66,17 @@ def _sms_to_exit_definition():
 
 
 class _BlockGate:
-    async def check(self, run, channel_type):
+    async def check(self, run, channel_type, **_kwargs):
         return GateResult(action="block", reason="opt_out")
 
 
 class _HoldGate:
-    async def check(self, run, channel_type):
+    async def check(self, run, channel_type, **_kwargs):
         return GateResult(action="hold", reason="consent_pending")
 
 
 class _AllowGate:
-    async def check(self, run, channel_type):
+    async def check(self, run, channel_type, **_kwargs):
         return GateResult(action="allow")
 
 
