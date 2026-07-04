@@ -111,7 +111,7 @@ def test_prepare_outbound_sms_body_adds_identity_and_casl_footer() -> None:
 @pytest.mark.asyncio
 async def test_sms_compliance_allows_when_no_records(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
-    service = SmsComplianceService(_FakeSession(None, None, None))  # DNC, suppression, consent
+    service = SmsComplianceService(_FakeSession([], None, None))  # DNC (list), suppression, consent
 
     identity = await service.assert_can_send(
         institution_id="inst",
@@ -133,7 +133,7 @@ async def test_sms_compliance_blocks_active_suppression(monkeypatch: pytest.Monk
         is_active=True,
         source="manual",
     )
-    service = SmsComplianceService(_FakeSession(None, suppression))
+    service = SmsComplianceService(_FakeSession([], suppression))
 
     with pytest.raises(SmsSendBlockedError):
         await service.assert_can_send(
@@ -154,7 +154,7 @@ async def test_sms_compliance_blocks_latest_revoked_consent(monkeypatch: pytest.
         status=ConsentStatus.REVOKED.value,
         source="manual",
     )
-    service = SmsComplianceService(_FakeSession(None, None, consent))
+    service = SmsComplianceService(_FakeSession([], None, consent))
 
     with pytest.raises(SmsSendBlockedError):
         await service.assert_can_send(

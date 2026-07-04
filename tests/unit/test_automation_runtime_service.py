@@ -16,10 +16,15 @@ from src.app.models.automation_workflow import (
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 
 
-def _make_session() -> AsyncMock:
+def _make_session(max_existing_attempt=None) -> AsyncMock:
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
+    # begin_step queries MAX(attempt_number) for (run, step) to allocate the next
+    # attempt. Default None → first attempt is 1.
+    exec_result = MagicMock()
+    exec_result.scalar_one_or_none = MagicMock(return_value=max_existing_attempt)
+    session.execute = AsyncMock(return_value=exec_result)
     return session
 
 
@@ -74,8 +79,29 @@ def test_begin_step_creates_execution_and_updates_run_pointer() -> None:
     step = asyncio.run(svc.begin_step(run, step_id="step-wait", step_type="wait"))
     assert step.step_id == "step-wait"
     assert step.status == AutomationStepStatus.PENDING.value
+    assert step.attempt_number == 1  # first attempt for this (run, step)
     assert run.current_step_id == "step-wait"
     session.add.assert_called()
+
+
+def test_begin_step_auto_increments_attempt_number() -> None:
+    """A node begun again (e.g. after a quiet-hours hold resumes) gets the next
+    attempt number, avoiding the (run, step, attempt) unique-index collision."""
+    session = _make_session(max_existing_attempt=1)
+    svc = AutomationWorkflowRuntimeService(session)
+    run = _make_run(AutomationRunStatus.RUNNING.value)
+    step = asyncio.run(svc.begin_step(run, step_id="step-send-sms", step_type="send_sms"))
+    assert step.attempt_number == 2
+
+
+def test_begin_step_honors_explicit_attempt_number() -> None:
+    session = _make_session()
+    svc = AutomationWorkflowRuntimeService(session)
+    run = _make_run(AutomationRunStatus.RUNNING.value)
+    step = asyncio.run(
+        svc.begin_step(run, step_id="s", step_type="send_sms", attempt_number=3)
+    )
+    assert step.attempt_number == 3
 
 
 # --- complete_step ---

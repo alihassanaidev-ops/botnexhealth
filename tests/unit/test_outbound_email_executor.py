@@ -87,6 +87,7 @@ def _make_executor(contact=None, institution=None, location=None):
         return None
 
     session.get = AsyncMock(side_effect=_get)
+    runtime.already_sent = AsyncMock(return_value=False)  # no prior send by default
     runtime.begin_step = AsyncMock(return_value=MagicMock())
     runtime.fail_step = AsyncMock()
     runtime.fail_run = AsyncMock()
@@ -207,6 +208,24 @@ def test_executor_falls_back_to_platform_from_address():
         asyncio.run(executor.execute(_make_run(), _make_node(), {}))
 
     assert captured["payload"]["from"] == "platform@example.com"
+
+
+def test_executor_is_idempotent_when_already_sent():
+    """A redelivery / hold-resume that re-enters an already-sent node must NOT
+    email the patient again — it advances silently."""
+    contact = _make_contact()
+    institution = _make_institution()
+    executor, runtime = _make_executor(contact=contact, institution=institution)
+    runtime.already_sent = AsyncMock(return_value=True)
+
+    with patch("src.app.services.automation.email_node_executor.httpx.AsyncClient") as MockClient:
+        result = asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert result == "node-2"                 # still advances
+    MockClient.assert_not_called()            # but never opens an HTTP client / re-sends
+    runtime.begin_step.assert_not_called()
+    runtime.complete_step.assert_not_called()
+    runtime.fail_run.assert_not_called()
 
 
 def test_executor_fails_on_resend_http_error():

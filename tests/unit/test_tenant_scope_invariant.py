@@ -54,7 +54,7 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # globally unique message id). Twilio doesn't know our institution_id.
     # Adding institution_id would require Twilio to send it back, which
     # they won't.
-    ("src/app/services/sms_service.py", 289, "SmsHistoryLog"),
+    ("src/app/services/sms_service.py", 291, "SmsHistoryLog"),
 
     # The scheduled retention job is an admin task that runs once per day
     # with DATABASE_ADMIN_URL and intentionally scans expired records across
@@ -129,7 +129,7 @@ def test_phi_queries_filter_by_institution_id() -> None:
             continue
         files_scanned += 1
         rel = path.relative_to(SRC_ROOT.parent.parent).as_posix()
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
 
         for match in _SELECT_RE.finditer(text):
             model = match.group(1)

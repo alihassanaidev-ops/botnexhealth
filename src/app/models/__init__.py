@@ -54,6 +54,7 @@ from src.app.models.sms_consent import (
     ConsentRecord,
     ConsentSource,
     ConsentStatus,
+    DncScope,
     DoNotContact,
     SmsSuppression,
 )
@@ -117,6 +118,7 @@ __all__ = [
     "SmsHistoryLog",
     "SmsStatus",
     "ConsentChannel",
+    "DncScope",
     "ConsentRecord",
     "ConsentSource",
     "ConsentStatus",

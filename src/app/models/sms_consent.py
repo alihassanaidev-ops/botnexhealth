@@ -31,11 +31,18 @@ class ConsentSource(str, Enum):
 
 
 class ConsentRecord(Base):
-    """Append-style consent state record for an institution-scoped phone."""
+    """Append-style consent state record for an institution-scoped contact.
+
+    The consent *identity* is channel-specific: SMS/VOICE are keyed on
+    ``phone_hash``, EMAIL on ``email_hash``. An email-only contact (no phone)
+    therefore has a valid email consent basis without a phone number — both
+    identity columns are nullable so each channel populates its own.
+    """
 
     __tablename__ = "consent_records"
     __table_args__ = (
         Index("ix_consent_records_institution_channel_phone", "institution_id", "channel", "phone_hash"),
+        Index("ix_consent_records_institution_channel_email", "institution_id", "channel", "email_hash"),
         CheckConstraint("channel IN ('sms', 'email', 'voice')", name="ck_consent_records_channel"),
         CheckConstraint("status IN ('granted', 'revoked')", name="ck_consent_records_status"),
         CheckConstraint(
@@ -55,8 +62,13 @@ class ConsentRecord(Base):
         UUID(as_uuid=False), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True, index=True
     )
     channel: Mapped[str] = mapped_column(String(32), nullable=False, default=ConsentChannel.SMS.value, index=True)
-    phone_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    phone_masked: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Channel-specific consent identity. SMS/VOICE key on phone_hash, EMAIL on
+    # email_hash — both nullable so an email-only or phone-only contact carries
+    # only the identity its channel needs.
+    phone_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    phone_masked: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    email_masked: Mapped[str | None] = mapped_column(String(320), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False, default=ConsentSource.MANUAL.value)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -118,8 +130,23 @@ class SmsSuppression(Base):
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class DncScope(str, Enum):
+    """How wide a do-not-contact record reaches (scope §11 DNC tiers)."""
+
+    LOCATION = "location"        # only the location whose sender received the STOP
+    INSTITUTION = "institution"  # every location in the institution
+    GROUP = "group"              # privileged DSO-wide "remove me everywhere"
+
+
 class DoNotContact(Base):
-    """Manual do-not-contact state that blocks outbound SMS."""
+    """Do-not-contact state that blocks outbound outreach on ALL channels.
+
+    Channel-agnostic (a DNC blocks SMS, voice, and email alike). ``scope`` tiers
+    how far it reaches: ``location`` (only the location whose number received the
+    STOP), ``institution`` (default — every location in the tenant), or ``group``
+    (a privileged DSO-wide removal). Existing rows predate ``scope`` and default
+    to ``institution`` for backward compatibility.
+    """
 
     __tablename__ = "do_not_contact"
     __table_args__ = (
@@ -135,6 +162,10 @@ class DoNotContact(Base):
             "source IN ('manual', 'twilio_keyword', 'system')",
             name="ck_do_not_contact_source",
         ),
+        CheckConstraint(
+            "scope IN ('location', 'institution', 'group')",
+            name="ck_do_not_contact_scope",
+        ),
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
@@ -149,6 +180,9 @@ class DoNotContact(Base):
     )
     phone_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     phone_masked: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DncScope.INSTITUTION.value
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False, default=ConsentSource.MANUAL.value)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)

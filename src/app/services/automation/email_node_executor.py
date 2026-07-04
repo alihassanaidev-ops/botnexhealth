@@ -46,6 +46,15 @@ class EmailNodeExecutor:
         context: dict,
     ) -> str:
         """Send a plain-text email for this node. Returns next_node_id on success."""
+        # Send-time idempotency (XC-1): a redelivery / re-advance / quiet-hours
+        # hold→resume that re-enters this node must not email the patient twice.
+        if await self.runtime.already_sent(run, node.id):
+            logger.info(
+                "send_email idempotent skip: already sent institution=%s run=%s node=%s",
+                run.institution_id, run.id, node.id,
+            )
+            return node.next_node_id
+
         step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
 
         # --- Resolve contact email ---

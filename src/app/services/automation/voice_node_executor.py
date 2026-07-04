@@ -24,6 +24,23 @@ from src.app.services.automation.runtime_service import AutomationWorkflowRuntim
 logger = logging.getLogger(__name__)
 
 _CREATE_CALL_URL = "https://api.retellai.com/v2/create-phone-call"
+_CALL_PLACED = "call_placed"
+
+
+def _ai_call_disclosure(clinic_name: str | None) -> str:
+    """Spoken AI-call identity disclosure + opt-out (TCPA artificial-voice /
+    CASL). Passed to Retell as a dynamic variable so the agent prompt opens
+    every outbound call by identifying the clinic, stating the call is
+    automated, and offering an opt-out — the compliance obligation for
+    AI/artificial-voice outreach (Plan 12). The spoken delivery lives in the
+    Retell agent prompt (which must reference ``{{compliance_disclosure}}``);
+    this is the authoritative text the engine supplies."""
+    clinic = (clinic_name or "your dental clinic").strip() or "your dental clinic"
+    return (
+        f"This is an automated call from {clinic}. "
+        "If you would prefer not to receive automated calls, say 'stop' at any "
+        "time and we will not call you again."
+    )
 
 
 class VoiceNodeExecutor:
@@ -46,6 +63,17 @@ class VoiceNodeExecutor:
         On any unrecoverable failure (missing contact, no phone, no from-number,
         Retell not configured, or a Retell API error) the step and run are failed.
         """
+        # Send-time idempotency (XC-1): placing an outbound call is not naturally
+        # idempotent, so a timer redelivery, a re-advance, or a quiet-hours
+        # hold→resume that re-enters this node must NOT dial the patient again.
+        # Shared guard keyed on a completed send step for this (run, node).
+        if await self.runtime.already_sent(run, node.id):
+            logger.info(
+                "send_voice idempotent skip: call already placed institution=%s run=%s node=%s",
+                run.institution_id, run.id, node.id,
+            )
+            return node.next_node_id
+
         step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
 
         # --- Resolve contact ---
@@ -88,6 +116,7 @@ class VoiceNodeExecutor:
         # Dynamic variables mirror the agent prompt's expected vars (first_name,
         # user_number). metadata.workflow_run_id is the correlation hedge.
         first_name = (contact.first_name or "").strip()
+        clinic_name = getattr(location, "name", None)
         payload = {
             "from_number": from_number,
             "to_number": to_number,
@@ -95,11 +124,18 @@ class VoiceNodeExecutor:
             "retell_llm_dynamic_variables": {
                 "first_name": first_name,
                 "user_number": to_number,
+                # Compliance disclosure the agent prompt must speak at call open
+                # (AI-call identity + opt-out). See _ai_call_disclosure.
+                "clinic_name": clinic_name or "",
+                "compliance_disclosure": _ai_call_disclosure(clinic_name),
             },
             "metadata": {
                 "workflow_run_id": str(run.id),
                 "institution_id": str(run.institution_id),
                 "source": "outbound_campaign",
+                # Marks this as an automated/artificial-voice call for downstream
+                # audit and post-call classification.
+                "ai_automated_call": True,
             },
         }
 
@@ -125,5 +161,5 @@ class VoiceNodeExecutor:
             await self.runtime.fail_run(run, reason=f"send_voice error: {type(exc).__name__}")
             return node.next_node_id
 
-        await self.runtime.complete_step(step, result_code="call_placed")
+        await self.runtime.complete_step(step, result_code=_CALL_PLACED)
         return node.next_node_id

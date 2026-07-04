@@ -81,11 +81,19 @@ async def _cancel_runs_for_appointment(
 def _verify_signature(raw_body: bytes, signature_header: str | None) -> None:
     """Raise 403 if HMAC-SHA256 signature does not match.
 
-    When nexhealth_webhook_secret is empty (local dev / test) verification is
-    skipped entirely — gate the endpoint at the network/firewall level instead.
+    When nexhealth_webhook_secret is empty verification is skipped — this is
+    permitted only in local/test, where the endpoint is firewalled. Production
+    startup already fails closed if the secret is unset (see config.py), but we
+    defend in depth here too: in production an unset secret rejects the request
+    rather than accepting an unauthenticated, potentially cross-tenant enroll.
     """
     secret = settings.nexhealth_webhook_secret
     if not secret:
+        if settings.is_production:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Webhook signature secret is not configured",
+            )
         return
     if not signature_header:
         raise HTTPException(

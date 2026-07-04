@@ -24,6 +24,7 @@ from src.app.models.user import User
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
 from src.app.services.automation.channel_readiness import ChannelReadinessService
+from src.app.services.automation.content_compliance_validator import ContentComplianceValidator
 from src.app.services.automation.dry_run import simulate_run
 from src.app.services.automation.validation_service import WorkflowValidationService
 from src.app.services.automation.template_renderer import STATIC_MERGE_FIELDS
@@ -292,9 +293,12 @@ async def validate_definition(
     # Pure validation — no persistence, so no location context is supplied. The
     # Plan-10 readiness checker short-circuits on a null location (readiness is a
     # per-location property surfaced by GET /channel-readiness), so it adds no
-    # issues here; the Plan-12 content seam is still a no-op.
+    # issues here. The Plan-12 content validator (promotional-in-exempt / PHI) is
+    # pure text analysis of the definition and needs no session, so it runs here
+    # too — the builder sees the same content issues publish will enforce.
     issues = await WorkflowValidationService(
         session=None,
+        content_validator=ContentComplianceValidator(),
         readiness_checker=ChannelReadinessService(None),
     ).validate(data.definition, institution_id=inst_id)
     responses = [

@@ -76,8 +76,23 @@ _VALID_PAYLOAD = {
 def test_verify_signature_skips_when_no_secret():
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
         # Should not raise even with no header
         _verify_signature(b"body", None)
+
+
+def test_verify_signature_rejects_in_production_without_secret():
+    """Defense-in-depth: even if startup validation is bypassed, an unset
+    secret in production must reject rather than accept an unauthenticated,
+    potentially cross-tenant webhook (P0-1)."""
+    from fastapi import HTTPException
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = True
+        with pytest.raises(HTTPException) as exc:
+            _verify_signature(b"body", None)
+    assert exc.value.status_code == 403
 
 
 def test_verify_signature_raises_403_missing_header():
@@ -128,6 +143,7 @@ async def test_webhook_queues_task_for_created_event():
         "src.app.tasks.automation_workflow.trigger_appointment_workflows"
     ) as mock_task:
         mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
         mock_task.delay = MagicMock()
         result = await nexhealth_appointment_webhook(request)
 
@@ -154,6 +170,7 @@ async def test_webhook_queues_task_with_no_contact():
         "src.app.tasks.automation_workflow.trigger_appointment_workflows"
     ) as mock_task:
         mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
         mock_task.delay = MagicMock()
         result = await nexhealth_appointment_webhook(request)
 
@@ -174,6 +191,7 @@ async def test_webhook_ignores_unhandled_event():
 
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
         result = await nexhealth_appointment_webhook(request)
 
     assert result["status"] == "ignored"
@@ -231,6 +249,7 @@ async def test_webhook_cancels_runs_on_cancelled_update():
         return_value=mock_scheduler,
     ):
         mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
         result = await nexhealth_appointment_webhook(request)
 
     assert result["status"] == "cancelled"
@@ -250,6 +269,7 @@ async def test_webhook_ignores_unknown_location():
         return_value=mock_session,
     ):
         mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
         result = await nexhealth_appointment_webhook(request)
 
     assert result["status"] == "ignored"
@@ -276,6 +296,7 @@ async def test_webhook_rejects_missing_start_time():
 
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
         with pytest.raises(HTTPException) as exc:
             await nexhealth_appointment_webhook(request)
 
@@ -291,6 +312,7 @@ async def test_webhook_rejects_bad_json():
 
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
         with pytest.raises(HTTPException) as exc:
             await nexhealth_appointment_webhook(request)
 

@@ -37,6 +37,15 @@ class SmsNodeExecutor:
         On any unrecoverable failure (missing contact, no phone, no from-number,
         or Twilio error) the step and run are marked failed.
         """
+        # Send-time idempotency (XC-1): a redelivery / re-advance / quiet-hours
+        # hold→resume that re-enters this node must not text the patient twice.
+        if await self.runtime.already_sent(run, node.id):
+            logger.info(
+                "send_sms idempotent skip: already sent institution=%s run=%s node=%s",
+                run.institution_id, run.id, node.id,
+            )
+            return node.next_node_id
+
         step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
 
         # --- Resolve contact ---

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.automation_workflow import (
@@ -16,6 +17,11 @@ from src.app.models.automation_workflow import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Result codes that mark a send step as having actually dispatched to the vendor.
+# A completed step with one of these means the patient was already contacted for
+# this (run, step) — the idempotency guard skips a second send.
+SEND_SUCCESS_RESULT_CODES = frozenset({"sent", "call_placed"})
 
 _TERMINAL_RUN_STATUSES = frozenset({
     AutomationRunStatus.COMPLETED.value,
@@ -51,13 +57,31 @@ class AutomationWorkflowRuntimeService:
         *,
         step_id: str,
         step_type: str,
-        attempt_number: int = 1,
+        attempt_number: int | None = None,
         max_attempts: int = 1,
         scheduled_at: datetime | None = None,
         scheduled_local_at: datetime | None = None,
         scheduled_timezone: str | None = None,
     ) -> AutomationWorkflowStepExecution:
-        """Create a step execution record and advance the run's current step pointer."""
+        """Create a step execution record and advance the run's current step pointer.
+
+        When ``attempt_number`` is not given it is allocated as the next attempt for
+        this ``(run, step_id)`` (``max(existing)+1``). A node can legitimately be
+        begun more than once — e.g. a quiet-hours *hold* creates the step, then on
+        resume the send executor begins it again, and a retry begins another attempt.
+        Auto-incrementing avoids colliding on the ``(run, step, attempt)`` unique
+        index and records each attempt distinctly.
+        """
+        if attempt_number is None:
+            max_existing = (
+                await self.session.execute(
+                    select(func.max(AutomationWorkflowStepExecution.attempt_number)).where(
+                        AutomationWorkflowStepExecution.workflow_run_id == run.id,
+                        AutomationWorkflowStepExecution.step_id == step_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            attempt_number = (max_existing or 0) + 1
         step = AutomationWorkflowStepExecution(
             institution_id=run.institution_id,
             location_id=run.location_id,
@@ -77,6 +101,32 @@ class AutomationWorkflowRuntimeService:
         await self.session.flush()
         await self._emit(run, "step.started", step_id=step_id, metadata={"step_type": step_type})
         return step
+
+    async def already_sent(self, run: AutomationWorkflowRun, step_id: str) -> bool:
+        """True if a send for this ``(run, step_id)`` has already dispatched.
+
+        Send-time idempotency (scope §5.4 exactly-one-action): a task redelivery,
+        a re-advance, or a quiet-hours hold→resume must not contact the patient a
+        second time. Keyed on a COMPLETED step with a send-success result code
+        (``sent``/``call_placed``) — a resumed *hold* step is COMPLETED with no
+        result code, so it does not count as already-sent.
+        """
+        row = (
+            await self.session.execute(
+                select(AutomationWorkflowStepExecution.id)
+                .where(
+                    AutomationWorkflowStepExecution.workflow_run_id == run.id,
+                    AutomationWorkflowStepExecution.step_id == step_id,
+                    AutomationWorkflowStepExecution.status
+                    == AutomationStepStatus.COMPLETED.value,
+                    AutomationWorkflowStepExecution.result_code.in_(
+                        tuple(SEND_SUCCESS_RESULT_CODES)
+                    ),
+                )
+                .limit(1)
+            )
+        ).first()
+        return row is not None
 
     async def complete_step(
         self,

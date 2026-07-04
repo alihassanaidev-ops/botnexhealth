@@ -124,11 +124,15 @@ def test_dispatcher_allow_gate_send_proceeds():
     dispatcher = WorkflowStepDispatcher(session, rt, sched, gate=_AllowGate())
 
     run = _make_run()
-    # Patch the SMS executor — this test covers gate logic, not send execution.
+    # This test covers gate logic, not send execution. Channel dispatch now goes
+    # through the action registry (get_action_executor), so patch that seam to
+    # return a fake executor that just advances to the next node.
+    fake_executor_cls = MagicMock()
+    fake_executor_cls.return_value.execute = AsyncMock(return_value="exit-1")
     with patch(
-        "src.app.services.automation.step_dispatcher.SmsNodeExecutor"
-    ) as MockExecutor:
-        MockExecutor.return_value.execute = AsyncMock(return_value="exit-1")
+        "src.app.services.automation.step_dispatcher.get_action_executor",
+        return_value=fake_executor_cls,
+    ):
         result = asyncio.run(dispatcher.advance(run, _sms_to_exit_definition(), context={}))
 
     assert result.status == "completed"
@@ -171,11 +175,13 @@ def test_dispatcher_block_gate_result_code():
 
 
 # ---------------------------------------------------------------------------
-# Dispatcher: gate=hold → run completes with compliance_hold outcome
+# Dispatcher: gate=hold → run DEFERS (held to the next window, never dropped).
+# Scope §8 fix: hold now schedules a resume timer + waits, rather than
+# terminating the run with a compliance_hold outcome.
 # ---------------------------------------------------------------------------
 
 
-def test_dispatcher_hold_gate_completes_with_hold_outcome():
+def test_dispatcher_hold_gate_defers_with_waiting_status():
     session = _make_session()
     rt = _make_runtime()
     sched = AsyncMock()
@@ -184,13 +190,14 @@ def test_dispatcher_hold_gate_completes_with_hold_outcome():
     run = _make_run()
     result = asyncio.run(dispatcher.advance(run, _sms_to_exit_definition(), context={}))
 
-    assert result.status == "completed"
-    assert result.outcome == "compliance_hold"
-    rt.complete_run.assert_awaited_once()
+    # Held, not dropped: the run waits for a resume timer instead of completing.
+    assert result.status == "waiting"
+    rt.wait_run.assert_awaited_once()
+    rt.complete_run.assert_not_awaited()
     rt.fail_run.assert_not_awaited()
 
 
-def test_dispatcher_hold_gate_step_result_code():
+def test_dispatcher_hold_gate_schedules_resume_timer():
     session = _make_session()
     rt = _make_runtime()
     sched = AsyncMock()
@@ -199,8 +206,12 @@ def test_dispatcher_hold_gate_step_result_code():
     run = _make_run()
     asyncio.run(dispatcher.advance(run, _sms_to_exit_definition(), context={}))
 
-    call_kwargs = rt.fail_step.call_args
-    assert call_kwargs.kwargs.get("result_code") == "compliance_hold"
+    # A resume timer is created and the send step is begun with a scheduled_at,
+    # so on fire the run re-checks the gate at the same send node.
+    sched.create_timer.assert_awaited_once()
+    begin_kwargs = rt.begin_step.call_args.kwargs
+    assert begin_kwargs.get("scheduled_at") is not None
+    rt.fail_step.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

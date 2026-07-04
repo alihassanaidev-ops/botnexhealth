@@ -320,6 +320,43 @@ async def test_idempotency_enforced_by_unique_index(session):
 
 
 @pytest.mark.asyncio
+async def test_send_step_idempotency_and_reclaim_after_hold(session):
+    """XC-1 (real unique index): begin_step re-entry on the same send node — as
+    happens when a quiet-hours hold resumes — must NOT collide on
+    uq_automation_step_execution_attempt, and already_sent must detect a completed
+    send so a redelivery would skip re-contacting the patient."""
+    from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+    from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+
+    wf, v1 = await _make_published_workflow(session)
+    enroll = AutomationWorkflowEnrollmentService(session)
+    run, _ = await enroll.enroll(
+        institution_id=INST_A, workflow_id=str(wf.id),
+        workflow_version_id=str(v1.id), location_id=LOC_A, idempotency_key="xc1-1",
+    )
+    runtime = AutomationWorkflowRuntimeService(session)
+    await runtime.start_run(run)
+
+    # 1st begin_step for the send node = attempt 1 (a quiet-hours hold creates this).
+    hold_step = await runtime.begin_step(run, step_id="n-send", step_type="send_sms")
+    assert hold_step.attempt_number == 1
+    # resume_run marks the hold step COMPLETED with no result_code (not a send).
+    await runtime.complete_step(hold_step, result_code=None)
+    await session.commit()
+    assert await runtime.already_sent(run, "n-send") is False
+
+    # 2nd begin_step for the SAME node must NOT raise a unique-index violation —
+    # it auto-increments to attempt 2 (the latent hold->resume collision fix).
+    send_step = await runtime.begin_step(run, step_id="n-send", step_type="send_sms")
+    assert send_step.attempt_number == 2
+    await runtime.complete_step(send_step, result_code="sent")
+    await session.commit()
+
+    # A redelivery / re-advance would now see the completed send and skip re-sending.
+    assert await runtime.already_sent(run, "n-send") is True
+
+
+@pytest.mark.asyncio
 async def test_rls_isolates_runs_across_institutions(pg_url, superuser_engine):
     """As the non-superuser app role under a celery/INST_A context, only INST_A's
     runs are visible — cross-tenant automation runs are RLS-isolated."""

@@ -247,6 +247,17 @@ class Settings(BaseSettings):
                         "WEBAUTHN_ALLOWED_ORIGINS must contain HTTPS origins in production"
                     )
 
+        # NEXHEALTH_WEBHOOK_SECRET verifies the HMAC-SHA256 signature on inbound
+        # NexHealth appointment webhooks. When empty, signature verification is
+        # skipped (fails open) — acceptable for local/test where the endpoint is
+        # firewalled, but in production an unauthenticated POST could trigger
+        # cross-tenant workflow enrollment. Fail closed: require it in prod.
+        if self.is_production and not self.nexhealth_webhook_secret:
+            raise ValueError(
+                "NEXHEALTH_WEBHOOK_SECRET must be set in production. "
+                "Without it, inbound appointment webhooks are unauthenticated."
+            )
+
         for cidr in self._split_csv(self.trusted_proxy_cidrs):
             ipaddress.ip_network(cidr, strict=False)
 

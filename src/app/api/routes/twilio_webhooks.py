@@ -37,13 +37,21 @@ router = APIRouter(prefix="/twilio/webhooks", tags=["Twilio Webhooks"])
 # follow-on "delivered" callback that Twilio sends after "sent".
 _TERMINAL_SMS_STATUSES = {"delivered", "sent", "failed", "undelivered"}
 
-STOP_KEYWORDS = {"STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"}
+# CASL (Canada) requires honoring French opt-out/help keywords alongside the
+# English ones. Entries are stored UPPERCASE (incl. accented forms) because the
+# body is uppercased before tokenizing and Python's str.upper() maps é→É, ê→Ê.
+STOP_KEYWORDS = {
+    "STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT",
+    "ARRET", "ARRÊT", "DESABONNER", "DÉSABONNER", "RETIRER", "SUPPRIMER",
+}
 START_KEYWORDS = {"START", "UNSTOP"}
-HELP_KEYWORDS = {"HELP", "INFO"}
+HELP_KEYWORDS = {"HELP", "INFO", "AIDE"}
 
 # Tokenize on any non-letter run. Catches phrasings like "please stop calling"
 # and "STOP!" without false-positives on partial words inside other tokens.
-_TOKEN_RE = re.compile(r"[A-Z]+")
+# Unicode letter class (not just A-Z) so accented French keywords like ARRÊT
+# and DÉSABONNER survive tokenization instead of splitting around the accent.
+_TOKEN_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
 def _classify_intent(body: str) -> str:

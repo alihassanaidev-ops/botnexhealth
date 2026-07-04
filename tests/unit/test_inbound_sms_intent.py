@@ -27,6 +27,16 @@ from src.app.api.routes.twilio_webhooks import _classify_intent, _verified_form
         ("more info please", "HELP"),
         # STOP wins over START in the unlikely "STOP and START" case.
         ("STOP and START", "STOP"),
+        # French / CASL opt-out keywords (accented and un-accented forms).
+        ("ARRET", "STOP"),
+        ("ARRÊT", "STOP"),
+        ("Arrêt", "STOP"),
+        ("arrêt s'il vous plaît", "STOP"),
+        ("DÉSABONNER", "STOP"),
+        ("DESABONNER", "STOP"),
+        ("retirer", "STOP"),
+        ("AIDE", "HELP"),
+        ("aide", "HELP"),
         # No keyword token → empty.
         ("", ""),
         ("Thanks!", ""),

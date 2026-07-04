@@ -37,6 +37,7 @@ def _make_session(
     halt: OutboundEmergencyHalt | None = None,
     operating_hours: LocationOperatingHours | None = None,
     consent_record: ConsentRecord | None = None,
+    dnc=None,
     location=None,
     contact=None,
 ) -> AsyncMock:
@@ -44,6 +45,7 @@ def _make_session(
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
+    dnc_rows = dnc if isinstance(dnc, list) else ([dnc] if dnc else [])
 
     def _execute_side_effect(stmt, *args, **kwargs):
         result = MagicMock()
@@ -53,6 +55,8 @@ def _make_session(
             result.scalar_one_or_none.return_value = halt
         elif "location_operating_hours" in stmt_str:
             result.scalar_one_or_none.return_value = operating_hours
+        elif "do_not_contact" in stmt_str:
+            result.scalars.return_value.all.return_value = dnc_rows
         elif "consent_records" in stmt_str:
             result.scalar_one_or_none.return_value = consent_record
         else:
@@ -83,9 +87,10 @@ def _make_location(timezone: str = "America/Toronto"):
     return loc
 
 
-def _make_contact(phone: str | None = "+14165551234"):
+def _make_contact(phone: str | None = "+14165551234", email: str | None = "patient@example.com"):
     contact = MagicMock()
     contact.phone = phone
+    contact.email = email
     return contact
 
 
@@ -107,6 +112,17 @@ def _make_halt():
     halt = MagicMock(spec=OutboundEmergencyHalt)
     halt.released_at = None
     return halt
+
+
+def _make_dnc(scope="institution", location_id=None, contact_id=None):
+    from src.app.models.sms_consent import DoNotContact
+
+    dnc = MagicMock(spec=DoNotContact)
+    dnc.scope = scope
+    dnc.location_id = location_id
+    dnc.contact_id = contact_id
+    dnc.is_active = True
+    return dnc
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +290,66 @@ def test_gate_allows_sms_when_compliant():
     assert result.action == "allow"
 
 
+def test_gate_blocks_voice_on_institution_do_not_contact():
+    """A do-not-contact record blocks voice too (not just SMS) — scope §11."""
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, dnc=_make_dnc(scope="institution"),
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="ph"):
+        result = asyncio.run(svc.check(run, "send_voice", now=now))
+
+    assert result.action == "block"
+    assert result.reason == "do_not_contact"
+
+
+def test_gate_blocks_email_on_do_not_contact():
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, dnc=_make_dnc(scope="group"),
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    result = asyncio.run(svc.check(run, "send_email", now=now))
+
+    assert result.action == "block"
+    assert result.reason == "do_not_contact"
+
+
+def test_gate_location_scoped_dnc_does_not_block_other_location():
+    """A location-scoped DNC for location L-other must NOT block a run at L-1."""
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    consent = _make_consent(ConsentStatus.GRANTED.value)
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location, contact=contact,
+        consent_record=consent,
+        dnc=_make_dnc(scope="location", location_id="L-other"),
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run(location_id="L-1")
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="ph"):
+        result = asyncio.run(svc.check(run, "send_voice", now=now))
+
+    # DNC is for a different location → not blocked; consent granted → allow.
+    assert result.action == "allow"
+
+
 def test_gate_blocks_on_no_email_consent():
     location = _make_location("UTC")
     hours = _make_hours(is_open=True)
@@ -286,11 +362,51 @@ def test_gate_blocks_on_no_email_consent():
     run = _make_run()
 
     now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
-    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="hashed"):
+    with patch("src.app.services.automation.compliance_gate_service.hash_email", return_value="ehash"):
         result = asyncio.run(svc.check(run, "send_email", now=now))
 
     assert result.action == "block"
     assert "email" in result.reason
+
+
+def test_gate_blocks_email_when_contact_has_no_email():
+    """An email send to a contact with no email address is blocked no_email —
+    NOT no_phone (email consent is keyed on the email identity, P0-2)."""
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact(phone=None, email=None)  # email-only-less contact
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, consent_record=None,
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    result = asyncio.run(svc.check(run, "send_email", now=now))
+
+    assert result.action == "block"
+    assert result.reason == "no_email"
+
+
+def test_gate_allows_email_for_contact_without_phone():
+    """An email-only contact (no phone) with granted email consent passes —
+    the old phone-hash keying wrongly blocked this as no_phone (P0-2)."""
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact(phone=None, email="email.only@example.com")
+    consent = _make_consent(ConsentStatus.GRANTED.value)
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, consent_record=consent,
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    result = asyncio.run(svc.check(run, "send_email", now=now))
+
+    assert result.action == "allow"
 
 
 def test_gate_allows_with_granted_email_consent():
@@ -306,7 +422,7 @@ def test_gate_allows_with_granted_email_consent():
     run = _make_run()
 
     now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
-    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="hashed"):
+    with patch("src.app.services.automation.compliance_gate_service.hash_email", return_value="ehash"):
         result = asyncio.run(svc.check(run, "send_email", now=now))
 
     assert result.action == "allow"
@@ -325,7 +441,7 @@ def test_gate_blocks_on_revoked_email_consent():
     run = _make_run()
 
     now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
-    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="hashed"):
+    with patch("src.app.services.automation.compliance_gate_service.hash_email", return_value="ehash"):
         result = asyncio.run(svc.check(run, "send_email", now=now))
 
     assert result.action == "block"

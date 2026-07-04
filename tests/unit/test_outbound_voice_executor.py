@@ -38,13 +38,14 @@ def _make_contact(phone="+14165551234", first="Jane"):
     return c
 
 
-def _make_location(retell_from_number="+15005550000"):
+def _make_location(retell_from_number="+15005550000", name="Bright Smiles Dental"):
     loc = MagicMock()
     loc.retell_from_number = retell_from_number
+    loc.name = name
     return loc
 
 
-def _make_executor(contact=None, location=None):
+def _make_executor(contact=None, location=None, already_placed=False):
     from src.app.services.automation.voice_node_executor import VoiceNodeExecutor
 
     session = AsyncMock()
@@ -60,6 +61,9 @@ def _make_executor(contact=None, location=None):
         return None
 
     session.get = AsyncMock(side_effect=_get)
+    # Idempotency guard: runtime.already_sent returns True only when a prior
+    # attempt already placed the call. Default is "no prior call".
+    runtime.already_sent = AsyncMock(return_value=already_placed)
     runtime.begin_step = AsyncMock(return_value=MagicMock())
     runtime.fail_step = AsyncMock()
     runtime.fail_run = AsyncMock()
@@ -167,8 +171,45 @@ def test_executor_places_call_success():
     assert payload["retell_llm_dynamic_variables"]["user_number"] == "+14165551234"
     assert payload["metadata"]["workflow_run_id"] == "run-1"
     assert payload["metadata"]["source"] == "outbound_campaign"
+    # AI-call disclosure injected (Plan 12): identity + opt-out, flagged automated.
+    assert payload["metadata"]["ai_automated_call"] is True
+    disclosure = payload["retell_llm_dynamic_variables"]["compliance_disclosure"]
+    assert "Bright Smiles Dental" in disclosure
+    assert "automated call" in disclosure.lower()
+    assert "stop" in disclosure.lower()
+    assert payload["retell_llm_dynamic_variables"]["clinic_name"] == "Bright Smiles Dental"
     runtime.complete_step.assert_called_once()
     assert runtime.complete_step.call_args.kwargs.get("result_code") == "call_placed"
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_is_idempotent_when_call_already_placed():
+    """A timer redelivery / task retry that re-enters a node whose call was
+    already placed must NOT dial the patient again — it advances silently."""
+    contact = _make_contact()
+    location = _make_location()
+    executor, runtime = _make_executor(contact=contact, location=location, already_placed=True)
+
+    post_called = {"count": 0}
+
+    async def _fake_post(url, headers, json):  # pragma: no cover - must not run
+        post_called["count"] += 1
+        resp = MagicMock()
+        resp.status_code = 201
+        return resp
+
+    with (
+        patch("src.app.services.automation.voice_node_executor.settings") as mock_settings,
+        patch("src.app.services.automation.voice_node_executor.httpx.AsyncClient") as MockClient,
+    ):
+        mock_settings.retell_api_secret = "re_secret"
+        MockClient.return_value = _mock_retell_client(_fake_post)
+        result = asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert result == "node-2"          # still advances to the next node
+    assert post_called["count"] == 0   # but never re-dials
+    runtime.begin_step.assert_not_called()
+    runtime.complete_step.assert_not_called()
     runtime.fail_run.assert_not_called()
 
 

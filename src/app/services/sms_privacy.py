@@ -106,6 +106,43 @@ def hash_phone(phone: str | None) -> str | None:
     return keyed_hash(normalized, purpose="phone-lookup-hash-v1")
 
 
+def normalize_email(email: str | None) -> str:
+    """Normalize an email address for hashing and comparison.
+
+    Lower-cases and trims; validates loosely against the email shape. Returns
+    "" for anything that does not look like an address (so callers treat it as
+    "no email identity" rather than hashing garbage).
+    """
+    if not email:
+        return ""
+    candidate = email.strip().lower()
+    return candidate if _EMAIL_RE.fullmatch(candidate) else ""
+
+
+def hash_email(email: str | None) -> str | None:
+    """Return the keyed email hash used for PHI-safe consent lookup.
+
+    The email address is the consent identity for the EMAIL channel, exactly
+    as the phone hash is for SMS/VOICE — an email-only contact has a valid
+    consent basis without a phone number.
+    """
+    normalized = normalize_email(email)
+    if not normalized:
+        return None
+    return keyed_hash(normalized, purpose="email-lookup-hash-v1")
+
+
+def mask_email(email: str | None) -> str:
+    """Mask an email for storage/display, preserving only the first character
+    of the local part and the domain (e.g. ``j***@example.com``)."""
+    normalized = normalize_email(email)
+    if not normalized:
+        return "Unknown"
+    local, _, domain = normalized.partition("@")
+    masked_local = f"{local[0]}***" if local else "***"
+    return f"{masked_local}@{domain}"
+
+
 def hash_for_logging(value: str | None) -> str:
     """Return a short keyed hash for logs and audit metadata."""
     if not value:

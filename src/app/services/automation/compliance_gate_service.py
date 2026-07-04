@@ -26,7 +26,7 @@ from src.app.models.sms_consent import ConsentChannel, ConsentRecord, ConsentSta
 from src.app.services.automation.compliance_gate import ComplianceGate, GateResult
 from src.app.services.automation.quiet_hours_service import QuietHoursService
 from src.app.services.sms_compliance import SmsSendBlockedError, SmsComplianceService
-from src.app.services.sms_privacy import hash_phone
+from src.app.services.sms_privacy import hash_email, hash_phone
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +83,32 @@ class ComplianceGateService:
             return GateResult(action="block", reason="contact_not_found")
 
         if channel_type == "send_sms":
+            # assert_can_send enforces DNC (scope-aware) + suppression + consent.
             return await self._check_sms(run, contact)
 
+        # Do-not-contact applies to EVERY channel (scope §11). The SMS path
+        # enforces it inside assert_can_send; enforce it here for voice/email so
+        # a "remove me everywhere" patient is never voice-called or emailed.
         if channel_type in ("send_email", "send_voice"):
-            channel = ConsentChannel.EMAIL.value if channel_type == "send_email" else ConsentChannel.VOICE.value
-            return await self._check_explicit_consent(run.institution_id, contact, channel)
+            phone_hash = hash_phone(contact.phone) if contact.phone else None
+            if await SmsComplianceService(self.session).is_do_not_contact(
+                institution_id=run.institution_id,
+                location_id=run.location_id,
+                phone_hash=phone_hash,
+                contact_id=run.contact_id,
+            ):
+                return GateResult(action="block", reason="do_not_contact")
+
+        # Email consent is keyed on the email address, not the phone — an
+        # email-only contact must not be blocked "no_phone".
+        if channel_type == "send_email":
+            return await self._check_email_consent(run.institution_id, contact)
+
+        # Voice consent is phone-identity based, like SMS.
+        if channel_type == "send_voice":
+            return await self._check_phone_consent(
+                run.institution_id, contact, ConsentChannel.VOICE.value
+            )
 
         # Unknown channel type — allow and let the send handler decide
         return GateResult(action="allow")
@@ -125,12 +146,13 @@ class ComplianceGateService:
         except SmsSendBlockedError as exc:
             return GateResult(action="block", reason=str(exc))
 
-    async def _check_explicit_consent(
+    async def _check_phone_consent(
         self,
         institution_id: str,
         contact: Contact,
         channel: str,
     ) -> GateResult:
+        """Explicit consent keyed on the contact's phone (SMS/VOICE identity)."""
         phone = contact.phone
         if not phone:
             return GateResult(action="block", reason="no_phone")
@@ -148,7 +170,36 @@ class ComplianceGateService:
             .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
             .limit(1)
         )
-        record = result.scalar_one_or_none()
+        return self._resolve_consent(result.scalar_one_or_none(), channel)
+
+    async def _check_email_consent(
+        self,
+        institution_id: str,
+        contact: Contact,
+    ) -> GateResult:
+        """Explicit consent keyed on the contact's email address (EMAIL identity).
+
+        Email-only contacts (no phone) resolve here on their email, so they are
+        never falsely blocked "no_phone".
+        """
+        email_hash = hash_email(contact.email)
+        if not email_hash:
+            return GateResult(action="block", reason="no_email")
+
+        result = await self.session.execute(
+            select(ConsentRecord)
+            .where(
+                ConsentRecord.institution_id == institution_id,
+                ConsentRecord.channel == ConsentChannel.EMAIL.value,
+                ConsentRecord.email_hash == email_hash,
+            )
+            .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
+            .limit(1)
+        )
+        return self._resolve_consent(result.scalar_one_or_none(), ConsentChannel.EMAIL.value)
+
+    @staticmethod
+    def _resolve_consent(record: ConsentRecord | None, channel: str) -> GateResult:
         if record is None:
             return GateResult(action="block", reason=f"no_{channel}_consent")
         if record.status == ConsentStatus.REVOKED.value:

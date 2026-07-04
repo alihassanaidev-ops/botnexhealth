@@ -111,6 +111,7 @@ def _make_executor(contact=None, location=None):
         return None
 
     session.get = AsyncMock(side_effect=_get)
+    runtime.already_sent = AsyncMock(return_value=False)  # no prior send by default
     runtime.begin_step = AsyncMock(return_value=MagicMock())
     runtime.fail_step = AsyncMock()
     runtime.fail_run = AsyncMock()
@@ -180,6 +181,28 @@ def test_executor_sends_and_completes_step():
     assert result == "node-2"
     runtime.complete_step.assert_called_once()
     assert runtime.complete_step.call_args.kwargs.get("result_code") == "sent"
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_is_idempotent_when_already_sent():
+    """A redelivery / hold-resume that re-enters an already-sent node must NOT
+    text the patient again — it advances silently."""
+    contact = _make_contact()
+    location = _make_location()
+    executor, runtime = _make_executor(contact=contact, location=location)
+    runtime.already_sent = AsyncMock(return_value=True)
+    run = _make_run()
+    node = _make_node()
+
+    with patch("src.app.services.automation.sms_node_executor.SmsService") as MockSms:
+        instance = MockSms.return_value
+        instance.send_sms = AsyncMock(return_value=MagicMock())
+        result = asyncio.run(executor.execute(run, node, {}))
+
+    assert result == "node-2"                 # still advances
+    instance.send_sms.assert_not_called()     # but never re-sends
+    runtime.begin_step.assert_not_called()
+    runtime.complete_step.assert_not_called()
     runtime.fail_run.assert_not_called()
 
 

@@ -12,7 +12,14 @@ from src.app.services.event_bus import SUPPORTED_EVENT_TYPES, publish_event
 
 def test_supported_event_types_frozen() -> None:
     assert SUPPORTED_EVENT_TYPES == frozenset(
-        {"calls_updated", "callbacks_updated", "dashboard_updated", "notification"}
+        {
+            "calls_updated",
+            "callbacks_updated",
+            "dashboard_updated",
+            "notification",
+            # PHI-free workflow/automation run progress hint (Plan 02/08).
+            "workflow_run_updated",
+        }
     )
 
 
@@ -30,6 +37,7 @@ _VALID_PAYLOADS: dict[str, dict] = {
     "calls_updated": {},
     "callbacks_updated": {},
     "dashboard_updated": {},
+    "workflow_run_updated": {},
     "notification": {
         "notification_id": "n-1",
         "title": "New call",
