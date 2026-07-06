@@ -52,7 +52,7 @@ _APPOINTMENT_CONFIRMATION_48H: dict[str, Any] = {
             "id": "sms-confirm",
             "body_template": (
                 "Hi {{patient_first_name}}, please confirm your upcoming appointment. "
-                "Reply YES to confirm or CANCEL to cancel. Reply STOP to opt out."
+                "Reply YES to confirm. Reply STOP to opt out."
             ),
             "next_node_id": "wait-response",
         },

@@ -1,8 +1,9 @@
 # Phase 2 Verification & Progress Report — Outbound Engagement Engine
 
-**Date:** 2026-07-05 (full re-verification after the Plan-03 session + Hammad's Plan-11 merge)
-**Branch:** `ali/phase-2` @ `71a74e5` (in sync with origin). Includes the merge of Hammad's Plan 11
-(`c8e6535` — usage rollups / voice metering / campaign attribution / reporting API) into the Plan-03 voice work.
+**Date:** 2026-07-06 (Plan 09 sections updated for commits `6671ba5` + `43e2875`; body otherwise the 2026-07-05 re-verification)
+**Branch:** `ali/phase-2` @ `0178e21` (in sync with origin). Includes Hammad's Plan 11
+(`c8e6535` — usage rollups / voice metering / campaign attribution / reporting API) and Plan 09 resilience core
+(`6671ba5` projection + reschedule re-enroll + freshness window; `43e2875` subscriptions + backfill + reconciliation).
 **Scope audited:** all 12 implementation plans.
 **Method:** this is a **full re-verification**, not an edit. Every prior finding was re-checked against the
 current merged tree by an independent per-plan sub-agent (graphify-oriented navigation → live code inspection,
@@ -38,15 +39,19 @@ The spine is complete and hardening is real:
   block at the gate**, not just a publish warning, and consent capture is channel-generic (voice capture works
   on the callback path).
 
-The original audit's five compliance/security findings (A–E) remain **all resolved** (one with a documented
-deferral). The remaining work concentrates in the data/provisioning/UI plans: Plan 09's **resilient projection
-core** (still absent), Plan 05 **email hardening** (unsubscribe/bounce/HTML/cost), Plan 10 **provisioning
-automation + persisted readiness state**, Plan 08's **full campaign UI + analytics dashboards**, Plan 06's
-**differentiators** (PMS write-back, Sales Qualification, live confirm-branch), and the residual Plan 11 gaps
-(budgets, cost estimation, voice cost pricing, DSO/group rollup).
+The original audit's five compliance/security findings (A–E) are now **all fully resolved** — Finding E's
+reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer) jumped from ~40% to ~80%**
+(Hammad, `6671ba5`+`43e2875`): the disposable `appointment_working_set` projection, reschedule re-enroll,
+event-level idempotency ledger, revalidation freshness window, and the subscription/backfill/reconciliation jobs
+now exist — though the live-NexHealth-API half of that (subscriptions/backfill/reconciliation) is mock-tested and
+**needs staging verification**. The remaining work concentrates in the provisioning/UI/email plans: Plan 05 **email
+hardening** (unsubscribe/bounce/HTML/cost), Plan 10 **provisioning automation + persisted readiness state**, Plan
+08's **full campaign UI + analytics dashboards**, Plan 06's **differentiators** (PMS write-back, Sales
+Qualification, live confirm-branch), and the residual Plan 11 gaps (budgets, cost estimation, voice cost pricing,
+DSO/group rollup).
 
-**Headline: ~62% of full Phase-2 plan scope delivered across all 12 plans (up from ~48%).** The functional
-foundation is stronger than the aggregate implies because the spine — 01/02/03/12 plus the now-substantial 11 —
+**Headline: ~66% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** The functional
+foundation is stronger than the aggregate implies because the spine — 01/02/03/12 plus the now-substantial 09 and 11 —
 is the most complete.
 
 ### Product-owner scope decision (unchanged)
@@ -67,10 +72,10 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 03 | Outbound Voice | 🟢 Outcome loop + data model + crash/timeout-safe + API | **~89%** | ↑↑ from ~35% |
 | 04 | Outbound SMS | 🟢 Substantial (now idempotent) | **~78%** | ↑ from ~70% |
 | 05 | Outbound Email | 🟠 Gated/idempotent/metered plain-text | **~38%** | ↑ from ~30–35% |
-| 06 | Four Live Campaigns | 🟡 Partial (confirm-branch still dead) | **~50–55%** | unchanged |
+| 06 | Four Live Campaigns | 🟢 Confirmation/reaction write-back slice implemented; Sales Qualification still absent | **~62–65%** | ↑ from ~50–55% |
 | 07 | AI Callback Handling | 🟢 End-to-end; inherits voice outcome loop | **~63%** | ↑ from ~60% |
 | 08 | Campaign Mgmt / Analytics UI | 🟠 Read-only slice | **~22%** | unchanged |
-| 09 | Integration & Data Layer | 🟡 Passthrough + live revalidation | **~40%** | unchanged |
+| 09 | Integration & Data Layer | 🟢 Projection + reschedule re-enroll + ledger + backfill/reconciliation (NexHealth-API pieces staging-pending) | **~80%** | ↑↑ from ~40% (Hammad, `6671ba5`+`43e2875`) |
 | 10 | Per-Tenant Provisioning | 🟡 Cred-storage + computed readiness | **~25%** | unchanged |
 | 11 | Usage & Cost Reporting | 🟢 Rollups + all-channel metering + reporting API | **~65%** | ↑↑ from ~15% (Hammad merge) |
 | 12 | Compliance & Consent | 🟢 Gate + semantics + basis hard-block (caps excluded) | **~72%** | ↑ from ~60% |
@@ -88,7 +93,7 @@ weighted estimate). Confidence: **High** across all 12 (independent per-plan cod
 | B | Quiet-hours "hold" drops the send instead of deferring | ✅ **FIXED (re-confirmed)** — hold schedules a resume timer and re-checks the gate on fire (`step_dispatcher.py:165-193`; `GateResult(action="hold", retry_at=...)` at `compliance_gate_service.py:90`); the run is held, never dropped. |
 | C | NexHealth webhook signature fails open when secret unset | ✅ **FIXED (re-confirmed)** — prod startup fails closed (`config.py:255-259` model validator) + a defense-in-depth 403 when prod+empty (`nexhealth_webhooks.py:92-96`). |
 | D | Email consent keyed on a phone hash | ✅ **FIXED (re-confirmed)** — email consent keys on an email identity (`hash_email` → `ConsentRecord.email_hash`, channel EMAIL); gate split into `_check_email_consent` vs `_check_phone_consent` (`compliance_gate_service.py:195-222`); migration `20260705_consent_email_identity`. |
-| E | Cancellation/reschedule unhandled + no send-time revalidation | ✅ **FIXED, 1 deferral (re-confirmed)** — `appointment.cancelled`/cancelled-on-update terminates runs+timers (`nexhealth_webhooks.py:198-211`); `PmsLiveRevalidationService` runs before every send (`step_dispatcher.py:143-158`). **Deferral (Plan 09 bug #1):** a *rescheduled* appointment is defensively skipped (`skipped_rescheduled`) but **not re-enrolled at the new time** — the send is dropped, not moved. |
+| E | Cancellation/reschedule unhandled + no send-time revalidation | ✅ **FULLY FIXED** — `appointment.cancelled`/cancelled-on-update terminates runs+timers; `PmsLiveRevalidationService` runs before every send. The prior reschedule deferral is now **closed** (Plan 09 `6671ba5`): a reschedule detected against the `appointment_working_set` projection cancels the old runs and **re-enrolls at the new time** via a time-aware idempotency key — the reminder is moved, not dropped. |
 
 ---
 
@@ -187,23 +192,27 @@ per-tenant sending domain (SPF/DKIM/DMARC + warm-up); `ResendCampaignClient`; an
 **Verdict:** a gated, idempotent, volume-metered plain-text v1 with consent keyed correctly — but blocked-by-default
 (no EMAIL-consent intake), $0 cost, and no unsubscribe/bounce/HTML/domain/attempt-log.
 
-### Plan 06 — Four Live Campaigns — 🟡 ~50–55%
+### Plan 06 — Four Live Campaigns — 🟢 ~62–65%
 **Built:** in-code template registry with 4 templates (`campaign_templates.py`); **recall trigger is REAL** (live
 `list_patient_recalls` → due-date filter → contact resolution → idempotent paced enrollment, `automation_workflow.py:1019-1055`);
 appointment-offset trigger wired end-to-end; **`PmsLiveRevalidationService` live-backed** and injected into every
 dispatch path; compliance gate before every send. **Template tests pass.**
-**Missing / ⚠️ Partial:** **Sales Qualification absent** (the 4th slot is a non-plan `reactivation` campaign);
-**PMS confirmation write-back does not exist** (the adapter *does* have `book/cancel/reschedule` writes at
-`adapter.py:409,442,458`, but no confirm/update-status method and no campaign path writes to PMS); templates are
-in-code dataclasses, not the DB-backed versioned `workflow_templates` model; outcome mapping not normalized; no
-channel-order/fallback/attempt-ceilings; no CSV/manual enrollment.
-**Bug (still present):** the Confirmation **"confirmed" branch is dead code** — no trigger/webhook/task ever writes
-`appointment_status` (or `appointment_booked`) into `run.trigger_metadata`, so those condition fields are always
-false and the run always exits `no_response`/`email-followup` (mirrored in the reactivation `appointment_booked`
-branch). The Plan-03 outcome loop does **not** rescue this: the templates contain no `SendVoiceNode` and the
-branches key on `appointment_status`, not `call_outcome`.
-**Verdict:** Reminder is fully live; Recall really enrolls; Confirmation is send-only (confirm/write-back
-non-functional); Sales Qualification dropped.
+**Built in Plan 06 confirmation/write-back slice:** inbound SMS confirmation replies now resume WAITING
+confirmation runs in real time (`YES`, `Y`, `CONFIRM`, `C`, `1` as bare tokens only), write
+`appointment_status="confirmed"` into `trigger_metadata`, cancel the wait timer, and drive the existing
+confirmed branch. The confirmation SMS no longer advertises `CANCEL` because `CANCEL` is a Twilio STOP keyword.
+NexHealth confirmation write-back now exists via capability-gated `confirm_appointment`
+(`PATCH /appointments/{id}` `{"appt":{"confirmed":true}}`), fail-open with `CONFIRM_APPOINTMENT` audit rows.
+The Reactivation `appointment_booked` dead branch is now event-led: accepted NexHealth appointment created/updated
+events enqueue `resume_reactivation_booking` for the resolved contact/location, write `appointment_booked=true`,
+and resume to `exit-booked`.
+**Still missing / ⚠️ Partial:** **Sales Qualification absent** (the 4th slot is still a non-plan
+`reactivation` campaign); templates are in-code dataclasses, not the DB-backed versioned `workflow_templates`
+model; outcome mapping not normalized; no channel-order/fallback/attempt-ceilings; no CSV/manual enrollment.
+Phone/front-desk confirmation detection via NexHealth's `confirmed` flag is intentionally deferred until live
+tenant sync behavior is verified.
+**Verdict:** Reminder and Recall are live; Confirmation now has SMS-confirm capture and PMS write-back;
+Reactivation's booked branch is reachable from appointment events; Sales Qualification remains dropped.
 
 ### Plan 07 — AI Callback Handling — 🟢 ~63%
 **Built:** `callback_requested` trigger; `CallbackTriggerService`; `trigger_callback_workflows` task; a Retell
@@ -234,22 +243,33 @@ run-detail timeline; **SSE real-time** (pages are manual-refresh); location scop
 **Bugs:** native `confirm()` instead of the app Dialog; runs table mislabeled "Enrollments."
 **Verdict:** honest read-only slice on real data; most of the plan (CSV/analytics/ops) is deferred.
 
-### Plan 09 — Integration & Data Layer — 🟡 ~40%
-**Built:** HMAC-verified webhook receiver (`nexhealth_webhooks.py:81-108`); appointment-offset trigger with
-ETA-scheduled idempotent enrollment; **`appointment.cancelled`/cancelled-on-update terminates runs+timers**
-(`:198-211`); **`PmsLiveRevalidationService`** injected at every dispatch path (cancelled/rescheduled detection,
-fail-open); **recall pull is REAL** (live `GET /recalls`, due derivation, paced enrollment); bulk-enroll endpoint.
-**Missing (no code/migration — all re-confirmed absent):** the plan's central deliverable, the disposable
-`appointment_working_set` projection (the webhook enqueues `trigger_appointment_workflows.delay` directly, persists
-nothing); `recall_eligibility_working_set`; `nexhealth_webhook_subscriptions` + lifecycle/health;
-`nexhealth_webhook_events` event ledger (no event-level idempotency); initial REST backfill; paced reconciliation
-sweep; job rate-limit pacing.
-**Bugs (all present):** (1) **rescheduled reminder silently dropped, not re-timed** (time-independent idempotency
-key `appt:{version}:{appointment_id}` dedupes the re-enroll; reschedule not re-enrolled; send-time
-`skipped_rescheduled`). (2) no event-level idempotency (dup deliveries re-run). (3) whole-table workflow scan per
-webhook. (4) **no revalidation freshness window** — an 800-patient 9 AM batch ≈ 800 burst NexHealth calls.
-**Verdict:** cancellation-safe passthrough with live revalidation, but every *defining* resilience component
-(projections, subscriptions, ledger, backfill, reconciliation) is still absent.
+### Plan 09 — Integration & Data Layer — 🟢 ~80% (code-complete; NexHealth-API pieces staging-pending)
+**Built (Hammad, commits `6671ba5` + `43e2875`, 2026-07-06) — the plan's defining resilience components now exist:**
+- **Disposable `appointment_working_set` projection** (`models/appointment_working_set.py`, migration
+  `20260707_appointment_working_set`) — the webhook UPSERTs last-seen scheduling state. Its RLS policy includes the
+  `nexhealth_webhooks` session context (the write path).
+- **Reschedule re-enroll — closes Finding E's deferral:** the webhook detects a `start_time` change vs the
+  projection, cancels the old runs+timers, and re-enrolls at the new time via a **time-aware idempotency key**
+  (`appt:{version}:{appointment_id}:{start}`, `appointment_trigger_service.py`). The reminder is re-timed, not dropped.
+- **`nexhealth_webhook_events` ledger** (`models/nexhealth_webhook_event.py`, `nexhealth_projection_service.py`) —
+  claim-at-receipt event-level idempotency with self-healing reclaim of a PROCESSING row abandoned >5 min;
+  `(trigger_ref_type, trigger_ref_id)` index for the cancel/reschedule run lookup.
+- **Revalidation freshness window** (`revalidation.py`) — a projection row synced within 15 min is trusted instead
+  of a live `get_appointment` on every send, cutting the ~800-call 9 AM burst.
+- **Subscription lifecycle** (`nexhealth_subscription_service.py`, `models/nexhealth_webhook_subscription.py`,
+  migration `20260708_nexhealth_webhook_subscriptions`) — create/list/health; provider create gated behind
+  `NEXHEALTH_WEBHOOK_CALLBACK_URL`. **Initial REST backfill** (`nexhealth_backfill_service.py` +
+  `NexHealthAdapter.list_appointments`) upserts the projection + triggers workflows for go-forward appointments.
+  **Paced reconciliation sweep** (Celery beat, `worker.py`) repairs stale/missing rows, cancels dead runs, re-enrolls reschedules.
+**Still open / deferred:** `recall_eligibility_working_set` (recall pull works but has no dedicated projection);
+SQL trigger_type filter (D-4 P2 — `AutomationWorkflow.trigger_type` is a computed property, needs a denormalized
+column first); operator-triggered backfill surface.
+**⚠️ Verification split:** the **projection / reschedule / freshness / ledger** half is **verified against real
+Postgres** (1371 unit tests + constraint smoke-tests). The **subscription / backfill / reconciliation** half calls
+the live NexHealth API and is **unit-tested with a mocked client only — NEEDS-STAGING-VERIFY** (exact partner
+subscription endpoint/payload + backfill paging unproven without staging creds).
+**Verdict:** the disposable read-model + live-revalidation architecture the plan specified now exists and the
+reschedule safety gap is closed; the residual risk is live-NexHealth validation, not missing code.
 
 ### Plan 10 — Per-Tenant Messaging Provisioning — 🟡 ~25%
 **Built:** genuine **AES-256-GCM per-institution Twilio + email creds** (4 columns on `institutions`, migration
@@ -326,10 +346,12 @@ remaining real gap is consent *capture* for email and general voice.
    redelivery/re-advance/hold-resume. **Crash-window (XC-1b):** **voice RESOLVED** (P9 committed claim + timeout-terminal
    policy) and **email** has a Resend `Idempotency-Key` header; **SMS crash-window still open** (no committed claim /
    `workflow_sms_attempts`).
-2. **The event-driven read model (Plan 09) was not built** — direct webhook→enroll passthrough; no
-   projection/backfill/reconciliation/event-ledger. Only appointments created *after* subscription can trigger; a
-   reschedule silently drops the reminder.
-3. **No revalidation freshness window** → burst NexHealth load at batch times (Plan 09).
+2. **The event-driven read model (Plan 09) — NOW BUILT** (`6671ba5`+`43e2875`): `appointment_working_set`
+   projection, `nexhealth_webhook_events` ledger (event-level idempotency), subscription lifecycle, REST backfill,
+   and reconciliation sweep all exist; reschedule now re-enrolls at the new time. **Residual:** the
+   subscription/backfill/reconciliation jobs are mock-tested only and **need NexHealth staging verification**.
+3. ✅ **Revalidation freshness window added** (Plan 09) — a projection row fresh within 15 min is trusted, so a
+   large fixed-time batch no longer fans out one live NexHealth call per send.
 4. **Usage model is now campaign-tagged** (`workflow_run_id`/`workflow_id`) and per-campaign spend works
    (`/by-campaign`). **Remaining cost gaps:** voice cost $0 (no Retell pricing), email cost $0 (no price source),
    SMS late-price-update dropped by MessageSid idempotency (Plan 11).
@@ -347,24 +369,25 @@ remaining real gap is consent *capture* for email and general voice.
 ## 6. Overall progress summary
 
 - **Complete (100%):** Plan 01, Plan 02.
-- **Substantial (60–90%):** Plan 03 (~89%), Plan 04 (~78%), Plan 12 (~72%), Plan 11 (~65%), Plan 07 (~63%).
-- **Partial (40–55%):** Plan 06 (~50–55%), Plan 09 (~40%).
+- **Substantial (60–90%):** Plan 03 (~89%), Plan 09 (~80%), Plan 04 (~78%), Plan 12 (~72%), Plan 11 (~65%), Plan 07 (~63%).
+- **Partial (40–55%):** Plan 06 (~50–55%).
 - **Minimal (22–38%):** Plan 05 (~38%), Plan 10 (~25%), Plan 08 (~22%).
 - **Not started (0%):** none.
 
-**Biggest remaining milestones (largest → smallest):** Plan 09 resilient core
-(projections/backfill/reconciliation/subscriptions/event-ledger + revalidation freshness window + reschedule
-re-enroll); Plan 05 email hardening (unsubscribe/bounce/HTML/domain/cost + consent capture); Plan 08 full UI
-(CSV/analytics dashboards consuming the new usage API/ops/SSE); Plan 06 differentiators (PMS write-back, live
-confirm-branch, Sales Qualification, DB-backed templates); Plan 10 provisioning automation + persisted readiness
-state; Plan 11 residuals (budgets, cost estimation, voice/email/SMS-late cost fidelity, DSO/group endpoint); Plan 03
-front-end + spoken-opt-out (A-8).
+**Biggest remaining milestones (largest → smallest):** Plan 05 email hardening (unsubscribe/bounce/HTML/domain/cost
++ consent capture); Plan 08 full UI (CSV/analytics dashboards consuming the new usage API/ops/SSE); Plan 06
+differentiators (PMS write-back, live confirm-branch, Sales Qualification, DB-backed templates); Plan 10
+provisioning automation + persisted readiness state; **Plan 09 NexHealth staging verification** (prove the
+subscription/backfill/reconciliation jobs against a live tenant) + `recall_eligibility_working_set`; Plan 11
+residuals (budgets, cost estimation, voice/email/SMS-late cost fidelity, DSO/group endpoint); Plan 03 front-end +
+spoken-opt-out (A-8).
 
 **Production readiness:** engine + builder are production-grade and verified; compliance is enforced (and consent
 basis hard-blocked) on every dispatch; voice is now outcome-reactive and crash/timeout-safe. For a **safe
 operator-driven pilot on the Celery path** the system is ready. Before **high-volume autonomous** sending: email
-unsubscribe/bounce + consent capture, the Plan-09 projection/backfill + revalidation freshness window, the SMS
-crash-window claim, and cost fidelity (voice/email pricing) for accurate reporting.
+unsubscribe/bounce + consent capture, **NexHealth-staging validation of the now-built Plan-09
+subscription/backfill/reconciliation jobs**, the SMS crash-window claim, and cost fidelity (voice/email pricing)
+for accurate reporting.
 
 ---
 
@@ -374,10 +397,12 @@ The full, prioritized, de-duplicated remaining-work list lives in **one place** 
 `../outbound-followups-and-gaps.md` (the register). This report does not restate it, to avoid drift.
 
 **Top of that list (highest-leverage first), updated for the current state:**
-1. **Plan 09 resilient core** (register D-*) — reschedule re-enroll, revalidation freshness window,
-   projections/backfill/subscriptions/event-ledger. The largest correctness + scale gap.
-2. **Plan 05 email hardening** (E-*) — unsubscribe (legal minimum), bounce/complaint ingestion, **email consent
+1. **Plan 05 email hardening** (E-*) — unsubscribe (legal minimum), bounce/complaint ingestion, **email consent
    capture** (unblocks email), HTML.
+2. **Plan 09 — NexHealth staging verification** (was "resilient core", now BUILT in `6671ba5`+`43e2875`): prove the
+   subscription/backfill/reconciliation jobs against a live NexHealth tenant (they're mock-tested only), then add
+   `recall_eligibility_working_set`. Reschedule re-enroll + freshness window + projection + event-ledger are done and
+   Postgres-verified.
 3. **Plan 11 residuals** — voice/email cost pricing + SMS late-price fix, `usage_budgets`, DSO/group rollup endpoint,
    alarms + a beat entry for the rollup recompute. (Rollups/reporting/attribution are now DONE.)
 4. **Plan 08 analytics UI** — consume the new `/institution/usage` API; CSV import; ops/replay; SSE.

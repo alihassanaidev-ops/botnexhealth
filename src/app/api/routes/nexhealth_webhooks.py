@@ -272,7 +272,10 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
             institution_id, appointment_id, reason="appointment_rescheduled"
         )
 
-    from src.app.tasks.automation_workflow import trigger_appointment_workflows
+    from src.app.tasks.automation_workflow import (
+        resume_reactivation_booking,
+        trigger_appointment_workflows,
+    )
 
     trigger_appointment_workflows.delay(
         institution_id=institution_id,
@@ -286,6 +289,13 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
             "nexhealth_location_id": nexhealth_location_id,
         },
     )
+    if contact_id:
+        resume_reactivation_booking.delay(
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_id=contact_id,
+            appointment_id=appointment_id,
+        )
 
     logger.info(
         "nexhealth_appointment_webhook: queued trigger institution=%s appt=%s event=%s change=%s contact=%s reenrolled_after_cancel=%d",

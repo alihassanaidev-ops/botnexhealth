@@ -76,6 +76,9 @@ def _make_cm_session():
     s.__aenter__ = AsyncMock(return_value=s)
     s.__aexit__ = AsyncMock(return_value=False)
     s.commit = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    s.execute = AsyncMock(return_value=result)
     return s
 
 
@@ -165,10 +168,13 @@ async def test_webhook_queues_task_for_created_event():
         side_effect=[mock_session, _make_cm_session()],
     ), _patch_projection(change="new"), patch(
         "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as mock_task:
+    ) as mock_task, patch(
+        "src.app.tasks.automation_workflow.resume_reactivation_booking"
+    ) as mock_reactivation:
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
         mock_task.delay = MagicMock()
+        mock_reactivation.delay = MagicMock()
         result = await nexhealth_appointment_webhook(request)
 
     assert result["status"] == "queued"
@@ -179,6 +185,12 @@ async def test_webhook_queues_task_for_created_event():
     assert kwargs["appointment_id"] == "appt-999"
     assert kwargs["contact_id"] == "contact-1"
     assert kwargs["appointment_at_iso"] == "2026-08-01T10:00:00Z"
+    mock_reactivation.delay.assert_called_once_with(
+        institution_id="inst-1",
+        location_id="loc-1",
+        contact_id="contact-1",
+        appointment_id="appt-999",
+    )
 
 
 @pytest.mark.asyncio
@@ -192,15 +204,19 @@ async def test_webhook_queues_task_with_no_contact():
         side_effect=[mock_session, _make_cm_session()],
     ), _patch_projection(change="new"), patch(
         "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as mock_task:
+    ) as mock_task, patch(
+        "src.app.tasks.automation_workflow.resume_reactivation_booking"
+    ) as mock_reactivation:
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
         mock_task.delay = MagicMock()
+        mock_reactivation.delay = MagicMock()
         result = await nexhealth_appointment_webhook(request)
 
     assert result["status"] == "queued"
     kwargs = mock_task.delay.call_args.kwargs
     assert kwargs["contact_id"] is None
+    mock_reactivation.delay.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

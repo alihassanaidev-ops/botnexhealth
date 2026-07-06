@@ -532,6 +532,16 @@ class CancelAppointmentRequest(BaseModel):
     appt: CancelAppointmentBody
 
 
+class ConfirmAppointmentBody(BaseModel):
+    """Body for confirming an appointment."""
+    confirmed: bool = True
+
+
+class ConfirmAppointmentRequest(BaseModel):
+    """Request model for confirming an appointment."""
+    appt: ConfirmAppointmentBody
+
+
 # =============================================================================
 # Appointment Type Create/Update Models
 # =============================================================================

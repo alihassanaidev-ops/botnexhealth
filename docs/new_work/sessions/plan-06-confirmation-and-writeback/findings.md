@@ -11,7 +11,7 @@ All `file:line` below re-verified against the current tree (not taken from the s
 
 ### The template (the dead branch)
 `src/app/services/automation/campaign_templates.py:46-77` — `_APPOINTMENT_CONFIRMATION_48H`:
-- `send_sms` "sms-confirm" (body: "Reply YES to confirm or CANCEL to cancel. Reply STOP to opt out.")
+- `send_sms` "sms-confirm" (body now: "Reply YES to confirm. Reply STOP to opt out.")
   → `wait-response`
 - `wait` "wait-response" duration 7200s (2h) → `check-confirmed`
 - `condition` "check-confirmed" rule `{field: appointment_status, op: eq, value: confirmed}`;
@@ -19,8 +19,9 @@ All `file:line` below re-verified against the current tree (not taken from the s
 - **Nothing ever writes `appointment_status` into run context → condition always false → always
   `no_response`.** Confirmed. This is C-1.
 
-Reactivation template (`:96-138`) has the same class of dead branch on `appointment_booked`
-(`:118`). Out of scope (not a scoped launch campaign) — note only.
+Reactivation template (`:96-138`) had the same class of dead branch on `appointment_booked` (`:118`).
+It is now fixed event-led: accepted NexHealth appointment created/updated events enqueue
+`resume_reactivation_booking` for the resolved contact/location.
 
 ### How the condition reads context
 `step_dispatcher.py:355-369` `_evaluate_rule` → `context.get(rule.field)`. The `context` passed into
@@ -93,8 +94,14 @@ Celery task enqueued from the Retell webhook. Finds the parked step, checks `run
 **Which runs to match (template-agnostic, safe):** WAITING run for (contact, location) whose current
 node is a WaitNode AND its `next_node_id` is a ConditionNode with a rule `field == "appointment_status"`.
 This confirms ONLY confirmation-style runs — reactivation runs key `appointment_booked` and are NOT
-matched, so a "YES" during a reactivation wait cannot wrongly confirm. (Reactivation dead branch stays
-noted, not fixed.)
+matched, so a "YES" during a reactivation wait cannot wrongly confirm.
+
+**Reactivation booked mechanism:** accepted NexHealth appointment created/updated events already resolve
+`contact_id` and `location_id` in `nexhealth_webhooks.py`. When present, the webhook enqueues
+`resume_reactivation_booking`, which targets WAITING runs for the same contact/location whose current WaitNode
+flows into a ConditionNode reading `appointment_booked`. It writes `appointment_booked=true` and
+`booked_appointment_id`, cancels the 48h wait timer, and resumes to `exit-booked`. This uses the codebase's
+existing appointment-event signal instead of unverified PMS polling or ambiguous SMS free text.
 
 **C-2 seam:** in the resume task, after `resume_after_timer` returns with `outcome == "confirmed"`, call
 capability-gated `confirm_appointment(trigger_ref_id)`, fail-open + audited on error (never breaks the
@@ -108,11 +115,12 @@ revalidation + at-most-once).
 
 ## New findings / risks not previously tracked
 
-1. **Template/opt-out conflict (pre-existing):** the confirmation body says "Reply CANCEL to cancel" but
+1. **Template/opt-out conflict (pre-existing, fixed):** the confirmation body said "Reply CANCEL to cancel" but
    `CANCEL` ∈ `STOP_KEYWORDS` (`twilio_webhooks.py:45`) → a patient replying "CANCEL" is **opted out of
-   all SMS**, not routed to appointment cancellation. Appointment cancel-from-SMS is NOT in this slice
-   (C-5/write-back-cancel territory). Routing this to the user (fix wording vs. leave + note).
-2. Confirmation keyword set must not overlap STOP/START/HELP. Proposed `YES/Y/CONFIRM/C/1` — none
-   overlap. Routing exact set + localization to the user.
+   all SMS**, not routed to appointment cancellation. The template now removes "CANCEL to cancel"; real
+   cancel-from-SMS remains separate C-5/write-back-cancel territory.
+2. Confirmation keyword set must not overlap STOP/START/HELP. Implemented owner choice
+   `YES/Y/CONFIRM/C/1`; none overlap. Only bare single-token replies confirm, so mixed/ambiguous replies
+   remain ignored.
 3. `resume_after_timer` re-runs `advance()` which for a ConditionNode does NOT re-send (condition→exit,
    no send node on the confirm branch) → no double-contact risk on confirm.

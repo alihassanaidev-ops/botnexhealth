@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,9 +14,11 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowTimer,
     AutomationWorkflowVersion,
 )
+from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.tasks.automation_workflow import (
     _claim_and_enqueue_async,
     _dispatch_timer_async,
+    _waiting_step_targets_field,
     _retry_countdown,
 )
 
@@ -27,6 +28,50 @@ _VALID_DEFINITION = {
     "trigger": {"type": "manual"},
     "entry_node_id": "exit-1",
     "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
+}
+
+_WAIT_CONFIRM_DEFINITION = {
+    "trigger": {"type": "appointment_offset", "offset_hours": -48},
+    "entry_node_id": "wait-response",
+    "nodes": [
+        {
+            "type": "wait",
+            "id": "wait-response",
+            "delay": {"delay_type": "duration", "duration_seconds": 7200},
+            "next_node_id": "check-confirmed",
+        },
+        {
+            "type": "condition",
+            "id": "check-confirmed",
+            "rules": [{"field": "appointment_status", "op": "eq", "value": "confirmed"}],
+            "true_next_node_id": "exit-confirmed",
+            "false_next_node_id": "exit-no-response",
+        },
+        {"type": "exit", "id": "exit-confirmed", "outcome": "confirmed"},
+        {"type": "exit", "id": "exit-no-response", "outcome": "no_response"},
+    ],
+}
+
+_WAIT_BOOKED_DEFINITION = {
+    "trigger": {"type": "recall_scan", "recall_interval_months": 18},
+    "entry_node_id": "wait-48h",
+    "nodes": [
+        {
+            "type": "wait",
+            "id": "wait-48h",
+            "delay": {"delay_type": "duration", "duration_seconds": 172800},
+            "next_node_id": "check-booked",
+        },
+        {
+            "type": "condition",
+            "id": "check-booked",
+            "rules": [{"field": "appointment_booked", "op": "eq", "value": True}],
+            "true_next_node_id": "exit-booked",
+            "false_next_node_id": "exit-emailed",
+        },
+        {"type": "exit", "id": "exit-booked", "outcome": "booked"},
+        {"type": "exit", "id": "exit-emailed", "outcome": "email_sent"},
+    ],
 }
 
 
@@ -45,6 +90,16 @@ _VALID_DEFINITION = {
 ])
 def test_retry_countdown(retries, expected) -> None:
     assert _retry_countdown(retries) == expected
+
+
+def test_waiting_step_targets_context_field_is_field_specific() -> None:
+    confirm = WorkflowDefinition.model_validate(_WAIT_CONFIRM_DEFINITION)
+    booked = WorkflowDefinition.model_validate(_WAIT_BOOKED_DEFINITION)
+
+    assert _waiting_step_targets_field(confirm, "wait-response", "appointment_status")
+    assert not _waiting_step_targets_field(confirm, "wait-response", "appointment_booked")
+    assert _waiting_step_targets_field(booked, "wait-48h", "appointment_booked")
+    assert not _waiting_step_targets_field(booked, "wait-48h", "appointment_status")
 
 
 # ---------------------------------------------------------------------------

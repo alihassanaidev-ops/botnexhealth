@@ -68,6 +68,15 @@ def test_appointment_templates_use_appointment_offset_trigger() -> None:
         assert t.definition["trigger"]["type"] == "appointment_offset"
 
 
+def test_confirmation_template_does_not_advertise_cancel_keyword() -> None:
+    t = TEMPLATES["appointment-confirmation-48h"]
+    sms = next(node for node in t.definition["nodes"] if node["id"] == "sms-confirm")
+    body = sms["body_template"]
+    assert "Reply YES to confirm." in body
+    assert "CANCEL" not in body
+    assert "Reply STOP to opt out." in body
+
+
 def test_recall_templates_use_recall_scan_trigger() -> None:
     for tid in ("recall-sms-6month", "reactivation-sms-email-18month"):
         t = TEMPLATES[tid]

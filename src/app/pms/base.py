@@ -176,3 +176,11 @@ class SupportsAvailabilityLinking(ABC):
     @abstractmethod
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
         ...
+
+
+class SupportsAppointmentConfirmation(ABC):
+    """Optional: PMS supports marking an appointment confirmed."""
+
+    @abstractmethod
+    async def confirm_appointment(self, appointment_id: str) -> BookingResult:
+        ...

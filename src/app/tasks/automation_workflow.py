@@ -28,7 +28,7 @@ from src.app.services.automation.callback_trigger_service import (
     compute_callback_eta,
     make_callback_idempotency_key,
 )
-from src.app.services.automation.definition_schema import WorkflowDefinition
+from src.app.services.automation.definition_schema import ConditionNode, WaitNode, WorkflowDefinition
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.nexhealth_backfill_service import (
     AppointmentSyncSummary,
@@ -994,6 +994,343 @@ async def _resume_voice_outcome_async(
         institution_id, retell_call_id, call_outcome, result.status,
     )
     return {"resumed": True, "status": result.status, "call_outcome": call_outcome}
+
+
+# ---------------------------------------------------------------------------
+# Context-field resume — SMS confirmations + reactivation booking detection
+# ---------------------------------------------------------------------------
+
+
+def _waiting_step_targets_field(
+    definition: WorkflowDefinition, current_step_id: str | None, field: str
+) -> bool:
+    """True when the current WaitNode flows into a ConditionNode reading field."""
+    if not current_step_id:
+        return False
+    node_map = {node.id: node for node in definition.nodes}
+    current = node_map.get(current_step_id)
+    if not isinstance(current, WaitNode):
+        return False
+    next_node = node_map.get(current.next_node_id)
+    if not isinstance(next_node, ConditionNode):
+        return False
+    return any(rule.field == field for rule in next_node.rules)
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.resume_sms_confirmation",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def resume_sms_confirmation(
+    self,
+    *,
+    institution_id: str,
+    location_id: str,
+    from_number: str,
+    body: str,
+    message_sid: str | None = None,
+) -> dict:
+    """Resume a WAITING confirmation run from a patient's inbound SMS reply."""
+    _ensure_db()
+    try:
+        return asyncio.run(
+            _resume_sms_confirmation_async(
+                institution_id=institution_id,
+                location_id=location_id,
+                from_number=from_number,
+                body=body,
+                message_sid=message_sid,
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "resume_sms_confirmation failed: institution=%s location=%s: %s",
+            institution_id, location_id, exc,
+        )
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _resume_sms_confirmation_async(
+    *,
+    institution_id: str,
+    location_id: str,
+    from_number: str,
+    body: str,
+    message_sid: str | None = None,
+) -> dict:
+    from sqlalchemy import select
+
+    from src.app.models.contact import Contact
+
+    phone_hash = Contact.find_by_phone_hash(from_number)
+    if not phone_hash:
+        return {"resumed": 0, "reason": "phone_hash_unavailable"}
+
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        location_id=location_id,
+        external_id=f"sms_confirmation:{message_sid or phone_hash}",
+    ) as session:
+        contacts = (
+            await session.execute(
+                select(Contact.id).where(
+                    Contact.institution_id == institution_id,
+                    Contact.phone_hash == phone_hash,
+                )
+            )
+        ).scalars().all()
+        if not contacts:
+            return {"resumed": 0, "reason": "contact_not_found"}
+
+        result = await _resume_waiting_runs_for_context_field(
+            session=session,
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_ids=[str(contact_id) for contact_id in contacts],
+            context_field="appointment_status",
+            context_value="confirmed",
+            metadata_updates={
+                "appointment_status": "confirmed",
+                "sms_confirmation_reply": body.strip(),
+                "sms_confirmation_message_sid": message_sid,
+            },
+        )
+
+        confirmed = result.get("outcomes", {}).get("confirmed", 0)
+        if confirmed:
+            await _confirm_appointments_for_runs(
+                session,
+                institution_id=institution_id,
+                location_id=location_id,
+                runs=result["outcome_runs"].get("confirmed", []),
+            )
+        await session.commit()
+        return {
+            "resumed": result["resumed"],
+            "matched": result["matched"],
+            "outcomes": result["outcomes"],
+        }
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.resume_reactivation_booking",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def resume_reactivation_booking(
+    self,
+    *,
+    institution_id: str,
+    location_id: str,
+    contact_id: str,
+    appointment_id: str,
+) -> dict:
+    """Resume WAITING reactivation runs when NexHealth reports a new booking."""
+    _ensure_db()
+    try:
+        return asyncio.run(
+            _resume_reactivation_booking_async(
+                institution_id=institution_id,
+                location_id=location_id,
+                contact_id=contact_id,
+                appointment_id=appointment_id,
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "resume_reactivation_booking failed: institution=%s location=%s contact=%s: %s",
+            institution_id, location_id, contact_id, exc,
+        )
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _resume_reactivation_booking_async(
+    *,
+    institution_id: str,
+    location_id: str,
+    contact_id: str,
+    appointment_id: str,
+) -> dict:
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        location_id=location_id,
+        external_id=f"reactivation_booking:{appointment_id}",
+    ) as session:
+        result = await _resume_waiting_runs_for_context_field(
+            session=session,
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_ids=[contact_id],
+            context_field="appointment_booked",
+            context_value=True,
+            metadata_updates={
+                "appointment_booked": True,
+                "booked_appointment_id": appointment_id,
+            },
+        )
+        await session.commit()
+        return {
+            "resumed": result["resumed"],
+            "matched": result["matched"],
+            "outcomes": result["outcomes"],
+        }
+
+
+async def _resume_waiting_runs_for_context_field(
+    *,
+    session,
+    institution_id: str,
+    location_id: str,
+    contact_ids: list[str],
+    context_field: str,
+    context_value,
+    metadata_updates: dict,
+) -> dict:
+    from sqlalchemy import select
+
+    if not contact_ids:
+        return {"matched": 0, "resumed": 0, "outcomes": {}, "outcome_runs": {}}
+
+    rows = (
+        await session.execute(
+            select(AutomationWorkflowRun).where(
+                AutomationWorkflowRun.institution_id == institution_id,
+                AutomationWorkflowRun.location_id == location_id,
+                AutomationWorkflowRun.contact_id.in_(contact_ids),
+                AutomationWorkflowRun.status == AutomationRunStatus.WAITING.value,
+            )
+        )
+    ).scalars().all()
+
+    scheduler = AutomationWorkflowSchedulerService(session)
+    matched = 0
+    resumed = 0
+    outcomes: dict[str, int] = {}
+    outcome_runs: dict[str, list[AutomationWorkflowRun]] = {}
+
+    for run in rows:
+        version = await session.get(AutomationWorkflowVersion, run.workflow_version_id)
+        if version is None:
+            continue
+        definition = WorkflowDefinition.model_validate(version.definition)
+        if not _waiting_step_targets_field(definition, run.current_step_id, context_field):
+            continue
+
+        matched += 1
+        await scheduler.cancel_timers_for_run(run.id)
+        md = dict(run.trigger_metadata or {})
+        md.update({k: v for k, v in metadata_updates.items() if v is not None})
+        md[context_field] = context_value
+        run.trigger_metadata = md
+        await session.flush()
+
+        dispatcher, location_timezone = await build_dispatcher(
+            session,
+            location_id=run.location_id,
+            revalidator=PmsLiveRevalidationService(session),
+        )
+        result = await dispatcher.resume_after_timer(
+            run, definition, context=md, location_timezone=location_timezone
+        )
+        if result.status == "completed":
+            resumed += 1
+            if result.outcome:
+                outcomes[result.outcome] = outcomes.get(result.outcome, 0) + 1
+                outcome_runs.setdefault(result.outcome, []).append(run)
+
+    return {
+        "matched": matched,
+        "resumed": resumed,
+        "outcomes": outcomes,
+        "outcome_runs": outcome_runs,
+    }
+
+
+async def _confirm_appointments_for_runs(
+    session,
+    *,
+    institution_id: str,
+    location_id: str,
+    runs: list[AutomationWorkflowRun],
+) -> None:
+    from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+    from src.app.models.institution import Institution
+    from src.app.models.institution_location import InstitutionLocation
+    from src.app.pms.base import SupportsAppointmentConfirmation
+    from src.app.pms.nexhealth.adapter import NexHealthAdapter
+    from src.app.services.audit import log_audit
+    from src.app.services.sms_privacy import safe_error_summary
+
+    institution = await session.get(Institution, institution_id)
+    location = await session.get(InstitutionLocation, location_id)
+    if institution is None or location is None:
+        return
+
+    adapter = None
+    try:
+        adapter = await NexHealthAdapter.create(institution, location)
+        if not isinstance(adapter, SupportsAppointmentConfirmation):
+            for run in runs:
+                await log_audit(
+                    actor=AuditActor.SYSTEM,
+                    action=AuditAction.CONFIRM_APPOINTMENT,
+                    target_resource=f"appointment:{run.trigger_ref_id or 'unknown'}",
+                    outcome=AuditOutcome.FAILURE_VALIDATION,
+                    metadata={
+                        "source": "automation_sms_confirmation",
+                        "reason": "unsupported_pms_capability",
+                        "workflow_run_id": str(run.id),
+                    },
+                    institution_id=institution_id,
+                    location_id=location_id,
+                )
+            return
+
+        for run in runs:
+            if run.trigger_ref_type != "appointment" or not run.trigger_ref_id:
+                continue
+            result = await adapter.confirm_appointment(str(run.trigger_ref_id))
+            await log_audit(
+                actor=AuditActor.SYSTEM,
+                action=AuditAction.CONFIRM_APPOINTMENT,
+                target_resource=f"appointment:{run.trigger_ref_id}",
+                outcome=(
+                    AuditOutcome.SUCCESS
+                    if result.success
+                    else AuditOutcome.FAILURE_EXTERNAL_API
+                ),
+                metadata={
+                    "source": "automation_sms_confirmation",
+                    "workflow_run_id": str(run.id),
+                    "pms_status": result.status,
+                    "error": safe_error_summary(result.error) if result.error else None,
+                },
+                institution_id=institution_id,
+                location_id=location_id,
+            )
+    except Exception as exc:  # noqa: BLE001 - write-back must fail open.
+        for run in runs:
+            await log_audit(
+                actor=AuditActor.SYSTEM,
+                action=AuditAction.CONFIRM_APPOINTMENT,
+                target_resource=f"appointment:{run.trigger_ref_id or 'unknown'}",
+                outcome=AuditOutcome.FAILURE_EXTERNAL_API,
+                metadata={
+                    "source": "automation_sms_confirmation",
+                    "workflow_run_id": str(run.id),
+                    "error": safe_error_summary(exc),
+                },
+                institution_id=institution_id,
+                location_id=location_id,
+            )
+    finally:
+        if adapter is not None:
+            await adapter.close()
 
 
 # ---------------------------------------------------------------------------

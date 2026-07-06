@@ -110,8 +110,8 @@ async def test_list_appointments_paginates_date_window(monkeypatch: pytest.Monke
     async def fake_request(client, method, path, params=None, json=None):
         calls.append(params or {})
         if params["page"] == 1:
-            return {"count": 2, "data": [{"id": 1}]}
-        return {"count": 2, "data": [{"id": 2}]}
+            return {"count": 51, "data": [{"id": i} for i in range(1, 51)]}
+        return {"count": 51, "data": [{"id": 51}]}
 
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
 
@@ -120,7 +120,7 @@ async def test_list_appointments_paginates_date_window(monkeypatch: pytest.Monke
         end_date="2026-08-31",
     )
 
-    assert [row["id"] for row in result] == [1, 2]
+    assert [row["id"] for row in result] == list(range(1, 52))
     assert calls[0]["subdomain"] == "test-subdomain"
     assert calls[0]["location_id"] == "test-location"
     assert calls[0]["start_date"] == "2026-08-01"
@@ -299,6 +299,29 @@ async def test_reschedule_returns_warning_when_cancel_fails_after_new_booked(mon
     assert result.success is True  # the booking did happen
     assert "failed to cancel old appointment" in (result.message or "").lower()
     assert "please cancel manually" in (result.message or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_confirm_appointment_patches_confirmed_true(monkeypatch: pytest.MonkeyPatch):
+    captured: dict = {}
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        captured["method"] = method
+        captured["path"] = path
+        captured["params"] = params
+        captured["json"] = json
+        return {"data": {"id": 1}}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    adapter = _make_adapter()
+    result = await adapter.confirm_appointment("nh-appt-123")
+
+    assert result.success is True
+    assert result.status == "confirmed"
+    assert captured["method"] == "PATCH"
+    assert captured["path"] == "/appointments/appt-123"
+    assert captured["json"] == {"appt": {"confirmed": True}}
 
 
 # ---------------------------------------------------------------------------

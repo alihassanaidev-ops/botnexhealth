@@ -47,11 +47,16 @@ STOP_KEYWORDS = {
 START_KEYWORDS = {"START", "UNSTOP"}
 HELP_KEYWORDS = {"HELP", "INFO", "AIDE"}
 
+# Confirmation replies are intentionally narrow because they write back to the PMS.
+# STOP/START/HELP are classified first, so opt-out safety always wins.
+CONFIRMATION_KEYWORDS = {"YES", "Y", "CONFIRM", "C", "1"}
+
 # Tokenize on any non-letter run. Catches phrasings like "please stop calling"
 # and "STOP!" without false-positives on partial words inside other tokens.
 # Unicode letter class (not just A-Z) so accented French keywords like ARRÊT
 # and DÉSABONNER survive tokenization instead of splitting around the accent.
 _TOKEN_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+_CONFIRMATION_TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 
 
 def _classify_intent(body: str) -> str:
@@ -69,6 +74,16 @@ def _classify_intent(body: str) -> str:
     if tokens & HELP_KEYWORDS:
         return "HELP"
     return ""
+
+
+def _classify_confirmation_reply(body: str) -> bool:
+    """Return True for a bare confirmation token.
+
+    Mixed replies such as "yes but reschedule" are deliberately not confirmed;
+    a false PMS confirmation is more expensive than a missed confirmation.
+    """
+    tokens = _CONFIRMATION_TOKEN_RE.findall(body.upper())
+    return len(tokens) == 1 and tokens[0] in CONFIRMATION_KEYWORDS
 
 
 @router.post("/inbound-sms")
@@ -137,6 +152,19 @@ async def inbound_sms(request: Request) -> Response:
         if intent == "HELP":
             await session.commit()
             return _twiml(_help_text(location))
+
+        if from_number and _classify_confirmation_reply(body):
+            from src.app.tasks.automation_workflow import resume_sms_confirmation
+
+            resume_sms_confirmation.delay(
+                institution_id=str(location.institution_id),
+                location_id=str(location.id),
+                from_number=from_number,
+                body=body,
+                message_sid=_field(form, "MessageSid"),
+            )
+            await session.commit()
+            return _twiml("Thanks, we received your confirmation reply.")
 
         logger.info(
             "Inbound SMS ignored: from_hash=%s to_hash=%s location_hash=%s keyword=%s",

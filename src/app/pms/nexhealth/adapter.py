@@ -12,7 +12,12 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from src.app.api.helpers import fetch_all_pages, handle_nexhealth_request
-from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
+from src.app.pms.base import (
+    PMSAdapter,
+    SupportsAppointmentConfirmation,
+    SupportsAppointmentTypeCreation,
+    SupportsAvailabilityLinking,
+)
 from src.app.pms.models import (
     BookingRequest,
     BookingResult,
@@ -100,7 +105,12 @@ def _normalize_phone_for_nexhealth(phone: str | None) -> str | None:
     return digits[:10]
 
 
-class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking):
+class NexHealthAdapter(
+    PMSAdapter,
+    SupportsAppointmentConfirmation,
+    SupportsAppointmentTypeCreation,
+    SupportsAvailabilityLinking,
+):
     source = "nexhealth"
 
     def __init__(
@@ -483,6 +493,36 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             if raw.get("code") is False:
                 return BookingResult(success=False, source="nexhealth", status="error", error=raw.get("error", "Failed"))
             return BookingResult(success=True, source="nexhealth", status="cancelled", message="Appointment cancelled successfully.")
+        except Exception as e:
+            return BookingResult(success=False, source="nexhealth", status="error", error=str(e))
+
+    async def confirm_appointment(self, appointment_id: str) -> BookingResult:
+        from src.app.api.models import ConfirmAppointmentBody, ConfirmAppointmentRequest
+
+        body = ConfirmAppointmentRequest(appt=ConfirmAppointmentBody(confirmed=True))
+        params = self._default_params()
+
+        try:
+            raw = await handle_nexhealth_request(
+                self._client,
+                "PATCH",
+                f"/appointments/{_strip(appointment_id)}",
+                params=params,
+                json=body.model_dump(),
+            )
+            if raw.get("code") is False:
+                return BookingResult(
+                    success=False,
+                    source="nexhealth",
+                    status="error",
+                    error=raw.get("error", "Failed"),
+                )
+            return BookingResult(
+                success=True,
+                source="nexhealth",
+                status="confirmed",
+                message="Appointment confirmed successfully.",
+            )
         except Exception as e:
             return BookingResult(success=False, source="nexhealth", status="error", error=str(e))
 

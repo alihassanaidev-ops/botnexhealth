@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.app.api.routes.twilio_webhooks import _classify_intent, _verified_form
+from src.app.api.routes.twilio_webhooks import (
+    _classify_confirmation_reply,
+    _classify_intent,
+    _verified_form,
+)
 
 
 @pytest.mark.parametrize(
@@ -46,6 +50,19 @@ from src.app.api.routes.twilio_webhooks import _classify_intent, _verified_form
 )
 def test_classify_intent_finds_keywords_anywhere(body: str, expected: str) -> None:
     assert _classify_intent(body) == expected
+
+
+@pytest.mark.parametrize("body", ["YES", "yes", "Y", "confirm", "C", "1", "1."])
+def test_classify_confirmation_reply_accepts_bare_confirm_tokens(body: str) -> None:
+    assert _classify_confirmation_reply(body) is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["", "yes but reschedule", "confirm and cancel", "oui", "cancel", "STOP", "11"],
+)
+def test_classify_confirmation_reply_rejects_ambiguous_or_non_confirm_tokens(body: str) -> None:
+    assert _classify_confirmation_reply(body) is False
 
 
 # ---------------------------------------------------------------------------
