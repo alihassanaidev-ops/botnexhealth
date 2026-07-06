@@ -17,6 +17,9 @@ from src.app.models.appointment_working_set import (  # noqa: F401 — model reg
     AppointmentWorkingSet,
 )
 from src.app.models.call import Call, CallDirection, CallStatus, PatientStatus
+from src.app.models.inbound_sms_message import (  # noqa: F401 — model registration
+    InboundSmsMessage,
+)
 from src.app.models.nexhealth_webhook_event import (  # noqa: F401 — model registration
     NexHealthWebhookEvent,
     NexHealthWebhookStatus,
@@ -149,6 +152,7 @@ __all__ = [
     "DeadLetterStatus",
     "OutboundEmergencyHalt",
     "AppointmentWorkingSet",
+    "InboundSmsMessage",
     "NexHealthWebhookEvent",
     "NexHealthWebhookStatus",
     "NexHealthWebhookSubscription",

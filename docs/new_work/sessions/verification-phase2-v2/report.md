@@ -70,7 +70,7 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 01 | Workflow Engine | ✅ Complete | **100%** | unchanged |
 | 02 | Visual Builder UI | ✅ Complete | **100%** | unchanged |
 | 03 | Outbound Voice | 🟢 Outcome loop + data model + crash/timeout-safe + API | **~89%** | ↑↑ from ~35% |
-| 04 | Outbound SMS | 🟢 Substantial (now idempotent) | **~78%** | ↑ from ~70% |
+| 04 | Outbound SMS | 🟢 Substantial (idempotent + inbound routing) | **~82%** | ↑ from ~78% (S-2 inbound routing) |
 | 05 | Outbound Email | 🟠 Gated/idempotent/metered plain-text | **~38%** | ↑ from ~30–35% |
 | 06 | Four Live Campaigns | 🟢 Confirmation/reaction write-back slice implemented; Sales Qualification still absent | **~62–65%** | ↑ from ~50–55% |
 | 07 | AI Callback Handling | 🟢 End-to-end; inherits voice outcome loop | **~63%** | ↑ from ~60% |
@@ -150,14 +150,19 @@ immediately behind a generic confirm; last-write-wins (no ETag/optimistic concur
 - AI-call disclosure injected (`compliance_disclosure` dynamic var); compliance-gated before dispatch.
 **Missing / remaining:**
 - **V-8 React UI** — the profile editor + attempt drill-down front-end (API-first; the backend contract is frozen).
-- **Spoken opt-out → voice suppression (V-2) — BLOCKED (A-8):** routing a patient's spoken "stop" into a VOICE
-  suppression needs the Retell post-call DNC-intent field shape (unconfirmed; needs a sample `call_analyzed` payload).
+- **Spoken opt-out → voice suppression (V-2) — WRITE+WIRING BUILT; detection config-gated (A-8 still open)**
+  `voice_optout_service` writes a **location-scoped `DoNotContact`** (suppresses
+  all channels for the location) on a detected spoken opt-out, wired into the Retell post-call webhook. Per the
+  do-not-guess rule, **detection is OFF until `retell_optout_analysis_key` is set** — the CTO drops in the real
+  Retell DNC-intent field once a sample opt-out `call_analyzed` payload confirms it. So the compliance write is
+  ready; only the (config-supplied) trigger field remains.
 - **Voice cost** — minutes/dials are metered but no Retell price is applied (voice cost reads $0 — Plan 11 residual).
 - **Per-clinic Retell workspace isolation / BYO-SIP (V-9)** — non-cap scale item; single global `retell_api_secret`
   today (infra/Plan 10 overlap).
 **Deliberately excluded (product owner):** per-location outbound concurrency caps.
 **Verdict:** a compliance-inheriting, outcome-reactive, crash- and timeout-safe voice channel with its own data
-model and API; only the front-end, the blocked spoken-opt-out wiring, and voice cost pricing remain.
+model and API; the spoken-opt-out write+wiring now exists (detection config-gated on the A-8 field), leaving the
+front-end, the A-8 detection field, and voice cost pricing.
 
 ### Plan 04 — Outbound SMS — 🟢 ~78%
 **Built:** `SmsNodeExecutor` (fail-safe) via the action registry; single gated `build_dispatcher` path; compliance
@@ -166,13 +171,17 @@ STOP/START/HELP inbound (location-scoped suppression + audit); delivery-status w
 dead-letter of unknown SIDs; **SMS usage metering** on terminal status (idempotent per MessageSid, segments +
 price); **send-time idempotency** — `runtime.already_sent` guards the executor (`sms_node_executor.py:42-48`), so a
 redelivery / re-advance / quiet-hours hold→resume no longer re-texts.
+**Inbound free-text routing (S-2) — NOW BUILT:** `inbound_sms_messages`
+(encrypted body, hashed/masked phones, intent, best-effort `workflow_run_id`; migration `20260709_inbound_sms`)
++ `InboundSmsRoutingService` persist **every** inbound reply and correlate contact + open run **only when
+exactly one matches**; the Twilio webhook's former drop point now surfaces free text to staff via an in-app+SSE
+notification (`NotificationType.INBOUND_SMS_REPLY`) — v1 = staff-notify, no NLU. STOP/START/HELP/confirm flow
+unchanged.
 **Missing / ⚠️ Partial:** `workflow_sms_attempts` table (idempotency rides the generic step-execution table, not a
 dedicated attempts table — the residual crash-window is XC-1b for SMS); `sms_history_logs` workflow-linkage columns
-(`sms_history_log.py:104-146` has no run/step/campaign/segments/price — those live on `usage_events` now);
-`inbound_sms_messages` + `InboundSmsRoutingService` (**free-text replies still ignored** — logged, empty TwiML
-`twilio_webhooks.py:141-149`).
-**Verdict:** production-grade compliant SMS send path — gated, metered, and now send-time idempotent; free-text
-inbound routing and dedicated attempt/linkage tables are the gaps.
+(no run/step/campaign/segments/price — those live on `usage_events` now).
+**Verdict:** production-grade compliant SMS send path — gated, metered, send-time idempotent, and now with
+persisted + staff-routed inbound replies; the dedicated attempt/linkage tables remain the gap.
 
 ### Plan 05 — Outbound Email — 🟠 ~38%
 **Built:** `EmailNodeExecutor` sends plain-text Resend email, gated; from-address institution override + platform
@@ -369,7 +378,7 @@ remaining real gap is consent *capture* for email and general voice.
 ## 6. Overall progress summary
 
 - **Complete (100%):** Plan 01, Plan 02.
-- **Substantial (60–90%):** Plan 03 (~89%), Plan 09 (~80%), Plan 04 (~78%), Plan 12 (~72%), Plan 11 (~65%), Plan 07 (~63%).
+- **Substantial (60–90%):** Plan 03 (~89%), Plan 09 (~80%), Plan 04 (~82%), Plan 12 (~72%), Plan 11 (~65%), Plan 07 (~63%).
 - **Partial (40–55%):** Plan 06 (~50–55%).
 - **Minimal (22–38%):** Plan 05 (~38%), Plan 10 (~25%), Plan 08 (~22%).
 - **Not started (0%):** none.
@@ -380,7 +389,7 @@ differentiators (PMS write-back, live confirm-branch, Sales Qualification, DB-ba
 provisioning automation + persisted readiness state; **Plan 09 NexHealth staging verification** (prove the
 subscription/backfill/reconciliation jobs against a live tenant) + `recall_eligibility_working_set`; Plan 11
 residuals (budgets, cost estimation, voice/email/SMS-late cost fidelity, DSO/group endpoint); Plan 03 front-end +
-spoken-opt-out (A-8).
+the spoken-opt-out **A-8 detection field** (V-2 write+wiring already built, config-gated).
 
 **Production readiness:** engine + builder are production-grade and verified; compliance is enforced (and consent
 basis hard-blocked) on every dispatch; voice is now outcome-reactive and crash/timeout-safe. For a **safe
@@ -408,7 +417,9 @@ The full, prioritized, de-duplicated remaining-work list lives in **one place** 
 4. **Plan 08 analytics UI** — consume the new `/institution/usage` API; CSV import; ops/replay; SSE.
 5. **Plan 06 differentiators** (C-*) — write the confirm-status into run context (revive the dead branch), PMS
    write-back, Sales Qualification, DB-backed templates.
-6. **Plan 03 front-end (V-8 UI)** + **spoken-opt-out (V-2, blocked A-8)**; **SMS crash-window claim (XC-1b SMS)**.
+6. **Plan 03 front-end (V-8 UI)** + **spoken-opt-out A-8 detection field** (V-2 write+wiring built + config-gated;
+   CTO supplies the Retell field name); **SMS crash-window claim (XC-1b SMS)**. Note: S-2 free-text inbound routing
+   is now DONE.
 
 *(Caps — frequency/spend/blast-radius/concurrency — are intentionally excluded per the product-owner decision;
 Plan 11 delivers usage *visibility*, not budgets/caps.)*

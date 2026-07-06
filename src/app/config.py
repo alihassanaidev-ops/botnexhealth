@@ -78,6 +78,11 @@ class Settings(BaseSettings):
 
     # Retell AI settings
     retell_api_secret: str | None = None
+    # V-2 spoken opt-out: the key in a call's post-call `custom_analysis_data` that
+    # signals the patient asked to stop being contacted. UNSET by default (do-not-guess):
+    # detection stays off until the real Retell analysis field name is confirmed and
+    # configured. When set, a truthy value at this key writes a location-scoped DNC.
+    retell_optout_analysis_key: str | None = None
 
     # Resend (transactional email)
     resend_api_key: str | None = None

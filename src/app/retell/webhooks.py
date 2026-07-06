@@ -664,6 +664,36 @@ async def process_retell_call_analyzed_event(
                     mapped_call_data.direction,
                 )
 
+            # ── Spoken opt-out → location DNC (V-2) ────────────────────────
+            # Detection is config-gated (do-not-guess): off until the real Retell
+            # opt-out analysis field name is set in `retell_optout_analysis_key`.
+            # When it fires, suppress ALL channels for the location (owner decision).
+            try:
+                from src.app.services.automation.voice_optout_service import (
+                    detect_voice_optout,
+                    suppress_voice_optout,
+                )
+
+                if location and detect_voice_optout(_custom_analysis):
+                    await suppress_voice_optout(
+                        institution_id=institution.id,
+                        location_id=str(location.id),
+                        contact_id=saved_call.contact_id,
+                        phone=_patient_phone,
+                        call_id=event.call.call_id,
+                    )
+                    logger.info(
+                        "Spoken opt-out suppressed: call_hash=%s location_hash=%s",
+                        hash_for_logging(event.call.call_id),
+                        location_id_hash or "none",
+                    )
+            except Exception as optout_err:
+                logger.error(
+                    "Failed to process spoken opt-out: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(optout_err),
+                )
+
         await _finish_webhook_processing(
             processing_call_id,
             processing_event_type,

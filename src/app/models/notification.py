@@ -28,6 +28,9 @@ class NotificationType(str, Enum):
     CALLBACK_RESOLVED = "callback_resolved"
     APPOINTMENT_BOOKED = "appointment_booked"
     URGENT = "urgent"
+    # A patient replied with free text to a campaign SMS (S-2, v1: notify staff,
+    # no autonomous NLU). Staff continue the conversation manually.
+    INBOUND_SMS_REPLY = "inbound_sms_reply"
 
 
 class Notification(Base):

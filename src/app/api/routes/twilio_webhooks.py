@@ -20,7 +20,12 @@ from src.app.services.audit import log_audit
 from src.app.services.dead_letter import capture_dead_letter
 from src.app.services.sms_compliance import SmsComplianceService
 from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
-from src.app.services.sms_privacy import hash_for_logging, redact_payload
+from src.app.models.notification import NotificationType
+from src.app.services.sms_privacy import (
+    hash_for_logging,
+    redact_payload,
+    safe_error_summary,
+)
 from src.app.services.sms_service import SmsService
 from src.app.services.usage_metering_service import (
     parse_cost_amount,
@@ -116,6 +121,35 @@ async def inbound_sms(request: Request) -> Response:
         external_id=to_number,
     ) as session:
         compliance = SmsComplianceService(session)
+
+        # Persist every inbound reply (S-2). One intent-classified row per inbound,
+        # best-effort correlated to a contact + open run; committed by whichever
+        # branch runs below. Does not alter the opt-out/confirm control flow.
+        if intent == "STOP":
+            _inbound_intent = "stop"
+        elif intent == "START":
+            _inbound_intent = "start"
+        elif intent == "HELP":
+            _inbound_intent = "help"
+        elif from_number and _classify_confirmation_reply(body):
+            _inbound_intent = "confirm"
+        else:
+            _inbound_intent = "free_text"
+
+        from src.app.services.automation.inbound_sms_routing_service import (
+            InboundSmsRoutingService,
+        )
+
+        _inbound_msg = await InboundSmsRoutingService(session).record_inbound(
+            institution_id=str(location.institution_id),
+            location_id=str(location.id),
+            from_number=from_number,
+            to_number=to_number,
+            body=body,
+            intent=_inbound_intent,
+            message_sid=_field(form, "MessageSid"),
+        )
+
         if intent == "STOP":
             await compliance.suppress(
                 institution_id=location.institution_id,
@@ -166,12 +200,40 @@ async def inbound_sms(request: Request) -> Response:
             await session.commit()
             return _twiml("Thanks, we received your confirmation reply.")
 
+        # Free text (v1: no NLU) — surface to staff so they can continue manually.
+        # The reply is already persisted above; here we alert staff via the existing
+        # in-app + SSE notification path (Celery, so the webhook stays fast).
+        try:
+            from src.app.tasks.in_app_notifications import enqueue_in_app_notifications
+
+            enqueue_in_app_notifications(
+                call_id="",
+                institution_id=str(location.institution_id),
+                location_id=str(location.id),
+                call_status=None,
+                call_tags_csv=None,
+                title="New patient SMS reply",
+                message=f"A patient replied by SMS at {location.name}. Open to respond.",
+                notification_type=NotificationType.INBOUND_SMS_REPLY.value,
+                data={
+                    "inbound_sms_message_id": str(_inbound_msg.id),
+                    "contact_id": _inbound_msg.contact_id,
+                    "workflow_run_id": _inbound_msg.workflow_run_id,
+                },
+            )
+        except Exception as notif_err:  # noqa: BLE001 — never fail the webhook on notify
+            logger.error(
+                "Failed to enqueue inbound-SMS staff notification: location_hash=%s error=%s",
+                hash_for_logging(str(location.id)),
+                safe_error_summary(notif_err),
+            )
+
         logger.info(
-            "Inbound SMS ignored: from_hash=%s to_hash=%s location_hash=%s keyword=%s",
+            "Inbound SMS free-text: from_hash=%s to_hash=%s location_hash=%s persisted=%s",
             hash_for_logging(from_number),
             hash_for_logging(to_number),
             hash_for_logging(str(location.id)),
-            keyword or "none",
+            _inbound_msg.id,
         )
         await session.commit()
         return _twiml("")
