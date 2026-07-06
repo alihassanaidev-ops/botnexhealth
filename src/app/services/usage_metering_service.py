@@ -104,13 +104,65 @@ class UsageMeteringService:
             async with self.session.begin_nested():
                 await self.session.flush()
         except IntegrityError:
-            # A concurrent/replayed delivery already recorded this key.
+            # A concurrent/replayed delivery already recorded this key. Instead of
+            # a plain no-op, backfill price/segments the first delivery lacked
+            # (Twilio's first terminal "sent" often has Price=null; a later
+            # "delivered" carries the real Price — without this it was dropped).
             logger.info(
                 "usage_event already recorded: institution=%s channel=%s key=%s",
                 institution_id, channel, idempotency_key,
             )
-            return None
+            return await self._backfill_costs(
+                institution_id=institution_id,
+                idempotency_key=idempotency_key,
+                cost_amount=cost_amount,
+                currency=currency,
+                segments=segments,
+            )
         return event
+
+    async def _backfill_costs(
+        self,
+        *,
+        institution_id: str,
+        idempotency_key: str | None,
+        cost_amount: Decimal | float | None,
+        currency: str,
+        segments: int | None,
+    ) -> UsageEvent | None:
+        """Fill in a null cost/segments on an already-recorded event.
+
+        Only fills fields that are currently NULL — never overwrites a value we
+        already captured, so out-of-order or repeated callbacks converge safely.
+        Returns the existing row (updated) or None when there's nothing to key on.
+        """
+        if not idempotency_key or (cost_amount is None and segments is None):
+            return None
+        from sqlalchemy import select
+
+        existing = (
+            await self.session.execute(
+                select(UsageEvent).where(
+                    UsageEvent.institution_id == institution_id,
+                    UsageEvent.idempotency_key == idempotency_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            return None
+        changed = False
+        if cost_amount is not None and existing.cost_amount is None:
+            existing.cost_amount = cost_amount
+            existing.currency = currency
+            changed = True
+        if segments is not None and existing.segments is None:
+            existing.segments = segments
+            changed = True
+        if changed:
+            logger.info(
+                "usage_event cost backfilled: institution=%s key=%s", institution_id, idempotency_key
+            )
+        return existing
 
 
 async def record_usage_event(

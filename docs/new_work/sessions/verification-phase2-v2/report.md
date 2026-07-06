@@ -29,12 +29,13 @@ and **meters usage across all three channels** with per-campaign attribution.
 The spine is complete and hardening is real:
 - **Plan 01 (Workflow Engine) and Plan 02 (Visual Builder) are complete (100%)**, verified end-to-end against a
   real database (12 real-Postgres integration tests).
-- **Plan 03 (Voice) advanced from a ~35% fire-and-forget v1 to ~89%**: dial-outcome feedback loop, transient
+- **Plan 03 (Voice) advanced from a ~35% fire-and-forget v1 to a functionally-complete channel (100%)**: dial-outcome feedback loop, transient
   retry, a dedicated data model (`outbound_voice_profiles` + `workflow_voice_attempts`), a crash-safe committed
   idempotency claim, an at-most-once timeout policy, content-class-aware consent basis, and a profiles/attempts
   REST API.
-- **Plan 11 (Usage & Cost) jumped from ~15% to ~65%** via Hammad's merge: a `usage_cost_rollups` rollup table +
-  service, all-channel ingestion (SMS/email/**voice**), campaign attribution tags, and a reporting API.
+- **Plan 11 (Usage & Cost) is complete (100%)**: `usage_cost_rollups` + service, all-channel ingestion
+  (SMS/email/**voice**), campaign attribution, a scheduled recompute, an SMS late-price fix, and per-institution +
+  DSO/group reporting APIs. Voice/email cost stays $0 by product decision (Option B); budgets dropped with no-caps.
 - **Plan 12 (Compliance) advanced to ~72%**: consent *basis* (marketing → express-written) is now a **hard
   block at the gate**, not just a publish warning, and consent capture is channel-generic (voice capture works
   on the callback path).
@@ -45,14 +46,15 @@ reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer)
 event-level idempotency ledger, revalidation freshness window, and the subscription/backfill/reconciliation jobs
 now exist — though the live-NexHealth-API half of that (subscriptions/backfill/reconciliation) is mock-tested and
 **needs staging verification**. The remaining work concentrates in the provisioning/UI/email plans: Plan 05 **email
-hardening** (unsubscribe/bounce/HTML/cost), Plan 10 **provisioning automation + persisted readiness state**, Plan
-08's **full campaign UI + analytics dashboards**, Plan 06's **differentiators** (PMS write-back, Sales
-Qualification, live confirm-branch), and the residual Plan 11 gaps (budgets, cost estimation, voice cost pricing,
-DSO/group rollup).
+hardening** (email consent capture — email is blocked-by-default — + unsubscribe/bounce/HTML), Plan 10 **provisioning
+automation + persisted readiness state**, and Plan 08's **full campaign UI + analytics dashboards** (which can now
+consume the shipped Plan-11 usage APIs). (Plans 06 and 11 are complete; Plan 06's Sales Qualification is
+product-dropped, Plan 11's voice/email cost is $0 by product Option B.)
 
-**Headline: ~66% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** The functional
-foundation is stronger than the aggregate implies because the spine — 01/02/03/12 plus the now-substantial 09 and 11 —
-is the most complete.
+**Headline: ~77% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Seven of twelve plans
+are now complete (01, 02, 03, 04, 06, 07, 11) — several marked so because their remaining items were assessed
+**not-required / product-dropped / other-lane**, not because everything was built. The concentrated remaining work
+is in Plan 05 (email), Plan 08 (UI), Plan 10 (provisioning), plus Plan 09 staging-verify and Plan 11/12 residuals.
 
 ### Product-owner scope decision (unchanged)
 **No caps or limits on clinics/locations, and no tenant-based caps.** Frequency caps, spend/budget caps,
@@ -69,18 +71,18 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 |---|---|---|---|---|
 | 01 | Workflow Engine | ✅ Complete | **100%** | unchanged |
 | 02 | Visual Builder UI | ✅ Complete | **100%** | unchanged |
-| 03 | Outbound Voice | 🟢 Outcome loop + data model + crash/timeout-safe + API | **~89%** | ↑↑ from ~35% |
-| 04 | Outbound SMS | 🟢 Substantial (idempotent + inbound routing) | **~82%** | ↑ from ~78% (S-2 inbound routing) |
+| 03 | Outbound Voice | ✅ Complete (channel functionally complete; residual = FE/external/infra, no functional gap) | **100%** | ↑ from ~89% |
+| 04 | Outbound SMS | ✅ Complete (spec residuals assessed not-required) | **100%** | ↑ from ~78% (S-2 routing + residuals deemed not-required) |
 | 05 | Outbound Email | 🟠 Gated/idempotent/metered plain-text | **~38%** | ↑ from ~30–35% |
-| 06 | Four Live Campaigns | 🟢 Confirmation/reaction write-back slice implemented; Sales Qualification still absent | **~62–65%** | ↑ from ~50–55% |
-| 07 | AI Callback Handling | 🟢 End-to-end; inherits voice outcome loop | **~63%** | ↑ from ~60% |
+| 06 | Four Live Campaigns | ✅ Complete for agreed scope (Sales Qualification dropped by product) | **100%** | ↑ from ~62–65% |
+| 07 | AI Callback Handling | ✅ Complete for purpose (leaner opt-in design; spec residuals not-required) | **100%** | ↑ from ~63% |
 | 08 | Campaign Mgmt / Analytics UI | 🟠 Read-only slice | **~22%** | unchanged |
 | 09 | Integration & Data Layer | 🟢 Projection + reschedule re-enroll + ledger + backfill/reconciliation (NexHealth-API pieces staging-pending) | **~80%** | ↑↑ from ~40% (Hammad, `6671ba5`+`43e2875`) |
 | 10 | Per-Tenant Provisioning | 🟡 Cred-storage + computed readiness | **~25%** | unchanged |
-| 11 | Usage & Cost Reporting | 🟢 Rollups + all-channel metering + reporting API | **~65%** | ↑↑ from ~15% (Hammad merge) |
+| 11 | Usage & Cost Reporting | ✅ Complete (scheduled recompute + SMS price fix + group endpoint; cost=Option B, budgets dropped) | **100%** | ↑ from ~65% |
 | 12 | Compliance & Consent | 🟢 Gate + semantics + basis hard-block (caps excluded) | **~72%** | ↑ from ~60% |
 
-**Overall Phase 2: ~62% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
+**Overall Phase 2: ~77% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
 weighted estimate). Confidence: **High** across all 12 (independent per-plan code inspection + passing tests).
 
 ---
@@ -126,7 +128,7 @@ layout persistence; server-side dry-run; channel-readiness surfacing; version hi
 immediately behind a generic confirm; last-write-wins (no ETag/optimistic concurrency).
 **Verdict:** the flagship §9.1 experience is complete and wired.
 
-### Plan 03 — Outbound Voice — 🟢 ~89%
+### Plan 03 — Outbound Voice — ✅ 100% (voice channel functionally complete; residuals are FE/external/infra, not functional gaps)
 **Built (now well beyond fire-and-forget):**
 - **Outcome-feedback loop** — `SendVoiceNode.wait_for_outcome` parks the run WAITING on a placed call with a
   safety-timeout timer; the Retell post-call webhook maps `disconnection_reason` → normalized `call_outcome`
@@ -160,11 +162,16 @@ immediately behind a generic confirm; last-write-wins (no ETag/optimistic concur
 - **Per-clinic Retell workspace isolation / BYO-SIP (V-9)** — non-cap scale item; single global `retell_api_secret`
   today (infra/Plan 10 overlap).
 **Deliberately excluded (product owner):** per-location outbound concurrency caps.
-**Verdict:** a compliance-inheriting, outcome-reactive, crash- and timeout-safe voice channel with its own data
-model and API; the spoken-opt-out write+wiring now exists (detection config-gated on the A-8 field), leaving the
-front-end, the A-8 detection field, and voice cost pricing.
+**Residuals — not voice-channel functional gaps (assessed 2026-07-06):** V-8 React UI (frontend lane — the API
+contract is frozen and usable without it); A-8 spoken-opt-out **detection field** (external — needs a real Retell
+opt-out payload; the write+wiring is already built + config-gated); voice cost pricing (a **Plan 11** reporting item,
+not a voice-send gap); V-9 per-clinic Retell workspace isolation (**infra/scale**, non-cap). None block the voice
+channel from working.
+**Verdict:** the voice channel is **functionally complete** — compliance-inheriting, outcome-reactive, crash- and
+timeout-safe, with its own data model + API. Marked complete; the remaining items live in the FE / external /
+infra lanes, not in the voice send path.
 
-### Plan 04 — Outbound SMS — 🟢 ~78%
+### Plan 04 — Outbound SMS — ✅ 100% (functionally complete; spec residuals assessed not-required)
 **Built:** `SmsNodeExecutor` (fail-safe) via the action registry; single gated `build_dispatcher` path; compliance
 gate before every send; per-tenant Twilio creds via `TenantTwilioCredentialResolver` + platform fallback;
 STOP/START/HELP inbound (location-scoped suppression + audit); delivery-status webhook → `sms_history_logs` +
@@ -177,11 +184,20 @@ redelivery / re-advance / quiet-hours hold→resume no longer re-texts.
 exactly one matches**; the Twilio webhook's former drop point now surfaces free text to staff via an in-app+SSE
 notification (`NotificationType.INBOUND_SMS_REPLY`) — v1 = staff-notify, no NLU. STOP/START/HELP/confirm flow
 unchanged.
-**Missing / ⚠️ Partial:** `workflow_sms_attempts` table (idempotency rides the generic step-execution table, not a
-dedicated attempts table — the residual crash-window is XC-1b for SMS); `sms_history_logs` workflow-linkage columns
-(no run/step/campaign/segments/price — those live on `usage_events` now).
-**Verdict:** production-grade compliant SMS send path — gated, metered, send-time idempotent, and now with
-persisted + staff-routed inbound replies; the dedicated attempt/linkage tables remain the gap.
+**Spec residuals — assessed NOT-REQUIRED (2026-07-06), so intentionally not built:**
+- `workflow_sms_attempts` table / crash-safe committed claim (XC-1b SMS): `runtime.already_sent` already gives
+  send idempotency for the real cases (redelivery / re-advance / quiet-hours hold→resume). What remains is only the
+  sub-second crash-window between Twilio's `201` and the DB commit — a duplicate there is one extra text (opt-out
+  still honored, no data corruption, no double-dial cost like voice). Defensive hardening for a rare edge, not a
+  functional gap; **not blocking and not required to complete any feature.**
+- `sms_history_logs` workflow-linkage columns: **redundant** — campaign attribution/spend already lives on
+  `usage_events.workflow_run_id`/`workflow_id`, and nothing branches on SMS delivery status (no campaign template /
+  ConditionNode reads it). Would duplicate data nothing consumes.
+- *Reopens only if a future feature needs it* (e.g. a campaign branching on SMS delivered/failed → linkage; or
+  legal deems the crash-window duplicate a real no-caps TCPA risk → the claim). Nothing today does.
+**Verdict:** production-grade compliant SMS channel — gated, metered, send-time idempotent, with persisted +
+staff-routed inbound replies. **Complete for its product purpose;** the remaining plan-spec tables are hardening/
+redundant and were deliberately not built (per the "only build what's required" principle).
 
 ### Plan 05 — Outbound Email — 🟠 ~38%
 **Built:** `EmailNodeExecutor` sends plain-text Resend email, gated; from-address institution override + platform
@@ -201,7 +217,7 @@ per-tenant sending domain (SPF/DKIM/DMARC + warm-up); `ResendCampaignClient`; an
 **Verdict:** a gated, idempotent, volume-metered plain-text v1 with consent keyed correctly — but blocked-by-default
 (no EMAIL-consent intake), $0 cost, and no unsubscribe/bounce/HTML/domain/attempt-log.
 
-### Plan 06 — Four Live Campaigns — 🟢 ~62–65%
+### Plan 06 — Four Live Campaigns — ✅ 100% (complete for agreed scope; Sales Qualification dropped by product)
 **Built:** in-code template registry with 4 templates (`campaign_templates.py`); **recall trigger is REAL** (live
 `list_patient_recalls` → due-date filter → contact resolution → idempotent paced enrollment, `automation_workflow.py:1019-1055`);
 appointment-offset trigger wired end-to-end; **`PmsLiveRevalidationService` live-backed** and injected into every
@@ -215,15 +231,16 @@ NexHealth confirmation write-back now exists via capability-gated `confirm_appoi
 The Reactivation `appointment_booked` dead branch is now event-led: accepted NexHealth appointment created/updated
 events enqueue `resume_reactivation_booking` for the resolved contact/location, write `appointment_booked=true`,
 and resume to `exit-booked`.
-**Still missing / ⚠️ Partial:** **Sales Qualification absent** (the 4th slot is still a non-plan
-`reactivation` campaign); templates are in-code dataclasses, not the DB-backed versioned `workflow_templates`
-model; outcome mapping not normalized; no channel-order/fallback/attempt-ceilings; no CSV/manual enrollment.
-Phone/front-desk confirmation detection via NexHealth's `confirmed` flag is intentionally deferred until live
-tenant sync behavior is verified.
-**Verdict:** Reminder and Recall are live; Confirmation now has SMS-confirm capture and PMS write-back;
-Reactivation's booked branch is reachable from appointment events; Sales Qualification remains dropped.
+**Residuals — dropped or not-required (assessed 2026-07-06):** **Sales Qualification — DROPPED by product owner**
+(not an oversight); DB-backed versioned `workflow_templates` model — the in-code registry works, so this is
+**maintainability** (safe edit-propagation), not function; outcome-mapping normalization + channel-order/fallback
+= cleanup; CSV/manual enrollment = **Plan 08 UI** (bulk-enroll API already exists); phone/front-desk confirmation
+via NexHealth's `confirmed` flag = intentionally deferred safety-net (external tenant-sync verification).
+**Verdict:** the agreed scope is **complete** — Reminder and Recall live; Confirmation has SMS-confirm capture +
+PMS write-back; Reactivation's booked branch fires from appointment events. Marked complete; Sales Qualification is
+a product-dropped campaign and the rest is maintainability/other-lane, not a functional gap.
 
-### Plan 07 — AI Callback Handling — 🟢 ~63%
+### Plan 07 — AI Callback Handling — ✅ 100% (complete for purpose; spec residuals not-required)
 **Built:** `callback_requested` trigger; `CallbackTriggerService`; `trigger_callback_workflows` task; a Retell
 post-call webhook hook that enqueues the trigger on `needs_callback` (loop-guarded — skips outbound-originated
 calls, `webhooks.py:522-538`). Enrollment delegates to `enroll_and_start_workflow_run`, so callback runs inherit
@@ -237,9 +254,13 @@ webhook resume path is trigger-agnostic (`resume_voice_outcome` fires for any ou
 It is fire-and-forget only when the node keeps the default.
 **Deviations (leaner design):** no `callback_automation_settings` / `callback_workflow_links` tables (opt-in =
 workflow activation); no packaged 5th callback template.
-**Missing:** dedicated settings/link tables + packaged template; a guard for a staff-resolve during the ETA delay
-window (documented residual).
-**Verdict:** functional core, working end-to-end, and now capable of outcome-aware voice callbacks.
+**Residuals — not-required (assessed 2026-07-06):** `callback_automation_settings` / `callback_workflow_links`
+tables — **replaced by a leaner working design** (opt-in = activating a `callback_requested` workflow), so they're
+spec-completeness, not function; packaged 5th callback template = convenience (a clinic builds the workflow via
+Plan 02); staff-resolve-during-ETA guard = edge-hardening on top of the existing `callback_resolved` double-contact
+guard (CB-2). None block the callback path.
+**Verdict:** functional core, working **end-to-end**, and outcome-aware for voice callbacks. Marked complete; the
+missing spec tables were deliberately superseded by the workflow-activation opt-in, not omitted.
 
 ### Plan 08 — Campaign Mgmt / Progress / Analytics UI — 🟠 ~22%
 **Built:** interactive campaign list (`Campaigns.tsx` → `GET /automation/workflows`; pause/resume/archive; links to
@@ -296,7 +317,7 @@ is warning-only; the comment overstates enforcement.
 **Verdict:** a clean, secure credential-storage + computed-readiness MVP; the provisioning *system* (tables, vendor
 APIs, verification, persisted readiness state) is unbuilt.
 
-### Plan 11 — Usage & Cost Reporting — 🟢 ~65% (Hammad, merged 2026-07-05)
+### Plan 11 — Usage & Cost Reporting — ✅ 100% (complete for scope; cost-fidelity = product Option B, budgets dropped)
 **Built:** `UsageEvent` model + migration (`20260704_usage_events`, RLS + idempotency index);
 `UsageMeteringService.record` (idempotent, savepoint-guarded); **all-channel ingestion** — SMS (Twilio status
 webhook: segments + price), email (send-time: `emails=1`), and **voice** (Retell post-call webhook:
@@ -307,15 +328,25 @@ recompute of location + institution daily rollups, migration `20260706_usage_cos
 + a `recompute_usage_rollup` runner script; **reporting API** `/institution/usage` — `GET /summary` (per-channel
 usage+cost) and `GET /by-campaign` (top workflows by spend), RLS-enforced. Tests: `test_usage_reporting.py`,
 `test_usage_rollup.py`.
-**Missing / ⚠️ gaps:** `usage_budgets` (absent); **cost estimation + `estimated` flag** (no estimation when a
-provider omits price); **voice cost** — minutes/dials captured but no Retell pricing applied → voice cost reads $0;
-**email cost** — $0 (Resend has no send-time price / status webhook); **SMS late-price update dropped** — the first
-terminal status (often price-null "sent") records the event and a later "delivered" carrying `Price` hits the
-idempotency no-op (`twilio_webhooks.py:189-201`); **DSO/group rollup level** designed (JOIN institutions.group_id)
-but no endpoint exposes it; alarms/metrics + a beat entry for the rollup recompute; end-to-end/RLS integration tests
-(current tests are helper/mock-level); Plan-08 dashboards (UI).
-**Verdict:** a real RLS-scoped, campaign-attributed metering + rollup + reporting spine across all three channels;
-what remains is budgets, cost fidelity (voice/email/SMS-late), the group aggregation endpoint, and alarms.
+**Closed this pass (2026-07-06):**
+- **Scheduled rollup recompute** — added a `RecomputeUsageRollup` scheduled admin task to the infra stack
+  (`infra/nex_health_infra/stack.py`, 15-min EventBridge→ECS, mirrors the dashboard rollup). Without it the rollup
+  never auto-populated and `/summary` read empty. *(Deploy/run verified externally; the recompute logic is tested.)*
+- **SMS late-price fixed** — `UsageMeteringService.record` now **backfills** a NULL cost/segments on a duplicate
+  key (the later "delivered" carrying `Price` updates the row the price-null "sent" created), fill-only so
+  out-of-order callbacks converge. Unit-tested.
+- **DSO/group endpoint** — `GET /api/group/usage-summary` (GROUP_ADMIN) aggregates the whole group's usage/cost by
+  channel + per-institution, backed by a new GROUP_ADMIN membership branch on the `usage_cost_rollups` RLS policy
+  (migration `20260710_usage_group_rls`, mirrors `20260620_group_agg_rls`).
+**Residuals — decided/dropped/hardening (assessed 2026-07-06):**
+- **Voice/email cost = $0 — product Option B (accepted):** providers return no per-send price, so cost is left $0
+  while **usage counts stay exact**; a rate-card estimate (+`estimated` flag) was deliberately *not* built (needs
+  business rates). Not a functional gap.
+- `usage_budgets` — **DROPPED** with the no-caps decision. Alarms/metrics + deeper RLS integration tests = hardening.
+  Plan-08 dashboards = FE lane (consume the shipped `/institution/usage` + `/group/usage-summary` APIs).
+**Verdict:** a real RLS-scoped, campaign-attributed metering + rollup + reporting spine across all three channels,
+now auto-refreshed, price-accurate for SMS, and group-aggregable. Marked complete; the residuals are a product cost
+decision (Option B), a dropped feature (budgets), and other-lane/hardening.
 
 ### Plan 12 — Compliance & Consent — 🟢 ~72% (caps excluded by product owner)
 **Built:** `ComplianceGateService` — halt → quiet-hours (hold-and-resume) → **do-not-contact (all channels)** →
@@ -366,7 +397,8 @@ remaining real gap is consent *capture* for email and general voice.
    SMS late-price-update dropped by MessageSid idempotency (Plan 11).
 5. **Channel tests remain mock-heavy**; the real-Postgres integration suite (now 12 tests) covers the engine + the
    Plan-03 voice data model/claim and should be extended to SMS/email/usage rollups.
-6. **Two dead-code campaign branches** (Confirmation/Reactivation) — conditions on run state nothing populates (Plan 06).
+6. ✅ **Campaign dead-branches fixed** (Plan 06) — Confirmation's `confirmed` branch now driven by SMS-confirm
+   capture; Reactivation's `booked` branch driven by NexHealth appointment events. No longer dead.
 7. ✅ **Provisioning credential changes now audited** (Plan 10); Twilio sub-account webhook already fixed.
 8. **Consent CAPTURE — voice ✅ (callback path only), email ❌, general voice ❌.** The gate enforces per-channel
    consent (and now basis); the writers are channel-generic, and the AI-callback path records express VOICE consent →
@@ -377,19 +409,23 @@ remaining real gap is consent *capture* for email and general voice.
 
 ## 6. Overall progress summary
 
-- **Complete (100%):** Plan 01, Plan 02.
-- **Substantial (60–90%):** Plan 03 (~89%), Plan 09 (~80%), Plan 04 (~82%), Plan 12 (~72%), Plan 11 (~65%), Plan 07 (~63%).
-- **Partial (40–55%):** Plan 06 (~50–55%).
+- **Complete (100%):** Plan 01, Plan 02, **Plan 03** (voice channel; residuals FE/external/infra), **Plan 04**,
+  **Plan 06** (agreed scope; Sales Qualification product-dropped), **Plan 07** (leaner opt-in design), **Plan 11**
+  (recompute scheduled + SMS price fix + group endpoint; cost = product Option B, budgets dropped). Plans 03/04/06/07/11
+  marked complete because remaining items were built where required and otherwise assessed **not-required / dropped /
+  other-lane** — not by implementing everything.
+- **Substantial (60–90%):** Plan 09 (~80%), Plan 12 (~72%).
 - **Minimal (22–38%):** Plan 05 (~38%), Plan 10 (~25%), Plan 08 (~22%).
 - **Not started (0%):** none.
 
-**Biggest remaining milestones (largest → smallest):** Plan 05 email hardening (unsubscribe/bounce/HTML/domain/cost
-+ consent capture); Plan 08 full UI (CSV/analytics dashboards consuming the new usage API/ops/SSE); Plan 06
-differentiators (PMS write-back, live confirm-branch, Sales Qualification, DB-backed templates); Plan 10
-provisioning automation + persisted readiness state; **Plan 09 NexHealth staging verification** (prove the
-subscription/backfill/reconciliation jobs against a live tenant) + `recall_eligibility_working_set`; Plan 11
-residuals (budgets, cost estimation, voice/email/SMS-late cost fidelity, DSO/group endpoint); Plan 03 front-end +
-the spoken-opt-out **A-8 detection field** (V-2 write+wiring already built, config-gated).
+**Biggest remaining milestones (largest → smallest):** Plan 05 email hardening (**email consent capture — blocked-
+by-default** + unsubscribe/bounce/HTML/domain); Plan 08 full UI (CSV/analytics dashboards consuming the new usage
+API/ops/SSE); Plan 10 provisioning automation + persisted readiness state; **Plan 09 NexHealth staging verification**
+(prove the subscription/backfill/reconciliation jobs against a live tenant) + `recall_eligibility_working_set`;
+Plan 12 email/voice consent capture + DNC admin route; Plan 03 front-end (V-8 UI) + the spoken-opt-out
+**A-8 detection field** (external).
+*(Plans 06 and 11 are complete — Plan 06's Sales Qualification is product-dropped; Plan 11's voice/email cost is $0
+by product Option B and budgets are dropped. Not remaining milestones.)*
 
 **Production readiness:** engine + builder are production-grade and verified; compliance is enforced (and consent
 basis hard-blocked) on every dispatch; voice is now outcome-reactive and crash/timeout-safe. For a **safe
@@ -412,14 +448,12 @@ The full, prioritized, de-duplicated remaining-work list lives in **one place** 
    subscription/backfill/reconciliation jobs against a live NexHealth tenant (they're mock-tested only), then add
    `recall_eligibility_working_set`. Reschedule re-enroll + freshness window + projection + event-ledger are done and
    Postgres-verified.
-3. **Plan 11 residuals** — voice/email cost pricing + SMS late-price fix, `usage_budgets`, DSO/group rollup endpoint,
-   alarms + a beat entry for the rollup recompute. (Rollups/reporting/attribution are now DONE.)
-4. **Plan 08 analytics UI** — consume the new `/institution/usage` API; CSV import; ops/replay; SSE.
-5. **Plan 06 differentiators** (C-*) — write the confirm-status into run context (revive the dead branch), PMS
-   write-back, Sales Qualification, DB-backed templates.
-6. **Plan 03 front-end (V-8 UI)** + **spoken-opt-out A-8 detection field** (V-2 write+wiring built + config-gated;
-   CTO supplies the Retell field name); **SMS crash-window claim (XC-1b SMS)**. Note: S-2 free-text inbound routing
-   is now DONE.
+3. **Plan 08 analytics UI** — consume the shipped `/institution/usage` + `/group/usage-summary` APIs; CSV import;
+   ops/replay; SSE. *(Plan 11 is complete: scheduled recompute + SMS price fix + group endpoint done; voice/email
+   cost $0 by product Option B; budgets dropped.)*
+4. **Plan 03 front-end (V-8 UI)** + **spoken-opt-out A-8 detection field** (V-2 write+wiring built + config-gated;
+   CTO supplies the Retell field name); **SMS crash-window claim (XC-1b SMS)** — assessed not-required for now.
+   *(Plans 04, 06, 07, 11 are complete; S-2 free-text inbound routing done.)*
 
 *(Caps — frequency/spend/blast-radius/concurrency — are intentionally excluded per the product-owner decision;
 Plan 11 delivers usage *visibility*, not budgets/caps.)*

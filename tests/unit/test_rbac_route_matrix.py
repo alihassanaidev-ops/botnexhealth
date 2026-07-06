@@ -309,6 +309,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/group/me",
         "GET /api/group/dashboard",
         "GET /api/group/institution/{institution_id}/dashboard",
+        "GET /api/group/usage-summary",
     ),
     SUPER_ADMIN_STRICT: (
         # Break-glass MFA reset — strictly SUPER_ADMIN, not the broader

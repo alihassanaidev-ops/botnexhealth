@@ -41,6 +41,7 @@ from src.app.database import RlsContext, get_db_session, use_rls_context
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call_metrics_daily import NULL_LOCATION_SENTINEL, CallMetricsDaily
 from src.app.models.institution import Institution
+from src.app.models.usage_cost_rollup import UsageCostRollup
 from src.app.models.institution_group import InstitutionGroup
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import User, UserRole
@@ -595,4 +596,126 @@ async def get_group_institution_dashboard(
         tag_distribution=tag_rows,
         location_comparison=loc_comparison,
         as_of=now.isoformat(),
+    )
+
+
+# ── DSO/group usage & cost rollup (Plan 11) ──────────────────────────────────
+
+
+class GroupChannelUsage(BaseModel):
+    channel: str
+    event_count: int
+    total_segments: int
+    total_dials: int
+    total_emails: int
+    total_minutes: float
+    total_cost: float
+
+
+class GroupInstitutionUsage(BaseModel):
+    institution_id: str
+    name: str
+    total_cost: float
+    event_count: int
+
+
+class GroupUsageSummaryResponse(BaseModel):
+    start_date: date
+    end_date: date
+    currency: str
+    total_cost: float
+    channels: list[GroupChannelUsage]
+    institutions: list[GroupInstitutionUsage]
+
+
+@router.get("/usage-summary", response_model=GroupUsageSummaryResponse)
+@limiter.limit(RATE_READ)
+async def get_group_usage_summary(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_group_admin)],
+    start_date: date | None = Query(None, description="Inclusive range start (YYYY-MM-DD)"),
+    end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
+) -> GroupUsageSummaryResponse:
+    """Whole-group usage + cost over a date range, from ``usage_cost_rollups``.
+
+    One GROUP BY across every member institution — the GROUP_ADMIN's RLS context
+    (group membership branch on the rollup) scopes reads to this group, so cost
+    stays constant in query count regardless of group size. Voice/email cost may
+    read $0 where the provider returns no price (usage counts are still exact).
+    """
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    start, end, _cap, _incl = _resolve_window(start_date, end_date, today)
+
+    async with get_db_session() as session:
+        members = (
+            await session.execute(
+                select(Institution.id, Institution.name).where(
+                    Institution.group_id == current_user.group_id
+                )
+            )
+        ).all()
+        member_ids = [str(m.id) for m in members]
+        names = {str(m.id): m.name for m in members}
+        if not member_ids:
+            return GroupUsageSummaryResponse(
+                start_date=start, end_date=end, currency="USD",
+                total_cost=0.0, channels=[], institutions=[],
+            )
+
+        base_filters = [
+            UsageCostRollup.institution_id.in_(member_ids),
+            UsageCostRollup.usage_date >= start,
+            UsageCostRollup.usage_date <= end,
+        ]
+
+        by_channel = (
+            await session.execute(
+                select(
+                    UsageCostRollup.channel,
+                    func.coalesce(func.sum(UsageCostRollup.event_count), 0).label("event_count"),
+                    func.coalesce(func.sum(UsageCostRollup.total_segments), 0).label("segments"),
+                    func.coalesce(func.sum(UsageCostRollup.total_dials), 0).label("dials"),
+                    func.coalesce(func.sum(UsageCostRollup.total_emails), 0).label("emails"),
+                    func.coalesce(func.sum(UsageCostRollup.total_minutes), 0).label("minutes"),
+                    func.coalesce(func.sum(UsageCostRollup.total_cost_amount), 0).label("cost"),
+                )
+                .where(*base_filters)
+                .group_by(UsageCostRollup.channel)
+            )
+        ).all()
+
+        by_institution = (
+            await session.execute(
+                select(
+                    UsageCostRollup.institution_id,
+                    func.coalesce(func.sum(UsageCostRollup.total_cost_amount), 0).label("cost"),
+                    func.coalesce(func.sum(UsageCostRollup.event_count), 0).label("event_count"),
+                )
+                .where(*base_filters)
+                .group_by(UsageCostRollup.institution_id)
+            )
+        ).all()
+
+    channels = [
+        GroupChannelUsage(
+            channel=r.channel, event_count=int(r.event_count), total_segments=int(r.segments),
+            total_dials=int(r.dials), total_emails=int(r.emails),
+            total_minutes=float(r.minutes), total_cost=float(r.cost),
+        )
+        for r in by_channel
+    ]
+    institutions = [
+        GroupInstitutionUsage(
+            institution_id=str(r.institution_id),
+            name=names.get(str(r.institution_id), "—"),
+            total_cost=float(r.cost),
+            event_count=int(r.event_count),
+        )
+        for r in by_institution
+    ]
+    return GroupUsageSummaryResponse(
+        start_date=start, end_date=end, currency="USD",
+        total_cost=sum(c.total_cost for c in channels),
+        channels=channels, institutions=institutions,
     )

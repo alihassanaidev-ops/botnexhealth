@@ -726,6 +726,31 @@ class NexHealthPlatformStack(Stack):
             schedule=events.Schedule.rate(Duration.minutes(5)),
         )
 
+        # Recompute the usage & cost rollup (Plan 11). ``usage_cost_rollups`` is
+        # the table behind the /institution/usage + /group/usage-summary reports;
+        # without this scheduled recompute those endpoints read an empty rollup.
+        # Runs as the admin role (RLS-bypass, all tenants in one query), same as
+        # the dashboard rollup. 15-min cadence — usage/cost tolerates more lag
+        # than the dashboard volume cards.
+        recompute_usage_rollup_task = self._build_scheduled_admin_task(
+            id_prefix="RecomputeUsageRollup",
+            command=[
+                "python",
+                "-m",
+                "src.app.scripts.recompute_usage_rollup",
+            ],
+            log_group=scheduled_jobs_log_group,
+            log_stream_prefix="usage-rollup",
+            image=app_image,
+            environment=migration_environment,
+            secrets=migration_secrets,
+            vpc=vpc,
+            cluster=cluster,
+            db_security_group=db_security_group,
+            private_subnets=private_subnets,
+            schedule=events.Schedule.rate(Duration.minutes(15)),
+        )
+
         # Ensure audit_logs has the next N monthly partitions pre-created
         # so any INSERT lands in a real partition instead of the DEFAULT
         # catch-all (where queries lose partition pruning). Daily at
