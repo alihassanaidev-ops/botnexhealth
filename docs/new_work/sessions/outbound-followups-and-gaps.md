@@ -136,7 +136,9 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   the confirm branch is unreachable (always exits `no_response`); mirrored in the reactivation `appointment_booked`
   branch. Fix requires the inbound-response→run linkage (ties to S-2 / V-1) and/or PMS write-back (C-2).
 - **C-2 (P1) PMS confirmation write-back** — no `update_appointment` capability exists; Confirmation can't write status back to NexHealth.
-- **C-3 (P1) Sales Qualification campaign** — absent (the 4th template slot is a non-plan `reactivation` campaign); needs new-contact/CSV enrollment.
+- **C-3 (P1) Sales Qualification campaign — DEFERRED (product decision 2026-07-05).** Absent (the 4th template slot
+  is a non-plan `reactivation` campaign). Deferred because there is **no lead-intake pipeline**, so the campaign
+  cannot be enrolled meaningfully; the Reactivation template stays in its slot. Revisit once lead intake exists.
 - **C-4 (P2) DB-backed versioned templates** — templates are in-code dataclasses, not `workflow_templates`/`_versions`; edits can't be versioned/propagated safely.
 - **C-5 (P2) Normalized outcome mapping** + channel-order/fallback/attempt-ceiling config.
 
