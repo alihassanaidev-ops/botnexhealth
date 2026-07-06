@@ -54,7 +54,7 @@ product-dropped, Plan 11's voice/email cost is $0 by product Option B.)
 **Headline: ~77% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Seven of twelve plans
 are now complete (01, 02, 03, 04, 06, 07, 11) — several marked so because their remaining items were assessed
 **not-required / product-dropped / other-lane**, not because everything was built. The concentrated remaining work
-is in Plan 05 (email), Plan 08 (UI), Plan 10 (provisioning), plus Plan 09 staging-verify and Plan 11/12 residuals.
+is in Plan 05 (email), Plan 08 (UI), Plan 10 (provisioning), plus Plan 09 staging verification and Plan 12 residuals.
 
 ### Product-owner scope decision (unchanged)
 **No caps or limits on clinics/locations, and no tenant-based caps.** Frequency caps, spend/budget caps,
@@ -158,7 +158,7 @@ immediately behind a generic confirm; last-write-wins (no ETag/optimistic concur
   do-not-guess rule, **detection is OFF until `retell_optout_analysis_key` is set** — the CTO drops in the real
   Retell DNC-intent field once a sample opt-out `call_analyzed` payload confirms it. So the compliance write is
   ready; only the (config-supplied) trigger field remains.
-- **Voice cost** — minutes/dials are metered but no Retell price is applied (voice cost reads $0 — Plan 11 residual).
+- **Voice cost** — minutes/dials are metered but no Retell price is applied (voice cost reads $0 by Plan 11 product Option B).
 - **Per-clinic Retell workspace isolation / BYO-SIP (V-9)** — non-cap scale item; single global `retell_api_secret`
   today (infra/Plan 10 overlap).
 **Deliberately excluded (product owner):** per-location outbound concurrency caps.
@@ -392,9 +392,9 @@ remaining real gap is consent *capture* for email and general voice.
    subscription/backfill/reconciliation jobs are mock-tested only and **need NexHealth staging verification**.
 3. ✅ **Revalidation freshness window added** (Plan 09) — a projection row fresh within 15 min is trusted, so a
    large fixed-time batch no longer fans out one live NexHealth call per send.
-4. **Usage model is now campaign-tagged** (`workflow_run_id`/`workflow_id`) and per-campaign spend works
-   (`/by-campaign`). **Remaining cost gaps:** voice cost $0 (no Retell pricing), email cost $0 (no price source),
-   SMS late-price-update dropped by MessageSid idempotency (Plan 11).
+4. ✅ **Usage model is now campaign-tagged and reporting-complete for scope** (`workflow_run_id`/`workflow_id`);
+   per-campaign spend works (`/by-campaign`), SMS late-price callbacks backfill NULL cost/segments, and
+   `/api/group/usage-summary` covers DSO/group aggregation. Voice/email cost remains $0 by product Option B.
 5. **Channel tests remain mock-heavy**; the real-Postgres integration suite (now 12 tests) covers the engine + the
    Plan-03 voice data model/claim and should be extended to SMS/email/usage rollups.
 6. ✅ **Campaign dead-branches fixed** (Plan 06) — Confirmation's `confirmed` branch now driven by SMS-confirm
@@ -431,8 +431,8 @@ by product Option B and budgets are dropped. Not remaining milestones.)*
 basis hard-blocked) on every dispatch; voice is now outcome-reactive and crash/timeout-safe. For a **safe
 operator-driven pilot on the Celery path** the system is ready. Before **high-volume autonomous** sending: email
 unsubscribe/bounce + consent capture, **NexHealth-staging validation of the now-built Plan-09
-subscription/backfill/reconciliation jobs**, the SMS crash-window claim, and cost fidelity (voice/email pricing)
-for accurate reporting.
+subscription/backfill/reconciliation jobs**, and the SMS crash-window claim if legal/product reclassifies that rare
+duplicate-send edge as material.
 
 ---
 
