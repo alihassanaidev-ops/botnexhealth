@@ -7,7 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
-import { RefreshCcw, AlertTriangle, Clock, Calendar } from "lucide-react"
+import { RefreshCcw, AlertTriangle, Clock, Calendar, MapPin } from "lucide-react"
 import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
 import { Input } from "@/components/ui/input"
 import {
@@ -33,6 +33,8 @@ export default function ProvidersScheduling() {
     const [operatories, setOperatories] = useState<CachedOperatory[]>([])
     const [selectedProviderId, setSelectedProviderId] = useState<string>("")
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
+    const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
+    const [showExpired, setShowExpired] = useState(false)
     const [loading, setLoading] = useState(true)
     const [loadingAvailabilities, setLoadingAvailabilities] = useState(false)
     const [syncing, setSyncing] = useState(false)
@@ -111,9 +113,10 @@ export default function ProvidersScheduling() {
         fetchAvailabilities()
     }, [fetchAvailabilities])
 
-    // Reset appointment type filter + sync settings when provider changes
+    // Reset appointment type/operatory filters + sync settings when provider changes
     useEffect(() => {
         setSelectedApptTypeId("all")
+        setSelectedOperatoryId("all")
         const p = providers.find((pr) => pr.source_id === selectedProviderId)
         setBufferMinutes(p?.buffer_minutes ?? 0)
         setCutoffTime(p?.same_day_cutoff_time ?? "")
@@ -253,34 +256,57 @@ export default function ProvidersScheduling() {
         }
     }
 
-    // Filter availabilities by selected appointment type, then sort by date.
+    // Use local date (browser TZ) — the user is at the practice.
+    const todayLocal = new Date().toLocaleDateString("en-CA") // YYYY-MM-DD
+    const isAvailabilityExpired = (av: CachedAvailability) =>
+        !!av.specific_date && av.specific_date < todayLocal
+
+    // Filter availabilities by selected appointment type (and expired state
+    // unless showExpired is on), then sort by date.
     // NexHealth returns rows in insertion order, which renders as random
     // dates from the operator's perspective — easy to mis-link an
     // appointment type to a far-future row instead of the soonest one.
     // Sort: specific_date ascending, then begin_time. Rows without a
     // specific_date (pure recurring rules) sort first.
-    const filteredAvailabilities = (
-        selectedApptTypeId === "all"
-            ? availabilities
-            : availabilities.filter(
-                (av) => av.appointment_type_ids?.includes(selectedApptTypeId)
-            )
-    ).slice().sort((a, b) => {
-        const ad = a.specific_date ?? ""
-        const bd = b.specific_date ?? ""
-        if (ad !== bd) return ad.localeCompare(bd)
-        const at = a.begin_time ?? ""
-        const bt = b.begin_time ?? ""
-        return at.localeCompare(bt)
-    })
+    const filteredAvailabilities = availabilities
+        .filter((av) => showExpired || !isAvailabilityExpired(av))
+        .filter(
+            (av) =>
+                selectedApptTypeId === "all" ||
+                av.appointment_type_ids?.includes(selectedApptTypeId)
+        )
+        .filter(
+            (av) =>
+                selectedOperatoryId === "all" ||
+                av.operatory_source_id === selectedOperatoryId
+        )
+        .slice()
+        .sort((a, b) => {
+            const ad = a.specific_date ?? ""
+            const bd = b.specific_date ?? ""
+            if (ad !== bd) return ad.localeCompare(bd)
+            const at = a.begin_time ?? ""
+            const bt = b.begin_time ?? ""
+            return at.localeCompare(bt)
+        })
 
     const unlinkedCount = availabilities.filter(
-        (av) => !av.appointment_type_ids || av.appointment_type_ids.length === 0
+        (av) =>
+            !isAvailabilityExpired(av) &&
+            (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
     ).length
 
     // Collect appointment types that appear in this provider's availabilities
     const availableApptTypeIds = new Set(availabilities.flatMap((av) => av.appointment_type_ids || []))
     const relevantApptTypes = appointmentTypes.filter((at) => availableApptTypeIds.has(at.source_id))
+
+    // Collect operatories that appear in this provider's availabilities.
+    // Names alone can collide (e.g. two rooms both named "DR. KADRI"), so the
+    // filter label always includes the ID to disambiguate.
+    const availableOperatoryIds = new Set(
+        availabilities.map((av) => av.operatory_source_id).filter((id): id is string => !!id)
+    )
+    const relevantOperatories = operatories.filter((op) => availableOperatoryIds.has(op.id))
 
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
@@ -375,6 +401,31 @@ export default function ProvidersScheduling() {
                                 </SelectContent>
                             </Select>
                         </div>
+
+                        <div className="flex items-center gap-2">
+                            <label className="text-sm font-medium whitespace-nowrap">Operatory:</label>
+                            <Select value={selectedOperatoryId} onValueChange={setSelectedOperatoryId}>
+                                <SelectTrigger className="w-[260px]">
+                                    <SelectValue placeholder="All Operatories" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All Operatories</SelectItem>
+                                    {relevantOperatories.map((op) => (
+                                        <SelectItem key={op.id} value={op.id}>
+                                            {op.name} ({op.id})
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                            <Checkbox
+                                checked={showExpired}
+                                onCheckedChange={(checked) => setShowExpired(checked === true)}
+                            />
+                            Show expired
+                        </label>
                     </div>
 
                     {/* Provider Scheduling Rules */}
@@ -509,9 +560,7 @@ export default function ProvidersScheduling() {
                                 <div className="space-y-3">
                                     {filteredAvailabilities.map((av) => {
                                         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
-                                        // Use local date (browser TZ) — the user is at the practice
-                                        const todayLocal = new Date().toLocaleDateString("en-CA") // YYYY-MM-DD
-                                        const isPastDate = !!av.specific_date && av.specific_date < todayLocal
+                                        const isPastDate = isAvailabilityExpired(av)
                                         const isWarning = !hasTypes && !isPastDate
 
                                         const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
@@ -560,6 +609,12 @@ export default function ProvidersScheduling() {
                                                                 </Badge>
                                                             )}
                                                         </div>
+                                                        {av.operatory_name && (
+                                                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
+                                                                <MapPin className="h-3 w-3" />
+                                                                Operatory: {av.operatory_name}
+                                                            </div>
+                                                        )}
                                                         {av.days && av.days.length > 0 && (
                                                             <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
                                                                 <Calendar className="h-3 w-3" />
