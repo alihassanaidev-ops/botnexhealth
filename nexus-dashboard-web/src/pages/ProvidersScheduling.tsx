@@ -306,7 +306,7 @@ export default function ProvidersScheduling() {
     const availableOperatoryIds = new Set(
         availabilities.map((av) => av.operatory_source_id).filter((id): id is string => !!id)
     )
-    const relevantOperatories = operatories.filter((op) => availableOperatoryIds.has(op.id))
+    const relevantOperatories = operatories.filter((op) => availableOperatoryIds.has(op.source_id))
 
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
@@ -411,8 +411,8 @@ export default function ProvidersScheduling() {
                                 <SelectContent>
                                     <SelectItem value="all">All Operatories</SelectItem>
                                     {relevantOperatories.map((op) => (
-                                        <SelectItem key={op.id} value={op.id}>
-                                            {op.name} ({op.id})
+                                        <SelectItem key={op.source_id} value={op.source_id}>
+                                            {op.name} ({op.source_id})
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
