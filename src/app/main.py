@@ -21,6 +21,7 @@ from src.app.api.routes.contacts import router as contacts_router
 from src.app.api.routes.dashboard import router as dashboard_router
 from src.app.api.routes.usage_reporting import router as usage_reporting_router
 from src.app.api.routes.do_not_contact import router as do_not_contact_router
+from src.app.api.routes.email_compliance import router as email_compliance_router
 from src.app.api.routes.group import router as group_router
 from src.app.api.routes.custom_fields import router as custom_fields_router
 from src.app.api.routes.workflow_statuses import router as workflow_statuses_router
@@ -260,6 +261,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router, prefix="/api")
     app.include_router(usage_reporting_router, prefix="/api")
     app.include_router(do_not_contact_router, prefix="/api")
+    app.include_router(email_compliance_router, prefix="/api")
     app.include_router(group_router, prefix="/api")
     app.include_router(custom_fields_router, prefix="/api")
     app.include_router(workflow_statuses_router, prefix="/api")

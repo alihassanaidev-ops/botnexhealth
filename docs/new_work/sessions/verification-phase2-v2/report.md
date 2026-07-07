@@ -45,14 +45,13 @@ reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer)
 (Hammad, `6671ba5`+`43e2875`): the disposable `appointment_working_set` projection, reschedule re-enroll,
 event-level idempotency ledger, revalidation freshness window, and the subscription/backfill/reconciliation jobs
 now exist — though the live-NexHealth-API half of that (subscriptions/backfill/reconciliation) is mock-tested and
-**needs staging verification**. The remaining work concentrates in the provisioning/UI/email plans: Plan 05 **email
-hardening** (unsubscribe/bounce/HTML/domain; transactional email now unblocked via Plan-12 implied consent, marketing
-still needs express consent), Plan 10 **provisioning
-automation + persisted readiness state**, and Plan 08's **full campaign UI + analytics dashboards** (which can now
-consume the shipped Plan-11 usage APIs). (Plans 06 and 11 are complete; Plan 06's Sales Qualification is
-product-dropped, Plan 11's voice/email cost is $0 by product Option B.)
+**needs staging verification**. The remaining work concentrates in the provisioning/UI plans: **Plan 05 email** is now launch-compliant
+(transactional sends + one-click unsubscribe + bounce/complaint suppression) — only the **per-tenant sending domain
+(SPF/DKIM, external)** + HTML remain; Plan 10 **provisioning automation + persisted readiness state** (external);
+and Plan 08's **full campaign UI + analytics dashboards** (which can now consume the shipped Plan-11 usage APIs).
+(Plans 06 and 11 complete; Plan 06's Sales Qualification is product-dropped, Plan 11's voice/email cost is $0 per Option B.)
 
-**Headline: ~79% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Eight of twelve plans
+**Headline: ~81% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Eight of twelve plans
 are now complete (01, 02, 03, 04, 06, 07, 11, 12) — several marked so because their remaining items were assessed
 **not-required / product-dropped / deferred-per-client / other-lane**, not because everything was built. The
 concentrated remaining work is now just **three plans** — Plan 05 (email), Plan 08 (UI), Plan 10 (provisioning) —
@@ -75,7 +74,7 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 02 | Visual Builder UI | ✅ Complete | **100%** | unchanged |
 | 03 | Outbound Voice | ✅ Complete (channel functionally complete; residual = FE/external/infra, no functional gap) | **100%** | ↑ from ~89% |
 | 04 | Outbound SMS | ✅ Complete (spec residuals assessed not-required) | **100%** | ↑ from ~78% (S-2 routing + residuals deemed not-required) |
-| 05 | Outbound Email | 🟠 Gated/idempotent/metered plain-text | **~42%** | ↑ from ~38% (transactional email unblocked via implied consent) |
+| 05 | Outbound Email | 🟢 Launch-compliant (sends + unsubscribe + bounce/complaint; per-tenant domain external) | **~70%** | ↑↑ from ~38% (transactional sends + unsubscribe + bounce/complaint) |
 | 06 | Four Live Campaigns | ✅ Complete for agreed scope (Sales Qualification dropped by product) | **100%** | ↑ from ~62–65% |
 | 07 | AI Callback Handling | ✅ Complete for purpose (leaner opt-in design; spec residuals not-required) | **100%** | ↑ from ~63% |
 | 08 | Campaign Mgmt / Analytics UI | 🟠 Read-only slice | **~22%** | unchanged |
@@ -84,7 +83,7 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 11 | Usage & Cost Reporting | ✅ Complete (scheduled recompute + SMS price fix + group endpoint; cost=Option B, budgets dropped) | **100%** | ↑ from ~65% |
 | 12 | Compliance & Consent | ✅ Complete for scope (gate + basis + DNC route + implied transactional consent; commercial capture deferred w/ intake) | **100%** | ↑ from ~72% |
 
-**Overall Phase 2: ~79% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
+**Overall Phase 2: ~81% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
 weighted estimate). Confidence: **High** across all 12 (independent per-plan code inspection + passing tests).
 
 ---
@@ -201,7 +200,7 @@ unchanged.
 staff-routed inbound replies. **Complete for its product purpose;** the remaining plan-spec tables are hardening/
 redundant and were deliberately not built (per the "only build what's required" principle).
 
-### Plan 05 — Outbound Email — 🟠 ~42%
+### Plan 05 — Outbound Email — 🟢 ~70% (launch-compliant v1; per-tenant sending domain is the external remainder)
 **Built:** `EmailNodeExecutor` sends plain-text Resend email, gated; from-address institution override + platform
 fallback (`resolve_email_from`); reuses the sandboxed SMS renderer; **send-time idempotency** (`already_sent` guard
 + Resend `Idempotency-Key: email:{run}:{node}` header, `email_node_executor.py:51-56,106-110`); **usage metered by
@@ -211,15 +210,26 @@ consent** (Finding D).
 (identifier-on-file → allowed for care content, no explicit record needed). **Marketing** email still correctly
 requires an express recorded consent, whose *capture* is deferred with the client-deferred lead-intake — so
 marketing email stays gated (compliance-correct), not silently broken.
-**Missing:** email cost (metered at **$0** — `record(...)` passes no `cost_amount`; Resend gives no send-time
-price, no status webhook to backfill); the campaign data model (`email_sending_profiles`,
-`workflow_email_templates`, `workflow_email_attempts` — no attempt/audit log; the existing `EmailTemplate` model is
-for staff/patient *notification* emails, not the automation campaign path); `EmailWebhookService` +
-bounce/complaint/delivered ingestion; **unsubscribe** (CASL/CAN-SPAM legal minimum); HTML/branded body (text only);
-per-tenant sending domain (SPF/DKIM/DMARC + warm-up); `ResendCampaignClient`; analytics; UI.
-**Verdict:** a gated, idempotent, volume-metered plain-text v1; **transactional email now sends** (Plan-12 implied
-consent), marketing correctly gated pending express-consent capture (deferred with lead-intake). Remaining: $0 cost,
-and no unsubscribe/bounce/HTML/domain/attempt-log.
+**Compliance — NOW BUILT (2026-07-07):**
+- **One-click unsubscribe** — every campaign email carries a signed unsubscribe link (`email_unsubscribe.py`,
+  `keyed_hash`-signed token binding institution + email_hash; raw address never in the URL). Public
+  `GET /api/email/unsubscribe` verifies + suppresses (`email_compliance.py`).
+- **Resend bounce/complaint webhook** — public `POST /api/email/webhooks/resend` (signature-verified, fail-closed in
+  prod) suppresses email on `email.bounced`/`email.complained`.
+- Both **suppress EMAIL only** by writing a **revoked EMAIL `ConsentRecord`** (new `record_email_consent[_identity]`
+  on `SmsComplianceService`) via a Celery task under the `celery` RLS context — the gate then blocks (revoked beats
+  implied). **No migration** (reuses `ConsentRecord.email_hash`). 12 tests.
+**Remaining — external / deferred / not-required:**
+- ⚠️ **Per-tenant sending domain (SPF/DKIM/DMARC + warm-up) — EXTERNAL** (DNS/vendor, overlaps Plan 10). Email sends
+  from the shared platform Resend domain today (works); a per-clinic domain is the deliverability/brand item for
+  scale. This is why Plan 05 is not marked 100%.
+- *Deferred:* HTML/branded body (owner: plain-text v1). *Not-required:* `email_sending_profiles`/`workflow_email_
+  templates`/`workflow_email_attempts` (attempts-log — same call as the SMS attempts table); $0 cost (Option B); analytics/UI (Plan 08).
+- **Resend webhook institution-scoping** relies on an echoed `institution_id` tag (added to the send) — the exact
+  Resend event payload shape is **NEEDS-STAGING-VERIFY**; the unsubscribe path is fully self-contained and verified.
+**Verdict:** a gated, idempotent, metered, **launch-compliant** plain-text email channel — transactional sends
+(implied consent), one-click unsubscribe, and bounce/complaint suppression. The per-tenant sending domain (external)
+is the remaining piece before high-volume production email; HTML + attempt-log are deferred/not-required.
 
 ### Plan 06 — Four Live Campaigns — ✅ 100% (complete for agreed scope; Sales Qualification dropped by product)
 **Built:** in-code template registry with 4 templates (`campaign_templates.py`); **recall trigger is REAL** (live
@@ -438,13 +448,14 @@ pipeline and is compliance-correctly gated in the meantime.
   (gate + basis + DNC route + implied transactional consent; commercial capture deferred with lead-intake). Marked
   complete because remaining items were built where required and otherwise assessed **not-required / dropped /
   deferred-per-client / other-lane** — not by implementing everything.
-- **Substantial (60–90%):** Plan 09 (~80%).
-- **Minimal (22–38%):** Plan 05 (~42%), Plan 10 (~25%), Plan 08 (~22%).
+- **Substantial (60–90%):** Plan 09 (~80%), Plan 05 (~70%).
+- **Minimal (22–38%):** Plan 10 (~25%), Plan 08 (~22%).
 - **Not started (0%):** none.
 
-**Biggest remaining milestones (largest → smallest):** Plan 05 email hardening (unsubscribe/bounce/HTML/domain —
-transactional email now sends via Plan-12 implied consent); Plan 08 full UI (CSV/analytics dashboards consuming the
-new usage API/ops/SSE); Plan 10 provisioning automation + persisted readiness state; **Plan 09 NexHealth staging verification**
+**Biggest remaining milestones (largest → smallest):** Plan 08 full UI (CSV/analytics dashboards consuming the
+new usage API/ops/SSE); Plan 10 provisioning automation + persisted readiness state; **Plan 05 per-tenant sending
+domain** (SPF/DKIM/DMARC + warm-up — external; unsubscribe/bounce/complaint + transactional sends now done);
+**Plan 09 NexHealth staging verification**
 (prove the subscription/backfill/reconciliation jobs against a live tenant) + `recall_eligibility_working_set`;
 Plan 03 front-end (V-8 UI) + the spoken-opt-out
 **A-8 detection field** (external).

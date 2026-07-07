@@ -47,6 +47,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/auth/set-password",
         "POST /api/auth/refresh",
         "POST /api/auth/logout",
+        "GET /api/email/unsubscribe",
     ),
     MFA_TICKET: (
         "POST /api/auth/mfa/webauthn/register/options",
@@ -64,6 +65,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/v1/twilio/webhooks/inbound-sms",
         "POST /api/v1/twilio/webhooks/sms-status",
         "POST /api/v1/nexhealth/webhooks/appointments",
+        "POST /api/email/webhooks/resend",
     ),
     TICKET_AUTH: (
         "GET /api/institution/events",

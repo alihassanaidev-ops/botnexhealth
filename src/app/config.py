@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     resend_reply_to: str | None = None
     # Comma-separated fallback recipients for call alerts (optional)
     resend_alert_recipients: str | None = None
+    # Shared secret for verifying Resend (bounce/complaint) webhooks. Unset in
+    # local/test; required in production (the webhook route fails closed when unset).
+    resend_webhook_secret: str | None = None
+    # Public base URL used to build one-click links in outbound emails (unsubscribe).
+    public_base_url: str = "https://app.scalenexus.ai"
 
     # Celery
     celery_broker_url: str | None = None

@@ -20,7 +20,7 @@ from src.app.models.sms_consent import (
     DoNotContact,
     SmsSuppression,
 )
-from src.app.services.sms_privacy import hash_phone, mask_phone
+from src.app.services.sms_privacy import hash_email, hash_phone, mask_email, mask_phone
 
 # DNC scopes that reach beyond a single location (block for the whole tenant).
 _TENANT_WIDE_DNC_SCOPES = frozenset({DncScope.INSTITUTION.value, DncScope.GROUP.value})
@@ -451,4 +451,70 @@ class SmsComplianceService:
             created_by_user_id=created_by_user_id,
         )
         self.session.add(row)
+        return row
+
+    async def record_email_consent(
+        self,
+        *,
+        institution_id: str,
+        email: str,
+        status: ConsentStatus | str,
+        basis: ConsentBasis | str | None = None,
+        location_id: str | None = None,
+        contact_id: str | None = None,
+        source: ConsentSource | str = ConsentSource.SYSTEM,
+        reason: str | None = None,
+    ) -> ConsentRecord | None:
+        """Append an EMAIL consent record keyed on the email identity.
+
+        The email counterpart to ``record_consent`` (which keys on phone). Writing
+        a REVOKED record here is how unsubscribe / hard-bounce / complaint suppress
+        email — the gate reads the latest EMAIL record and a revoked one beats the
+        implied-transactional allowance. Returns None if the email can't be hashed."""
+        email_hash = hash_email(email)
+        if not email_hash:
+            return None
+        return await self.record_email_consent_identity(
+            institution_id=institution_id,
+            email_hash=email_hash,
+            email_masked=mask_email(email),
+            status=status,
+            basis=basis,
+            location_id=location_id,
+            contact_id=contact_id,
+            source=source,
+            reason=reason,
+        )
+
+    async def record_email_consent_identity(
+        self,
+        *,
+        institution_id: str,
+        email_hash: str,
+        email_masked: str | None = None,
+        status: ConsentStatus | str,
+        basis: ConsentBasis | str | None = None,
+        location_id: str | None = None,
+        contact_id: str | None = None,
+        source: ConsentSource | str = ConsentSource.SYSTEM,
+        reason: str | None = None,
+    ) -> ConsentRecord:
+        """Append an EMAIL consent record from a pre-computed ``email_hash``.
+
+        Used where the raw address isn't available (an unsubscribe token carries
+        only the keyed email hash)."""
+        row = ConsentRecord(
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_id=contact_id,
+            channel=ConsentChannel.EMAIL.value,
+            email_hash=email_hash,
+            email_masked=email_masked,
+            status=status.value if isinstance(status, ConsentStatus) else status,
+            basis=basis.value if isinstance(basis, ConsentBasis) else basis,
+            source=source.value if isinstance(source, ConsentSource) else source,
+            reason=reason,
+        )
+        self.session.add(row)
+        await self.session.flush()
         return row

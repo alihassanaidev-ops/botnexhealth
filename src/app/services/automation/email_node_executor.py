@@ -98,6 +98,20 @@ class EmailNodeExecutor:
         subject = render_sms_body(node.subject_template, contact, location, context)
         body = render_sms_body(node.body_template, contact, location, context)
 
+        # --- Append the one-click unsubscribe footer (CAN-SPAM/CASL, Plan 05) ---
+        from src.app.services.email_unsubscribe import (
+            make_unsubscribe_token,
+            unsubscribe_footer,
+            unsubscribe_url,
+        )
+        from src.app.services.sms_privacy import hash_email
+
+        _email_hash = hash_email(to_email)
+        if _email_hash:
+            _token = make_unsubscribe_token(str(run.institution_id), _email_hash)
+            _url = unsubscribe_url(settings.public_base_url, _token)
+            body = body + unsubscribe_footer(_url, getattr(location, "name", None))
+
         # --- Send via Resend ---
         try:
             headers = {
@@ -113,6 +127,9 @@ class EmailNodeExecutor:
                 "to": [to_email],
                 "subject": subject,
                 "text": body,
+                # Tag so the Resend bounce/complaint webhook can scope suppression
+                # back to this institution (Plan 05).
+                "tags": [{"name": "institution_id", "value": str(run.institution_id)}],
             }
             if settings.resend_reply_to:
                 payload["reply_to"] = settings.resend_reply_to
