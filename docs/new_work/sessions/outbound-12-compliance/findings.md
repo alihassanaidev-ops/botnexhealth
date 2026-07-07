@@ -2,6 +2,17 @@
 
 ## Existing infrastructure (reusable)
 
+## 2026-07-08 closeout update
+- Product/legal resolved email/voice consent as **implied consent for transactional/care content** when the
+  channel identifier is already on file.
+- Marketing/recall/commercial email and voice still require express recorded consent.
+- Revoked consent and DNC are checked before implied consent.
+- Staff/admin DNC route now exists and is audited.
+- Commercial express-consent capture remains deferred with the client-deferred lead-intake pipeline.
+
+The original recommendation below for explicit email/voice consent is superseded for transactional/care content;
+it still applies to commercial/recall content.
+
 ### Consent / suppression layer
 - `src/app/models/sms_consent.py` — `ConsentRecord`, `SmsSuppression`, `DoNotContact`
 - `ConsentChannel` enum currently only has `SMS = "sms"` — needs EMAIL + VOICE for future channels
@@ -34,8 +45,8 @@
 - Table allows: activate/release timestamps, reason text, acting user FK, future per-workflow-type override
 - Simple implementation: gate queries `WHERE institution_id=X AND released_at IS NULL LIMIT 1`
 
-### D2 — Email/voice consent
-**Recommendation: require explicit consent per channel.**
+### D2 — Email/voice consent (original recommendation; superseded for transactional/care)
+**Original recommendation: require explicit consent per channel.**
 - CASL (Canada's Anti-Spam Legislation) requires express consent for commercial electronic messages, including transactional email to new contacts
 - Existing `ConsentRecord.channel` already supports multi-channel by design (string field, not hard-typed)
 - For v1: add EMAIL + VOICE to `ConsentChannel` enum; gate returns `block` if no active `ConsentRecord` for channel

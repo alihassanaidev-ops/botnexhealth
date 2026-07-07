@@ -5,8 +5,9 @@
 - `NoOpComplianceGate` in place; step dispatcher fully stubbed
 - All prerequisite models and services exist
 
-## Decisions — all resolved (2026-07-03)
-D1 separate OutboundEmergencyHalt table · D2 explicit consent per channel · D3 reuse LocationOperatingHours · D4 terminate compliance_hold · D5 block on NULL contact_id
+## Decisions — all resolved
+D1 separate OutboundEmergencyHalt table · D2 implied consent for transactional/care email+voice, express consent for
+commercial/recall · D3 reuse LocationOperatingHours · D4 terminate compliance_hold · D5 block on NULL contact_id
 
 ## Slices
 
@@ -47,3 +48,17 @@ D1 separate OutboundEmergencyHalt table · D2 explicit consent per channel · D3
 - **Status:** complete ✅
 - `tests/unit/test_automation_compliance_gate_service.py` — 13 tests covering all 3 check layers
 - 23/23 gate tests passing; 206/206 full automation suite passing — no regressions
+
+### Slice 7 — DNC + implied transactional consent
+- **Status:** complete ✅
+- `src/app/api/routes/do_not_contact.py` — staff/admin route to set/release do-not-contact records.
+- `src/app/models/audit_log.py` — audit actions for DNC set/release.
+- `src/app/services/automation/compliance_gate_service.py` — transactional/care email + voice can send on implied consent when the channel identifier is on file; marketing/recall still require express consent.
+- Gate checks revoked consent/DNC before implied consent, so opt-outs stay authoritative.
+- `tests/unit/test_do_not_contact.py` — DNC route tests.
+- `tests/unit/test_automation_compliance_gate_service.py` — implied transactional consent and marketing/recall blocking tests.
+
+## Deferred / Not Required
+- Commercial express-consent capture is deferred with the client-deferred lead-intake/commercial workflows.
+- Frequency/spend/blast-radius caps are dropped by product-owner decision.
+- A separate named ConsentService/SuppressionService is not required for current behavior.

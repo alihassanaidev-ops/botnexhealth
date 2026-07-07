@@ -566,6 +566,54 @@ export interface AutomationWorkflowRun {
     created_at: string;
 }
 
+export interface ChannelUsage {
+    channel: string;
+    event_count: number;
+    total_segments: number;
+    total_dials: number;
+    total_emails: number;
+    total_minutes: number;
+    total_cost: number;
+}
+
+export interface UsageSummary {
+    start_date: string;
+    end_date: string;
+    currency: string;
+    total_cost: number;
+    channels: ChannelUsage[];
+}
+
+export interface CampaignUsage {
+    workflow_id: string;
+    event_count: number;
+    total_cost: number;
+    total_segments: number;
+    total_minutes: number;
+    total_emails: number;
+}
+
+export interface CampaignUsageReport {
+    start_date: string;
+    end_date: string;
+    campaigns: CampaignUsage[];
+}
+
+export interface OutboundHaltStatus {
+    halted: boolean;
+    halt_id?: string | null;
+    reason?: string | null;
+    halted_at?: string | null;
+    halted_by_user_id?: string | null;
+    halted_runs?: number | null;
+}
+
+export interface WorkflowHaltResult {
+    workflow_id: string;
+    halted_runs: number;
+    status: string;
+}
+
 export interface CallbacksListResponse {
     total: number;
     limit: number;

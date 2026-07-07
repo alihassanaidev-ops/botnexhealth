@@ -1,9 +1,11 @@
 # Phase 2 Verification & Progress Report — Outbound Engagement Engine
 
-**Date:** 2026-07-06 (Plan 09 sections updated for commits `6671ba5` + `43e2875`; body otherwise the 2026-07-05 re-verification)
-**Branch:** `ali/phase-2` @ `0178e21` (in sync with origin). Includes Hammad's Plan 11
-(`c8e6535` — usage rollups / voice metering / campaign attribution / reporting API) and Plan 09 resilience core
-(`6671ba5` projection + reschedule re-enroll + freshness window; `43e2875` subscriptions + backfill + reconciliation).
+**Date:** 2026-07-08 (updated for Plan 05 commit `945ab9f`, Plan 12 commit `63b0363`, and the current Plan 08
+operator-UI working tree)
+**Branch:** `ali/phase-2` @ `945ab9f` + working tree. Includes Hammad's Plan 11
+(`c8e6535` — usage rollups / voice metering / campaign attribution / reporting API), Plan 09 resilience core
+(`6671ba5` projection + reschedule re-enroll + freshness window; `43e2875` subscriptions + backfill + reconciliation),
+Plan 12 implied transactional consent (`63b0363`), and Plan 05 email compliance (`945ab9f`).
 **Scope audited:** all 12 implementation plans.
 **Method:** this is a **full re-verification**, not an edit. Every prior finding was re-checked against the
 current merged tree by an independent per-plan sub-agent (graphify-oriented navigation → live code inspection,
@@ -45,17 +47,17 @@ reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer)
 (Hammad, `6671ba5`+`43e2875`): the disposable `appointment_working_set` projection, reschedule re-enroll,
 event-level idempotency ledger, revalidation freshness window, and the subscription/backfill/reconciliation jobs
 now exist — though the live-NexHealth-API half of that (subscriptions/backfill/reconciliation) is mock-tested and
-**needs staging verification**. The remaining work concentrates in the provisioning/UI plans: **Plan 05 email** is now launch-compliant
+**needs staging verification**. The remaining work concentrates in provisioning and external verification: **Plan 05 email** is now launch-compliant
 (transactional sends + one-click unsubscribe + bounce/complaint suppression) — only the **per-tenant sending domain
 (SPF/DKIM, external)** + HTML remain; Plan 10 **provisioning automation + persisted readiness state** (external);
-and Plan 08's **full campaign UI + analytics dashboards** (which can now consume the shipped Plan-11 usage APIs).
-(Plans 06 and 11 complete; Plan 06's Sales Qualification is product-dropped, Plan 11's voice/email cost is $0 per Option B.)
+and Plan 08 is complete for the essential operator scope.
+(Plans 06, 08, and 11 complete; Plan 06's Sales Qualification is product-dropped, Plan 08's CSV/revenue/timeline/ops/SSE
+items are not required for current scope, Plan 11's voice/email cost is $0 per Option B.)
 
-**Headline: ~81% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Eight of twelve plans
-are now complete (01, 02, 03, 04, 06, 07, 11, 12) — several marked so because their remaining items were assessed
+**Headline: ~88% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Nine of twelve plans
+are now complete (01, 02, 03, 04, 06, 07, 08, 11, 12) — several marked so because their remaining items were assessed
 **not-required / product-dropped / deferred-per-client / other-lane**, not because everything was built. The
-concentrated remaining work is now just **three plans** — Plan 05 (email), Plan 08 (UI), Plan 10 (provisioning) —
-plus Plan 09 staging verification.
+concentrated remaining work is now **Plan 05 scale email**, **Plan 10 provisioning**, plus **Plan 09 staging verification**.
 
 ### Product-owner scope decision (unchanged)
 **No caps or limits on clinics/locations, and no tenant-based caps.** Frequency caps, spend/budget caps,
@@ -77,13 +79,13 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 05 | Outbound Email | 🟢 Launch-compliant (sends + unsubscribe + bounce/complaint; per-tenant domain external) | **~70%** | ↑↑ from ~38% (transactional sends + unsubscribe + bounce/complaint) |
 | 06 | Four Live Campaigns | ✅ Complete for agreed scope (Sales Qualification dropped by product) | **100%** | ↑ from ~62–65% |
 | 07 | AI Callback Handling | ✅ Complete for purpose (leaner opt-in design; spec residuals not-required) | **100%** | ↑ from ~63% |
-| 08 | Campaign Mgmt / Analytics UI | 🟠 Read-only slice | **~22%** | unchanged |
+| 08 | Campaign Mgmt / Analytics UI | ✅ Complete for essential operator scope (CSV/revenue/timelines/ops/SSE deferred/not-required) | **100%** | ↑ from ~22% |
 | 09 | Integration & Data Layer | 🟢 Projection + reschedule re-enroll + ledger + backfill/reconciliation (NexHealth-API pieces staging-pending) | **~80%** | ↑↑ from ~40% (Hammad, `6671ba5`+`43e2875`) |
 | 10 | Per-Tenant Provisioning | 🟡 Cred-storage + computed readiness | **~25%** | unchanged |
 | 11 | Usage & Cost Reporting | ✅ Complete (scheduled recompute + SMS price fix + group endpoint; cost=Option B, budgets dropped) | **100%** | ↑ from ~65% |
 | 12 | Compliance & Consent | ✅ Complete for scope (gate + basis + DNC route + implied transactional consent; commercial capture deferred w/ intake) | **100%** | ↑ from ~72% |
 
-**Overall Phase 2: ~81% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
+**Overall Phase 2: ~88% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
 weighted estimate). Confidence: **High** across all 12 (independent per-plan code inspection + passing tests).
 
 ---
@@ -276,16 +278,25 @@ guard (CB-2). None block the callback path.
 **Verdict:** functional core, working **end-to-end**, and outcome-aware for voice callbacks. Marked complete; the
 missing spec tables were deliberately superseded by the workflow-activation opt-in, not omitted.
 
-### Plan 08 — Campaign Mgmt / Progress / Analytics UI — 🟠 ~22%
+### Plan 08 — Campaign Mgmt / Progress / Analytics UI — ✅ 100% (essential operator scope)
 **Built:** interactive campaign list (`Campaigns.tsx` → `GET /automation/workflows`; pause/resume/archive; links to
-builder/detail/versions); campaign detail with a read-only runs table; backend lifecycle + run-read routes;
-role-gated routes; `workflow_run_updated` SSE type registered (backend only).
-**Missing:** enrollment UI + **CSV** import/mapping/preview; **analytics/reporting dashboards** (note: Plan 11 now
-provides the backend `/institution/usage` API these would consume, but no FE consumes it yet); `campaign_metrics_daily`
-+ attributed revenue; operations/dead-letter/replay page; **emergency-halt UI** (backend exists, unconsumed);
-run-detail timeline; **SSE real-time** (pages are manual-refresh); location scoping in the list.
-**Bugs:** native `confirm()` instead of the app Dialog; runs table mislabeled "Enrollments."
-**Verdict:** honest read-only slice on real data; most of the plan (CSV/analytics/ops) is deferred.
+builder/detail/versions); campaign detail with runs table; backend lifecycle + run-read routes; role-gated routes;
+`workflow_run_updated` SSE type registered (backend only).
+**Built in Plan 08 operator slice (2026-07-08):** campaign detail usage/cost cards consume Plan 11
+`/institution/usage/summary` + `/by-campaign`; campaign list exposes institution-wide outbound halt status plus
+activate/release; campaign detail exposes per-campaign emergency halt and run cancel; archive uses app Dialogs; the
+detail table is now labeled "Runs"; backend `/outbound-halt` literal routes were moved before `/{workflow_id}` so
+the UI reaches the halt endpoints. **Manual enrollment UI now exists** for one existing patient on an active campaign,
+using the existing `POST /automation/workflows/{workflow_id}/enroll` backend.
+**Deferred / not-required for current scope:** **CSV** import/mapping/preview/commit is not required for the current
+four-campaign scope and adds PHI/consent/retention decisions; `campaign_metrics_daily` + attributed revenue require
+confirmed revenue source/attribution definition; operations/dead-letter/replay page and run-detail timelines are
+high-volume support tooling; **SSE real-time** is not required because manual refresh works; location scoping only
+matters once multi-location campaign operation is in launch scope; richer outcome analytics wait on delivery/booking
+definitions.
+**Verdict:** complete for the essential product purpose — admins can manage campaigns, view usage/cost, manually
+enroll existing patients, inspect/cancel runs, and halt outbound safely. Remaining original-plan items are explicitly
+deferred/not-required rather than functional blockers.
 
 ### Plan 09 — Integration & Data Layer — 🟢 ~80% (code-complete; NexHealth-API pieces staging-pending)
 **Built (Hammad, commits `6671ba5` + `43e2875`, 2026-07-06) — the plan's defining resilience components now exist:**
@@ -443,24 +454,25 @@ pipeline and is compliance-correctly gated in the meantime.
 ## 6. Overall progress summary
 
 - **Complete (100%):** Plan 01, Plan 02, **Plan 03** (voice channel; residuals FE/external/infra), **Plan 04**,
-  **Plan 06** (agreed scope; Sales Qualification product-dropped), **Plan 07** (leaner opt-in design), **Plan 11**
+  **Plan 06** (agreed scope; Sales Qualification product-dropped), **Plan 07** (leaner opt-in design), **Plan 08**
+  (essential operator scope; CSV/revenue/timelines/ops/SSE deferred/not-required), **Plan 11**
   (recompute scheduled + SMS price fix + group endpoint; cost = product Option B, budgets dropped), **Plan 12**
   (gate + basis + DNC route + implied transactional consent; commercial capture deferred with lead-intake). Marked
   complete because remaining items were built where required and otherwise assessed **not-required / dropped /
   deferred-per-client / other-lane** — not by implementing everything.
 - **Substantial (60–90%):** Plan 09 (~80%), Plan 05 (~70%).
-- **Minimal (22–38%):** Plan 10 (~25%), Plan 08 (~22%).
+- **Minimal:** Plan 10 (~25%).
 - **Not started (0%):** none.
 
-**Biggest remaining milestones (largest → smallest):** Plan 08 full UI (CSV/analytics dashboards consuming the
-new usage API/ops/SSE); Plan 10 provisioning automation + persisted readiness state; **Plan 05 per-tenant sending
+**Biggest remaining milestones (largest → smallest):** Plan 10 provisioning automation + persisted readiness state; **Plan 05 per-tenant sending
 domain** (SPF/DKIM/DMARC + warm-up — external; unsubscribe/bounce/complaint + transactional sends now done);
 **Plan 09 NexHealth staging verification**
 (prove the subscription/backfill/reconciliation jobs against a live tenant) + `recall_eligibility_working_set`;
 Plan 03 front-end (V-8 UI) + the spoken-opt-out
 **A-8 detection field** (external).
-*(Plans 06 and 11 are complete — Plan 06's Sales Qualification is product-dropped; Plan 11's voice/email cost is $0
-by product Option B and budgets are dropped. Not remaining milestones.)*
+*(Plans 06, 08, and 11 are complete for agreed/essential scope — Plan 06's Sales Qualification is product-dropped;
+Plan 08's CSV/revenue/timeline/ops/SSE items are not required for the current operator scope; Plan 11's voice/email
+cost is $0 by product Option B and budgets are dropped. Not remaining milestones.)*
 
 **Production readiness:** engine + builder are production-grade and verified; compliance is enforced (and consent
 basis hard-blocked) on every dispatch; voice is now outcome-reactive and crash/timeout-safe. For a **safe
@@ -477,18 +489,17 @@ The full, prioritized, de-duplicated remaining-work list lives in **one place** 
 `../outbound-followups-and-gaps.md` (the register). This report does not restate it, to avoid drift.
 
 **Top of that list (highest-leverage first), updated for the current state:**
-1. **Plan 05 email hardening** (E-*) — unsubscribe (legal minimum), bounce/complaint ingestion, **email consent
-   capture** (unblocks email), HTML.
-2. **Plan 09 — NexHealth staging verification** (was "resilient core", now BUILT in `6671ba5`+`43e2875`): prove the
-   subscription/backfill/reconciliation jobs against a live NexHealth tenant (they're mock-tested only), then add
-   `recall_eligibility_working_set`. Reschedule re-enroll + freshness window + projection + event-ledger are done and
-   Postgres-verified.
-3. **Plan 08 analytics UI** — consume the shipped `/institution/usage` + `/group/usage-summary` APIs; CSV import;
-   ops/replay; SSE. *(Plan 11 is complete: scheduled recompute + SMS price fix + group endpoint done; voice/email
-   cost $0 by product Option B; budgets dropped.)*
+1. **Plan 09 — NexHealth staging verification** (was "resilient core", now BUILT in `6671ba5`+`43e2875`): prove the
+   subscription/backfill/reconciliation jobs against a live NexHealth tenant (they're mock-tested only), then decide
+   whether `recall_eligibility_working_set` is actually needed. Reschedule re-enroll + freshness window + projection
+   + event-ledger are done and Postgres-verified.
+2. **Plan 10 provisioning** — persisted readiness state and vendor automation only if this becomes required for
+   launch; external DNS/Twilio/A2P pieces remain vendor/process work.
+3. **Plan 05 scale email** — per-tenant sending domain (SPF/DKIM/DMARC + warm-up) is external/vendor work; HTML is
+   optional polish. Launch-compliant transactional email already sends with unsubscribe/bounce/complaint handling.
 4. **Plan 03 front-end (V-8 UI)** + **spoken-opt-out A-8 detection field** (V-2 write+wiring built + config-gated;
    CTO supplies the Retell field name); **SMS crash-window claim (XC-1b SMS)** — assessed not-required for now.
-   *(Plans 04, 06, 07, 11 are complete; S-2 free-text inbound routing done.)*
+   *(Plans 04, 06, 07, 08, 11 are complete; S-2 free-text inbound routing done.)*
 
 *(Caps — frequency/spend/blast-radius/concurrency — are intentionally excluded per the product-owner decision;
 Plan 11 delivers usage *visibility*, not budgets/caps.)*

@@ -20,3 +20,17 @@
 - **Status:** complete ✅
 - `tests/unit/test_outbound_email_executor.py` — 10 tests: `_build_from` helper, executor error paths, institution vs platform from-address, Resend HTTP error
 - 1188/1188 unit tests passing, no regressions
+
+### Slice 4 — Email compliance closeout
+- **Status:** complete ✅
+- `src/app/services/email_unsubscribe.py` — signed unsubscribe tokens binding institution + email hash.
+- `src/app/api/routes/email_compliance.py` — public one-click unsubscribe and Resend bounce/complaint webhook.
+- `src/app/tasks/email_compliance.py` — suppression task writes revoked EMAIL consent under Celery RLS context.
+- `src/app/services/automation/email_node_executor.py` — appends unsubscribe footer, sends Resend idempotency header, tags institution, records usage.
+- `src/app/services/sms_compliance.py` — channel-generic email consent/suppression helpers.
+- `tests/unit/test_email_compliance.py` — unsubscribe + webhook tests.
+
+## Deferred / Not Required
+- Per-tenant sending domain (SPF/DKIM/DMARC + warm-up) is external/vendor work and overlaps Plan 10.
+- HTML/branded body is optional polish; plain text v1 is launch-compliant.
+- `workflow_email_attempts` is not needed for current unsubscribe/bounce suppression design.

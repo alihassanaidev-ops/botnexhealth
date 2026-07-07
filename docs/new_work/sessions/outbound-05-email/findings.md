@@ -31,3 +31,11 @@ Reuse for both subject_template and body_template.
 
 ## httpx already in project
 Used by email_notification_service.py — no new dependency needed.
+
+## 2026-07-08 compliance closeout
+- Campaign email now appends a signed one-click unsubscribe link.
+- `GET /api/email/unsubscribe` verifies the token and suppresses the email identity.
+- `POST /api/email/webhooks/resend` verifies Resend webhook signatures and suppresses on bounce/complaint.
+- Suppression writes revoked EMAIL consent keyed by email hash, so opt-outs beat implied transactional consent.
+- Email executor now sends Resend idempotency headers and records usage.
+- Remaining scale work is per-tenant sending domain / DNS / warm-up, which is external and overlaps Plan 10.

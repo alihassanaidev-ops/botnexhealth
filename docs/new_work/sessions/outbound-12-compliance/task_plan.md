@@ -6,7 +6,9 @@ workflow runs before any send node fires. Three sequential checks: emergency hal
 quiet hours → channel consent.
 
 ## Current Status
-**Complete** ✅ — all 6 slices shipped.
+**Complete for agreed scope** ✅ — gate + halt + quiet hours + DNC + consent basis shipped. Transactional/care
+email and voice now use implied consent when the identifier is on file; commercial/recall still require express
+consent.
 
 ## Prerequisites (confirmed present)
 - `ComplianceGate` protocol + `GateResult` already frozen in `compliance_gate.py`
@@ -22,7 +24,7 @@ See `findings.md` for full rationale on each.
 | # | Decision | Recommended | Owner | Status |
 |---|----------|-------------|-------|--------|
 | D1 | Emergency halt: column on Institution vs. separate audit table | Separate `OutboundEmergencyHalt` table | CTO | ✅ **Resolved: separate table** |
-| D2 | Consent for email/voice: explicit opt-in required or implicit relationship? | Explicit per-channel (CASL) | CTO + Legal | ✅ **Resolved: explicit consent, add EMAIL+VOICE to ConsentChannel** |
+| D2 | Consent for email/voice: explicit opt-in required or implicit relationship? | Implied for transactional/care, express for marketing/recall | CTO + Legal | ✅ **Resolved: Option B for transactional; express still required for commercial** |
 | D3 | Quiet hours source: reuse `LocationOperatingHours` or separate outbound window? | Reuse operating hours for v1 | Product | ✅ **Resolved: reuse LocationOperatingHours; separate config deferred** |
 | D4 | Hold semantics: terminate with `compliance_hold` outcome or re-queue? | Terminate for v1 (re-queue deferred) | CTO | ✅ **Resolved: terminate with compliance_hold; re-queue deferred** |
 | D5 | NULL contact_id on run: skip consent check or fail-safe block? | Fail-safe block | CTO | ✅ **Resolved: block — no contact = no consent can be verified** |
@@ -68,6 +70,13 @@ See `findings.md` for full rationale on each.
 - [ ] Gate passes when consent granted + no halt + in hours
 - [ ] Emergency halt API: activate / release / status
 
+### Slice 7 — DNC + Implied Transactional Consent Closeout
+- [x] Add staff/admin do-not-contact route
+- [x] Audit DNC set/release actions
+- [x] Gate DNC before channel consent
+- [x] Allow transactional/care email + voice by implied consent when identifier is on file
+- [x] Keep marketing/recall email + voice blocked unless express consent exists
+
 ## Files Touched
 | File | Change |
 |------|--------|
@@ -77,5 +86,7 @@ See `findings.md` for full rationale on each.
 | `src/app/services/automation/compliance_gate_service.py` | New — real gate |
 | `src/app/services/automation/step_dispatcher.py` | Swap NoOp for real gate |
 | `src/app/api/routes/automation_workflows.py` | Emergency halt endpoints |
+| `src/app/api/routes/do_not_contact.py` | DNC admin endpoints |
 | `alembic/versions/` | 2 migrations (halt table + consent constraint) |
 | `tests/unit/test_automation_compliance_gate_service.py` | New test file |
+| `tests/unit/test_do_not_contact.py` | New test file |

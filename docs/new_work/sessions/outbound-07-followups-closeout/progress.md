@@ -26,8 +26,8 @@
 
 ### Explicitly deferred (documented in the register)
 - Plan 03's own items (V-1 outcome loop, V-3 consent-basis hard-block, V-4 data model, V-6 retry) → the NEXT task.
-- Email consent *capture UI/intake* (Plan 05) — the writer is now channel-generic, but email still has no
-  capture trigger, so email remains blocked-by-default until Plan 05 adds intake (XC-6 email portion).
+- Commercial email consent *capture UI/intake* — transactional/care email now sends on implied consent when the
+  email identifier is on file. Marketing/recall email remains blocked until an express-consent intake records it.
 - Plan 06 C-1 dead confirm-branch (needs response capture / PMS write-back). CB-4 packaged template/tables.
 - XC-1b SMS/voice provider idempotency keys (Twilio/Retell support varies).
 

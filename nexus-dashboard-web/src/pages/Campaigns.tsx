@@ -10,19 +10,32 @@ import {
     Loader2,
     Plus,
     Workflow,
+    ShieldAlert,
+    ShieldCheck,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
+    activateOutboundHalt,
     listCampaigns,
+    getOutboundHaltStatus,
     pauseCampaign,
+    releaseOutboundHalt,
     resumeCampaign,
     archiveCampaign,
 } from "@/lib/automation-api"
-import type { AutomationWorkflow } from "@/types"
+import type { AutomationWorkflow, OutboundHaltStatus } from "@/types"
 
 const STATUS_STYLES: Record<string, string> = {
     active: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800",
@@ -60,13 +73,21 @@ function TriggerLabel({ triggerType }: { triggerType: string | null }) {
 
 export default function Campaigns() {
     const [campaigns, setCampaigns] = useState<AutomationWorkflow[]>([])
+    const [haltStatus, setHaltStatus] = useState<OutboundHaltStatus | null>(null)
     const [loading, setLoading] = useState(true)
     const [acting, setActing] = useState<string | null>(null)
+    const [archiveTarget, setArchiveTarget] = useState<AutomationWorkflow | null>(null)
+    const [haltDialog, setHaltDialog] = useState<"activate" | "release" | null>(null)
 
     async function refresh() {
         setLoading(true)
         try {
-            setCampaigns(await listCampaigns())
+            const [nextCampaigns, nextHalt] = await Promise.all([
+                listCampaigns(),
+                getOutboundHaltStatus(),
+            ])
+            setCampaigns(nextCampaigns)
+            setHaltStatus(nextHalt)
         } catch {
             toast.error("Failed to load campaigns")
         } finally {
@@ -103,14 +124,42 @@ export default function Campaigns() {
     }
 
     async function handleArchive(wf: AutomationWorkflow) {
-        if (!confirm(`Archive "${wf.name}"? It will stop accepting new enrollments.`)) return
         setActing(wf.id)
         try {
             const updated = await archiveCampaign(wf.id)
             setCampaigns((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
             toast.success(`"${wf.name}" archived`)
+            setArchiveTarget(null)
         } catch {
             toast.error("Failed to archive campaign")
+        } finally {
+            setActing(null)
+        }
+    }
+
+    async function handleActivateHalt() {
+        setActing("outbound-halt")
+        try {
+            const next = await activateOutboundHalt("Activated from campaign management")
+            setHaltStatus(next)
+            const suffix = next.halted_runs ? ` ${next.halted_runs} runs stopped.` : ""
+            toast.success(`Outbound halt activated.${suffix}`)
+            setHaltDialog(null)
+        } catch {
+            toast.error("Failed to activate outbound halt")
+        } finally {
+            setActing(null)
+        }
+    }
+
+    async function handleReleaseHalt() {
+        setActing("outbound-halt")
+        try {
+            setHaltStatus(await releaseOutboundHalt())
+            toast.success("Outbound halt released")
+            setHaltDialog(null)
+        } catch {
+            toast.error("Failed to release outbound halt")
         } finally {
             setActing(null)
         }
@@ -133,6 +182,20 @@ export default function Campaigns() {
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
+                    <Button
+                        variant={haltStatus?.halted ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setHaltDialog(haltStatus?.halted ? "release" : "activate")}
+                        disabled={loading || acting === "outbound-halt"}
+                        className="gap-1.5"
+                    >
+                        {haltStatus?.halted ? (
+                            <ShieldAlert className="h-3.5 w-3.5" />
+                        ) : (
+                            <ShieldCheck className="h-3.5 w-3.5" />
+                        )}
+                        {haltStatus?.halted ? "Outbound halted" : "Outbound clear"}
+                    </Button>
                     <Button size="sm" asChild className="gap-1.5">
                         <Link to="/institution-admin/campaigns/templates">
                             <Plus className="h-3.5 w-3.5" />
@@ -151,6 +214,20 @@ export default function Campaigns() {
                     </Button>
                 </div>
             </div>
+
+            {haltStatus?.halted && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+                    <div className="flex items-start gap-2">
+                        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                        <div>
+                            <p className="font-medium">Institution outbound is halted.</p>
+                            <p className="text-xs opacity-80">
+                                New outbound campaign sends are blocked until this halt is released.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <Card>
                 <CardContent className="p-0">
@@ -247,7 +324,7 @@ export default function Campaigns() {
                                                         size="icon"
                                                         className="h-8 w-8"
                                                         disabled={busy}
-                                                        onClick={() => handleArchive(wf)}
+                                                        onClick={() => setArchiveTarget(wf)}
                                                         title="Archive"
                                                     >
                                                         <Archive className="h-3.5 w-3.5" />
@@ -272,6 +349,58 @@ export default function Campaigns() {
                     )}
                 </CardContent>
             </Card>
+
+            <Dialog open={archiveTarget !== null} onOpenChange={(open) => !open && setArchiveTarget(null)}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Archive this campaign?</DialogTitle>
+                        <DialogDescription>
+                            It will stop accepting new enrollments. Existing runs are not cancelled by archive.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setArchiveTarget(null)} disabled={acting !== null}>
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={() => archiveTarget && handleArchive(archiveTarget)}
+                            disabled={acting !== null}
+                        >
+                            {acting === archiveTarget?.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Archive
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={haltDialog !== null} onOpenChange={(open) => !open && setHaltDialog(null)}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {haltDialog === "release" ? "Release outbound halt?" : "Activate outbound halt?"}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {haltDialog === "release"
+                                ? "Campaign sends can resume after the halt is released."
+                                : "This stops in-flight campaign runs and blocks new outbound sends for this institution."}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setHaltDialog(null)} disabled={acting !== null}>
+                            Cancel
+                        </Button>
+                        <Button
+                            variant={haltDialog === "release" ? "default" : "destructive"}
+                            onClick={haltDialog === "release" ? handleReleaseHalt : handleActivateHalt}
+                            disabled={acting !== null}
+                        >
+                            {acting === "outbound-halt" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            {haltDialog === "release" ? "Release halt" : "Activate halt"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

@@ -1,6 +1,6 @@
 # Outbound Engagement Engine — Follow-ups & Gaps Register
 
-**Last updated:** 2026-07-04
+**Last updated:** 2026-07-08
 **Purpose:** the **single source of remaining work** for Phase 2 — every open gap, deferral, bug, and
 follow-up across all 12 plans, de-duplicated and prioritized. This is the "what's left / why" companion to
 `verification-phase2-v2/report.md` (which is the "where we are / status" document). To avoid duplication:
@@ -29,6 +29,10 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
   7 integration. Residual crash-window tracked as **XC-1b** below. Session: `outbound-xc1-send-idempotency/`.
 - **Plan 12 semantic layer:** content-class/PHI validator wired into publish + `/validate`; AI-voice disclosure
   injection; **bilingual FR STOP**; **do-not-contact scope tiers** + DNC now enforced on **all** channels (voice/email were a hole).
+- **Plan 05 email compliance:** one-click unsubscribe + Resend bounce/complaint suppression shipped; revoked EMAIL
+  consent is written by email hash, and campaign email sends with a Resend idempotency header.
+- **Plan 12 implied transactional consent:** transactional/care email + voice can send on implied consent when the
+  channel identifier is on file; commercial/recall still require express consent.
 - **Plan 02:** builder wires `/validate` `/versions` `/merge-fields`; merge-field drift fixed; the validation panel
   surfaces the new compliance codes automatically (no FE change needed).
 - **Engine hardening (finalize):** inline path unified onto gated `build_dispatcher` (kills Finding A); quiet-hours
@@ -66,14 +70,13 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
   operator runbooks (pause/halt/dead-letter replay); feature-flag the scheduler for staged go-live.
 - **XC-5 (P2) Non-cap paced dispatch.** Global smoothing against the shared NexHealth ~1000/min key + Twilio/Retell
   limits (not a per-clinic cap). Only jitter ships today. Coordinate with Plan 09 backfill.
-- **XC-6 (P0/P1) Consent-CAPTURE path — VOICE ✅ done, EMAIL still open.** The gate enforces per-channel
+- **XC-6 (P0/P1) Consent-CAPTURE path — VOICE ✅ done, EMAIL commercial capture still open.** The gate enforces per-channel
   consent but the writers only wrote SMS. **Closeout 2026-07-04:** made `record_consent`/`record_consent_identity`
   channel-generic + added `has_consent_record`; the AI-callback path now records an express **VOICE** consent on
   the inbound callback request (if none exists), so **Plan 07 voice callbacks are functional end-to-end** (real-DB
-  test). **Still open — EMAIL capture (P1):** the writer is now channel-generic, but nothing captures email
-  consent, so **Plan 05 email sends remain blocked-by-default** until an email opt-in/intake flow records it
-  (Plan 05 / Plan 12). General voice consent (non-callback triggers, e.g. Recall/Sales) also still needs an
-  intake path. *(P0-2 fixed the email consent key, not this capture gap.)*
+  test). **Closeout 2026-07-07/08:** transactional/care EMAIL and VOICE now send on implied consent when the
+  identifier is on file, while revoked consent/DNC still block. **Still open:** express-consent capture for
+  commercial/recall email/voice is deferred with the client-deferred lead-intake pipeline.
 
 ### Plan 03 — Outbound Voice (~70–75% — outcome loop + consent basis built 2026-07-04)
 Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈70–75%.
@@ -124,14 +127,15 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
 - **S-3 (P2) `sms_history_logs` workflow linkage** — add `workflow_run_id`/`step_id`/`campaign_id`/`attempt_number`/
   `provider_segments`/`price_*` so delivery joins to a run/attempt (linkage currently only on the separate `usage_events` row).
 
-### Plan 05 — Outbound Email (~30–35%)
-- **E-1 (P1) Unsubscribe** — link/token + email suppression. Legal minimum (CASL/CAN-SPAM); do not launch email without it.
-- **E-2 (P1) Bounce/complaint/delivered webhook** — `EmailWebhookService` + signature verify + suppression from hard bounce/complaint.
-- **E-3 (P2) HTML/branded body** (plain text only today) + email-specific merge-field allowlist.
-- **E-4 (P2) Per-tenant sending domain** — SPF/DKIM/DMARC + warm-up + encrypted per-tenant Resend key + `EmailSendingProfileService` (see Plan 10).
-- **E-5 (P2) Email attempt/audit log** (`workflow_email_attempts`) — no per-send record today → future bounce reconciliation impossible.
-- **E-6 (P1) Email cost not captured** — metered at $0 by Plan 11 product Option B; revisit only if Resend pricing
-  or an approved internal rate card should be surfaced in reports.
+### Plan 05 — Outbound Email (~70%; launch-compliant v1)
+- **E-1 ✅ Unsubscribe.** Signed one-click unsubscribe link + email suppression shipped.
+- **E-2 ✅ Bounce/complaint webhook.** Resend webhook signature verification + suppression from hard bounce/complaint shipped.
+- **E-3 (P2) HTML/branded body** — optional polish; plain text v1 is the launch-compliant slice.
+- **E-4 (P2/external) Per-tenant sending domain** — SPF/DKIM/DMARC + warm-up + encrypted per-tenant Resend key /
+  `EmailSendingProfileService` if scale requires it (see Plan 10).
+- **E-5 ✅ Attempt/audit log not required.** Current usage/campaign attribution lives on `usage_events` and workflow
+  steps; unsubscribe/bounce suppression does not need a `workflow_email_attempts` table.
+- **E-6 ✅ Email usage metered.** Sends record `emails=1`; cost remains $0 by Plan 11 product Option B.
 
 ### Plan 06 — Four Live Campaigns (100% for agreed scope; updated 2026-07-07)
 - **C-1 ✅ Confirmation branch capture.** Inbound SMS confirmation replies (`YES`, `Y`, `CONFIRM`, `C`, `1` as
@@ -162,15 +166,20 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   superseded by the leaner opt-in-via-activation design. Callback workflows inherit Plan 03's outcome loop when
   their `SendVoiceNode.wait_for_outcome` is enabled.
 
-### Plan 08 — Campaign Management / Analytics UI (~22%)
-- **U-1 (P1) Enrollment UI + CSV import** (mapping/validate/preview) + `campaign_enrollment_batches`. Backend
-  single/bulk enroll exists but is unconsumed by the UI.
-- **U-2 (P1) Emergency-halt UI** — backend routes exist, no frontend surface.
+### Plan 08 — Campaign Management / Analytics UI (100% essential scope)
+- **U-1 ✅ Manual enrollment UI.** Existing-patient manual enrollment is now surfaced on campaign detail using the
+  existing single-enroll backend. **CSV import is not required for current scope** and stays deferred because it adds
+  PHI/consent/retention decisions.
+- **U-2 ✅ Emergency-halt UI.** Institution-wide halt status/activate/release and per-campaign emergency halt are
+  surfaced in the campaign UI. Backend `/outbound-halt` literal routes were also moved before `/{workflow_id}`.
 - **U-2b (P1) Privileged institution/DSO-wide DNC admin endpoint + UI** — the `set_do_not_contact` writer exists (Plan 12); expose it.
-- **U-3 (P2) Analytics/reporting page + attributed revenue** — **backend now unblocked**: Plan 11 rollups +
-  `/institution/usage` API (`/summary`, `/by-campaign`) exist (M-2). The FE analytics page that consumes them remains.
-- **U-4 (P2) Operations page** — dead-letter/replay, stale-timers, run-detail timeline.
-- **U-5 (P2) SSE real-time** — pages are manual-refresh; wire `workflow_run_updated`. Fix native `confirm()` → app Dialog; add location scoping.
+- **U-3 ✅ essential analytics.** Campaign detail consumes Plan 11 `/institution/usage/summary` + `/by-campaign` for
+  usage/cost cards. Attributed revenue, outcome-rate definitions, trends, and group-level dashboards are not required
+  for current scope.
+- **U-4 (P2) Operations page** — dead-letter/replay, stale-timers, run-detail timeline. Run cancel is now exposed
+  from the campaign detail table. Full ops/replay and timelines are high-volume support tooling, not current blockers.
+- **U-5 (P2) SSE real-time** — pages are manual-refresh; wire `workflow_run_updated`. Native archive `confirm()` is
+  fixed; SSE and location scoping are not required for current scope.
 
 ### Plan 09 — Integration & Data Layer (~40%)
 - **D-1 (P1) Reschedule re-enroll at the new time** — a rescheduled appointment's reminder is **silently dropped**
@@ -197,25 +206,27 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
 - **M-2 ✅ Rollups + reporting API.** `usage_cost_rollups` table + `UsageRollupService`
   (UPSERT-from-SELECT, location + institution daily rollups; `services/usage_rollup.py`, migration
   `20260706_usage_cost_rollups`) + runner `recompute_usage_rollup.py`; reporting API `/institution/usage`
-  (`GET /summary`, `GET /by-campaign`, RLS-enforced). **Unblocks Plan 08 analytics (U-3) — backend ready, FE remains.**
+  (`GET /summary`, `GET /by-campaign`, RLS-enforced). **Consumed by Plan 08 campaign usage cards.**
 - **M-3 ✅ Cost fidelity for available provider prices.** SMS late-price callbacks now backfill NULL cost/segments
   on the existing idempotent usage event (`UsageMeteringService._backfill_costs`). Email and voice cost remain $0
   by product Option B because providers do not supply per-send prices; this is a reporting-policy decision, not an
   implementation gap.
 - **M-4 ✅ Campaign attribution.** `usage_events.workflow_run_id` + `workflow_id` added (migration
   `20260706_usage_event_campaign_tags`); `record()` persists them; per-campaign spend works via `/by-campaign`.
-- **M-5 ✅ Budgets dropped; dashboards moved to Plan 08.** `usage_budgets`/budget caps are dropped by the no-caps
-  product decision. FE dashboards remain Plan 08 U-3 and consume the shipped usage APIs.
+- **M-5 ✅ Budgets dropped; essential dashboards moved to Plan 08 and shipped.** `usage_budgets`/budget caps are
+  dropped by the no-caps product decision. Plan 08 consumes the shipped usage APIs for campaign usage/cost cards.
 - **M-6 ✅ Cost estimation deliberately not built.** No `estimated` flag/rate-card estimate because no approved
   business rates exist; exact usage counts still report across SMS/email/voice.
 - **M-7 ✅ Group endpoint + scheduled recompute shipped; alarms are hardening.** `GET /api/group/usage-summary`
   exposes DSO/group aggregation, and infra schedules `RecomputeUsageRollup` every 15 minutes. Ingestion-lag/
   rollup-failure alarms and deeper RLS/integration tests are operational hardening, not Plan 11 blockers.
 
-### Plan 12 — Compliance & Consent (~60%)
-- **CO-1 (P2) Named `ConsentService`/`SuppressionService`** — logic currently lives in the gate + `SmsComplianceService`.
-- **CO-2 (P2) US cross-timezone quiet hours** — clinic-TZ only; a US clinic calling out-of-region patients can breach their local quiet hours.
-- *(Consent-basis hard-enforcement for marketing voice = V-3; DNC admin endpoint = U-2b.)*
+### Plan 12 — Compliance & Consent (100% agreed scope)
+- **CO-1 ✅ Named `ConsentService`/`SuppressionService` not required.** Logic lives in the gate +
+  channel-generic `SmsComplianceService` helpers.
+- **CO-2 (P2) US cross-timezone quiet hours** — clinic-TZ only; patient-local quiet-hours are future policy work if required.
+- **Commercial express-consent capture** is deferred with client-deferred lead intake; gate correctly blocks
+  marketing/recall email/voice meanwhile.
 
 ---
 
@@ -225,10 +236,13 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
    Remaining: **XC-1b** crash-window (committed-before-send claim / provider idempotency key) before high volume.
 3. ✅ **Plan 11 usage/cost** — complete for agreed scope: voice/SMS/email usage ingestion, campaign attribution,
    institution reporting, scheduled rollups, SMS late-price backfill, and group usage summary are shipped. Budgets
-   are dropped by the no-caps decision; voice/email cost stays $0 by product Option B; dashboards remain Plan 08.
+   are dropped by the no-caps decision; voice/email cost stays $0 by product Option B; essential campaign usage UI is
+   shipped in Plan 08.
 4. **Plan 09 resilient core** (D-1..D-4) — reschedule re-enroll, freshness window, projections/backfill/reconciliation.
-5. **Plan 05 email hardening** (E-1/E-2) — unsubscribe + bounce/complaint; independent, legal minimum.
+5. ✅ **Plan 05 email compliance** — unsubscribe + bounce/complaint shipped. Remaining scale email is per-tenant
+   domain/DNS/warm-up if launch scale requires it.
 6. **Plan 06 differentiators** (C-1..C-3) — PMS write-back (fixes dead confirm-branch), Sales Qualification.
 7. ✅ **Plan 07 AI callback** — core v1 merged (2026-07-04). Remaining: CB-2/CB-3 confirmations + CB-4 template/tables.
 8. **Plan 03 outcome feedback loop** (V-1..V-3) + **Plan 10** (PR-1 quick audit fix, then PR-2/PR-3).
-9. **Plan 08 full UI** (U-1..U-5) + **Ops** (XC-4) + remaining P2 polish alongside.
+9. ✅ **Plan 08 essential operator UI** — complete. CSV/revenue/timeline/ops/SSE remain deferred/not-required unless
+   future launch workflows explicitly need them.

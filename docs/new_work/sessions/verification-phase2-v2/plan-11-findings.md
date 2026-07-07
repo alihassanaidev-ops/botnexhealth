@@ -15,7 +15,7 @@ Remaining plan-spec items are not blockers:
 - Voice/email cost remains `$0` by product Option B because the providers do not emit per-send prices and
   no approved business rate card exists.
 - `usage_budgets`/budget caps are dropped by the no-caps product decision.
-- Dashboards are Plan 08 frontend work consuming the shipped usage APIs.
+- Essential campaign usage cards are shipped in Plan 08; richer dashboards remain future UI work if product needs them.
 - Alarms and deeper RLS/integration coverage are operational hardening.
 
 ## Current implemented state
@@ -40,7 +40,8 @@ Remaining plan-spec items are not blockers:
 - **Cost estimation fallback:** deliberately not built. Exact usage counts are present; estimated dollar values
   need approved business rates before they should appear in product.
 - **Budgets:** dropped with the no-caps/no-limits product decision.
-- **Frontend dashboards:** not part of Plan 11 closeout; tracked in Plan 08.
+- **Frontend dashboards:** not part of Plan 11 closeout. Essential campaign usage cards shipped in Plan 08; richer
+  dashboards remain future UI work if product needs them.
 - **Alarms/tests:** recommended hardening, not required for feature completion.
 
 ## Confidence
