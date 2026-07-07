@@ -36,9 +36,9 @@ The spine is complete and hardening is real:
 - **Plan 11 (Usage & Cost) is complete (100%)**: `usage_cost_rollups` + service, all-channel ingestion
   (SMS/email/**voice**), campaign attribution, a scheduled recompute, an SMS late-price fix, and per-institution +
   DSO/group reporting APIs. Voice/email cost stays $0 by product decision (Option B); budgets dropped with no-caps.
-- **Plan 12 (Compliance) advanced to ~72%**: consent *basis* (marketing → express-written) is now a **hard
-  block at the gate**, not just a publish warning, and consent capture is channel-generic (voice capture works
-  on the callback path).
+- **Plan 12 (Compliance) is complete for scope (100%)**: consent *basis* is a **hard block at the gate**; a staff
+  do-not-contact admin route; and **implied transactional consent** unblocks appointment email/voice the compliant
+  way (recall/marketing still require express consent — that capture is deferred with the client-deferred lead-intake).
 
 The original audit's five compliance/security findings (A–E) are now **all fully resolved** — Finding E's
 reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer) jumped from ~40% to ~80%**
@@ -46,15 +46,17 @@ reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer)
 event-level idempotency ledger, revalidation freshness window, and the subscription/backfill/reconciliation jobs
 now exist — though the live-NexHealth-API half of that (subscriptions/backfill/reconciliation) is mock-tested and
 **needs staging verification**. The remaining work concentrates in the provisioning/UI/email plans: Plan 05 **email
-hardening** (email consent capture — email is blocked-by-default — + unsubscribe/bounce/HTML), Plan 10 **provisioning
+hardening** (unsubscribe/bounce/HTML/domain; transactional email now unblocked via Plan-12 implied consent, marketing
+still needs express consent), Plan 10 **provisioning
 automation + persisted readiness state**, and Plan 08's **full campaign UI + analytics dashboards** (which can now
 consume the shipped Plan-11 usage APIs). (Plans 06 and 11 are complete; Plan 06's Sales Qualification is
 product-dropped, Plan 11's voice/email cost is $0 by product Option B.)
 
-**Headline: ~77% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Seven of twelve plans
-are now complete (01, 02, 03, 04, 06, 07, 11) — several marked so because their remaining items were assessed
-**not-required / product-dropped / other-lane**, not because everything was built. The concentrated remaining work
-is in Plan 05 (email), Plan 08 (UI), Plan 10 (provisioning), plus Plan 09 staging verification and Plan 12 residuals.
+**Headline: ~79% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Eight of twelve plans
+are now complete (01, 02, 03, 04, 06, 07, 11, 12) — several marked so because their remaining items were assessed
+**not-required / product-dropped / deferred-per-client / other-lane**, not because everything was built. The
+concentrated remaining work is now just **three plans** — Plan 05 (email), Plan 08 (UI), Plan 10 (provisioning) —
+plus Plan 09 staging verification.
 
 ### Product-owner scope decision (unchanged)
 **No caps or limits on clinics/locations, and no tenant-based caps.** Frequency caps, spend/budget caps,
@@ -73,16 +75,16 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 02 | Visual Builder UI | ✅ Complete | **100%** | unchanged |
 | 03 | Outbound Voice | ✅ Complete (channel functionally complete; residual = FE/external/infra, no functional gap) | **100%** | ↑ from ~89% |
 | 04 | Outbound SMS | ✅ Complete (spec residuals assessed not-required) | **100%** | ↑ from ~78% (S-2 routing + residuals deemed not-required) |
-| 05 | Outbound Email | 🟠 Gated/idempotent/metered plain-text | **~38%** | ↑ from ~30–35% |
+| 05 | Outbound Email | 🟠 Gated/idempotent/metered plain-text | **~42%** | ↑ from ~38% (transactional email unblocked via implied consent) |
 | 06 | Four Live Campaigns | ✅ Complete for agreed scope (Sales Qualification dropped by product) | **100%** | ↑ from ~62–65% |
 | 07 | AI Callback Handling | ✅ Complete for purpose (leaner opt-in design; spec residuals not-required) | **100%** | ↑ from ~63% |
 | 08 | Campaign Mgmt / Analytics UI | 🟠 Read-only slice | **~22%** | unchanged |
 | 09 | Integration & Data Layer | 🟢 Projection + reschedule re-enroll + ledger + backfill/reconciliation (NexHealth-API pieces staging-pending) | **~80%** | ↑↑ from ~40% (Hammad, `6671ba5`+`43e2875`) |
 | 10 | Per-Tenant Provisioning | 🟡 Cred-storage + computed readiness | **~25%** | unchanged |
 | 11 | Usage & Cost Reporting | ✅ Complete (scheduled recompute + SMS price fix + group endpoint; cost=Option B, budgets dropped) | **100%** | ↑ from ~65% |
-| 12 | Compliance & Consent | 🟢 Gate + semantics + basis hard-block (caps excluded) | **~72%** | ↑ from ~60% |
+| 12 | Compliance & Consent | ✅ Complete for scope (gate + basis + DNC route + implied transactional consent; commercial capture deferred w/ intake) | **100%** | ↑ from ~72% |
 
-**Overall Phase 2: ~77% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
+**Overall Phase 2: ~79% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
 weighted estimate). Confidence: **High** across all 12 (independent per-plan code inspection + passing tests).
 
 ---
@@ -199,23 +201,25 @@ unchanged.
 staff-routed inbound replies. **Complete for its product purpose;** the remaining plan-spec tables are hardening/
 redundant and were deliberately not built (per the "only build what's required" principle).
 
-### Plan 05 — Outbound Email — 🟠 ~38%
+### Plan 05 — Outbound Email — 🟠 ~42%
 **Built:** `EmailNodeExecutor` sends plain-text Resend email, gated; from-address institution override + platform
 fallback (`resolve_email_from`); reuses the sandboxed SMS renderer; **send-time idempotency** (`already_sent` guard
 + Resend `Idempotency-Key: email:{run}:{node}` header, `email_node_executor.py:51-56,106-110`); **usage metered by
 volume** (`UsageMeteringService.record(channel="email", emails=1)` in the executor, `:149-163`); **email-identity
 consent** (Finding D).
-**⚠️ Blocked-by-default in production:** the gate requires a granted EMAIL `ConsentRecord` and **no code path
-creates one** (`compliance_gate_service.py:228-229`) — the Finding-D fix corrected the consent *key*, not the
-missing *capture*.
+**Consent (updated 2026-07-07):** **transactional/appointment email now SENDS** via Plan-12 implied consent
+(identifier-on-file → allowed for care content, no explicit record needed). **Marketing** email still correctly
+requires an express recorded consent, whose *capture* is deferred with the client-deferred lead-intake — so
+marketing email stays gated (compliance-correct), not silently broken.
 **Missing:** email cost (metered at **$0** — `record(...)` passes no `cost_amount`; Resend gives no send-time
 price, no status webhook to backfill); the campaign data model (`email_sending_profiles`,
 `workflow_email_templates`, `workflow_email_attempts` — no attempt/audit log; the existing `EmailTemplate` model is
 for staff/patient *notification* emails, not the automation campaign path); `EmailWebhookService` +
 bounce/complaint/delivered ingestion; **unsubscribe** (CASL/CAN-SPAM legal minimum); HTML/branded body (text only);
 per-tenant sending domain (SPF/DKIM/DMARC + warm-up); `ResendCampaignClient`; analytics; UI.
-**Verdict:** a gated, idempotent, volume-metered plain-text v1 with consent keyed correctly — but blocked-by-default
-(no EMAIL-consent intake), $0 cost, and no unsubscribe/bounce/HTML/domain/attempt-log.
+**Verdict:** a gated, idempotent, volume-metered plain-text v1; **transactional email now sends** (Plan-12 implied
+consent), marketing correctly gated pending express-consent capture (deferred with lead-intake). Remaining: $0 cost,
+and no unsubscribe/bounce/HTML/domain/attempt-log.
 
 ### Plan 06 — Four Live Campaigns — ✅ 100% (complete for agreed scope; Sales Qualification dropped by product)
 **Built:** in-code template registry with 4 templates (`campaign_templates.py`); **recall trigger is REAL** (live
@@ -348,7 +352,7 @@ usage+cost) and `GET /by-campaign` (top workflows by spend), RLS-enforced. Tests
 now auto-refreshed, price-accurate for SMS, and group-aggregable. Marked complete; the residuals are a product cost
 decision (Option B), a dropped feature (budgets), and other-lane/hardening.
 
-### Plan 12 — Compliance & Consent — 🟢 ~72% (caps excluded by product owner)
+### Plan 12 — Compliance & Consent — ✅ 100% (complete for scope; commercial-consent capture tied to deferred intake)
 **Built:** `ComplianceGateService` — halt → quiet-hours (hold-and-resume) → **do-not-contact (all channels)** →
 per-channel consent — invoked before **every** send; DST-correct quiet hours; **real content-class + PHI validator**
 (`ContentComplianceValidator`) wired into publish + `/validate`; **AI-voice disclosure**; **bilingual EN/FR STOP**;
@@ -362,13 +366,30 @@ per-channel consent — invoked before **every** send; DST-correct quiet hours; 
   *warning* — so: **hard block at the gate, warning at publish.**)
 - **Consent capture is channel-generic** — `record_consent`/`record_consent_identity` accept `channel` + `basis`
   (no longer hardcoded `channel=sms`); the AI-callback path writes **EXPRESS VOICE** consent.
-**Missing / deliberately excluded:** **email consent CAPTURE still absent** (no writer passes `channel=EMAIL` → email
-blocked-by-default); **general (non-callback) voice consent capture** absent (only the callback path writes voice
-consent); privileged institution/DSO **DNC admin HTTP endpoint** (writer exists, no route); named
-`ConsentService`/`SuppressionService` (logic lives in the gate + `SmsComplianceService`); US cross-timezone
-quiet-hours (clinic TZ only). **Frequency/spend/blast-radius caps — DROPPED (no-caps decision), not oversights.**
-**Verdict:** an authoritative, on-every-dispatch semantic layer that now enforces consent *basis* at runtime; the
-remaining real gap is consent *capture* for email and general voice.
+- **Staff DNC admin route — NOW BUILT (2026-07-06):** `POST/DELETE/GET /api/institution/do-not-contact`
+  (INSTITUTION_ADMIN, audited `DO_NOT_CONTACT_CREATE/RELEASE`) — the privileged entry point to record an opt-out
+  received **off-channel** (front desk, phone-to-human, email). Completes the Scope §11 staff-DNC feature whose
+  backend (model, scope tiers, `set_do_not_contact`, gate-honoring) already existed. Added `release_do_not_contact`.
+  No migration (the `do_not_contact` RLS already permits INSTITUTION_ADMIN writes). 6 tests.
+- **Implied transactional consent — NOW BUILT (Option B, 2026-07-07):** the gate allows a **transactional/care**
+  email or voice message to a patient whose channel identifier is already on file, **without** an explicit consent
+  record (`_resolve_consent` → `allow "*_implied_transactional"` for `content_class ∈ {transactional_care, unset}`).
+  This unblocks the appointment-reminder/confirmation campaigns on email/voice, the compliant way. **Recall &
+  marketing still REQUIRE an express recorded consent** (unchanged). Opt-outs (DNC / revoked) are enforced *before*
+  this check, so an opted-out patient is never reached. No data backfill, no migration — a send-time policy decision,
+  fully reversible. Owner sign-off: implied consent for transactional healthcare messages (Option B). 4 gate tests.
+**Remaining — all not-required / deferred-per-client:**
+- **Commercial (recall/marketing) email+voice *express*-consent CAPTURE** — the mechanism (patient opt-in intake) is
+  **deferred with the lead-intake pipeline (Gap 3, deferred per client 2026-07-01)**. Meanwhile the gate correctly
+  **blocks** commercial email/voice without express consent — compliance-correct, not a bug. The shipped campaigns
+  (all SMS + reactivation's marketing-email branch) behave correctly: SMS works; marketing email stays gated.
+- *Not-required (assessed):* named `ConsentService`/`SuppressionService` (refactor); US cross-timezone quiet-hours
+  (edge — clinic-TZ works for the common case). **Caps — DROPPED (no-caps decision).** DSO-wide group-scope DNC =
+  GROUP_ADMIN follow-up (location/institution tiers ship).
+**Verdict:** an authoritative on-every-dispatch semantic layer — consent-*basis* enforcement, a staff DNC entry
+point, and implied transactional consent that unblocks appointment email/voice the compliant way. Marked complete
+for scope; commercial (recall/marketing) express-consent *capture* is deferred with the client-deferred lead-intake
+pipeline and is compliance-correctly gated in the meantime.
 
 ---
 
@@ -400,10 +421,12 @@ remaining real gap is consent *capture* for email and general voice.
 6. ✅ **Campaign dead-branches fixed** (Plan 06) — Confirmation's `confirmed` branch now driven by SMS-confirm
    capture; Reactivation's `booked` branch driven by NexHealth appointment events. No longer dead.
 7. ✅ **Provisioning credential changes now audited** (Plan 10); Twilio sub-account webhook already fixed.
-8. **Consent CAPTURE — voice ✅ (callback path only), email ❌, general voice ❌.** The gate enforces per-channel
-   consent (and now basis); the writers are channel-generic, and the AI-callback path records express VOICE consent →
-   Plan 07 works end-to-end. STILL OPEN: **email consent capture** (no intake → Plan 05 blocked-by-default) and
-   **general (Recall/Sales) voice consent capture** — both need an intake path.
+8. **Consent CAPTURE — transactional now handled (Option B), commercial deferred.** The gate enforces per-channel
+   consent + basis. **Transactional/care** email + voice are now allowed by **implied consent** when the patient's
+   identifier is on file (no explicit record needed) — so appointment reminders/confirmations send on all channels.
+   Express VOICE consent is recorded on the AI-callback path. STILL OPEN (deferred with the client-deferred
+   lead-intake, Gap 3): **express-consent capture for commercial (recall/marketing) email/voice** — correctly gated
+   (blocked) meanwhile, so no compliance exposure.
 
 ---
 
@@ -411,18 +434,19 @@ remaining real gap is consent *capture* for email and general voice.
 
 - **Complete (100%):** Plan 01, Plan 02, **Plan 03** (voice channel; residuals FE/external/infra), **Plan 04**,
   **Plan 06** (agreed scope; Sales Qualification product-dropped), **Plan 07** (leaner opt-in design), **Plan 11**
-  (recompute scheduled + SMS price fix + group endpoint; cost = product Option B, budgets dropped). Plans 03/04/06/07/11
-  marked complete because remaining items were built where required and otherwise assessed **not-required / dropped /
-  other-lane** — not by implementing everything.
-- **Substantial (60–90%):** Plan 09 (~80%), Plan 12 (~72%).
-- **Minimal (22–38%):** Plan 05 (~38%), Plan 10 (~25%), Plan 08 (~22%).
+  (recompute scheduled + SMS price fix + group endpoint; cost = product Option B, budgets dropped), **Plan 12**
+  (gate + basis + DNC route + implied transactional consent; commercial capture deferred with lead-intake). Marked
+  complete because remaining items were built where required and otherwise assessed **not-required / dropped /
+  deferred-per-client / other-lane** — not by implementing everything.
+- **Substantial (60–90%):** Plan 09 (~80%).
+- **Minimal (22–38%):** Plan 05 (~42%), Plan 10 (~25%), Plan 08 (~22%).
 - **Not started (0%):** none.
 
-**Biggest remaining milestones (largest → smallest):** Plan 05 email hardening (**email consent capture — blocked-
-by-default** + unsubscribe/bounce/HTML/domain); Plan 08 full UI (CSV/analytics dashboards consuming the new usage
-API/ops/SSE); Plan 10 provisioning automation + persisted readiness state; **Plan 09 NexHealth staging verification**
+**Biggest remaining milestones (largest → smallest):** Plan 05 email hardening (unsubscribe/bounce/HTML/domain —
+transactional email now sends via Plan-12 implied consent); Plan 08 full UI (CSV/analytics dashboards consuming the
+new usage API/ops/SSE); Plan 10 provisioning automation + persisted readiness state; **Plan 09 NexHealth staging verification**
 (prove the subscription/backfill/reconciliation jobs against a live tenant) + `recall_eligibility_working_set`;
-Plan 12 email/voice consent capture + DNC admin route; Plan 03 front-end (V-8 UI) + the spoken-opt-out
+Plan 03 front-end (V-8 UI) + the spoken-opt-out
 **A-8 detection field** (external).
 *(Plans 06 and 11 are complete — Plan 06's Sales Qualification is product-dropped; Plan 11's voice/email cost is $0
 by product Option B and budgets are dropped. Not remaining milestones.)*

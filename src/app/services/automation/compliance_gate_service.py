@@ -36,6 +36,15 @@ logger = logging.getLogger(__name__)
 _MARKETING_CONTENT_CLASSES = {"sales", "marketing"}
 _ALL_BASES = frozenset(b.value for b in ConsentBasis)
 
+# Content classes that carry IMPLIED consent when the patient's channel identifier
+# is already on file (Option B, 2026-07-07). A patient who gave the clinic their
+# email/phone for care is treated as consenting to TRANSACTIONAL / appointment
+# messages, so those don't require an explicit consent record. Recall and
+# marketing/sales are excluded — they still need an express recorded consent.
+# (Opt-outs — DNC / revoked consent — are enforced *before* this check, so an
+# opted-out patient is never reached by the implied path.)
+_IMPLIED_CONSENT_CLASSES = {None, "transactional_care"}
+
 
 def _acceptable_bases(content_class: str | None) -> frozenset[str]:
     if content_class in _MARKETING_CONTENT_CLASSES:
@@ -226,6 +235,13 @@ class ComplianceGateService:
         record: ConsentRecord | None, channel: str, content_class: str | None = None
     ) -> GateResult:
         if record is None:
+            # No explicit consent record. The callers guarantee the channel
+            # identifier (phone/email) is on file before reaching here (they block
+            # 'no_phone'/'no_email' first). Implied consent (Option B): allow
+            # TRANSACTIONAL / care messages to a patient whose contact info we
+            # hold; recall & marketing still require an express recorded consent.
+            if content_class in _IMPLIED_CONSENT_CLASSES:
+                return GateResult(action="allow", reason=f"{channel}_implied_transactional")
             return GateResult(action="block", reason=f"no_{channel}_consent")
         if record.status == ConsentStatus.REVOKED.value:
             return GateResult(action="block", reason=f"{channel}_consent_revoked")

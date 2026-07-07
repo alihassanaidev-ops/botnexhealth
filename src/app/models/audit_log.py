@@ -69,6 +69,10 @@ class AuditAction(str, Enum):
     SMS_SEND = "SMS_SEND"
     SMS_SUPPRESSION_CREATE = "SMS_SUPPRESSION_CREATE"
     SMS_SUPPRESSION_RELEASE = "SMS_SUPPRESSION_RELEASE"
+    # Channel-agnostic do-not-contact (staff-initiated, privileged). Distinct
+    # from SMS suppression: a DNC blocks every channel for its scope tier.
+    DO_NOT_CONTACT_CREATE = "DO_NOT_CONTACT_CREATE"
+    DO_NOT_CONTACT_RELEASE = "DO_NOT_CONTACT_RELEASE"
     VIEW_FULL_PHONE = "VIEW_FULL_PHONE"
     VIEW_SMS_BODY = "VIEW_SMS_BODY"
     DEAD_LETTER_REPLAY = "DEAD_LETTER_REPLAY"

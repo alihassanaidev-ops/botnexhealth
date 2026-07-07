@@ -225,6 +225,33 @@ class SmsComplianceService:
             raise
         return row
 
+    async def release_do_not_contact(
+        self,
+        *,
+        institution_id: str,
+        phone: str,
+        released_by_user_id: str | None = None,
+    ) -> DoNotContact | None:
+        """Deactivate the active do-not-contact record for a phone. Returns the
+        released row, or None if there was no active DNC. Idempotent."""
+        identity = self.identify(phone)
+        row = (
+            await self.session.execute(
+                select(DoNotContact).where(
+                    DoNotContact.institution_id == institution_id,
+                    DoNotContact.phone_hash == identity.phone_hash,
+                    DoNotContact.is_active.is_(True),
+                )
+            )
+        ).scalars().first()
+        if row is None:
+            return None
+        row.is_active = False
+        row.released_by_user_id = released_by_user_id
+        row.released_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return row
+
     async def suppress(
         self,
         *,

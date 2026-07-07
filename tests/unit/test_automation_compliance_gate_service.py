@@ -351,7 +351,9 @@ def test_gate_location_scoped_dnc_does_not_block_other_location():
     assert result.action == "allow"
 
 
-def test_gate_blocks_on_no_email_consent():
+def test_gate_allows_transactional_email_without_record_implied():
+    """Option B: a transactional/unset email to a contact with an email on file
+    is allowed by IMPLIED consent even with no explicit consent record."""
     location = _make_location("UTC")
     hours = _make_hours(is_open=True)
     contact = _make_contact()
@@ -364,10 +366,72 @@ def test_gate_blocks_on_no_email_consent():
 
     now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
     with patch("src.app.services.automation.compliance_gate_service.hash_email", return_value="ehash"):
+        # unset content_class == care/transactional
         result = asyncio.run(svc.check(run, "send_email", now=now))
 
+    assert result.action == "allow"
+    assert result.reason and "implied" in result.reason
+
+
+def test_gate_blocks_marketing_email_without_consent():
+    """Marketing/recall email still REQUIRES an express recorded consent — the
+    implied-transactional allowance does not extend to commercial content."""
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, consent_record=None,
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch("src.app.services.automation.compliance_gate_service.hash_email", return_value="ehash"):
+        result = asyncio.run(svc.check(run, "send_email", content_class="marketing", now=now))
+
     assert result.action == "block"
-    assert "email" in result.reason
+    assert result.reason == "no_email_consent"
+
+
+def test_gate_allows_transactional_voice_without_record_implied():
+    """Same implied-transactional allowance on the voice path (phone identity)."""
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, consent_record=None,
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="ph"):
+        result = asyncio.run(svc.check(run, "send_voice", now=now))
+
+    assert result.action == "allow"
+    assert result.reason and "implied" in result.reason
+
+
+def test_gate_blocks_marketing_voice_without_consent():
+    """Marketing/recall voice still requires an express recorded consent."""
+    location = _make_location("UTC")
+    hours = _make_hours(is_open=True)
+    contact = _make_contact()
+    session = _make_session(
+        halt=None, operating_hours=hours, location=location,
+        contact=contact, consent_record=None,
+    )
+    svc = ComplianceGateService(session)
+    run = _make_run()
+
+    now = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    with patch("src.app.services.automation.compliance_gate_service.hash_phone", return_value="ph"):
+        result = asyncio.run(svc.check(run, "send_voice", content_class="recall", now=now))
+
+    assert result.action == "block"
+    assert result.reason == "no_voice_consent"
 
 
 def test_gate_blocks_email_when_contact_has_no_email():
