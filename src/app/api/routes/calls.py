@@ -572,9 +572,9 @@ async def get_call(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> CallDetail:
     """
-    Get scrubbed detail for a single call.
+    Get the PHI-minimized detail for a single call.
 
-    PHI note: full transcript, raw transcript, recording URL, and PHI custom
+    PHI note: the (now raw/unscrubbed) transcript, recording URL, and PHI custom
     fields are not returned here. They are available through explicit audited
     reveal endpoints for clinic users in the circle of care.
     """
@@ -630,10 +630,10 @@ async def reveal_transcript(
     call_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> TranscriptRevealResponse:
-    """Reveal the (scrubbed) structured transcript and audit the access.
+    """Reveal the structured transcript and audit the access.
 
-    Only Retell's PII-scrubbed transcript is stored, so this single endpoint
-    replaces the legacy raw/full split.
+    Retell's raw (unscrubbed) transcript is stored and revealed here behind the
+    PHI-reveal authorization + audit trail below.
     """
     _ensure_phi_reveal_allowed(
         current_user,

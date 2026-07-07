@@ -93,6 +93,7 @@ class BookingResult(BaseModel):
     end: str | None = None
     patient_id: str | None = None
     provider_id: str | None = None
+    appointment_type_id: str | None = None
     message: str = ""
     error: str | None = None
 

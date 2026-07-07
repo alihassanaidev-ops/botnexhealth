@@ -373,7 +373,7 @@ class PostCallService:
             retell_call_id=webhook_call.call_id,
             call_direction=webhook_call.direction,
             agent_used=webhook_call.agent_id,
-            recording_url=webhook_call.recording_url,  # scrubbed URL set in webhooks.py
+            recording_url=webhook_call.recording_url,  # raw recording URL set in webhooks.py
             patient_sentiment=analysis_dict.get("user_sentiment"),
             call_status=primary_status,
             call_tags=all_tags,

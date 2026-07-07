@@ -4,8 +4,9 @@ HIPAA Compliance:
 - All records are institution-scoped (institution_id NOT NULL).
 - Transcript and summary are AES-256-GCM encrypted at the application
   layer (defense in depth on top of RDS at-rest encryption).
-- We only persist Retell's scrubbed outputs — raw, unredacted transcripts
-  never reach this table.
+- We persist Retell's raw (unscrubbed) transcript, recording, and analysis;
+  the encryption above plus RBAC/tenant-scoped access are what protect this
+  PHI at rest, not scrubbing at the webhook boundary.
 - retell_call_id UNIQUE constraint ensures webhook idempotency.
 """
 
@@ -157,8 +158,8 @@ class Call(Base):
     agent_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Call content (AES-256-GCM encrypted — see encrypt_value/decrypt_value)
-    # Only Retell's scrubbed structured transcript is stored. Raw transcripts
-    # never reach this table.
+    # Retell's raw (unscrubbed) structured transcript is stored, protected by
+    # the application-layer encryption on this column.
     transcript_with_tool_calls_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -262,7 +263,7 @@ class Call(Base):
 
     @property
     def transcript_with_tool_calls(self) -> list | None:
-        """Decrypted scrubbed structured transcript (turn-by-turn)."""
+        """Decrypted raw structured transcript (turn-by-turn)."""
         raw = decrypt_value(self.transcript_with_tool_calls_encrypted)
         if raw is None:
             return None

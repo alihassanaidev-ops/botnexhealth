@@ -36,8 +36,22 @@ def test_all_institution_scoped_models_are_in_protected_tables() -> None:
     spec.loader.exec_module(mod)
     protected = set(mod.PROTECTED_TABLES)
 
+    # Tables added after the baseline enable RLS in their OWN migration (the
+    # baseline's ALTER TABLE loop can't cover a table that doesn't exist yet).
+    # A table is protected if any migration declares its ``{table}_rls`` policy.
+    versions_src = "\n".join(
+        p.read_text()
+        for p in (ROOT / "alembic" / "versions").glob("*.py")
+    )
+    protected |= {
+        table
+        for table in institution_scoped_tables
+        if f"{table}_rls" in versions_src
+    }
+
     missing = institution_scoped_tables - protected
     assert not missing, (
-        f"Models with institution_id not in PROTECTED_TABLES: {missing}. "
-        f"Add them to alembic/versions/20260510_consolidated_baseline.py."
+        f"Models with institution_id lack an RLS policy: {missing}. "
+        f"Add the table to PROTECTED_TABLES in the baseline migration, or "
+        f"enable FORCE RLS + a {{table}}_rls policy in its own migration."
     )

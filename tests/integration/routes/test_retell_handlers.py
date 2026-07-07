@@ -111,7 +111,7 @@ async def test_list_transfer_numbers_success():
     async def fake_db(*_args, **_kwargs):
         yield mock_session
 
-    async def mock_resolve():
+    async def mock_resolve(require_pms: bool = True):
         return SimpleNamespace(
             institution=SimpleNamespace(id="inst-1"),
             location=SimpleNamespace(id="loc-1", timezone="UTC"),

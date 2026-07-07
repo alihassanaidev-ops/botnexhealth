@@ -74,3 +74,37 @@ def process_retell_call_analyzed(self, payload: dict[str, Any]) -> dict[str, Any
     from src.app.retell.webhooks import process_retell_call_analyzed_event
 
     return asyncio.run(process_retell_call_analyzed_event(payload))
+
+
+@celery_app.task(
+    bind=True,
+    name="webhooks.process_retell_call_ended",
+    queue="webhooks",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=5,
+    acks_late=True,
+)
+def process_retell_call_ended(self, payload: dict[str, Any]) -> dict[str, Any]:
+    """Process a Retell ``call_ended`` payload off the request thread.
+
+    Sends the patient the appointment-confirmation SMS (Approach B: our own
+    template populated from the authoritative PMS booking) as soon as the call
+    ends, rather than waiting for the delayed ``call_analyzed`` analysis. Only
+    fires when an appointment was actually booked during the call.
+    """
+    from src.app.config import settings
+    from src.app.database import init_database, is_database_initialized
+
+    if not is_database_initialized():
+        if not settings.database_url:
+            raise RuntimeError(
+                "DATABASE_URL is required to process Retell webhooks"
+            )
+        init_database(settings.database_url)
+
+    from src.app.retell.webhooks import process_retell_call_ended_event
+
+    return asyncio.run(process_retell_call_ended_event(payload))

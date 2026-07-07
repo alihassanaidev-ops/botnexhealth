@@ -76,15 +76,17 @@ def _build_template_variables(
 ) -> dict[str, str]:
     """Convert raw call payload into template variables.
 
-    When ``patient_facing`` is True the email is addressed to the patient
-    themselves, so the patient name is rendered in full rather than redacted.
-    Staff emails keep the redacted name and masked phone.
+    Both staff and patient emails render the full collected patient name now
+    that unscrubbed call data flows end-to-end. ``appointment_patient_redacted``
+    is still read as a fallback for any legacy caller that supplies only that
+    key. (``patient_facing`` is retained for callers/other rendering logic.)
     """
     tags = payload.get("tags") or []
-    if patient_facing:
-        patient_name = payload.get("appointment_patient_name") or "Not provided"
-    else:
-        patient_name = payload.get("appointment_patient_redacted") or "Not provided"
+    patient_name = (
+        payload.get("appointment_patient_name")
+        or payload.get("appointment_patient_redacted")
+        or "Not provided"
+    )
     return {
         "location_name": payload.get("location_name") or "Clinic",
         "caller_phone": payload.get("caller_phone_masked") or "Unknown",

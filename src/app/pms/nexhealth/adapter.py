@@ -395,7 +395,12 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
                     status="error",
                     error=raw.get("error") or raw.get("description") or "Unknown error",
                 )
-            return mappers.to_booking_result(raw, success=True)
+            result = mappers.to_booking_result(raw, success=True)
+            # Carry the requested appointment type through so downstream
+            # notifications can resolve the service name from cached PMS data.
+            if not result.appointment_type_id and req.appointment_type_id:
+                result.appointment_type_id = _strip(req.appointment_type_id)
+            return result
         except Exception as e:
             return BookingResult(success=False, source="nexhealth", status="error", error=str(e))
 

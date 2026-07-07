@@ -145,11 +145,13 @@ The worker then (`src/app/services/post_call_service.py`):
 
 1. Resolves institution/location from the agent ID.
 2. Upserts a `Contact` (matched by phone hash) and writes the `Call` row —
-   transcript and summary encrypted, and only Retell's *scrubbed* outputs are
-   ever persisted.
+   Retell's *raw (unscrubbed)* transcript, recording, and analysis are
+   persisted, with transcript and summary encrypted at the application layer
+   (the scrubbed variants are used only as a fallback when raw is absent).
 3. Fans out: recording download → S3 (`tasks/recordings.py`), staff email via
-   Resend, in-app notifications per recipient, auto-SMS to the patient if the
-   agent composed one (consent-gated, see SECURITY.md).
+   Resend, in-app notifications per recipient, and an auto-SMS to the patient
+   when the agent composed one **and** the call is tagged `appointment_booked`
+   (consent-gated, see SECURITY.md).
 4. Publishes an SSE hint over Redis pub/sub (`src/app/services/event_bus.py`) so
    open dashboards refetch. Events are deliberately payload-free
    (`calls_updated`, etc.) — the SSE channel never carries PHI, clients refetch

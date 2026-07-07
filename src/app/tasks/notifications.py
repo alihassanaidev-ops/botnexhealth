@@ -31,7 +31,6 @@ from src.app.services.dead_letter import capture_dead_letter, should_retry_vendo
 from src.app.services.email_notification_service import (
     EmailNotificationService,
     mask_phone,
-    redact_patient_name,
     resolve_template_type,
 )
 from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
@@ -397,6 +396,36 @@ async def _send_call_notification_async(
             fallback_contact_name=call.contact.full_name if call.contact else None,
         )
 
+        # Approach B: for a real PMS booking, override the transcript-derived
+        # provider/time/service with the authoritative values from the
+        # ``book_appointment`` result (resolved to display names). This is what
+        # stops the staff email from showing "Provider: Not provided".
+        if is_appointment and call.retell_call_id:
+            try:
+                from src.app.services.appointment_context import (
+                    resolve_booking_context,
+                )
+
+                booking = await resolve_booking_context(
+                    session,
+                    institution_id=institution_id,
+                    retell_call_id=call.retell_call_id,
+                    timezone=(location.timezone if location else "UTC") or "UTC",
+                )
+                if booking and booking.booked:
+                    if booking.provider_name:
+                        appt["appointment_provider"] = booking.provider_name
+                    if booking.appointment_datetime:
+                        appt["appointment_datetime"] = booking.appointment_datetime
+                    if booking.service:
+                        appt["appointment_service"] = booking.service
+            except Exception as exc:
+                logger.warning(
+                    "Booking-context resolve failed for email: call_hash=%s error=%s",
+                    hash_for_logging(call.id),
+                    safe_error_summary(exc),
+                )
+
         payload = {
             "call_id": call.id,
             "institution_id": institution_id,
@@ -408,9 +437,7 @@ async def _send_call_notification_async(
             "primary_tag": call.call_status,
             "tags": tags,
             "is_urgent": urgent,
-            "appointment_patient_redacted": redact_patient_name(
-                appt.get("patient_name")
-            ),
+            "appointment_patient_name": appt.get("patient_name"),
             "appointment_datetime": appt.get("appointment_datetime"),
             "appointment_provider": appt.get("appointment_provider"),
             "appointment_service": appt.get("appointment_service"),
@@ -575,7 +602,7 @@ def send_test_call_notification(
             "primary_tag": normalized_tag,
             "tags": [normalized_tag],
             "is_urgent": urgent,
-            "appointment_patient_redacted": "J*** D***",
+            "appointment_patient_name": "John Doe",
             "appointment_datetime": "2026-03-10 2:30 PM",
             "appointment_provider": "Dr. Test Provider",
             "appointment_service": "Consultation",
