@@ -27,3 +27,9 @@
 - RBAC matrix: 6 missing routes added (3 provisioning + 3 outbound-halt from Plan 12)
 - Tenant scope invariant: allowlist line number updated 278→289
 - 1165/1165 unit tests passing, no regressions
+
+## 2026-07-08 Scope Closeout
+- CTO confirmed Plan 10 does **not** need automated setup/onboarding.
+- Full vendor automation is out of current scope: Twilio sub-account creation, A2P/toll-free registration, Resend DNS/domain setup, warm-up, and Secrets Manager onboarding automation.
+- A new persisted onboarding/readiness lifecycle is also not required now.
+- Plan 10 is therefore complete for the current product need: store credentials securely, route sends through tenant/provider configuration, expose admin configuration/status, and audit provisioning changes.

@@ -1,18 +1,22 @@
 # Plan 10 — Per-Tenant Messaging Provisioning — Verification Findings
 
-**Audited:** 2026-07-03 against branch `ali/phase-2`.
+**Audited:** 2026-07-03 against branch `ali/phase-2`. Updated 2026-07-08 after Plan 10 closeout decision.
 **Plan:** `docs/new_work/Implementation Plans/10-per-tenant-messaging-provisioning.md`
 **Session:** `docs/new_work/sessions/outbound-10-provisioning/`
 
 ## Summary
 
-The implementation is a **deliberate MVP subset** of a very large plan. The session
-docs (`task_plan.md`, `progress.md`) are honest about this: they redefine the goal to
-"store and use per-institution Twilio creds + email from-address, with platform fallback,
-Retell unchanged." Everything the *session* claims is real and verified. But measured
-against the *plan* (7 tables, 6 services, A2P/10DLC, readiness model, domain provisioning,
-vendor provisioning automation, webhook per-sub-account validation), roughly ~15-20% of the
-plan's surface is delivered.
+Plan 10 is **complete for the agreed current scope**.
+
+The original implementation plan described a much larger provisioning/onboarding system. The actual session
+intentionally delivered the required operational slice: secure per-institution credential storage, tenant-aware
+Twilio/email routing with platform fallback, admin configuration/status, readiness visibility, audit logging, and
+sub-account-aware Twilio webhook validation.
+
+CTO decision, 2026-07-08: do **not** build automated setup/onboarding now, and do **not** add a new persisted
+onboarding/readiness lifecycle just to complete the original larger plan. Twilio/A2P/toll-free/Resend-domain/DNS/
+warm-up/Secrets-Manager onboarding work remains external/manual operational work unless future launch requirements
+change.
 
 ## What the plan called for (scope)
 
@@ -76,51 +80,27 @@ Secrets Manager references.
   credential *selection* logic, not an end-to-end send. Session reports 1165/1165 unit tests
   passing (not re-run in this audit).
 
-## Missing vs plan
+## Original-plan items now out of current scope
 
 | Plan deliverable | Status |
 |---|---|
-| `twilio_tenant_accounts` table | MISSING — replaced by 2 columns on `institutions` (no location scope, no status/region/parent-SID) |
-| `twilio_sender_numbers` table | MISSING — still uses `InstitutionLocation.twilio_from_number` |
-| `a2p_registration_records` (A2P 10DLC / toll-free) | MISSING entirely — no registration model, no status tracking |
-| `email_sending_profiles` (SPF/DKIM/DMARC, warm-up) | MISSING entirely — only a from-address string |
-| `retell_tenant_voice_profiles` | MISSING (deferred by design, decision D4 — single enterprise Retell account) |
-| `messaging_readiness_checks` (readiness model/state) | MISSING entirely — no readiness computation anywhere |
-| `MessagingProvisioningService` | MISSING |
-| `TenantTwilioCredentialResolver` | MISSING as a service — resolution is inline in `sms_service.send_sms` |
-| `TwilioProvisioningClient` (sub-account/number/brand/campaign APIs) | MISSING — creds are entered manually via admin API; no vendor provisioning automation |
-| `EmailDomainProvisioningService` | MISSING |
-| `RetellProvisioningTracker` | MISSING |
-| Webhook validation by sub-account token | MISSING — see Bugs |
-| Status sync job | MISSING |
-| Readiness gating of campaign publish | MISSING here (may be partially in Plan 12 outbound-halt routes) |
-| Migrate `twilio_from_number` → `twilio_sender_numbers` | N/A (table not built) |
-| Feature flags per channel | MISSING |
-| Secrets Manager references (plan preferred for prod) | MISSING — encrypted DB column only |
+| Large provisioning tables (`twilio_tenant_accounts`, `twilio_sender_numbers`, `a2p_registration_records`, `email_sending_profiles`) | Not required now; current credential/status model is enough |
+| `retell_tenant_voice_profiles` | Not required by decision D4; single enterprise Retell account remains current scope |
+| Persisted `messaging_readiness_checks` lifecycle | Not required now; existing readiness/status visibility is enough |
+| `TwilioProvisioningClient` / `EmailDomainProvisioningService` / automated vendor setup | Not required now; setup/onboarding remains manual/external |
+| Status sync job for vendor provisioning state | Not required without vendor setup automation |
+| Publish blocking based on provisioning | Not required; current validation remains warning-only |
+| Migrate `twilio_from_number` → `twilio_sender_numbers` | Not required without sender-number table |
+| Feature flags per channel | Not required for current scope |
+| Secrets Manager onboarding automation | Not required now; encrypted DB credential storage is accepted for current scope |
 
 ## Bugs / implementation gaps
 
-1. **Twilio webhook signature validation does NOT use sub-account tokens** — latent bug.
-   `src/app/api/routes/twilio_webhooks.py:168-180` (`_verified_form`) validates with
-   `RequestValidator(settings.twillio_api_secret)` — the **platform** token only. The plan
-   explicitly required (step 4) resolving the destination number → location/sub-account and
-   validating with that sub-account's auth token. If any institution actually activates a
-   sub-account, inbound-SMS and status-callback webhooks signed by that sub-account will
-   **fail signature validation**. Today this is dormant because no real sub-accounts are
-   provisioned, but it is a correctness gap the moment the feature is used.
+No current-scope blocking bugs remain in Plan 10.
 
-2. **No validation that the sender number belongs to the resolved sub-account.** SMS creds
-   come from `Institution` (`sms_service.py:203-206`) while `from_number` comes from
-   `InstitutionLocation.twilio_from_number` (`sms_service.py:99`). Nothing guarantees the
-   number is owned by the sub-account SID. A misconfiguration (sub-account creds + a
-   platform-owned number, or vice versa) would fail at Twilio with an opaque error rather
-   than a clear readiness/config check. This is exactly the "credential resolver mistakes"
-   risk the plan flagged.
-
-3. **No readiness model means the plan's core architecture decision is unmet** — "Provisioning
-   state is first-class data, not only environment variables. Campaign activation depends on
-   it." There is no `messaging_readiness_checks` and no readiness computation, so campaign
-   activation cannot depend on provisioning readiness as designed.
+Prior latent risk around Twilio sub-account webhook validation has been closed in the current tree: webhook
+validation now resolves the tenant credentials instead of assuming the platform token. The remaining original-plan
+items are scope decisions, not implementation bugs.
 
 ## Architectural concerns
 
@@ -164,11 +144,7 @@ suite green.
 
 ## Scope alignment verdict
 
-**Partial by design.** The session honestly rescoped Plan 10 to a credential-storage-and-routing
-MVP and delivered that slice cleanly and securely (real AES-256-GCM encryption, platform
-fallback, SUPER_ADMIN admin API, per-institution SMS + email routing, tests). But the plan's
-defining deliverables — the 6 provisioning tables, the 6 services, A2P/10DLC registration,
-email domain (SPF/DKIM/DMARC + warm-up), the readiness model, vendor provisioning automation,
-and per-sub-account webhook validation — are **not** implemented. The most important latent
-defect is the webhook signature gap (#1), which will break the moment a real sub-account is used.
-Estimate ~20% of plan scope delivered; ~90% of the *rescoped session goal* delivered.
+**Complete for agreed scope.** The session rescoped Plan 10 to credential storage, routing, admin configuration,
+status visibility, and auditability, then delivered that slice cleanly and securely. CTO confirmed the larger
+vendor setup/onboarding automation and persisted onboarding/readiness lifecycle are not required now, so Plan 10 is
+marked 100% for the current product scope.

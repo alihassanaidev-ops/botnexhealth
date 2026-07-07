@@ -6,7 +6,11 @@ their own Twilio sub-account number and their own email from-address, while
 Retell stays as a single enterprise account (no per-clinic provisioning needed).
 
 ## Current Status
-**Complete** ✅ — all 4 slices shipped.
+**Complete for agreed scope** ✅ — all 4 required slices shipped.
+
+CTO decision, 2026-07-08: do **not** build automated vendor setup/onboarding for Plan 10, and do not add a new
+persisted onboarding/readiness lifecycle just to satisfy the original larger plan. Current required scope is secure
+credential storage, tenant-aware send routing, admin configuration, and status visibility.
 
 ## Existing Infrastructure (confirmed)
 - `Institution.nexhealth_api_key_encrypted` — encrypted pattern with local `encrypt_value`/`decrypt_value`
@@ -25,6 +29,8 @@ Retell stays as a single enterprise account (no per-clinic provisioning needed).
 | D3 | Email model: per-institution Resend API key vs platform key + per-institution domain | ✅ **Platform key + per-institution from-address** | Resend supports multiple domains under one account; per-institution API key deferred |
 | D4 | Retell: per-clinic provisioning? | ✅ **None needed** | Single enterprise account, `retell_agent_id` per location already exists |
 | D5 | Admin API auth: who can configure credentials? | ✅ **SUPER_ADMIN only** | These are platform-managed credentials, not clinic-admin managed |
+| D6 | Automate vendor setup/onboarding now? | ✅ **No** | CTO: not needed for current scope |
+| D7 | Add persisted onboarding/readiness lifecycle now? | ✅ **No** | Existing status/readiness visibility is enough; no extra workflow required |
 
 ## Slices
 
@@ -50,6 +56,13 @@ Retell stays as a single enterprise account (no per-clinic provisioning needed).
 - [x] SmsService: RuntimeError when neither set
 - [x] RBAC matrix updated for 3 provisioning routes + 3 outbound-halt routes (Plan 12 gap)
 - [x] Tenant scope invariant allowlist line number updated after `_get_twilio_client` expansion
+
+### Out of scope by CTO decision ✅
+- [x] Automated Twilio sub-account setup
+- [x] Automated A2P 10DLC / toll-free registration
+- [x] Automated Resend domain/DNS/warm-up setup
+- [x] Secrets Manager onboarding automation
+- [x] New persisted onboarding/readiness lifecycle
 
 ## Files Touched
 | File | Change |

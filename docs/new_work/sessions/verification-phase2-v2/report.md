@@ -47,17 +47,19 @@ reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer)
 (Hammad, `6671ba5`+`43e2875`): the disposable `appointment_working_set` projection, reschedule re-enroll,
 event-level idempotency ledger, revalidation freshness window, and the subscription/backfill/reconciliation jobs
 now exist — though the live-NexHealth-API half of that (subscriptions/backfill/reconciliation) is mock-tested and
-**needs staging verification**. The remaining work concentrates in provisioning and external verification: **Plan 05 email** is now launch-compliant
+**needs staging verification**. The remaining work concentrates in external verification and scale email: **Plan 05 email** is now launch-compliant
 (transactional sends + one-click unsubscribe + bounce/complaint suppression) — only the **per-tenant sending domain
-(SPF/DKIM, external)** + HTML remain; Plan 10 **provisioning automation + persisted readiness state** (external);
-and Plan 08 is complete for the essential operator scope.
-(Plans 06, 08, and 11 complete; Plan 06's Sales Qualification is product-dropped, Plan 08's CSV/revenue/timeline/ops/SSE
-items are not required for current scope, Plan 11's voice/email cost is $0 per Option B.)
+(SPF/DKIM, external)** + HTML remain; Plan 10 is complete for the current required scope because CTO confirmed vendor
+setup/onboarding automation and a new persisted onboarding/readiness lifecycle are not required now; and Plan 08 is
+complete for the essential operator scope.
+(Plans 06, 08, 10, and 11 complete; Plan 06's Sales Qualification is product-dropped, Plan 08's CSV/revenue/timeline/ops/SSE
+items are not required for current scope, Plan 10's vendor/onboarding automation is not required, and Plan 11's
+voice/email cost is $0 per Option B.)
 
-**Headline: ~88% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Nine of twelve plans
-are now complete (01, 02, 03, 04, 06, 07, 08, 11, 12) — several marked so because their remaining items were assessed
+**Headline: ~92% of full Phase-2 plan scope delivered across all 12 plans (up from ~62%).** Ten of twelve plans
+are now complete (01, 02, 03, 04, 06, 07, 08, 10, 11, 12) — several marked so because their remaining items were assessed
 **not-required / product-dropped / deferred-per-client / other-lane**, not because everything was built. The
-concentrated remaining work is now **Plan 05 scale email**, **Plan 10 provisioning**, plus **Plan 09 staging verification**.
+concentrated remaining work is now **Plan 05 scale email** plus **Plan 09 staging verification**.
 
 ### Product-owner scope decision (unchanged)
 **No caps or limits on clinics/locations, and no tenant-based caps.** Frequency caps, spend/budget caps,
@@ -81,11 +83,11 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 07 | AI Callback Handling | ✅ Complete for purpose (leaner opt-in design; spec residuals not-required) | **100%** | ↑ from ~63% |
 | 08 | Campaign Mgmt / Analytics UI | ✅ Complete for essential operator scope (CSV/revenue/timelines/ops/SSE deferred/not-required) | **100%** | ↑ from ~22% |
 | 09 | Integration & Data Layer | 🟢 Projection + reschedule re-enroll + ledger + backfill/reconciliation (NexHealth-API pieces staging-pending) | **~80%** | ↑↑ from ~40% (Hammad, `6671ba5`+`43e2875`) |
-| 10 | Per-Tenant Provisioning | 🟡 Cred-storage + computed readiness | **~25%** | unchanged |
+| 10 | Per-Tenant Provisioning | ✅ Complete for agreed scope (secure tenant credential routing/status; setup automation not required) | **100%** | ↑ from ~25% |
 | 11 | Usage & Cost Reporting | ✅ Complete (scheduled recompute + SMS price fix + group endpoint; cost=Option B, budgets dropped) | **100%** | ↑ from ~65% |
 | 12 | Compliance & Consent | ✅ Complete for scope (gate + basis + DNC route + implied transactional consent; commercial capture deferred w/ intake) | **100%** | ↑ from ~72% |
 
-**Overall Phase 2: ~88% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
+**Overall Phase 2: ~92% of full plan scope** (per-plan numbers are the reliable figures; the aggregate is a
 weighted estimate). Confidence: **High** across all 12 (independent per-plan code inspection + passing tests).
 
 ---
@@ -326,21 +328,22 @@ subscription endpoint/payload + backfill paging unproven without staging creds).
 **Verdict:** the disposable read-model + live-revalidation architecture the plan specified now exists and the
 reschedule safety gap is closed; the residual risk is live-NexHealth validation, not missing code.
 
-### Plan 10 — Per-Tenant Messaging Provisioning — 🟡 ~25%
+### Plan 10 — Per-Tenant Messaging Provisioning — ✅ 100% (complete for agreed scope)
 **Built:** genuine **AES-256-GCM per-institution Twilio + email creds** (4 columns on `institutions`, migration
 `20260703_institution_provisioning`); reusable **`TenantTwilioCredentialResolver`** (institution→platform
 fallback), consumed by SMS/email/webhooks; **`ChannelReadinessService` + `GET /channel-readiness`** (computed)
 feeding **warning-only** publish validation; super-admin provisioning API (masks SID, never returns token);
 Twilio sub-account webhook signature validated with the resolved sub-account token. Provisioning credential changes
 are now **audited** (`log_audit(INSTITUTION_UPDATE)` on PATCH/DELETE, `admin_institutions.py:1636-1680`).
-**Missing:** all 6 provisioning tables (migration is ADD COLUMN, not CREATE TABLE); **first-class persisted
-readiness *state* model** (readiness is computed on read; no status/lifecycle); A2P 10DLC / toll-free registration;
-email domain SPF/DKIM/DMARC + warm-up; provisioning vendor automation (creds entered manually); AWS Secrets Manager;
-per-channel feature flags.
+**Not required for current scope (CTO decision, 2026-07-08):** automated vendor setup/onboarding, A2P 10DLC /
+toll-free registration automation, email domain SPF/DKIM/DMARC + warm-up automation, Secrets Manager onboarding
+automation, all large provisioning tables, per-channel feature flags, and a new persisted onboarding/readiness
+lifecycle. These remain external/manual operational work unless launch requirements change.
 **Nit:** an in-code comment (`validation_service.py:13-14`) says Plan 10 "blocks publishing" — the shipped checker
 is warning-only; the comment overstates enforcement.
-**Verdict:** a clean, secure credential-storage + computed-readiness MVP; the provisioning *system* (tables, vendor
-APIs, verification, persisted readiness state) is unbuilt.
+**Verdict:** complete for the agreed product scope: secure credential storage, tenant-aware routing/status, admin
+configuration, audited changes, and webhook credential correctness. The original larger onboarding/provisioning
+automation system is explicitly not required now.
 
 ### Plan 11 — Usage & Cost Reporting — ✅ 100% (complete for scope; cost-fidelity = product Option B, budgets dropped)
 **Built:** `UsageEvent` model + migration (`20260704_usage_events`, RLS + idempotency index);
@@ -455,24 +458,26 @@ pipeline and is compliance-correctly gated in the meantime.
 
 - **Complete (100%):** Plan 01, Plan 02, **Plan 03** (voice channel; residuals FE/external/infra), **Plan 04**,
   **Plan 06** (agreed scope; Sales Qualification product-dropped), **Plan 07** (leaner opt-in design), **Plan 08**
-  (essential operator scope; CSV/revenue/timelines/ops/SSE deferred/not-required), **Plan 11**
+  (essential operator scope; CSV/revenue/timelines/ops/SSE deferred/not-required), **Plan 10** (secure tenant
+  credential routing/status; vendor setup/onboarding automation not required), **Plan 11**
   (recompute scheduled + SMS price fix + group endpoint; cost = product Option B, budgets dropped), **Plan 12**
   (gate + basis + DNC route + implied transactional consent; commercial capture deferred with lead-intake). Marked
   complete because remaining items were built where required and otherwise assessed **not-required / dropped /
   deferred-per-client / other-lane** — not by implementing everything.
 - **Substantial (60–90%):** Plan 09 (~80%), Plan 05 (~70%).
-- **Minimal:** Plan 10 (~25%).
+- **Minimal:** none.
 - **Not started (0%):** none.
 
-**Biggest remaining milestones (largest → smallest):** Plan 10 provisioning automation + persisted readiness state; **Plan 05 per-tenant sending
+**Biggest remaining milestones (largest → smallest):** **Plan 05 per-tenant sending
 domain** (SPF/DKIM/DMARC + warm-up — external; unsubscribe/bounce/complaint + transactional sends now done);
 **Plan 09 NexHealth staging verification**
 (prove the subscription/backfill/reconciliation jobs against a live tenant) + `recall_eligibility_working_set`;
 Plan 03 front-end (V-8 UI) + the spoken-opt-out
 **A-8 detection field** (external).
-*(Plans 06, 08, and 11 are complete for agreed/essential scope — Plan 06's Sales Qualification is product-dropped;
+*(Plans 06, 08, 10, and 11 are complete for agreed/essential scope — Plan 06's Sales Qualification is product-dropped;
 Plan 08's CSV/revenue/timeline/ops/SSE items are not required for the current operator scope; Plan 11's voice/email
-cost is $0 by product Option B and budgets are dropped. Not remaining milestones.)*
+cost is $0 by product Option B and budgets are dropped; Plan 10's vendor setup/onboarding automation is not required.
+Not remaining milestones.)*
 
 **Production readiness:** engine + builder are production-grade and verified; compliance is enforced (and consent
 basis hard-blocked) on every dispatch; voice is now outcome-reactive and crash/timeout-safe. For a **safe
@@ -493,11 +498,9 @@ The full, prioritized, de-duplicated remaining-work list lives in **one place** 
    subscription/backfill/reconciliation jobs against a live NexHealth tenant (they're mock-tested only), then decide
    whether `recall_eligibility_working_set` is actually needed. Reschedule re-enroll + freshness window + projection
    + event-ledger are done and Postgres-verified.
-2. **Plan 10 provisioning** — persisted readiness state and vendor automation only if this becomes required for
-   launch; external DNS/Twilio/A2P pieces remain vendor/process work.
-3. **Plan 05 scale email** — per-tenant sending domain (SPF/DKIM/DMARC + warm-up) is external/vendor work; HTML is
+2. **Plan 05 scale email** — per-tenant sending domain (SPF/DKIM/DMARC + warm-up) is external/vendor work; HTML is
    optional polish. Launch-compliant transactional email already sends with unsubscribe/bounce/complaint handling.
-4. **Plan 03 front-end (V-8 UI)** + **spoken-opt-out A-8 detection field** (V-2 write+wiring built + config-gated;
+3. **Plan 03 front-end (V-8 UI)** + **spoken-opt-out A-8 detection field** (V-2 write+wiring built + config-gated;
    CTO supplies the Retell field name); **SMS crash-window claim (XC-1b SMS)** — assessed not-required for now.
    *(Plans 04, 06, 07, 08, 11 are complete; S-2 free-text inbound routing done.)*
 

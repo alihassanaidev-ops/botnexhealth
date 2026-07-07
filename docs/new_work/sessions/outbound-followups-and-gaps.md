@@ -33,6 +33,9 @@ are **dropped, not deferred**. Non-cap vendor-throughput *smoothing* and per-cli
   consent is written by email hash, and campaign email sends with a Resend idempotency header.
 - **Plan 12 implied transactional consent:** transactional/care email + voice can send on implied consent when the
   channel identifier is on file; commercial/recall still require express consent.
+- **Plan 10 provisioning closeout:** secure tenant credential storage/routing + admin status/config is enough for
+  current scope. CTO confirmed automated vendor setup/onboarding and a new persisted onboarding/readiness lifecycle
+  are not required now.
 - **Plan 02:** builder wires `/validate` `/versions` `/merge-fields`; merge-field drift fixed; the validation panel
   surfaces the new compliance codes automatically (no FE change needed).
 - **Engine hardening (finalize):** inline path unified onto gated `build_dispatcher` (kills Finding A); quiet-hours
@@ -191,12 +194,13 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   **backfill** (go-forward-only gap today), and a paced **reconciliation sweep**. Enables D-1 + out-of-order/staleness resilience.
 - **D-4 (P2) Perf** — whole-table workflow scan per webhook; no event-level idempotency (dup deliveries re-run).
 
-### Plan 10 — Per-Tenant Provisioning (~25%)
+### Plan 10 — Per-Tenant Provisioning (100% agreed scope)
 - **PR-1 ✅ (closeout 2026-07-04).** Provisioning credential changes (`admin_institutions` PATCH + DELETE) now
   `log_audit(INSTITUTION_UPDATE)` with the actor + masked metadata (never the token/SID).
-- **PR-2 (P2) First-class readiness *state* model** — readiness is computed on read; no persisted status/lifecycle.
-- **PR-3 (P2) Provisioning automation** — Twilio sub-account creation, A2P 10DLC / toll-free registration, email
-  domain SPF/DKIM/DMARC + warm-up (all manual today); Secrets Manager for tenant creds; per-location sub-account scoping.
+- **PR-2 ✅ Persisted onboarding/readiness lifecycle not required.** Existing status/readiness visibility is enough for
+  current scope; do not add new workflow state just for plan completion.
+- **PR-3 ✅ Vendor setup/onboarding automation not required.** Twilio sub-account creation, A2P/toll-free registration,
+  Resend DNS/domain setup, warm-up, and Secrets Manager onboarding automation remain external/manual operational work.
 
 ### Plan 11 — Usage & Cost Reporting (100%) — complete for agreed scope (updated 2026-07-07)
 - **M-1 ✅ Voice usage metering.** Retell post-call webhook emits `channel=voice` usage (minutes + dials),
@@ -243,6 +247,6 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
    domain/DNS/warm-up if launch scale requires it.
 6. **Plan 06 differentiators** (C-1..C-3) — PMS write-back (fixes dead confirm-branch), Sales Qualification.
 7. ✅ **Plan 07 AI callback** — core v1 merged (2026-07-04). Remaining: CB-2/CB-3 confirmations + CB-4 template/tables.
-8. **Plan 03 outcome feedback loop** (V-1..V-3) + **Plan 10** (PR-1 quick audit fix, then PR-2/PR-3).
+8. **Plan 03 outcome feedback loop** (V-1..V-3). Plan 10 is complete for agreed scope.
 9. ✅ **Plan 08 essential operator UI** — complete. CSV/revenue/timeline/ops/SSE remain deferred/not-required unless
    future launch workflows explicitly need them.

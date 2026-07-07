@@ -1,5 +1,14 @@
 # Findings: Outbound 10 — Per-tenant Provisioning
 
+## 2026-07-08 Scope Decision
+CTO confirmed that Plan 10 should not expand into automated setup/onboarding. The original large-plan items
+around Twilio sub-account creation, A2P/toll-free registration, Resend DNS/domain automation, warm-up, Secrets
+Manager onboarding automation, and a new persisted onboarding/readiness lifecycle are not required for the current
+product scope.
+
+The required Plan 10 scope is the operational slice already built: secure credential storage, tenant-aware send
+routing, admin configuration/status, and auditability.
+
 ## Encryption pattern (Institution model)
 `encrypt_value(value)` / `decrypt_value(value)` are module-level functions in
 `src/app/models/institution.py` (L86, L121). No separate import. Each encrypted
