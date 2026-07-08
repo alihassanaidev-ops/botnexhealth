@@ -321,10 +321,12 @@ deferred/not-required rather than functional blockers.
 **Still open / deferred:** `recall_eligibility_working_set` (recall pull works but has no dedicated projection);
 SQL trigger_type filter (D-4 P2 — `AutomationWorkflow.trigger_type` is a computed property, needs a denormalized
 column first); operator-triggered backfill surface.
-**⚠️ Verification split:** the **projection / reschedule / freshness / ledger** half is **verified against real
-Postgres** (1371 unit tests + constraint smoke-tests). The **subscription / backfill / reconciliation** half calls
-the live NexHealth API and is **unit-tested with a mocked client only — NEEDS-STAGING-VERIFY** (exact partner
-subscription endpoint/payload + backfill paging unproven without staging creds).
+**Verification split:** the **projection / reschedule / freshness / ledger** half is **verified against real
+Postgres** (1371 unit tests + constraint smoke-tests). Focused Plan 09 local verification on 2026-07-08 also passed
+57 unit tests across projection, webhook handling, subscription lifecycle, backfill/reconciliation, PMS revalidation,
+and adapter appointment listing. The **subscription / backfill / reconciliation** half calls the live NexHealth API
+and is still **unit-tested with a mocked client only — NEEDS-STAGING-VERIFY** (exact partner subscription endpoint/
+payload + backfill paging unproven without staging creds).
 **Verdict:** the disposable read-model + live-revalidation architecture the plan specified now exists and the
 reschedule safety gap is closed; the residual risk is live-NexHealth validation, not missing code.
 

@@ -184,15 +184,20 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
 - **U-5 (P2) SSE real-time** — pages are manual-refresh; wire `workflow_run_updated`. Native archive `confirm()` is
   fixed; SSE and location scoping are not required for current scope.
 
-### Plan 09 — Integration & Data Layer (~40%)
-- **D-1 (P1) Reschedule re-enroll at the new time** — a rescheduled appointment's reminder is **silently dropped**
-  (time-independent idempotency key dedupes the re-enroll; revalidation then skips the stale-time send). Needs the time-aware working-set (D-3).
-- **D-2 (P1) Revalidation freshness window** — dispatch revalidates *every* appointment run live → an 800-patient
-  9 AM batch = ~800 burst NexHealth calls. Add a recent-webhook freshness window + shared-key budget.
-- **D-3 (P2) Disposable read-model core** — `appointment_working_set` / `recall_eligibility_working_set` projections,
-  `nexhealth_webhook_subscriptions` + lifecycle, a webhook **event ledger** (edge idempotency + audit), initial REST
-  **backfill** (go-forward-only gap today), and a paced **reconciliation sweep**. Enables D-1 + out-of-order/staleness resilience.
-- **D-4 (P2) Perf** — whole-table workflow scan per webhook; no event-level idempotency (dup deliveries re-run).
+### Plan 09 — Integration & Data Layer (~80%; staging verification pending)
+- **D-1 ✅ Reschedule re-enroll at the new time.** `appointment_working_set` detects start-time changes and the
+  appointment idempotency key now includes the appointment start time, so rescheduled reminders are re-timed instead
+  of silently dropped.
+- **D-2 ✅ Revalidation freshness window.** `PmsLiveRevalidationService` checks recent projection rows first and
+  falls back to live NexHealth only when needed.
+- **D-3 ✅ Disposable read-model core built.** `appointment_working_set`, `nexhealth_webhook_events`,
+  `nexhealth_webhook_subscriptions`, initial REST backfill, and reconciliation sweep exist and are locally tested.
+- **D-4 ✅ Event-level idempotency/perf core built.** Webhook ledger dedupes event handling; run lookup indexes support
+  cancel/reschedule repair.
+- **D-5 ⬜ NexHealth staging verification.** Subscription create/list/health, real webhook payloads, backfill
+  pagination/filtering, and reconciliation behavior still need proof against a live staging tenant.
+- **D-6 ⬜ Post-staging recall projection decision.** Decide whether `recall_eligibility_working_set` is needed after
+  seeing real NexHealth recall/backfill behavior.
 
 ### Plan 10 — Per-Tenant Provisioning (100% agreed scope)
 - **PR-1 ✅ (closeout 2026-07-04).** Provisioning credential changes (`admin_institutions` PATCH + DELETE) now

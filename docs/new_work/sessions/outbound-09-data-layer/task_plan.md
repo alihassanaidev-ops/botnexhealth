@@ -4,7 +4,7 @@
 Feed external and internal trigger events into the workflow engine safely, starting with NexHealth appointment webhooks and later recall/reactivation scans.
 
 ## Current Status
-Partially complete.
+Code-complete for core local/data-layer scope; live NexHealth staging verification remains.
 
 ## Completed
 - [x] NexHealth appointment webhook receiver
@@ -14,17 +14,24 @@ Partially complete.
 - [x] Appointment trigger task dispatch
 - [x] Appointment offset enrollment ETA calculation
 - [x] Bulk enrollment endpoint
+- [x] `appointment_working_set` projection
+- [x] `nexhealth_webhook_events` event ledger
+- [x] Cancellation/reschedule handling
+- [x] Time-aware appointment idempotency key for reschedule re-enroll
+- [x] Send-time `PmsLiveRevalidationService`
+- [x] NexHealth webhook subscription lifecycle table/service
+- [x] Initial backfill service
+- [x] Reconciliation sweep
+- [x] Focused local verification: 57 Plan 09 tests passing on 2026-07-08
 
 ## Remaining
-- [ ] Confirm NexHealth multi-key and webhook subscription limits
-- [ ] Harden appointment webhook payload coverage against real NexHealth samples
-- [ ] Complete recall scanner patient-query logic
-- [ ] Complete reactivation scanner logic
-- [ ] Add backfill/retry strategy for missed webhooks
-- [ ] Decide legal/product rules for recall and reactivation campaigns
+- [ ] Verify subscription create/list/health flow against a live NexHealth staging tenant
+- [ ] Verify real appointment webhook payloads for created/updated/cancelled/rescheduled events
+- [ ] Verify backfill filters and pagination against real `list_appointments` responses
+- [ ] Verify reconciliation repairs stale/missing rows against real tenant data
+- [ ] Decide after staging whether `recall_eligibility_working_set` is actually required
 
 ## Blockers / Dependencies
-- Product/NexHealth confirmation of webhook caps and multi-key assumptions.
-- Product/legal classification for recall/reactivation.
-- Dev B compliance gate for real outbound enrollment/send decisions.
-
+- NexHealth staging tenant access and callback URL.
+- Real staging API key/secret access; local `.env` contains placeholders only.
+- Public HTTPS callback endpoint for webhook delivery.
