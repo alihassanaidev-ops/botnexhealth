@@ -1,10 +1,38 @@
 # Outbound Engagement Engine — Follow-ups & Gaps Register
 
-**Last updated:** 2026-07-08
+**Last updated:** 2026-07-12
 **Purpose:** the **single source of remaining work** for Phase 2 — every open gap, deferral, bug, and
 follow-up across all 12 plans, de-duplicated and prioritized. This is the "what's left / why" companion to
 `verification-phase2-v2/report.md` (which is the "where we are / status" document). To avoid duplication:
 **status + percentages live in the report; actionable remaining work lives here.**
+
+---
+
+## Decision Log
+
+### 2026-07-12 — Plan 05 & Plan 09 remainders proposed for QA-deferral (PENDING CTO SIGN-OFF)
+
+Both remaining plans are at ~80% with **no code work left** — their remainders are **external / staging**,
+not implementation. Proposed as deferrals so the team can move into the verification + QA phase this week
+per the CTO's directive. **Not final — awaiting CTO sign-off (back Monday 2026-07-13).**
+
+- **Plan 05 — Outbound Email → DEFER remainder to QA/ops.** Remaining = per-clinic sending domains,
+  SPF/DKIM/DMARC DNS, domain warm-up, high-volume deliverability verification, and optional HTML/branded
+  templates (items **E-3, E-4**). **Rationale:** all external DNS/vendor + scale-deliverability + optional
+  polish — **not a functional gap**. The channel is launch-compliant today (transactional sends, one-click
+  unsubscribe, bounce/complaint suppression, usage metering all shipped). Shared platform Resend domain works
+  for a pilot. → belongs to QA/ops, not a dev sprint.
+- **Plan 09 — Integration & Data Layer → DEFER remainder to QA.** Remaining = validate the four flows against a
+  real/staging NexHealth tenant (items **D-5, D-6**). **Rationale:** code is complete and unit-tested (mocked
+  client); the last 20% is *staging validation*, which is blocked on prerequisites the dev cannot self-provision:
+  staging `NEXHEALTH_API_KEY`, staging `NEXHEALTH_WEBHOOK_SECRET`, a real `InstitutionLocation`
+  (`nexhealth_subdomain` + `nexhealth_location_id`), a public HTTPS callback
+  (`https://<staging-api>/api/v1/nexhealth/webhooks/appointments`), and a running staging worker/beat. → this
+  **is** the QA/staging phase; it cannot be "implemented," only validated.
+
+**Consequence:** with both remainders deferred, no feature-implementation work remains for Phase 2. Next step is
+the CTO's requested implementation-verification pass (4-bucket classification across all sessions), then QA.
+A Plan 09 staging runbook will be prepared so the moment credentials exist, validation is a ~1-hour exercise.
 
 **Legend:** ✅ done · ❌ dropped (product-owner decision) · ⬜ open.
 **Priority:** **P0** = fix before any real/at-scale send (correctness/security/patient-safety/legal) ·

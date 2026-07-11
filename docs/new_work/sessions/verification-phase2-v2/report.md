@@ -12,6 +12,13 @@ current merged tree by an independent per-plan sub-agent (graphify-oriented navi
 each conclusion traced to `file:line`); Plan 03 and the global test/migration status were verified directly by
 the author. Test baseline below.
 
+> **⏸ Decision pending (2026-07-12).** The two non-complete plans — **Plan 05 (~70%)** and **Plan 09 (~80%)** —
+> have their remainders **proposed for QA-deferral** because both are **external/staging, not code**: Plan 05 =
+> per-tenant sending domain / SPF-DKIM-DMARC / warm-up + optional HTML (E-3/E-4); Plan 09 = staging validation of
+> the subscription/backfill/reconciliation/reschedule flows against a live NexHealth tenant (D-5/D-6). **Pending
+> CTO sign-off (back Monday 2026-07-13).** See the Decision Log in `../outbound-followups-and-gaps.md`. Percentages
+> and per-plan findings below are unchanged.
+
 > **Supersession.** This replaces the 2026-07-04 current-state report (preserved in git history). Since that
 > version, two things changed the codebase materially: (1) the **Plan-03 voice** build was largely completed
 > (data model, crash-safe idempotency, timeout policy, and the profiles/attempts API), and (2) **Hammad's
