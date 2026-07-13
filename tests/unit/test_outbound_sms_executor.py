@@ -81,6 +81,7 @@ def test_render_no_contact_no_location_known_patient_var_blank():
 def _make_run(contact_id="c-1", location_id="l-1"):
     run = MagicMock()
     run.id = "run-1"
+    run.workflow_id = "wf-1"
     run.institution_id = "inst-1"
     run.contact_id = contact_id
     run.location_id = location_id
@@ -179,6 +180,11 @@ def test_executor_sends_and_completes_step():
         result = asyncio.run(executor.execute(run, node, {}))
 
     assert result == "node-2"
+    # Campaign attribution (Plan 11): run + workflow ids flow to send_sms so the
+    # delivery webhook can tag the usage event for /by-campaign.
+    send_kwargs = instance.send_sms.call_args.kwargs
+    assert send_kwargs["workflow_run_id"] == "run-1"
+    assert send_kwargs["workflow_id"] == "wf-1"
     runtime.complete_step.assert_called_once()
     assert runtime.complete_step.call_args.kwargs.get("result_code") == "sent"
     runtime.fail_run.assert_not_called()

@@ -69,6 +69,8 @@ class SmsService:
         institution_location_id: str,
         patient_contact_id: str | None = None,
         call_id: str | None = None,
+        workflow_run_id: str | None = None,
+        workflow_id: str | None = None,
     ) -> SmsHistoryLog:
         """
         Send an SMS via Twilio and log the history in the database.
@@ -80,6 +82,9 @@ class SmsService:
             institution_location_id: The location associated with this message.
             patient_contact_id: Optional ID of the Contact receiving this message.
             call_id: Optional associated Retell Call ID.
+            workflow_run_id: Optional campaign run that sent this SMS (Plan 11
+                attribution — carried to the delivery webhook's usage event).
+            workflow_id: Optional campaign/workflow id for per-campaign spend.
 
         Returns:
             The SmsHistoryLog database record.
@@ -149,6 +154,8 @@ class SmsService:
                 institution_location_id=institution_location_id,
                 patient_contact_id=patient_contact_id,
                 call_id=call_id,
+                workflow_run_id=workflow_run_id,
+                workflow_id=workflow_id,
                 to_number_hash=identity.phone_hash,
                 to_number_masked=identity.phone_masked,
                 last_status_at=now,
@@ -179,6 +186,8 @@ class SmsService:
             institution_location_id=institution_location_id,
             patient_contact_id=patient_contact_id,
             call_id=call_id,
+            workflow_run_id=workflow_run_id,
+            workflow_id=workflow_id,
             to_number_hash=identity.phone_hash,
             to_number_masked=identity.phone_masked,
             timestamp=now,

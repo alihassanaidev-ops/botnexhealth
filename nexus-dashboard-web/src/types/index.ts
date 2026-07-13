@@ -265,6 +265,21 @@ export interface WorkflowStatus {
     created_at: string;
 }
 
+/**
+ * An active do-not-contact record (staff-initiated opt-out). Phone is masked
+ * server-side; `scope` is "location" | "institution"; `source` distinguishes
+ * staff/system origin.
+ */
+export interface DncRecord {
+    phone_masked: string;
+    scope: string;
+    source: string;
+    reason: string | null;
+    location_id: string | null;
+    contact_id: string | null;
+    created_at: string;
+}
+
 /** The status reference embedded on a call (id/name/color only). */
 export interface WorkflowStatusRef {
     id: string;

@@ -90,6 +90,8 @@ class SmsNodeExecutor:
                 body=body,
                 institution_location_id=str(run.location_id),
                 patient_contact_id=str(run.contact_id),
+                workflow_run_id=str(run.id),
+                workflow_id=str(run.workflow_id),
             )
         except Exception as exc:
             logger.error(

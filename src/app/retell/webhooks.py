@@ -436,6 +436,7 @@ async def process_retell_call_analyzed_event(
                         provider_message_id=event.call.call_id,
                         idempotency_key=f"retell:{event.call.call_id}",
                         workflow_run_id=event.call.metadata.get("workflow_run_id"),
+                        workflow_id=event.call.metadata.get("workflow_id"),
                     )
             except Exception as usage_err:
                 logger.error(

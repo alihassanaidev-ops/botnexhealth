@@ -23,6 +23,7 @@ import {
     PhoneForwarded,
     Shield,
     ShieldCheck,
+    ShieldOff,
     MessageSquare,
     Mail,
     MailCheck,
@@ -108,6 +109,11 @@ const institutionAdminNav: NavItemDef[] = [
         title: "Campaigns",
         url: "/institution-admin/campaigns",
         icon: Megaphone,
+    },
+    {
+        title: "Do Not Contact",
+        url: "/institution-admin/do-not-contact",
+        icon: ShieldOff,
     },
 ]
 

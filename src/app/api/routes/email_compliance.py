@@ -17,7 +17,7 @@ from fastapi.responses import PlainTextResponse
 
 from src.app.config import settings
 from src.app.services.email_unsubscribe import verify_unsubscribe_token
-from src.app.services.sms_privacy import hash_email, hash_for_logging
+from src.app.services.sms_privacy import hash_email
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,33 @@ def _enqueue_suppress(institution_id: str, email_hash: str, reason: str) -> None
     suppress_email_consent.delay(
         institution_id=institution_id, email_hash=email_hash, reason=reason
     )
+
+
+def _enqueue_suppress_by_recipient(email_hash: str, reason: str) -> None:
+    """Suppress when the event carries no institution scope: resolve the
+    institution(s) from the recipient's email_hash in the task, then fan out."""
+    from src.app.tasks.email_compliance import suppress_email_for_recipient
+
+    suppress_email_for_recipient.delay(email_hash=email_hash, reason=reason)
+
+
+def _institution_from_tags(data: dict[str, Any]) -> str:
+    """Best-effort institution_id from a Resend event, tolerating both tag shapes.
+
+    We send tags as a list of ``{"name","value"}`` objects; some payloads surface
+    them as a flat dict, and bounce/complaint events usually omit custom tags
+    entirely. Never raises on an unexpected shape — an empty string means
+    'unscoped', which routes to email_hash resolution instead.
+    """
+    tags = data.get("tags")
+    if isinstance(tags, list):
+        for tag in tags:
+            if isinstance(tag, dict) and tag.get("name") == "institution_id":
+                return str(tag.get("value") or "")
+    elif isinstance(tags, dict):
+        if tags.get("institution_id"):
+            return str(tags["institution_id"])
+    return str(data.get("institution_id") or "")
 
 
 @router.get("/unsubscribe", response_class=PlainTextResponse)
@@ -97,21 +124,24 @@ async def resend_webhook(request: Request) -> dict[str, Any]:
         return {"status": "ignored", "type": event_type}
 
     data = payload.get("data") or {}
-    institution_id = str((data.get("tags") or {}).get("institution_id") or data.get("institution_id") or "")
+    institution_id = _institution_from_tags(data)
+    reason = f"resend_{event_type}"
     suppressed = 0
     for email in _recipients(data):
         email_hash = hash_email(email)
         if not email_hash:
             continue
-        if not institution_id:
-            # No institution tag on the event — we cannot scope the suppression.
-            logger.warning(
-                "resend webhook %s missing institution scope; email_hash=%s skipped",
-                event_type, hash_for_logging(email),
-            )
-            continue
-        _enqueue_suppress(institution_id, email_hash, reason=f"resend_{event_type}")
+        if institution_id:
+            # Scope came through on the event — suppress directly.
+            _enqueue_suppress(institution_id, email_hash, reason=reason)
+        else:
+            # No institution tag (Resend omits custom tags on bounce/complaint) —
+            # resolve the institution(s) from the recipient's email_hash in the task.
+            _enqueue_suppress_by_recipient(email_hash, reason=reason)
         suppressed += 1
 
-    logger.info("resend webhook: type=%s suppressed=%d", event_type, suppressed)
+    logger.info(
+        "resend webhook: type=%s scoped=%s suppressed=%d",
+        event_type, bool(institution_id), suppressed,
+    )
     return {"status": "processed", "type": event_type, "suppressed": suppressed}

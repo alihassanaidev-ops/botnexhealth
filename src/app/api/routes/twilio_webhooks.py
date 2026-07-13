@@ -288,6 +288,8 @@ async def sms_status(request: Request) -> dict[str, str]:
             currency=(_field(form, "PriceUnit") or "USD"),
             provider_message_id=message_sid,
             idempotency_key=f"sms:{message_sid}",
+            workflow_run_id=str(row.workflow_run_id) if row.workflow_run_id else None,
+            workflow_id=str(row.workflow_id) if row.workflow_id else None,
         )
     return {"status": "updated"}
 

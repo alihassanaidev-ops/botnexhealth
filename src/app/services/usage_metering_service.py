@@ -41,12 +41,6 @@ logger = logging.getLogger(__name__)
 # consolidated baseline migration's ``_usage_events_expr``).
 USAGE_METERING_CONTEXT = "usage_metering"
 
-# TODO(Plan 03): The voice channel (channel="voice", provider="retell",
-# minutes/dials) will be metered by the Retell voice executor once it lands.
-# Call UsageMeteringService.record(...) from that executor's success path with
-# the call's billable minutes/dials and the Retell call id as idempotency_key.
-# Do not implement voice ingestion here — this note marks the integration point.
-
 
 class UsageMeteringService:
     def __init__(self, session: AsyncSession):

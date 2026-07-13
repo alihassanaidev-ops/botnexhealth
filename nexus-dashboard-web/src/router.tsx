@@ -32,6 +32,7 @@ const LocationAdminPanel = lazy(() => import("./pages/LocationAdminPanel"));
 const InstitutionUserManagement = lazy(() => import("./pages/InstitutionUserManagement"));
 const InstitutionSettings = lazy(() => import("./pages/InstitutionSettings"));
 const WorkflowStatuses = lazy(() => import("./pages/WorkflowStatuses"));
+const DoNotContactAdmin = lazy(() => import("./pages/DoNotContactAdmin"));
 const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
@@ -265,6 +266,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
                                 <S><WorkflowStatuses /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/do-not-contact",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><DoNotContactAdmin /></S>
                             </RoleGuard>
                         ),
                     },

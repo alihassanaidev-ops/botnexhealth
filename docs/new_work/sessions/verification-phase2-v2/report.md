@@ -19,6 +19,14 @@ the author. Test baseline below.
 > CTO sign-off (back Monday 2026-07-13).** See the Decision Log in `../outbound-followups-and-gaps.md`. Percentages
 > and per-plan findings below are unchanged.
 
+> **✅ Post-verification fixes (2026-07-13).** The v3 verification (`../verification-phase2-v3/report.md`) surfaced
+> three actionable findings, now **fixed** (session `../qa-prep-3-fixes/`): (1) **Plan 05** — the Resend
+> bounce/complaint webhook (this report flagged it "NEEDS-STAGING-VERIFY" at §4 Plan 05; it actually suppressed
+> nothing in prod because Resend omits the send-time tag) now resolves the institution(s) from the recipient's
+> `email_hash` and suppresses; (2) **Plan 11** — voice + SMS are now stamped with `workflow_id` so they appear in
+> `/by-campaign` (previously only email did); (3) **Plan 08** — the staff DNC admin UI (U-2b) was built. 1479 unit
+> tests pass. Where §4/§5 below describe these as gaps, treat them as closed as of 2026-07-13.
+
 > **Supersession.** This replaces the 2026-07-04 current-state report (preserved in git history). Since that
 > version, two things changed the codebase materially: (1) the **Plan-03 voice** build was largely completed
 > (data model, crash-safe idempotency, timeout policy, and the profiles/attempts API), and (2) **Hammad's

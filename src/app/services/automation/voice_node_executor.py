@@ -167,6 +167,10 @@ class VoiceNodeExecutor:
         }
         metadata = {
             "workflow_run_id": str(run.id),
+            # workflow_id lets the Retell post-call usage webhook attribute voice
+            # minutes/dials to the campaign in /by-campaign (Plan 11), symmetric
+            # with SMS/email. Without it voice is invisible in per-campaign spend.
+            "workflow_id": str(run.workflow_id),
             "workflow_step_id": node.id,
             "institution_id": str(run.institution_id),
             "source": "outbound_campaign",

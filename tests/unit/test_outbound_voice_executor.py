@@ -26,6 +26,7 @@ from src.app.services.automation.voice_node_executor import VoiceParked
 def _make_run(contact_id="c-1", location_id="l-1", institution_id="inst-1"):
     run = MagicMock()
     run.id = "run-1"
+    run.workflow_id = "wf-1"
     run.institution_id = institution_id
     run.contact_id = contact_id
     run.location_id = location_id
@@ -185,6 +186,7 @@ def test_executor_places_call_and_stores_call_id():
     assert "stop" in dv["compliance_disclosure"].lower()
     md = kw["metadata"]
     assert md["workflow_run_id"] == "run-1"
+    assert md["workflow_id"] == "wf-1"  # attribution for /by-campaign (Plan 11)
     assert md["source"] == "outbound_campaign"
     assert md["ai_automated_call"] is True
     # call_id captured onto the attempt for webhook correlation.
