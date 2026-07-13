@@ -50,6 +50,15 @@ was already covered by the 12 integration tests; the gap was the channel/webhook
 Backend E2E for the engine (12 tests) + channels/gate/fixes (4 tests) is now durable + green.
 Remaining Layer 2 breadth (more channels/edge cases) can grow the same file over time.
 
+### Live API smoke (bridge check — 2026-07-14)
+Brought up the API container (`docker compose up -d api`); `/livez` → 200 after 18s.
+`POST /api/auth/login` (inst.admin@bright-smile-dental.dev / LocalDev123!) → HTTP 200
+`{"status":"mfa_setup_required", ...}`. **This is correct behavior** and validates the live stack:
+app boots, DB connected, seeded user resolves, auth works, MFA is enforced. Did NOT script through
+the TOTP-setup dance to a token — the authenticated enroll→advance path is already proven by the
+real-Postgres integration tests, so the marginal value is low. **API container left running for the
+deferred Layer 3 manual FE pass.**
+
 ### Remaining layers (increasingly user/ops-dependent)
 - **Layer 3 — Frontend manual click-through**: needs app up + browser. FE now builds (140 vitest green);
   the manual pass validates DNC UI / Campaign UI / Builder against a live backend.

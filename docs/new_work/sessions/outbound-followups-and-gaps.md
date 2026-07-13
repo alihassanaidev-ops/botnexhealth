@@ -1,6 +1,6 @@
 # Outbound Engagement Engine — Follow-ups & Gaps Register
 
-**Last updated:** 2026-07-12
+**Last updated:** 2026-07-14
 **Purpose:** the **single source of remaining work** for Phase 2 — every open gap, deferral, bug, and
 follow-up across all 12 plans, de-duplicated and prioritized. This is the "what's left / why" companion to
 `verification-phase2-v2/report.md` (which is the "where we are / status" document). To avoid duplication:
@@ -33,6 +33,22 @@ per the CTO's directive. **Not final — awaiting CTO sign-off (back Monday 2026
 **Consequence:** with both remainders deferred, no feature-implementation work remains for Phase 2. Next step is
 the CTO's requested implementation-verification pass (4-bucket classification across all sessions), then QA.
 A Plan 09 staging runbook will be prepared so the moment credentials exist, validation is a ~1-hour exercise.
+
+### 2026-07-14 — Verification (v3) + fixes + QA executed
+
+- **Verification pass done** → `verification-phase2-v3/report.md` (4-bucket classification, all 12 plans).
+  Headline: Bucket-3 (unnecessary/remove) nearly empty; the codebase is clean.
+- **3 blocking fixes shipped** (`qa-prep-3-fixes/`): **Plan 05** Resend bounce/complaint webhook now
+  resolves institution(s) from the recipient `email_hash` and suppresses (was: suppressed nothing in
+  prod — tag mismatch + Resend omits tags); **Plan 11** voice + SMS now stamped with `workflow_id` so
+  they appear in `/by-campaign` (was: only email); **Plan 08 U-2b** staff DNC admin UI built.
+- **P2 tail cleared** (`qa-prep-p2-tail/`): removed the dead Plan-01 registry seam; fixed stale
+  Plan-10/11 doc comments; Plan-08 stat cards no longer fall back to institution-wide totals. 4 P2
+  items intentionally left as decisions (bilingual footer, group-DNC creation, Plan-02 ETag, Plan-07 ETA guard).
+- **QA Layers 0–2 executed green** (`qa-plan/`): fresh migration (fixed a 33-char revision id → `20260712_sms_wf_attribution`),
+  backend 1494 tests + FE 140 vitest + tsc clean, and NEW real-Postgres channel/gate integration tests
+  (`tests/integration/test_outbound_channels_integration.py`) proving all 3 fixes E2E. Live API smoke: stack
+  boots + auth/MFA enforced. Layer 3 (manual FE) deferred; Layers 4–5 (vendors, prod) ops-gated.
 
 **Legend:** ✅ done · ❌ dropped (product-owner decision) · ⬜ open.
 **Priority:** **P0** = fix before any real/at-scale send (correctness/security/patient-safety/legal) ·
@@ -155,8 +171,9 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   if already sent). Residual crash-window = **XC-1b**. A dedicated `workflow_sms_attempts` table is optional polish.
 - **S-2 (P1) Free-text inbound routing** — replies are ignored (empty TwiML, no persistence/notification). Build
   `inbound_sms_messages` + `InboundSmsRoutingService` (staff notification at minimum).
-- **S-3 (P2) `sms_history_logs` workflow linkage** — add `workflow_run_id`/`step_id`/`campaign_id`/`attempt_number`/
-  `provider_segments`/`price_*` so delivery joins to a run/attempt (linkage currently only on the separate `usage_events` row).
+- **S-3 ✅ `sms_history_logs` workflow linkage (2026-07-14)** — added nullable `workflow_run_id`/`workflow_id`
+  (migration `20260712_sms_wf_attribution`), stamped at send time and carried to the delivery-status usage
+  event so SMS now appears in `/by-campaign`. (`step_id`/`attempt_number`/`price_*` still optional, not needed.)
 
 ### Plan 05 — Outbound Email (~70%; launch-compliant v1)
 - **E-1 ✅ Unsubscribe.** Signed one-click unsubscribe link + email suppression shipped.
@@ -203,7 +220,9 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   PHI/consent/retention decisions.
 - **U-2 ✅ Emergency-halt UI.** Institution-wide halt status/activate/release and per-campaign emergency halt are
   surfaced in the campaign UI. Backend `/outbound-halt` literal routes were also moved before `/{workflow_id}`.
-- **U-2b (P1) Privileged institution/DSO-wide DNC admin endpoint + UI** — the `set_do_not_contact` writer exists (Plan 12); expose it.
+- **U-2b ✅ Privileged institution DNC admin endpoint + UI (2026-07-14)** — backend `POST/DELETE/GET
+  /api/institution/do-not-contact` (Plan 12) + a React admin page (`DoNotContactAdmin.tsx`, INSTITUTION_ADMIN,
+  api-client + test). *Group/DSO-wide DNC creation remains a GROUP_ADMIN follow-up (gate already honors GROUP scope).*
 - **U-3 ✅ essential analytics.** Campaign detail consumes Plan 11 `/institution/usage/summary` + `/by-campaign` for
   usage/cost cards. Attributed revenue, outcome-rate definitions, trends, and group-level dashboards are not required
   for current scope.
