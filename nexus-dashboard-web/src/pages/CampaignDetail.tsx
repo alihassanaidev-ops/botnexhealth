@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { Link, useParams } from "react-router-dom"
 import {
     ArrowLeft,
@@ -107,10 +107,6 @@ function money(value: number | undefined, currency = "USD"): string {
 
 function number(value: number | undefined): string {
     return new Intl.NumberFormat().format(value ?? 0)
-}
-
-function channel(summary: UsageSummary | null, name: string) {
-    return summary?.channels.find((c) => c.channel === name)
 }
 
 function isCancelable(run: AutomationWorkflowRun): boolean {
@@ -268,6 +264,12 @@ export default function CampaignDetail() {
                 getCampaign(id),
                 listCampaignRuns(id),
                 getUsageSummary(),
+                // The /by-campaign endpoint has no per-workflow filter; it returns the
+                // top-N workflows by spend. We request the backend max (200) and pick this
+                // campaign out client-side. Caveat: for an institution with >200 campaigns,
+                // a campaign outside the top-200-by-spend will not appear here and its usage
+                // cards fall back to the neutral empty state (0). If exact per-campaign usage
+                // for such tail campaigns is required, add a workflow_id filter to the route.
                 getUsageByCampaign(undefined, 200),
             ])
             setCampaign(wf)
@@ -283,10 +285,6 @@ export default function CampaignDetail() {
     }
 
     useEffect(() => { refresh() }, [id])
-
-    const sms = useMemo(() => channel(usageSummary, "sms"), [usageSummary])
-    const voice = useMemo(() => channel(usageSummary, "voice"), [usageSummary])
-    const email = useMemo(() => channel(usageSummary, "email"), [usageSummary])
 
     async function handlePause() {
         if (!campaign) return
@@ -512,17 +510,17 @@ export default function CampaignDetail() {
                             <Stat
                                 icon={<MessageSquare className="h-3.5 w-3.5" />}
                                 label="SMS segments"
-                                value={number(campaignUsage?.total_segments ?? sms?.total_segments)}
+                                value={number(campaignUsage?.total_segments)}
                             />
                             <Stat
                                 icon={<Phone className="h-3.5 w-3.5" />}
                                 label="Voice minutes"
-                                value={number(campaignUsage?.total_minutes ?? voice?.total_minutes)}
+                                value={number(campaignUsage?.total_minutes)}
                             />
                             <Stat
                                 icon={<Mail className="h-3.5 w-3.5" />}
                                 label="Emails"
-                                value={number(campaignUsage?.total_emails ?? email?.total_emails)}
+                                value={number(campaignUsage?.total_emails)}
                             />
                         </div>
                     )}

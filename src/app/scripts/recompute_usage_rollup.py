@@ -1,6 +1,6 @@
 """Recompute today's and yesterday's usage & cost rollup (Plan 11 M-2).
 
-Designed to run on a 5-minute EventBridge → ECS schedule (same pattern as
+Designed to run on a 15-minute EventBridge → ECS schedule (same pattern as
 ``recompute_dashboard_rollup``). Each tick:
 
   1. Connects using ``DATABASE_ADMIN_URL`` — the runtime ``nexhealth_app`` role

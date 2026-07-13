@@ -11,7 +11,8 @@ so the frontend and the engine share one source of truth. Layers:
      invoked through a seam; a no-op default ships here so the engine stays safe until
      Plan 12 provides the real validator.
   5. Channel readiness — invoked through a seam (a no-op default); Plan 10 provides the
-     real readiness check that blocks publishing a workflow whose channels aren't set up.
+     real readiness check. It is advisory: it emits warnings at publish (surfaced in the
+     builder) but does NOT block publishing a workflow whose channels aren't set up.
 
 This service *invokes* compliance policy; it does not define Plan 12's semantic rules.
 """
