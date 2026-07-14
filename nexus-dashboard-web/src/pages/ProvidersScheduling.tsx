@@ -157,14 +157,16 @@ export default function ProvidersScheduling() {
         }
         setSavingSettings(true)
         try {
-            await updateProvider(selectedProvider.id, {
+            const updated = await updateProvider(selectedProvider.id, {
                 buffer_minutes: bufferMinutes,
                 same_day_cutoff_time: cutoffTime || null,
                 min_age: minAge === "" ? null : minAge,
                 max_age: maxAge === "" ? null : maxAge,
             }, locationId)
+            // Merge the server-confirmed provider instead of refetching every
+            // provider/type/operatory — the PATCH already returns the fresh row.
+            setProviders((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
             toast.success("Provider settings saved")
-            await fetchData()
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : "Failed to update settings"
             toast.error(message)
@@ -197,12 +199,28 @@ export default function ProvidersScheduling() {
         if (!editTarget) return
         setSaving(true)
         try {
-            await updateAvailability(editTarget.source_id, {
+            const updated = await updateAvailability(editTarget.source_id, {
                 appointment_type_ids: editTypeIds,
             }, locationId)
+            // Merge the server-confirmed row in place rather than refetching the
+            // provider's entire (potentially thousands-of-rows) availability set.
+            // NexHealth's PATCH may not echo appointment-type *names*, so resolve
+            // them locally from the already-loaded appointment type list.
+            const nameBySourceId = new Map(appointmentTypes.map((at) => [at.source_id, at.name]))
+            const typeIds = updated.appointment_type_ids ?? editTypeIds
+            const merged: CachedAvailability = {
+                ...editTarget,
+                ...updated,
+                id: updated.id || editTarget.id,
+                source_id: updated.source_id || editTarget.source_id,
+                appointment_type_ids: typeIds,
+                appointment_type_names: typeIds.map((id) => nameBySourceId.get(id) ?? id),
+            }
+            setAvailabilities((prev) =>
+                prev.map((a) => (a.source_id === merged.source_id ? merged : a))
+            )
             toast.success("Work window updated")
             setEditTarget(null)
-            await fetchAvailabilities()
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to update"
             toast.error(message)
@@ -233,10 +251,23 @@ export default function ProvidersScheduling() {
 
         setSaving(true)
         try {
-            await createAvailability({
+            const created = await createAvailability({
                 provider_id: selectedProviderId,
                 ...newWindow
             }, locationId)
+            // Append the created row instead of refetching everything. Resolve
+            // type names locally and keep the chosen operatory id for display
+            // (operatory name is resolved from the operatories list at render).
+            const nameBySourceId = new Map(appointmentTypes.map((at) => [at.source_id, at.name]))
+            const typeIds = created.appointment_type_ids ?? newWindow.appointment_type_ids
+            const enriched: CachedAvailability = {
+                ...created,
+                id: created.id || created.source_id,
+                operatory_source_id: created.operatory_source_id ?? newWindow.operatory_id,
+                appointment_type_ids: typeIds,
+                appointment_type_names: typeIds.map((id) => nameBySourceId.get(id) ?? id),
+            }
+            setAvailabilities((prev) => [...prev, enriched])
             toast.success("Work window created successfully")
             setCreateDialogOpen(false)
             // Reset form
@@ -247,7 +278,6 @@ export default function ProvidersScheduling() {
                 start_time: "09:00",
                 end_time: "17:00",
             })
-            await fetchAvailabilities()
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to create work window"
             toast.error(message)
