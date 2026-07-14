@@ -308,6 +308,11 @@ export default function ProvidersScheduling() {
     )
     const relevantOperatories = operatories.filter((op) => availableOperatoryIds.has(op.source_id))
 
+    // NexHealth doesn't embed an operatory name on the availability itself (only
+    // operatory_id), so resolve the display name from the operatories list by
+    // source_id. Names can collide, so rows still show the ID alongside.
+    const operatoryNameBySourceId = new Map(operatories.map((op) => [op.source_id, op.name]))
+
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
@@ -609,10 +614,11 @@ export default function ProvidersScheduling() {
                                                                 </Badge>
                                                             )}
                                                         </div>
-                                                        {av.operatory_name && (
+                                                        {av.operatory_source_id && (
                                                             <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
                                                                 <MapPin className="h-3 w-3" />
-                                                                Operatory: {av.operatory_name}
+                                                                Operatory: {operatoryNameBySourceId.get(av.operatory_source_id) ?? av.operatory_name ?? "Unknown"}
+                                                                <span className="opacity-60">({av.operatory_source_id})</span>
                                                             </div>
                                                         )}
                                                         {av.days && av.days.length > 0 && (
