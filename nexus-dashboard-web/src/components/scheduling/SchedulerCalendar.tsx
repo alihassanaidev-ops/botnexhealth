@@ -204,11 +204,13 @@ export default function SchedulerCalendar({
         try {
             const updated = await updateAvailability(selected.source_id, { appointment_type_ids: editTypeIds }, locationId)
             const nameById = new Map(appointmentTypes.map((at) => [at.source_id, at.name]))
+            // Only the linked types changed. NexHealth's PATCH response is a bare
+            // availability (no synthesized provider_name, sometimes no operatory/times),
+            // so spreading it would blank those fields — keep the known-good row and
+            // override only the type fields.
             const typeIds = updated.appointment_type_ids ?? editTypeIds
             const merged: CachedAvailability = {
-                ...selected, ...updated,
-                id: updated.id || selected.id,
-                source_id: updated.source_id || selected.source_id,
+                ...selected,
                 appointment_type_ids: typeIds,
                 appointment_type_names: typeIds.map((id) => nameById.get(id) ?? id),
             }
@@ -287,7 +289,7 @@ export default function SchedulerCalendar({
                             {columns.map((c) => (
                                 <div key={c.key} className="flex-none border-l px-2.5 py-2" style={{ width: COL_W }}>
                                     <div className="truncate text-[13px] font-semibold" title={c.name}>{c.name}</div>
-                                    {c.sub && <div className={`font-mono text-[10px] ${c.dup ? "text-amber-600 dark:text-amber-500" : "text-muted-foreground"}`}>nh-{c.sub}</div>}
+                                    {c.sub && <div className={`font-mono text-[10px] ${c.dup ? "text-amber-600 dark:text-amber-500" : "text-muted-foreground"}`}>{c.sub}</div>}
                                 </div>
                             ))}
                         </div>
@@ -374,7 +376,7 @@ export default function SchedulerCalendar({
                                 if (band) {
                                     return (
                                         <div className="space-y-4">
-                                            <Field k="Room" v={effectiveGroupBy === "operatory" ? `${operatoryName.get(selected.operatory_source_id || "") || ""}` : (selected.provider_name || "")} sub={effectiveGroupBy === "operatory" ? `nh-${selected.operatory_source_id}` : undefined} />
+                                            <Field k="Room" v={effectiveGroupBy === "operatory" ? `${operatoryName.get(selected.operatory_source_id || "") || ""}` : (selected.provider_name || "")} sub={effectiveGroupBy === "operatory" ? (selected.operatory_source_id || undefined) : undefined} />
                                             <Field k="Open" v={`${fromMin(band.sMin)} – ${fromMin(band.eMin)}`} mono />
                                             <div>
                                                 <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">{band.members.length} underlying window{band.members.length > 1 ? "s" : ""}</div>
@@ -397,7 +399,7 @@ export default function SchedulerCalendar({
                                 return (
                                     <div className="space-y-4">
                                         <Field k="Time" v={`${selected.begin_time} – ${selected.end_time}`} sub={durLabel(s, e)} mono />
-                                        <Field k="Operatory" v={operatoryName.get(selected.operatory_source_id || "") || "—"} sub={selected.operatory_source_id ? `nh-${selected.operatory_source_id}` : undefined} />
+                                        <Field k="Operatory" v={operatoryName.get(selected.operatory_source_id || "") || "—"} sub={selected.operatory_source_id || undefined} />
                                         <Field k="Provider" v={selected.provider_name || "Unassigned"} />
                                         <div>
                                             <div className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">Appointment types</div>

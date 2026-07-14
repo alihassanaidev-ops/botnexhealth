@@ -209,12 +209,13 @@ export default function ProvidersScheduling() {
             // NexHealth's PATCH may not echo appointment-type *names*, so resolve
             // them locally from the already-loaded appointment type list.
             const nameBySourceId = new Map(appointmentTypes.map((at) => [at.source_id, at.name]))
+            // Only the linked types changed. The PATCH response is a bare NexHealth
+            // availability (no synthesized provider_name, sometimes no operatory/times),
+            // so keep the known-good row and override only the type fields — spreading
+            // `updated` would blank those fields until the next full refetch.
             const typeIds = updated.appointment_type_ids ?? editTypeIds
             const merged: CachedAvailability = {
                 ...editTarget,
-                ...updated,
-                id: updated.id || editTarget.id,
-                source_id: updated.source_id || editTarget.source_id,
                 appointment_type_ids: typeIds,
                 appointment_type_names: typeIds.map((id) => nameBySourceId.get(id) ?? id),
             }
