@@ -22,6 +22,7 @@ import {
 } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
 import { useSelectedLocationId } from "@/context/LocationContext"
+import SchedulerCalendar from "@/components/scheduling/SchedulerCalendar"
 
 export default function ProvidersScheduling() {
     const { user } = useAuth()
@@ -35,6 +36,7 @@ export default function ProvidersScheduling() {
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
     const [showExpired, setShowExpired] = useState(false)
+    const [view, setView] = useState<"list" | "calendar">("list")
     const [loading, setLoading] = useState(true)
     const [loadingAvailabilities, setLoadingAvailabilities] = useState(false)
     const [syncing, setSyncing] = useState(false)
@@ -354,7 +356,18 @@ export default function ProvidersScheduling() {
                     </p>
                 </div>
                 <div className="flex items-center space-x-2">
-                    {canManage && (
+                    <div className="inline-flex overflow-hidden rounded-md border">
+                        {(["list", "calendar"] as const).map((v) => (
+                            <button
+                                key={v}
+                                onClick={() => setView(v)}
+                                className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground"}`}
+                            >
+                                {v}
+                            </button>
+                        ))}
+                    </div>
+                    {canManage && view === "list" && (
                         <>
                             <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
                                 Create Work Window
@@ -398,6 +411,13 @@ export default function ProvidersScheduling() {
                         </p>
                     </CardContent>
                 </Card>
+            ) : view === "calendar" ? (
+                <SchedulerCalendar
+                    locationId={locationId}
+                    operatories={operatories}
+                    appointmentTypes={appointmentTypes}
+                    canManage={canManage}
+                />
             ) : (
                 <>
                     {/* Filters: Provider → Appointment Type */}
