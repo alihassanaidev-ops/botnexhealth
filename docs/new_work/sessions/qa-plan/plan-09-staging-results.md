@@ -76,6 +76,38 @@ registration (no need for the CTO to supply one).
 - Note: this path is already covered by real-Postgres unit/integration tests; the live sandbox adds little
   here beyond the payload shape, which we mirror from the projection parser.
 
+### FLOW 5 — REAL end-to-end webhook round-trip ✅ PASS (2026-07-15)
+The final gap — a real appointment change delivering a real, NexHealth-signed webhook to our running app —
+is now **closed**. Done over a **cloudflared** quick tunnel (ngrok is unusable in this env — CRL fetch fails).
+
+Setup:
+- `cloudflared tunnel --url http://localhost:8000` → public origin; verified it forwards to the app.
+- Registered a real endpoint: `POST /webhook_endpoints {target_url:<cf>/api/v1/nexhealth/webhooks/appointments}`
+  → **201**, `id=16271`, returned a real `secret_key`. Subscriptions `appointment_insertion` (51664) +
+  `appointment_updated` (51665) → **201** each.
+- **Set `NEXHEALTH_WEBHOOK_SECRET=<secret_key>`** in `.env` and **recreated** the api container
+  (`docker compose up -d --force-recreate api` — `docker restart` does NOT reload `env_file`) so signature
+  verification actually **runs** (not the local skip path). Temporarily wired local `InstitutionLocation`
+  "Downtown Clinic" → `nexhealth_location_id=348511` / `nexhealth_subdomain=silora-demo-practice`.
+
+Round-trip observed (real NexHealth → cloudflared → our app):
+- **Book** (`POST /appointments` … `start_time 2026-07-23T08:00-07:00`) → appt `1599668687` created.
+  → webhook `appointment_insertion` received → **200 OK**, sig verified, event parsed, location resolved
+  (`institution=66b77a28…`), ledger `nexhealth_webhook_events` row **COMPLETED**
+  (dedup_key `appointment_insertion:1599668687:2026-07-23T15:00:00.000Z`), `appointment_working_set` upserted
+  (`status=scheduled`, `last_event=appointment_insertion`), enrollment trigger enqueued to Celery.
+- **Cancel** (`PATCH …{cancelled:true}`) → webhook `appointment_updated` received → **200 OK**, handler logged
+  `cancelled … event=appointment_updated`, projection flipped to **`status=cancelled` / `last_event=appointment_updated`**.
+
+**This proves every inbound layer against a genuinely NexHealth-signed delivery: HMAC signature verification,
+`event_name` parsing (`appointment_insertion`/`appointment_updated`), location resolution, ledger dedup,
+projection upsert, and workflow enqueue — for both the insert and the update/cancel paths.**
+
+Cleanup (all sandbox + local state restored): appointment cancelled; endpoint 16271 **DELETE → 204**;
+`NEXHEALTH_WEBHOOK_SECRET` reverted to empty + api container recreated (secret cleared); Downtown Clinic
+nexhealth fields reverted to NULL; local `appointment_working_set` + `nexhealth_webhook_events` test rows purged;
+cloudflared stopped (tunnel now 530). `git status` clean; `.env` is gitignored.
+
 ## Verdict (final for this session)
 The staging validation did its job — it found **two real bugs the mock tests missed**:
 1. **Backfill params** (`start_date/end_date` → `start/end`) — ✅ **FIXED** + verified live (200) + 180 tests pass.
@@ -91,12 +123,15 @@ The staging validation did its job — it found **two real bugs the mock tests m
    already matched.)
 
 **All three drift bugs are now fixed and verified against the real API at every layer** (auth, backfill,
-subscription registration, inbound signature + parsing). **Plan 09 is code-complete + verified (~95%+).**
+subscription registration, inbound signature + parsing). **Plan 09 is code-complete + verified — and the
+real-appointment round-trip is now DONE (Flow 5 above), so Plan 09 = 100%.**
 
-**The only thing NOT done is a full real-appointment round-trip** (NexHealth actually delivering a webhook from a
-real appointment change) — blocked by the **empty sandbox tenant** (no appointments to create/change), an
-**environmental limitation, not a code defect.** Also open: reconciliation live-check (needs data), D-6 recall
-projection decision, and the `/appointment_slots` param check (bonus, untested endpoint).
+**The final round-trip is complete** (2026-07-15, via cloudflared): a real booked appointment delivered a real
+NexHealth-signed `appointment_insertion` webhook, and its cancellation delivered `appointment_updated` — both
+received, verified, parsed, projected, and enqueued end-to-end. The earlier "empty tenant" blocker was resolved
+by booking against a bookable provider/type/operatory (Brian Albert / Checkup / op 268375). Still open (minor,
+non-blocking): reconciliation live-check, D-6 recall projection decision, and the `/appointment_slots` param check
+(bonus, untested endpoint).
 
 **To actually reach 100%:**
 - Rework `nexhealth_subscription_service` to the `/webhook_endpoints` + `/webhook_endpoints/{id}/webhook_subscriptions`

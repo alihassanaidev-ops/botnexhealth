@@ -58,7 +58,7 @@ The spine is complete and hardening is real:
   way (recall/marketing still require express consent — that capture is deferred with the client-deferred lead-intake).
 
 The original audit's five compliance/security findings (A–E) are now **all fully resolved** — Finding E's
-reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer) jumped from ~40% to ~80%, then to ~95% after live sandbox verification (2026-07-15)**
+reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer) jumped from ~40% to ~80% to ~95% (live sandbox verification), then to 100% after the real webhook round-trip (2026-07-15)**
 (Hammad, `6671ba5`+`43e2875`): the disposable `appointment_working_set` projection, reschedule re-enroll,
 event-level idempotency ledger, revalidation freshness window, and the subscription/backfill/reconciliation jobs
 now exist — though the live-NexHealth-API half of that (subscriptions/backfill/reconciliation) is mock-tested and
@@ -97,7 +97,7 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 06 | Four Live Campaigns | ✅ Complete for agreed scope (Sales Qualification dropped by product) | **100%** | ↑ from ~62–65% |
 | 07 | AI Callback Handling | ✅ Complete for purpose (leaner opt-in design; spec residuals not-required) | **100%** | ↑ from ~63% |
 | 08 | Campaign Mgmt / Analytics UI | ✅ Complete for essential operator scope (CSV/revenue/timelines/ops/SSE deferred/not-required) | **100%** | ↑ from ~22% |
-| 09 | Integration & Data Layer | 🟢 Projection + reschedule re-enroll + ledger + backfill/reconciliation; **live sandbox-verified 2026-07-15 (3 v2-drift bugs fixed)** — real-appointment round-trip pending | **~95%** | ↑ from ~80% (staging verification) |
+| 09 | Integration & Data Layer | 🟢 Projection + reschedule re-enroll + ledger + backfill/reconciliation; **live sandbox-verified 2026-07-15 (3 v2-drift bugs fixed)** — real-appointment round-trip DONE | **100%** | ↑ from ~95% (round-trip verified) |
 | 10 | Per-Tenant Provisioning | ✅ Complete for agreed scope (secure tenant credential routing/status; setup automation not required) | **100%** | ↑ from ~25% |
 | 11 | Usage & Cost Reporting | ✅ Complete (scheduled recompute + SMS price fix + group endpoint; cost=Option B, budgets dropped) | **100%** | ↑ from ~65% |
 | 12 | Compliance & Consent | ✅ Complete for scope (gate + basis + DNC route + implied transactional consent; commercial capture deferred w/ intake) | **100%** | ↑ from ~72% |
@@ -315,7 +315,7 @@ definitions.
 enroll existing patients, inspect/cancel runs, and halt outbound safely. Remaining original-plan items are explicitly
 deferred/not-required rather than functional blockers.
 
-### Plan 09 — Integration & Data Layer — 🟢 ~95% (staging-verified 2026-07-15; real-appointment round-trip pending)
+### Plan 09 — Integration & Data Layer — 🟢 100% (real webhook round-trip verified 2026-07-15)
 > **Update 2026-07-15 — live sandbox verification done** (`../qa-plan/plan-09-staging-results.md`). Ran the flows
 > against the real NexHealth sandbox (`silora-demo-practice`). Auth ✅, backfill ✅, subscription registration ✅,
 > inbound webhook ✅ — all verified live. It caught **three real bugs the mock tests missed, now all fixed + re-verified:**
@@ -492,7 +492,7 @@ pipeline and is compliance-correctly gated in the meantime.
   (gate + basis + DNC route + implied transactional consent; commercial capture deferred with lead-intake). Marked
   complete because remaining items were built where required and otherwise assessed **not-required / dropped /
   deferred-per-client / other-lane** — not by implementing everything.
-- **Substantial (60–95%):** Plan 09 (~95%, staging-verified 2026-07-15), Plan 05 (~70%).
+- **Substantial (60–95%):** Plan 05 (~70%). _(Plan 09 reached 100% on 2026-07-15 after the real webhook round-trip — now complete.)_
 - **Minimal:** none.
 - **Not started (0%):** none.
 

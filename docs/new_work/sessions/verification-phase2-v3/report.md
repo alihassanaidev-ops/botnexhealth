@@ -104,6 +104,6 @@ The v2 report is broadly honest, but this pass found these inaccuracies:
 2. **Fix before/early in QA:** Plan 05 bounce/complaint webhook (P1 correctness), Plan 11 SMS+voice `workflow_id` tagging (P1 reporting), Plan 08 U-2b DNC admin UI (operator affordance).
 3. **Small cleanup PR:** delete the Plan 01 dead registry seam; fix the stale comments/doc drift in §3.
 4. **Feed §6 corrections back into the v2 report** so status docs match code.
-5. Deferred Plan 05 (domain/DNS) and Plan 09 (staging validation) remain QA/ops tickets, pending CTO sign-off Monday.
+5. Deferred Plan 05 (domain/DNS) remains a QA/ops ticket, pending CTO sign-off Monday. **Plan 09 (NexHealth staging validation) is now COMPLETE** — the full real-appointment webhook round-trip passed live against the sandbox on 2026-07-15 (book → `appointment_insertion`, cancel → `appointment_updated`, both received/verified/projected end-to-end via a cloudflared tunnel; see `../qa-plan/plan-09-staging-results.md`, Flow 5). Plan 09 = 100%.
 
 **Bottom line for the CTO:** we built the right things, we built them mostly correctly, and we built very little we shouldn't have. Three fixable items and one small cleanup stand between here and a clean pilot.

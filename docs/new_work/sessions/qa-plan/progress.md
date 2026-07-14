@@ -82,3 +82,19 @@ value the CTO gave was the **API key** (not a webhook secret); `.env` corrected.
   with a real endpoint secret (valid accepted, tampered/missing-ts → 403).
 All v2.0-era-code vs current-v2 (v2.2.2) drift, not v3. **180 NexHealth/Plan-09 tests pass.** Plan 09 ~80% → **~95%**
 (full real-appointment round-trip pending — empty sandbox tenant).
+> **SUPERSEDED (2026-07-15):** the round-trip is now DONE — **Plan 09 = 100%.** See the next entry below.
+
+## 2026-07-15 — Layer 4/5: Plan 09 REAL webhook round-trip ✅ DONE → Plan 09 = 100% (see plan-09-staging-results.md, Flow 5)
+Closed the last ~5%. Over a **cloudflared** quick tunnel (ngrok is unusable in this env — CRL fetch fails),
+drove a genuine end-to-end round-trip against the sandbox:
+- Registered a real endpoint (`POST /webhook_endpoints` → 201, id 16271, real `secret_key`) + subscriptions
+  `appointment_insertion`/`appointment_updated`. Set `NEXHEALTH_WEBHOOK_SECRET` and **recreated** the api
+  container (`compose up --force-recreate`; `docker restart` does NOT reload `env_file`) so signature verify
+  actually runs. Temporarily wired local "Downtown Clinic" → loc 348511.
+- **Booked** appt 1599668687 → real `appointment_insertion` webhook → 200 OK: sig verified, event parsed,
+  location resolved, ledger `COMPLETED`, `appointment_working_set` upserted (`scheduled`), workflow enqueued.
+- **Cancelled** it → real `appointment_updated` webhook → 200 OK: projection flipped to `cancelled`.
+- Both insert + update/cancel paths proven against genuinely NexHealth-signed deliveries.
+- Cleanup: appointment cancelled, endpoint deleted (204), secret cleared + container recreated, location
+  reverted to NULL, local test rows purged, tunnel stopped. `git status` clean (docs only).
+**The "empty tenant" blocker was resolved by booking a bookable provider/type/operatory. Plan 09 = 100%.**
