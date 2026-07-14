@@ -21,12 +21,13 @@ import {
     triggerSync,
 } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
-import { useSelectedLocationId } from "@/context/LocationContext"
+import { useSelectedLocationId, useLocationContext } from "@/context/LocationContext"
 import SchedulerCalendar from "@/components/scheduling/SchedulerCalendar"
 
 export default function ProvidersScheduling() {
     const { user } = useAuth()
     const locationId = useSelectedLocationId()
+    const { selectedLocation } = useLocationContext()
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [providers, setProviders] = useState<CachedProvider[]>([])
     const [availabilities, setAvailabilities] = useState<CachedAvailability[]>([])
@@ -418,6 +419,7 @@ export default function ProvidersScheduling() {
                     operatories={operatories}
                     appointmentTypes={appointmentTypes}
                     canManage={canManage}
+                    timezone={selectedLocation?.timezone ?? undefined}
                 />
             ) : (
                 <>

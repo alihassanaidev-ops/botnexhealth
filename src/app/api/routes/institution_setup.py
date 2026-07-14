@@ -277,6 +277,7 @@ class LocationInfoResponse(BaseModel):
     id: str
     name: str
     slug: str
+    timezone: str = "UTC"
 
     model_config = {"from_attributes": True}
 

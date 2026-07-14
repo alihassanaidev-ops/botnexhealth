@@ -129,6 +129,7 @@ export interface LocationInfo {
     id: string;
     name: string;
     slug: string;
+    timezone?: string | null;
 }
 
 export interface SetupOverview {
