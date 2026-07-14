@@ -297,7 +297,7 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
     const gate = (
         <div className="flex min-h-24 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
             <p className="text-xs text-muted-foreground max-w-xs">
-                This transcript is PII-scrubbed and encrypted at rest. Each reveal is audit-logged.
+                This transcript may contain PHI. It is encrypted at rest and every reveal is audit-logged.
             </p>
             <Button
                 type="button"
@@ -323,7 +323,7 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
                 Transcript
                 <span className="ml-1.5 text-[9px] opacity-60 font-normal normal-case">
-                    HIPAA ✓ PII-scrubbed
+                    HIPAA ✓ encrypted + audited
                 </span>
             </p>
             <div className="rounded-lg border bg-muted max-h-64 overflow-y-auto">
