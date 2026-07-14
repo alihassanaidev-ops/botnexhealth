@@ -123,8 +123,10 @@ async def test_list_appointments_paginates_date_window(monkeypatch: pytest.Monke
     assert [row["id"] for row in result] == list(range(1, 52))
     assert calls[0]["subdomain"] == "test-subdomain"
     assert calls[0]["location_id"] == "test-location"
-    assert calls[0]["start_date"] == "2026-08-01"
-    assert calls[0]["end_date"] == "2026-08-31"
+    # NexHealth /appointments expects `start`/`end` query params (verified live against
+    # the sandbox — start_date/end_date returns HTTP 400 "Missing parameter start").
+    assert calls[0]["start"] == "2026-08-01"
+    assert calls[0]["end"] == "2026-08-31"
     assert calls[1]["page"] == 2
 
 

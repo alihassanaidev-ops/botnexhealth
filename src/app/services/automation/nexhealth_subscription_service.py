@@ -25,12 +25,14 @@ from src.app.models.nexhealth_webhook_subscription import (
 
 logger = logging.getLogger(__name__)
 
+# NexHealth's valid appointment webhook events (verified live against the sandbox
+# 2026-07-14: only these two are accepted — cancellations/deletions arrive as
+# `appointment_updated`, not a distinct event). Subscribe with resource_type="Appointment".
 DEFAULT_APPOINTMENT_EVENTS = [
-    "appointment.created",
-    "appointment.updated",
-    "appointment.cancelled",
-    "appointment.deleted",
+    "appointment_insertion",
+    "appointment_updated",
 ]
+_WEBHOOK_RESOURCE_TYPE = "Appointment"
 
 
 @dataclass
@@ -237,21 +239,40 @@ class NexHealthSubscriptionLifecycleService:
         from src.app.api.helpers import handle_nexhealth_request
         from src.app.pms.nexhealth.adapter import NexHealthAdapter
 
+        # NexHealth v2 webhook registration is a TWO-step, account-level flow (verified
+        # live 2026-07-14). The legacy single `POST /webhooks` endpoint we used before is
+        # gone (404); it was a pre-v2.2.2 shape:
+        #   1) POST /webhook_endpoints  {"target_url": ...}  -> {id, secret_key}
+        #   2) POST /webhook_endpoints/{id}/webhook_subscriptions?subdomain=X
+        #        {"resource_type": "Appointment", "event": <event>}   per event
+        # The endpoint is account-level (subdomain ignored on create); subscriptions are
+        # subdomain-scoped. The returned secret_key is the inbound signing secret.
         adapter = None
+        secret_key: str | None = None
         try:
             adapter = await NexHealthAdapter.create(institution, location)
-            raw = await handle_nexhealth_request(
-                adapter._client,  # noqa: SLF001 - lifecycle service intentionally reuses scoped adapter client
+            subdomain = adapter._default_params().get("subdomain")  # noqa: SLF001
+
+            endpoint = await handle_nexhealth_request(
+                adapter._client,  # noqa: SLF001
                 "POST",
-                "/webhooks",
-                params=adapter._default_params(),  # noqa: SLF001
-                json={
-                    "webhook": {
-                        "url": callback_url,
-                        "events": event_types,
-                    }
-                },
+                "/webhook_endpoints",
+                json={"target_url": callback_url},
             )
+            ep_data = endpoint.get("data") if isinstance(endpoint, dict) else None
+            endpoint_id = (ep_data or {}).get("id")
+            secret_key = (ep_data or {}).get("secret_key")
+            if not endpoint_id:
+                raise RuntimeError("webhook_endpoint id missing in response")
+
+            for event in event_types:
+                await handle_nexhealth_request(
+                    adapter._client,  # noqa: SLF001
+                    "POST",
+                    f"/webhook_endpoints/{endpoint_id}/webhook_subscriptions",
+                    params={"subdomain": subdomain},
+                    json={"resource_type": _WEBHOOK_RESOURCE_TYPE, "event": event},
+                )
         except Exception as exc:  # noqa: BLE001
             row.status = NexHealthWebhookSubscriptionStatus.FAILED.value
             row.error_metadata = {"type": type(exc).__name__}
@@ -266,14 +287,14 @@ class NexHealthSubscriptionLifecycleService:
             if adapter is not None:
                 await adapter.close()
 
-        provider_id = _extract_provider_subscription_id(raw)
-        row.provider_subscription_id = provider_id
-        row.status = (
-            NexHealthWebhookSubscriptionStatus.ACTIVE.value
-            if provider_id
-            else NexHealthWebhookSubscriptionStatus.PENDING.value
-        )
-        row.error_metadata = None if provider_id else {"reason": "provider_id_missing"}
+        row.provider_subscription_id = str(endpoint_id)
+        row.status = NexHealthWebhookSubscriptionStatus.ACTIVE.value
+        row.error_metadata = None
+        # The endpoint's secret_key is the inbound-webhook signing secret. Persist it if
+        # the model carries a column (per-endpoint secret; falls back to the platform
+        # NEXHEALTH_WEBHOOK_SECRET otherwise — see the inbound verifier).
+        if secret_key and hasattr(row, "secret_key"):
+            row.secret_key = secret_key
 
 
 def _extract_provider_subscription_id(raw: dict[str, Any]) -> str | None:

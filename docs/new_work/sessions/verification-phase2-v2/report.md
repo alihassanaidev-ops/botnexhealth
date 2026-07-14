@@ -58,7 +58,7 @@ The spine is complete and hardening is real:
   way (recall/marketing still require express consent — that capture is deferred with the client-deferred lead-intake).
 
 The original audit's five compliance/security findings (A–E) are now **all fully resolved** — Finding E's
-reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer) jumped from ~40% to ~80%**
+reschedule deferral was closed by the Plan 09 work below. **Plan 09 (Data Layer) jumped from ~40% to ~80%, then to ~95% after live sandbox verification (2026-07-15)**
 (Hammad, `6671ba5`+`43e2875`): the disposable `appointment_working_set` projection, reschedule re-enroll,
 event-level idempotency ledger, revalidation freshness window, and the subscription/backfill/reconciliation jobs
 now exist — though the live-NexHealth-API half of that (subscriptions/backfill/reconciliation) is mock-tested and
@@ -97,7 +97,7 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 06 | Four Live Campaigns | ✅ Complete for agreed scope (Sales Qualification dropped by product) | **100%** | ↑ from ~62–65% |
 | 07 | AI Callback Handling | ✅ Complete for purpose (leaner opt-in design; spec residuals not-required) | **100%** | ↑ from ~63% |
 | 08 | Campaign Mgmt / Analytics UI | ✅ Complete for essential operator scope (CSV/revenue/timelines/ops/SSE deferred/not-required) | **100%** | ↑ from ~22% |
-| 09 | Integration & Data Layer | 🟢 Projection + reschedule re-enroll + ledger + backfill/reconciliation (NexHealth-API pieces staging-pending) | **~80%** | ↑↑ from ~40% (Hammad, `6671ba5`+`43e2875`) |
+| 09 | Integration & Data Layer | 🟢 Projection + reschedule re-enroll + ledger + backfill/reconciliation; **live sandbox-verified 2026-07-15 (3 v2-drift bugs fixed)** — real-appointment round-trip pending | **~95%** | ↑ from ~80% (staging verification) |
 | 10 | Per-Tenant Provisioning | ✅ Complete for agreed scope (secure tenant credential routing/status; setup automation not required) | **100%** | ↑ from ~25% |
 | 11 | Usage & Cost Reporting | ✅ Complete (scheduled recompute + SMS price fix + group endpoint; cost=Option B, budgets dropped) | **100%** | ↑ from ~65% |
 | 12 | Compliance & Consent | ✅ Complete for scope (gate + basis + DNC route + implied transactional consent; commercial capture deferred w/ intake) | **100%** | ↑ from ~72% |
@@ -315,7 +315,18 @@ definitions.
 enroll existing patients, inspect/cancel runs, and halt outbound safely. Remaining original-plan items are explicitly
 deferred/not-required rather than functional blockers.
 
-### Plan 09 — Integration & Data Layer — 🟢 ~80% (code-complete; NexHealth-API pieces staging-pending)
+### Plan 09 — Integration & Data Layer — 🟢 ~95% (staging-verified 2026-07-15; real-appointment round-trip pending)
+> **Update 2026-07-15 — live sandbox verification done** (`../qa-plan/plan-09-staging-results.md`). Ran the flows
+> against the real NexHealth sandbox (`silora-demo-practice`). Auth ✅, backfill ✅, subscription registration ✅,
+> inbound webhook ✅ — all verified live. It caught **three real bugs the mock tests missed, now all fixed + re-verified:**
+> (1) `GET /appointments` sent `start_date/end_date` → API requires `start/end`; (2) webhook registration posted JSON
+> to the dead `/webhooks` → reworked to the real `/webhook_endpoints` 2-step form flow; (3) inbound parser read `event`
+> + raw-body `X-NexHealth-Signature` → NexHealth sends `event_name` + signs `{timestamp}.{base64(body)}` via
+> `signature`/`timestamp` headers (verified live with a real endpoint `secret_key`). All were v2.0-era-code vs current-v2
+> (v2.2.2) drift, **not** a v3 migration. 180 Plan-09/NexHealth tests pass. **Remaining ~5%:** a full real-appointment
+> round-trip (blocked by the empty sandbox tenant), reconciliation live-check, D-6 recall projection, `/appointment_slots` param check.
+
+
 **Built (Hammad, commits `6671ba5` + `43e2875`, 2026-07-06) — the plan's defining resilience components now exist:**
 - **Disposable `appointment_working_set` projection** (`models/appointment_working_set.py`, migration
   `20260707_appointment_working_set`) — the webhook UPSERTs last-seen scheduling state. Its RLS policy includes the
@@ -481,7 +492,7 @@ pipeline and is compliance-correctly gated in the meantime.
   (gate + basis + DNC route + implied transactional consent; commercial capture deferred with lead-intake). Marked
   complete because remaining items were built where required and otherwise assessed **not-required / dropped /
   deferred-per-client / other-lane** — not by implementing everything.
-- **Substantial (60–90%):** Plan 09 (~80%), Plan 05 (~70%).
+- **Substantial (60–95%):** Plan 09 (~95%, staging-verified 2026-07-15), Plan 05 (~70%).
 - **Minimal:** none.
 - **Not started (0%):** none.
 

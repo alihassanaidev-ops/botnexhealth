@@ -290,8 +290,9 @@ class NexHealthAdapter(
             per_page = 50
             for page in range(1, 11):
                 params = self._default_params()
-                params["start_date"] = date_str
-                params["end_date"] = date_str
+                # NexHealth /appointments expects `start`/`end` (not start_date/end_date).
+                params["start"] = date_str
+                params["end"] = date_str
                 params["provider_id"] = _strip(provider_id)
                 params["page"] = page
                 params["per_page"] = per_page
@@ -363,8 +364,9 @@ class NexHealthAdapter(
         async def fetch(page: int, per_page: int) -> dict[str, Any]:
             p = {
                 **params,
-                "start_date": start_date,
-                "end_date": end_date,
+                # NexHealth /appointments expects `start`/`end` (not start_date/end_date).
+                "start": start_date,
+                "end": end_date,
                 "page": page,
                 "per_page": per_page,
             }

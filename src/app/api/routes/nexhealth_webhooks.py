@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import logging
@@ -22,8 +23,12 @@ router = APIRouter(prefix="/nexhealth/webhooks", tags=["NexHealth Webhooks"])
 # Events we act on. Cancellations arrive both as a dedicated event and as an
 # ``appointment.updated`` carrying ``cancelled: true`` — status is evaluated on
 # every update, not just the cancellation event (Plan 09 §Technical Considerations).
-_ENROLL_EVENTS = frozenset({"appointment.created", "appointment.updated"})
-_CANCEL_EVENTS = frozenset({"appointment.cancelled", "appointment.deleted"})
+# NexHealth sends an `event_name` (verified live/docs 2026-07-14) — only two appointment
+# events exist: `appointment_insertion` (created) and `appointment_updated` (any change, incl.
+# cancellations, which arrive as an update carrying `cancelled: true`, NOT a distinct event).
+# Values may carry a `.complete` suffix (e.g. "appointment_insertion.complete") — normalized to base.
+_ENROLL_EVENTS = frozenset({"appointment_insertion", "appointment_updated"})
+_CANCEL_EVENTS: frozenset[str] = frozenset()  # no distinct cancel event; derived from the `cancelled` flag
 _HANDLED_EVENTS = _ENROLL_EVENTS | _CANCEL_EVENTS
 
 
@@ -78,7 +83,11 @@ async def _cancel_runs_for_appointment(
     return cancelled
 
 
-def _verify_signature(raw_body: bytes, signature_header: str | None) -> None:
+def _verify_signature(
+    raw_body: bytes,
+    signature_header: str | None,
+    timestamp_header: str | None,
+) -> None:
     """Raise 403 if HMAC-SHA256 signature does not match.
 
     When nexhealth_webhook_secret is empty verification is skipped — this is
@@ -95,12 +104,15 @@ def _verify_signature(raw_body: bytes, signature_header: str | None) -> None:
                 detail="Webhook signature secret is not configured",
             )
         return
-    if not signature_header:
+    if not signature_header or not timestamp_header:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Missing X-NexHealth-Signature header",
+            detail="Missing NexHealth signature/timestamp headers",
         )
-    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    # NexHealth signs `{timestamp}.{base64(raw_body)}` with HMAC-SHA256 using the endpoint
+    # secret_key (verified live/docs 2026-07-14). The `timestamp` header value is used verbatim.
+    signed = f"{timestamp_header}.{base64.b64encode(raw_body).decode('ascii')}"
+    expected = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature_header.strip()):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -122,7 +134,11 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     with ``"status": "ignored"`` bodies.
     """
     raw_body = await request.body()
-    _verify_signature(raw_body, request.headers.get("X-NexHealth-Signature"))
+    _verify_signature(
+        raw_body,
+        request.headers.get("signature") or request.headers.get("X-NexHealth-Signature"),
+        request.headers.get("timestamp"),
+    )
 
     try:
         payload = await request.json()
@@ -131,10 +147,13 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
         )
 
-    event: str = payload.get("event", "")
+    # NexHealth uses `event_name` (e.g. "appointment_insertion.complete"); normalize to the base
+    # token. Fall back to `event` for backward compatibility with older/synthetic payloads.
+    event_name: str = payload.get("event_name") or payload.get("event") or ""
+    event: str = event_name.split(".", 1)[0]
     if event not in _HANDLED_EVENTS:
-        logger.debug("nexhealth_appointment_webhook: ignoring event=%s", event)
-        return {"status": "ignored", "event": event}
+        logger.debug("nexhealth_appointment_webhook: ignoring event=%s", event_name)
+        return {"status": "ignored", "event": event_name}
 
     appt: dict = (payload.get("data") or {}).get("appointment") or {}
     nexhealth_location_id = str(appt.get("location_id", ""))

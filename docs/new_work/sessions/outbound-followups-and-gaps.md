@@ -1,6 +1,6 @@
 # Outbound Engagement Engine — Follow-ups & Gaps Register
 
-**Last updated:** 2026-07-14
+**Last updated:** 2026-07-15
 **Purpose:** the **single source of remaining work** for Phase 2 — every open gap, deferral, bug, and
 follow-up across all 12 plans, de-duplicated and prioritized. This is the "what's left / why" companion to
 `verification-phase2-v2/report.md` (which is the "where we are / status" document). To avoid duplication:
@@ -231,7 +231,7 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
 - **U-5 (P2) SSE real-time** — pages are manual-refresh; wire `workflow_run_updated`. Native archive `confirm()` is
   fixed; SSE and location scoping are not required for current scope.
 
-### Plan 09 — Integration & Data Layer (~80%; staging verification pending)
+### Plan 09 — Integration & Data Layer (~95%; staging-verified 2026-07-15, real round-trip pending)
 - **D-1 ✅ Reschedule re-enroll at the new time.** `appointment_working_set` detects start-time changes and the
   appointment idempotency key now includes the appointment start time, so rescheduled reminders are re-timed instead
   of silently dropped.
@@ -241,8 +241,12 @@ Implemented 2026-07-04 (`outbound-03-voice-implementation/`) — Plan 03 now ≈
   `nexhealth_webhook_subscriptions`, initial REST backfill, and reconciliation sweep exist and are locally tested.
 - **D-4 ✅ Event-level idempotency/perf core built.** Webhook ledger dedupes event handling; run lookup indexes support
   cancel/reschedule repair.
-- **D-5 ⬜ NexHealth staging verification.** Subscription create/list/health, real webhook payloads, backfill
-  pagination/filtering, and reconciliation behavior still need proof against a live staging tenant.
+- **D-5 🟢 NexHealth staging verification (2026-07-15).** Ran live against the sandbox (`silora-demo-practice`);
+  found + fixed **3 real bugs the mocks missed** (see `../qa-plan/plan-09-staging-results.md`): appointments
+  `start_date/end_date`→`start/end`; webhook registration reworked to the real `/webhook_endpoints` 2-step form flow
+  (`/webhooks` was 404 / dead); inbound parser reworked to `event_name` + `{timestamp}.{base64}` signature (verified
+  live with a real endpoint `secret_key`). Auth/backfill/subscription/inbound all verified live. **Remaining ⬜:** a full
+  real-appointment round-trip (empty sandbox tenant blocks it), reconciliation live-check, `/appointment_slots` param check.
 - **D-6 ⬜ Post-staging recall projection decision.** Decide whether `recall_eligibility_working_set` is needed after
   seeing real NexHealth recall/backfill behavior.
 

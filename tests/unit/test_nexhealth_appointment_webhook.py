@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -20,16 +21,29 @@ from src.app.api.routes.nexhealth_webhooks import (
 # ---------------------------------------------------------------------------
 
 
-def _sign(body: bytes, secret: str = "testsecret") -> str:
-    return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+def _sign(body: bytes, timestamp: str, secret: str = "testsecret") -> str:
+    """Build a signature the same way the handler verifies it: HMAC-SHA256 over
+    ``{timestamp}.{base64(raw_body)}`` with the endpoint secret, hex digest."""
+    signed = f"{timestamp}.{base64.b64encode(body).decode('ascii')}"
+    return hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
 
 
-def _make_request(payload: dict, signature: str | None = None, raw_body: bytes | None = None):
+def _make_request(
+    payload: dict,
+    signature: str | None = None,
+    timestamp: str | None = None,
+    raw_body: bytes | None = None,
+):
     body = raw_body if raw_body is not None else json.dumps(payload).encode()
     request = MagicMock()
     request.body = AsyncMock(return_value=body)
     request.json = AsyncMock(return_value=payload)
-    request.headers = {"X-NexHealth-Signature": signature} if signature else {}
+    headers: dict[str, str] = {}
+    if signature:
+        headers["signature"] = signature
+    if timestamp:
+        headers["timestamp"] = timestamp
+    request.headers = headers
     return request
 
 
@@ -83,7 +97,7 @@ def _make_cm_session():
 
 
 _VALID_PAYLOAD = {
-    "event": "appointment.created",
+    "event_name": "appointment_insertion.complete",
     "data": {
         "appointment": {
             "id": "appt-999",
@@ -104,8 +118,8 @@ def test_verify_signature_skips_when_no_secret():
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
-        # Should not raise even with no header
-        _verify_signature(b"body", None)
+        # Should not raise even with no headers
+        _verify_signature(b"body", None, None)
 
 
 def test_verify_signature_rejects_in_production_without_secret():
@@ -118,7 +132,7 @@ def test_verify_signature_rejects_in_production_without_secret():
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = True
         with pytest.raises(HTTPException) as exc:
-            _verify_signature(b"body", None)
+            _verify_signature(b"body", None, None)
     assert exc.value.status_code == 403
 
 
@@ -128,7 +142,7 @@ def test_verify_signature_raises_403_missing_header():
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = "s3cr3t"
         with pytest.raises(HTTPException) as exc:
-            _verify_signature(b"body", None)
+            _verify_signature(b"body", None, None)
     assert exc.value.status_code == 403
 
 
@@ -138,16 +152,17 @@ def test_verify_signature_raises_403_wrong_signature():
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = "s3cr3t"
         with pytest.raises(HTTPException) as exc:
-            _verify_signature(b"body", "badhex")
+            _verify_signature(b"body", "badhex", "1700000000")
     assert exc.value.status_code == 403
 
 
 def test_verify_signature_passes_correct_signature():
-    body = b'{"event":"test"}'
-    sig = _sign(body, "s3cr3t")
+    body = b'{"event_name":"test"}'
+    timestamp = "1700000000"
+    sig = _sign(body, timestamp, "s3cr3t")
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = "s3cr3t"
-        _verify_signature(body, sig)  # should not raise
+        _verify_signature(body, sig, timestamp)  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +241,7 @@ async def test_webhook_queues_task_with_no_contact():
 
 @pytest.mark.asyncio
 async def test_webhook_ignores_unhandled_event():
-    payload = {**_VALID_PAYLOAD, "event": "patient.updated"}
+    payload = {**_VALID_PAYLOAD, "event_name": "patient_updated.complete"}
     request = _make_request(payload)
 
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
@@ -235,7 +250,7 @@ async def test_webhook_ignores_unhandled_event():
         result = await nexhealth_appointment_webhook(request)
 
     assert result["status"] == "ignored"
-    assert result["event"] == "patient.updated"
+    assert result["event"] == "patient_updated.complete"
 
 
 @pytest.mark.asyncio
@@ -262,7 +277,7 @@ async def test_webhook_cancels_runs_on_cancelled_update():
     cancel_session.execute = AsyncMock(return_value=runs_result)
 
     payload = {
-        "event": "appointment.updated",
+        "event_name": "appointment_updated.complete",
         "data": {
             "appointment": {
                 "id": "appt-999",
@@ -326,7 +341,7 @@ async def test_webhook_rejects_missing_start_time():
     from fastapi import HTTPException
 
     payload = {
-        "event": "appointment.created",
+        "event_name": "appointment_insertion.complete",
         "data": {
             "appointment": {"id": "appt-1", "location_id": "nexloc-1"}
             # start_time missing

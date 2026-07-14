@@ -69,3 +69,16 @@ deferred Layer 3 manual FE pass.**
 ### Follow-up commit needed
 - `alembic/versions/20260712_sms_wf_attribution.py` (renamed + revision id shortened) — fixes the
   33-char revision id that breaks `alembic upgrade head`.
+
+## 2026-07-15 — Layer 4/5: Plan 09 live sandbox verification (see plan-09-staging-results.md)
+Ran Plan 09 flows against the real NexHealth sandbox (`silora-demo-practice`, loc 348511). Discovered the
+value the CTO gave was the **API key** (not a webhook secret); `.env` corrected. All 4 flows verified live;
+**found + fixed 3 real bugs the mock tests missed:**
+- Flow 2 backfill: `GET /appointments` `start_date/end_date` → **`start/end`** (400 otherwise). Fixed.
+- Flow 3 subscription: reworked from the dead `/webhooks` (404) to the real **`/webhook_endpoints`** 2-step
+  form flow; valid events `appointment_insertion`/`appointment_updated`; endpoint-create returns the signing `secret_key`.
+- Flow 4 inbound: reworked parser to `event_name` (+ `.complete` normalize) and the
+  `HMAC(secret_key, "{timestamp}.{base64(body)}")` scheme via `signature`/`timestamp` headers — **verified live**
+  with a real endpoint secret (valid accepted, tampered/missing-ts → 403).
+All v2.0-era-code vs current-v2 (v2.2.2) drift, not v3. **180 NexHealth/Plan-09 tests pass.** Plan 09 ~80% → **~95%**
+(full real-appointment round-trip pending — empty sandbox tenant).
