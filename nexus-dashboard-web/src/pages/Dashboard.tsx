@@ -32,6 +32,7 @@ import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import { useSSE } from "@/hooks/useSSE"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
+import { getInitials } from "@/components/calls/format"
 import { getDashboardSummary, getAggregateDashboard } from "@/lib/dashboard-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
@@ -266,7 +267,13 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
         <div className="rounded-xl border border-border/40 bg-card/50 hover:bg-accent/30 transition-all duration-200 p-4 space-y-2">
             <div className="flex items-start justify-between gap-2">
                 <div className="flex items-start gap-2.5 min-w-0">
-                    <span className="mt-1.5 h-2 w-2 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shrink-0 shadow-sm shadow-amber-500/50" />
+                    {item.contact_name ? (
+                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-purple-600 text-[11px] font-semibold text-white">
+                            {getInitials(item.contact_name)}
+                        </div>
+                    ) : (
+                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">?</div>
+                    )}
                     <div className="min-w-0">
                         <p className="font-medium text-sm truncate text-foreground">
                             {item.contact_name ?? <span className="text-muted-foreground italic">Unknown caller</span>}
