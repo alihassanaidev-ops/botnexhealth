@@ -38,6 +38,11 @@ export default function ProvidersScheduling() {
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
     const [showExpired, setShowExpired] = useState(false)
     const [view, setView] = useState<"list" | "calendar">("list")
+    // Calendar view is still under test — expose it on staging/local only and keep
+    // it out of production until validated. Remove this gate to launch everywhere.
+    const calendarEnabled =
+        typeof window !== "undefined" &&
+        (window.location.hostname.includes("staging") || window.location.hostname.includes("localhost"))
     const [loading, setLoading] = useState(true)
     const [loadingAvailabilities, setLoadingAvailabilities] = useState(false)
     const [syncing, setSyncing] = useState(false)
@@ -358,17 +363,19 @@ export default function ProvidersScheduling() {
                     </p>
                 </div>
                 <div className="flex items-center space-x-2">
-                    <div className="inline-flex overflow-hidden rounded-md border">
-                        {(["list", "calendar"] as const).map((v) => (
-                            <button
-                                key={v}
-                                onClick={() => setView(v)}
-                                className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground"}`}
-                            >
-                                {v}
-                            </button>
-                        ))}
-                    </div>
+                    {calendarEnabled && (
+                        <div className="inline-flex overflow-hidden rounded-md border">
+                            {(["list", "calendar"] as const).map((v) => (
+                                <button
+                                    key={v}
+                                    onClick={() => setView(v)}
+                                    className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground"}`}
+                                >
+                                    {v}
+                                </button>
+                            ))}
+                        </div>
+                    )}
                     {canManage && view === "list" && (
                         <>
                             <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
@@ -413,7 +420,7 @@ export default function ProvidersScheduling() {
                         </p>
                     </CardContent>
                 </Card>
-            ) : view === "calendar" ? (
+            ) : view === "calendar" && calendarEnabled ? (
                 <SchedulerCalendar
                     locationId={locationId}
                     operatories={operatories}
