@@ -15,8 +15,10 @@ import {
     Timer,
     MapPin,
     Activity,
+    Home,
 } from "lucide-react"
 
+import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -470,44 +472,42 @@ export default function Dashboard() {
             </div>
 
             <div className="relative z-10 p-8 pt-6 space-y-6">
-                {/* Header */}
-                <div className="flex items-center justify-between">
-                    <div>
-                        <h2 className="text-2xl font-bold tracking-tight">Dashboard</h2>
-                        <p className="text-sm text-muted-foreground/70 mt-0.5">
-                            {todayStr} · Call activity overview.
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        {user?.role === "INSTITUTION_ADMIN" && (
-                            <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
-                                <SelectTrigger className="w-[180px] h-8 text-xs">
-                                    <MapPin className="mr-2 h-3.5 w-3.5" />
-                                    <SelectValue placeholder="Select location" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Locations</SelectItem>
-                                    {locations.map((loc) => (
-                                        <SelectItem key={loc.slug} value={loc.slug}>
-                                            {loc.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        )}
-                        <DateRangePicker value={range} onChange={setRange} />
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={fetchSummary}
-                            disabled={loading}
-                            className="gap-2 h-8 text-xs"
-                        >
-                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                            Refresh
-                        </Button>
-                    </div>
-                </div>
+                <PageHeader
+                    icon={Home}
+                    title="Dashboard"
+                    description={<>{todayStr} · Call activity overview.</>}
+                    actions={
+                        <>
+                            {user?.role === "INSTITUTION_ADMIN" && (
+                                <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
+                                    <SelectTrigger className="w-[180px] h-8 text-xs">
+                                        <MapPin className="mr-2 h-3.5 w-3.5" />
+                                        <SelectValue placeholder="Select location" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Locations</SelectItem>
+                                        {locations.map((loc) => (
+                                            <SelectItem key={loc.slug} value={loc.slug}>
+                                                {loc.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
+                            <DateRangePicker value={range} onChange={setRange} />
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={fetchSummary}
+                                disabled={loading}
+                                className="gap-2 h-8 text-xs"
+                            >
+                                <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                                Refresh
+                            </Button>
+                        </>
+                    }
+                />
 
                 {/* Range-scoped cards (driven by the date-range picker) */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

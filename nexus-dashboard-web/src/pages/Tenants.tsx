@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, RefreshCcw } from "lucide-react";
+import { Building2, Plus, RefreshCcw } from "lucide-react";
+import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import {
     Table,
@@ -54,32 +55,35 @@ export default function Institutions() {
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between space-y-2">
-                <h2 className="text-3xl font-bold tracking-tight">Institutions</h2>
-                <div className="flex items-center space-x-2">
-                    <Button variant="outline" size="icon" onClick={fetchInstitutions} disabled={isLoading}>
-                        <RefreshCcw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-                    </Button>
-                    <Sheet open={isOpen} onOpenChange={setIsOpen}>
-                        <SheetTrigger asChild>
-                            <Button>
-                                <Plus className="mr-2 h-4 w-4" /> Add Institution
-                            </Button>
-                        </SheetTrigger>
-                        <SheetContent className="sm:max-w-md">
-                            <SheetHeader>
-                                <SheetTitle>Add New Institution</SheetTitle>
-                                <SheetDescription>
-                                    Create a new institution. This will trigger an invite email.
-                                </SheetDescription>
-                            </SheetHeader>
-                            <div className="py-4">
-                                <TenantForm onSuccess={handleSuccess} />
-                            </div>
-                        </SheetContent>
-                    </Sheet>
-                </div>
-            </div>
+            <PageHeader
+                icon={Building2}
+                title="Institutions"
+                actions={
+                    <>
+                        <Button variant="outline" size="icon" onClick={fetchInstitutions} disabled={isLoading}>
+                            <RefreshCcw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+                        </Button>
+                        <Sheet open={isOpen} onOpenChange={setIsOpen}>
+                            <SheetTrigger asChild>
+                                <Button>
+                                    <Plus className="mr-2 h-4 w-4" /> Add Institution
+                                </Button>
+                            </SheetTrigger>
+                            <SheetContent className="sm:max-w-md">
+                                <SheetHeader>
+                                    <SheetTitle>Add New Institution</SheetTitle>
+                                    <SheetDescription>
+                                        Create a new institution. This will trigger an invite email.
+                                    </SheetDescription>
+                                </SheetHeader>
+                                <div className="py-4">
+                                    <TenantForm onSuccess={handleSuccess} />
+                                </div>
+                            </SheetContent>
+                        </Sheet>
+                    </>
+                }
+            />
             <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm">
                 <Table>
                     <TableHeader>

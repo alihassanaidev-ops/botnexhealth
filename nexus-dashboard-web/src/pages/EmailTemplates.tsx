@@ -13,6 +13,7 @@ import {
     Copy,
     Check,
 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { toast } from "sonner"
 import { Link } from "react-router-dom"
 
@@ -242,11 +243,11 @@ export default function EmailTemplates() {
                         <span className="text-muted-foreground/50">/</span>
                         <span className="text-sm font-medium">Email Templates</span>
                     </div>
-                    <h1 className="text-2xl font-bold tracking-tight">Email Templates</h1>
-                    <p className="text-muted-foreground mt-1">
-                        Customize the notification emails sent to your team. Each template is linked
-                        to a specific notification type.
-                    </p>
+                    <PageHeader
+                        icon={Mail}
+                        title="Email Templates"
+                        description="Customize the notification emails sent to your team. Each template is linked to a specific notification type."
+                    />
                 </div>
 
                 <div className="grid gap-4">

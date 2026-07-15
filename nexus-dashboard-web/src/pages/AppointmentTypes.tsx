@@ -6,7 +6,8 @@ import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Plus, RefreshCcw, Trash2, Clock, Tag, Pencil } from "lucide-react"
+import { CalendarCheck, Plus, RefreshCcw, Trash2, Clock, Tag, Pencil } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import type { CachedAppointmentType, CachedDescriptor } from "@/types"
 import {
     listAppointmentTypes,
@@ -255,26 +256,21 @@ export default function AppointmentTypes() {
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between space-y-2">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight">Appointment Types</h2>
-                    <p className="text-muted-foreground">
-                        Configure the types of appointments your practice offers.
-                    </p>
-                </div>
-                <div className="flex items-center space-x-2">
-                    {canManage && (
-                        <>
-                            <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
-                                <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                            </Button>
-                            <Button onClick={() => setCreateOpen(true)}>
-                                <Plus className="mr-2 h-4 w-4" /> Create
-                            </Button>
-                        </>
-                    )}
-                </div>
-            </div>
+            <PageHeader
+                icon={CalendarCheck}
+                title="Appointment Types"
+                description="Configure the types of appointments your practice offers."
+                actions={canManage && (
+                    <>
+                        <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
+                            <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                        </Button>
+                        <Button onClick={() => setCreateOpen(true)}>
+                            <Plus className="mr-2 h-4 w-4" /> Create
+                        </Button>
+                    </>
+                )}
+            />
 
             <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm">
                 <Table>

@@ -16,6 +16,7 @@ import {
     LayoutList,
     MessagesSquare,
 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
 import { Card, CardContent } from "@/components/ui/card"
@@ -584,60 +585,55 @@ export default function Calls() {
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            {/* Page header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-                        <Phone className="h-7 w-7" />
-                        Calls
-                    </h2>
-                    <p className="text-muted-foreground mt-1">
-                        Browse and review all patient calls handled by your voice agent.
-                    </p>
-                </div>
-                <div className="flex items-center gap-3">
-                    {!loading && data && (
-                        <div className="text-right">
-                            <p className="text-2xl font-bold tabular-nums">{total.toLocaleString()}</p>
-                            <p className="text-xs text-muted-foreground">total calls</p>
+            <PageHeader
+                icon={Phone}
+                title="Calls"
+                description="Browse and review all patient calls handled by your voice agent."
+                actions={
+                    <>
+                        {!loading && data && (
+                            <div className="text-right">
+                                <p className="text-2xl font-bold tabular-nums">{total.toLocaleString()}</p>
+                                <p className="text-xs text-muted-foreground">total calls</p>
+                            </div>
+                        )}
+                        <div className="flex items-center rounded-lg border bg-muted/40 p-0.5">
+                            <button
+                                type="button"
+                                onClick={() => changeView("table")}
+                                aria-pressed={viewMode === "table"}
+                                className={cn(
+                                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                                    viewMode === "table"
+                                        ? "bg-background text-foreground shadow-sm"
+                                        : "text-muted-foreground hover:text-foreground",
+                                )}
+                            >
+                                <LayoutList className="h-3.5 w-3.5" />
+                                <span className="hidden sm:inline">Table</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => changeView("conversation")}
+                                aria-pressed={viewMode === "conversation"}
+                                className={cn(
+                                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                                    viewMode === "conversation"
+                                        ? "bg-background text-foreground shadow-sm"
+                                        : "text-muted-foreground hover:text-foreground",
+                                )}
+                            >
+                                <MessagesSquare className="h-3.5 w-3.5" />
+                                <span className="hidden sm:inline">Conversations</span>
+                            </button>
                         </div>
-                    )}
-                    <div className="flex items-center rounded-lg border bg-muted/40 p-0.5">
-                        <button
-                            type="button"
-                            onClick={() => changeView("table")}
-                            aria-pressed={viewMode === "table"}
-                            className={cn(
-                                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                                viewMode === "table"
-                                    ? "bg-background text-foreground shadow-sm"
-                                    : "text-muted-foreground hover:text-foreground",
-                            )}
-                        >
-                            <LayoutList className="h-3.5 w-3.5" />
-                            <span className="hidden sm:inline">Table</span>
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => changeView("conversation")}
-                            aria-pressed={viewMode === "conversation"}
-                            className={cn(
-                                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                                viewMode === "conversation"
-                                    ? "bg-background text-foreground shadow-sm"
-                                    : "text-muted-foreground hover:text-foreground",
-                            )}
-                        >
-                            <MessagesSquare className="h-3.5 w-3.5" />
-                            <span className="hidden sm:inline">Conversations</span>
-                        </button>
-                    </div>
-                    <Button variant="outline" size="sm" onClick={fetchCalls} disabled={loading} className="gap-1.5">
-                        <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+                        <Button variant="outline" size="sm" onClick={fetchCalls} disabled={loading} className="gap-1.5">
+                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </>
+                }
+            />
 
             {/* Filters */}
             <div className="flex items-center justify-between">

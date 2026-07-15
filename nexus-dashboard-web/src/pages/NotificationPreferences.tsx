@@ -13,7 +13,8 @@ import {
     type NotificationPreference,
     type ExternalRecipient,
 } from "@/lib/notification-settings-api"
-import { Phone, AlertTriangle, CalendarCheck, Loader2, Plus, Trash2, Bell } from "lucide-react"
+import { Phone, AlertTriangle, CalendarCheck, Loader2, Plus, Trash2, Bell, MailCheck } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
 import { Input } from "@/components/ui/input"
@@ -186,12 +187,11 @@ export default function NotificationPreferences() {
 
     return (
         <div className="p-6 max-w-4xl mx-auto space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold tracking-tight">Email Preferences</h1>
-                <p className="text-muted-foreground text-sm mt-1">
-                    Manage how you and others receive email notifications.
-                </p>
-            </div>
+            <PageHeader
+                icon={MailCheck}
+                title="Email Preferences"
+                description="Manage how you and others receive email notifications."
+            />
 
             <div className="grid gap-6 md:grid-cols-2">
                 {/* Personal Preferences */}

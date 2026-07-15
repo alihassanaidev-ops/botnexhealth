@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import {
     ArrowDown,
     ArrowUp,
+    Building2,
     CalendarCheck,
     Clock,
     CreditCard,
@@ -14,6 +15,7 @@ import {
     TrendingUp,
     UserPlus,
 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
 import { ComparisonChart } from "@/components/dashboard/ComparisonChart"
 import { lastNDaysRange, type DateRangeValue } from "@/lib/date-range"
@@ -321,21 +323,20 @@ export default function InstitutionAdminPanel() {
     return (
         <div className="relative space-y-6 bg-background">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Institution Admin Panel</h1>
-                    <p className="mt-1 text-muted-foreground">
-                        Aggregate performance across all locations with location-level operations controls.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <DateRangePicker value={range} onChange={setRange} />
-                    <Button onClick={loadData} disabled={loading}>
-                        {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                icon={Building2}
+                title="Institution Admin Panel"
+                description="Aggregate performance across all locations with location-level operations controls."
+                actions={
+                    <>
+                        <DateRangePicker value={range} onChange={setRange} />
+                        <Button onClick={loadData} disabled={loading}>
+                            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                            Refresh
+                        </Button>
+                    </>
+                }
+            />
 
 
             {/* Chart + ROI side by side (chart goes full-width when ROI has no data) */}

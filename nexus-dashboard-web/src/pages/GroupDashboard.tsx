@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
     Building2, Phone, CalendarCheck, UserPlus, Percent, Clock, RefreshCcw, Layers, MapPin,
 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { Area, AreaChart, CartesianGrid, XAxis } from "recharts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -175,53 +176,50 @@ export default function GroupDashboard() {
 
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            {/* Header */}
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-                        <Layers className="h-7 w-7" />
-                        {title}
-                    </h2>
-                    <p className="text-muted-foreground mt-1">
-                        {inInstitution
-                            ? `Practice ${atLocation ? "location " : ""}view — aggregate metrics only, no patient data.`
-                            : `Cross-practice performance across ${group?.summary.institution_count ?? me?.members.length ?? 0} practices.`}
-                    </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    {/* Institution selector */}
-                    <Select value={institutionId} onValueChange={onSelectInstitution}>
-                        <SelectTrigger className="h-8 w-[200px] text-xs">
-                            <SelectValue placeholder="Practice" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={ALL}>All practices</SelectItem>
-                            {(me?.members ?? []).map((m) => (
-                                <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                    {/* Location selector (only when drilled into a practice) */}
-                    {inInstitution && (
-                        <Select value={locationId} onValueChange={setLocationId}>
-                            <SelectTrigger className="h-8 w-[180px] text-xs">
-                                <SelectValue placeholder="Location" />
+            <PageHeader
+                icon={Layers}
+                title={title}
+                description={
+                    inInstitution
+                        ? `Practice ${atLocation ? "location " : ""}view — aggregate metrics only, no patient data.`
+                        : `Cross-practice performance across ${group?.summary.institution_count ?? me?.members.length ?? 0} practices.`
+                }
+                actions={
+                    <>
+                        {/* Institution selector */}
+                        <Select value={institutionId} onValueChange={onSelectInstitution}>
+                            <SelectTrigger className="h-8 w-[200px] text-xs">
+                                <SelectValue placeholder="Practice" />
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem value={ALL}>All locations</SelectItem>
-                                {locations.map((l) => (
-                                    <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                                <SelectItem value={ALL}>All practices</SelectItem>
+                                {(me?.members ?? []).map((m) => (
+                                    <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
                                 ))}
                             </SelectContent>
                         </Select>
-                    )}
-                    <DateRangePicker value={range} onChange={setRange} />
-                    <Button variant="outline" size="sm" onClick={fetchDashboard} disabled={loading} className="gap-1.5">
-                        <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+                        {/* Location selector (only when drilled into a practice) */}
+                        {inInstitution && (
+                            <Select value={locationId} onValueChange={setLocationId}>
+                                <SelectTrigger className="h-8 w-[180px] text-xs">
+                                    <SelectValue placeholder="Location" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={ALL}>All locations</SelectItem>
+                                    {locations.map((l) => (
+                                        <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+                        <DateRangePicker value={range} onChange={setRange} />
+                        <Button variant="outline" size="sm" onClick={fetchDashboard} disabled={loading} className="gap-1.5">
+                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </>
+                }
+            />
 
             {/* KPI cards */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">

@@ -7,7 +7,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
-import { RefreshCcw, AlertTriangle, Clock, Calendar, MapPin } from "lucide-react"
+import { RefreshCcw, AlertTriangle, Clock, Calendar, MapPin, UserCog } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
 import { Input } from "@/components/ui/input"
 import {
@@ -355,39 +356,38 @@ export default function ProvidersScheduling() {
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between space-y-2">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight">Providers & Scheduling</h2>
-                    <p className="text-muted-foreground">
-                        Link appointment types to provider availabilities so your scheduling engine can generate bookable slots.
-                    </p>
-                </div>
-                <div className="flex items-center space-x-2">
-                    {calendarEnabled && (
-                        <div className="inline-flex overflow-hidden rounded-md border">
-                            {(["list", "calendar"] as const).map((v) => (
-                                <button
-                                    key={v}
-                                    onClick={() => setView(v)}
-                                    className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground"}`}
-                                >
-                                    {v}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                    {canManage && view === "list" && (
-                        <>
-                            <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
-                                Create Work Window
-                            </Button>
-                            <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
-                                <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                            </Button>
-                        </>
-                    )}
-                </div>
-            </div>
+            <PageHeader
+                icon={UserCog}
+                title="Providers & Scheduling"
+                description="Link appointment types to provider availabilities so your scheduling engine can generate bookable slots."
+                actions={
+                    <>
+                        {calendarEnabled && (
+                            <div className="inline-flex overflow-hidden rounded-md border">
+                                {(["list", "calendar"] as const).map((v) => (
+                                    <button
+                                        key={v}
+                                        onClick={() => setView(v)}
+                                        className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground"}`}
+                                    >
+                                        {v}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        {canManage && view === "list" && (
+                            <>
+                                <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
+                                    Create Work Window
+                                </Button>
+                                <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
+                                    <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                                </Button>
+                            </>
+                        )}
+                    </>
+                }
+            />
 
             {error && (
                 <Alert variant="destructive">

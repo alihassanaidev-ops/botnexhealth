@@ -5,10 +5,12 @@ import {
     Mail,
     Phone,
     Save,
+    Settings,
     Edit,
     Plus,
     Trash2,
 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -356,14 +358,11 @@ export default function InstitutionSettings() {
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between space-y-2">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight">Settings</h2>
-                    <p className="text-muted-foreground">
-                        Configure your institution settings and preferences.
-                    </p>
-                </div>
-            </div>
+            <PageHeader
+                icon={Settings}
+                title="Settings"
+                description="Configure your institution settings and preferences."
+            />
 
             {/* Billing Section */}
             <Card className="border-border bg-background/60 shadow-sm mt-4">

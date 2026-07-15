@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { RefreshCw, ChevronLeft, ChevronRight, ShieldCheck } from "lucide-react";
+import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { TableSkeleton } from "@/components/ui/skeletons";
 import { Input } from "@/components/ui/input";
@@ -78,29 +79,28 @@ export default function AdminAuditLogs() {
     return (
         <div className="relative space-y-6 bg-background">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex justify-between items-center">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Platform Audit Logs</h1>
-                    <p className="text-muted-foreground mt-2">
-                        View compliance and system activity across all institutions.
-                    </p>
-                </div>
-                <div className="flex items-center space-x-4">
-                    <div className="relative">
-                        <Input
-                            type="text"
-                            placeholder="Filter by Institution ID..."
-                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 min-w-[300px]"
-                            value={institutionIdFilter}
-                            onChange={(e) => setInstitutionIdFilter(e.target.value)}
-                        />
+            <PageHeader
+                icon={ShieldCheck}
+                title="Platform Audit Logs"
+                description="View compliance and system activity across all institutions."
+                actions={
+                    <div className="flex items-center space-x-4">
+                        <div className="relative">
+                            <Input
+                                type="text"
+                                placeholder="Filter by Institution ID..."
+                                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 min-w-[300px]"
+                                value={institutionIdFilter}
+                                onChange={(e) => setInstitutionIdFilter(e.target.value)}
+                            />
+                        </div>
+                        <Button variant="outline" onClick={() => fetchLogs(page, institutionIdFilter)} disabled={loading}>
+                            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                            Refresh Logs
+                        </Button>
                     </div>
-                    <Button variant="outline" onClick={() => fetchLogs(page, institutionIdFilter)} disabled={loading}>
-                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                        Refresh Logs
-                    </Button>
-                </div>
-            </div>
+                }
+            />
 
             <Card>
                 <CardHeader>

@@ -21,7 +21,8 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
-import { Plus, Pencil, Trash2, ShieldAlert, EyeOff } from "lucide-react"
+import { Plus, Pencil, Trash2, ShieldAlert, EyeOff, ListChecks } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import type { CustomFieldDefinition } from "@/types"
 import {
     listFieldDefinitions,
@@ -212,19 +213,16 @@ export default function CustomFields() {
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between space-y-2">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight">Custom Fields</h2>
-                    <p className="text-muted-foreground">
-                        Define additional data fields for calls that auto-populate from Retell webhooks.
-                    </p>
-                </div>
-                <div className="flex items-center space-x-2">
+            <PageHeader
+                icon={ListChecks}
+                title="Custom Fields"
+                description="Define additional data fields for calls that auto-populate from Retell webhooks."
+                actions={
                     <Button onClick={openCreate}>
                         <Plus className="mr-2 h-4 w-4" /> Create
                     </Button>
-                </div>
-            </div>
+                }
+            />
 
             <div className="flex items-center space-x-2 pb-4 pt-2">
                 <Label htmlFor="show-inactive" className="text-sm text-muted-foreground">

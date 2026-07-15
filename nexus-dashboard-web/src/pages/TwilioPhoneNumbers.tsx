@@ -10,6 +10,7 @@ import {
     Ban,
     Unlock,
 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -157,25 +158,23 @@ export default function TwilioPhoneNumbers() {
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight">Twilio Phone Numbers</h2>
-                    <p className="text-muted-foreground">
-                        Manage platform phone numbers and send SMS messages.
-                    </p>
-                </div>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-2"
-                    onClick={() => fetchNumbers(true)}
-                    disabled={refreshing}
-                >
-                    <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-                    Refresh
-                </Button>
-            </div>
+            <PageHeader
+                icon={MessageSquare}
+                title="Twilio Phone Numbers"
+                description="Manage platform phone numbers and send SMS messages."
+                actions={
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        onClick={() => fetchNumbers(true)}
+                        disabled={refreshing}
+                    >
+                        <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+                        Refresh
+                    </Button>
+                }
+            />
 
             {/* Stats row */}
             {!loading && (

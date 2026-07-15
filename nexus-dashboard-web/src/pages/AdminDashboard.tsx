@@ -8,7 +8,9 @@ import {
     Users,
     ArrowRight,
     Plus,
+    LayoutDashboard,
 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -61,21 +63,19 @@ export default function AdminDashboard() {
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-2xl font-bold tracking-tight">Admin Dashboard</h2>
-                    <p className="text-sm text-muted-foreground/70 mt-0.5">
-                        Platform overview and institution management.
-                    </p>
-                </div>
-                <Link to="/institutions">
-                    <Button variant="outline" className="gap-2">
-                        <Plus className="h-4 w-4" />
-                        Add Institution
-                    </Button>
-                </Link>
-            </div>
+            <PageHeader
+                icon={LayoutDashboard}
+                title="Admin Dashboard"
+                description="Platform overview and institution management."
+                actions={
+                    <Link to="/institutions">
+                        <Button variant="outline" className="gap-2">
+                            <Plus className="h-4 w-4" />
+                            Add Institution
+                        </Button>
+                    </Link>
+                }
+            />
 
             {/* Stats Cards */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
