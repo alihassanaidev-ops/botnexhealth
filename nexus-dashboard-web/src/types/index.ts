@@ -283,6 +283,8 @@ export interface CallRecord {
     summary: string | null;
     patient_sentiment: string | null;
     next_action: string | null;
+    /** Appointment type booked during the call, if any. */
+    booked_appointment_type_name?: string | null;
     is_new_patient: boolean;
     is_complaint: boolean;
     is_insurance_billing: boolean;
@@ -492,6 +494,7 @@ export interface CallbackQueueItem {
     call_duration_seconds: number | null;
     summary: string | null;
     next_action: string | null;
+    booked_appointment_type_name?: string | null;
     phone_masked: string | null;
     phone_reveal_available: boolean;
 }
@@ -529,6 +532,7 @@ export interface CallbackListItem {
     call_duration_seconds: number | null;
     summary: string | null;
     next_action: string | null;
+    booked_appointment_type_name?: string | null;
     callback_resolved: boolean;
     callback_resolved_at: string | null;
     callback_note: string | null;

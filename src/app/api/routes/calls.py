@@ -67,6 +67,8 @@ class CallRecord(BaseModel):
     is_new_patient: bool
     is_complaint: bool
     is_insurance_billing: bool
+    # Appointment type booked during the call (if any). Not PHI — clinic config.
+    booked_appointment_type_name: str | None = None
     call_date: date | None
     call_time: str | None
     call_duration_seconds: int | None
@@ -221,6 +223,7 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         is_new_patient=call.is_new_patient,
         is_complaint=call.is_complaint,
         is_insurance_billing=call.is_insurance_billing,
+        booked_appointment_type_name=call.booked_appointment_type_name,
         call_date=call.call_date,
         call_time=str(call.call_time) if call.call_time else None,
         call_duration_seconds=call.call_duration_seconds,

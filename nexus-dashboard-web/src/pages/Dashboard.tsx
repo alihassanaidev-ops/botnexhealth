@@ -282,6 +282,11 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                             {formatDate(item.call_date)} · {formatTime(item.call_time)}
                             {item.call_duration_seconds ? ` · ${formatDuration(item.call_duration_seconds)}` : ""}
                         </p>
+                        {item.booked_appointment_type_name && (
+                            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                Booked: {item.booked_appointment_type_name}
+                            </span>
+                        )}
                         {item.phone_reveal_available && (
                             <RevealablePhone
                                 callId={item.call_id}

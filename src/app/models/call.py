@@ -205,6 +205,13 @@ class Call(Base):
     patient_intent: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Which appointment type (if any) was booked during this call. Populated
+    # best-effort at post-call time from the book_appointment invocation; never
+    # written on the live booking path, so capturing it cannot affect booking.
+    # Not PHI — an appointment type is clinic config, not patient data.
+    booked_appointment_type_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    booked_appointment_type_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # Human-assigned workflow status (tenant-defined). Single-select; NULL = unset.
     # Distinct from the AI ``call_status``/``call_tags`` above.
     workflow_status_id: Mapped[str | None] = mapped_column(

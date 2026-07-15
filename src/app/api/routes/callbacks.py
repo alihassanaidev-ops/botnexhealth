@@ -43,6 +43,7 @@ class CallbackItem(BaseModel):
     call_duration_seconds: int | None
     summary: str | None
     next_action: str | None
+    booked_appointment_type_name: str | None = None
     callback_resolved: bool
     callback_resolved_at: str | None
     callback_note: str | None
@@ -87,6 +88,7 @@ def _call_to_callback_item(call: Call) -> CallbackItem:
         call_duration_seconds=call.call_duration_seconds,
         summary=call.summary,
         next_action=call.next_action,
+        booked_appointment_type_name=call.booked_appointment_type_name,
         callback_resolved=call.callback_resolved,
         callback_resolved_at=call.callback_resolved_at.isoformat() if call.callback_resolved_at else None,
         callback_note=call.callback_note,
