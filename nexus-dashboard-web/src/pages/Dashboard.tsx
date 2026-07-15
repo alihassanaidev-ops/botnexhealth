@@ -615,12 +615,7 @@ export default function Dashboard() {
                     </div>
 
                     {/* Callback queue */}
-                    <div className={`relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border shadow-sm transition-all duration-300
-                        ${hasCallbacks ? "border-amber-500/20" : "border-border/60"}`}
-                    >
-                        {hasCallbacks && (
-                            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(245,158,11,0.05),transparent_60%)]" />
-                        )}
+                    <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm transition-all duration-300">
                         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
                         <div className="relative">
                             <div className="p-6 pb-4">
