@@ -1,40 +1,39 @@
 import { cn } from "@/lib/utils"
 
-// App-shell loading state: the ScaleNexus mark in a brand gradient badge with a
-// gentle "breathing" animation + an indeterminate bar. The logo SVG renders
-// white, so the gradient badge guarantees contrast in both light and dark.
+// App-shell loading state: the full-color ScaleNexus logo (no background) with a
+// glossy "shine" sweeping across it. The shine is a moving highlight masked to
+// the logo's exact shape, so it gleams only over the mark + wordmark.
 export default function BrandLoader({ fullScreen = false, className }: { fullScreen?: boolean; className?: string }) {
     return (
         <div
             className={cn(
-                "flex w-full flex-col items-center justify-center gap-5",
+                "flex w-full items-center justify-center",
                 fullScreen ? "min-h-screen" : "min-h-[60vh]",
                 className,
             )}
             role="status"
             aria-label="Loading"
         >
-            <div className="relative">
-                <div className="brand-loader-glow absolute inset-0 -z-10 rounded-3xl bg-gradient-to-br from-violet-500/40 to-purple-600/40 blur-2xl" />
-                <div className="brand-loader-badge grid size-20 place-items-center rounded-3xl bg-gradient-to-br from-violet-500 to-purple-600 shadow-lg shadow-violet-500/25">
-                    <img src="/scalenexuslogo.svg" alt="ScaleNexus" className="size-11 object-contain" draggable={false} />
-                </div>
-            </div>
-            <div className="h-1 w-24 overflow-hidden rounded-full bg-muted">
-                <div className="brand-loader-bar h-full w-1/2 rounded-full bg-gradient-to-r from-violet-500 to-purple-600" />
+            <div className="relative inline-block">
+                <img src="/scalenexuslogo.png" alt="ScaleNexus" className="w-44 select-none" draggable={false} />
+                <span className="brand-shine pointer-events-none absolute inset-0" aria-hidden="true" />
             </div>
             <span className="sr-only">Loading…</span>
 
             <style>{`
-                @keyframes brandBreath { 0%,100% { transform: scale(1); opacity: 1 } 50% { transform: scale(1.06); opacity: .88 } }
-                @keyframes brandGlow   { 0%,100% { opacity: .45 } 50% { opacity: .85 } }
-                @keyframes brandBar    { 0% { transform: translateX(-120%) } 100% { transform: translateX(260%) } }
-                .brand-loader-badge { animation: brandBreath 1.6s ease-in-out infinite }
-                .brand-loader-glow  { animation: brandGlow 1.6s ease-in-out infinite }
-                .brand-loader-bar   { animation: brandBar 1.25s ease-in-out infinite }
-                @media (prefers-reduced-motion: reduce) {
-                    .brand-loader-badge, .brand-loader-glow, .brand-loader-bar { animation: none }
+                .brand-shine {
+                    background-image: linear-gradient(105deg, transparent 42%, rgba(255,255,255,.9) 50%, transparent 58%);
+                    background-size: 200% 100%;
+                    background-repeat: no-repeat;
+                    -webkit-mask: url(/scalenexuslogo.png) center / contain no-repeat;
+                            mask: url(/scalenexuslogo.png) center / contain no-repeat;
+                    animation: brandShine 1.9s ease-in-out infinite;
                 }
+                @keyframes brandShine {
+                    0%, 12%   { background-position: 160% 0; }
+                    88%, 100% { background-position: -60% 0; }
+                }
+                @media (prefers-reduced-motion: reduce) { .brand-shine { animation: none; opacity: 0; } }
             `}</style>
         </div>
     )
