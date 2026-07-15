@@ -67,6 +67,35 @@ export function ChartSkeleton({ className, height = 260 }: { className?: string;
     )
 }
 
+/** Operatory/day calendar grid: column headers + time gutter + a few tiles. */
+export function CalendarSkeleton({ cols = 6, className }: { cols?: number; className?: string }) {
+    const tileH = [52, 36, 70, 44]
+    return (
+        <div className={cn("overflow-hidden rounded-xl border bg-card", className)} role="status" aria-label="Loading schedule">
+            <div className="flex border-b bg-muted/40">
+                <div className="w-[58px] shrink-0" />
+                {Array.from({ length: cols }).map((_, i) => (
+                    <div key={i} className="flex-1 border-l px-3 py-2.5">
+                        <Skeleton className="h-3.5 w-24" />
+                    </div>
+                ))}
+            </div>
+            <div className="flex">
+                <div className="w-[58px] shrink-0 space-y-9 border-r px-2 pt-3">
+                    {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-3 w-9" />)}
+                </div>
+                {Array.from({ length: cols }).map((_, c) => (
+                    <div key={c} className="flex-1 space-y-3 border-l p-2 pt-3">
+                        {[0, 1, 2].map((t) => (
+                            <Skeleton key={t} className="w-full rounded-md" style={{ height: tileH[(c + t) % tileH.length], marginTop: (t * 14) % 34 }} />
+                        ))}
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
 /** Generic centered page/section fallback (header + a few lines). */
 export function PageSkeleton({ className }: { className?: string }) {
     return (

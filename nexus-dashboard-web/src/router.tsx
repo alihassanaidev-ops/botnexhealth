@@ -7,7 +7,7 @@ import RoleGuard from "./components/RoleGuard";
 import PmsGuard from "./components/PmsGuard";
 import AppLayout from "./components/AppLayout";
 import RouteError from "./components/RouteError";
-import { PageSkeleton } from "@/components/ui/skeletons";
+import BrandLoader from "@/components/BrandLoader";
 
 // Auth pages — eagerly loaded (small, needed immediately)
 import Login from "./pages/Login";
@@ -42,7 +42,7 @@ const GroupDashboard = lazy(() => import("./pages/GroupDashboard"));
 const Groups = lazy(() => import("./pages/Groups"));
 
 function LazyFallback() {
-    return <PageSkeleton />;
+    return <BrandLoader />;
 }
 
 function S({ children }: { children: React.ReactNode }) {

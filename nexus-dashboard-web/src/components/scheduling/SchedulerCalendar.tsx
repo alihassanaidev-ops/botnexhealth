@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight, AlertTriangle, Loader2, Globe } from "lucide-react"
+import { ChevronLeft, ChevronRight, AlertTriangle, Globe } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { CalendarSkeleton } from "@/components/ui/skeletons"
 import { listAvailabilities, updateAvailability } from "@/lib/tenant-api"
 import type { CachedAvailability, CachedOperatory, CachedAppointmentType } from "@/types"
 
@@ -314,7 +315,7 @@ export default function SchedulerCalendar({
             </div>
 
             {loading ? (
-                <div className="flex justify-center py-20 text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>
+                <CalendarSkeleton cols={7} />
             ) : error ? (
                 <div className="flex items-center gap-2 rounded-xl border border-destructive/40 p-4 text-sm text-destructive"><AlertTriangle className="h-4 w-4" />{error}</div>
             ) : columns.length === 0 ? (

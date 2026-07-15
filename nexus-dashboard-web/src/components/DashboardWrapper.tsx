@@ -2,7 +2,7 @@ import { Outlet, Navigate, useLocation } from "react-router-dom";
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
 import { TopNav } from "@/components/TopNav"
-import { PageSkeleton } from "@/components/ui/skeletons"
+import BrandLoader from "@/components/BrandLoader"
 import { useAuth } from "@/context/AuthContext"
 
 export default function DashboardWrapper() {
@@ -10,7 +10,7 @@ export default function DashboardWrapper() {
     const location = useLocation();
 
     if (isLoading) {
-        return <PageSkeleton />;
+        return <BrandLoader fullScreen />;
     }
 
     if (!user) {
