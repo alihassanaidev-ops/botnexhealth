@@ -3,17 +3,16 @@
  * (click-to-add). Also exposes a "Trigger" affordance to open the trigger config.
  */
 import { cn } from "@/lib/utils"
-import { NODE_META, PALETTE_GROUPS, TRIGGER_META } from "@/lib/workflow/catalog"
+import { NODE_META, PALETTE_GROUPS, TRIGGER_META, WORKFLOW_NODE_DND_MIME } from "@/lib/workflow/catalog"
 import type { NodeType, WorkflowTrigger } from "@/types/workflow"
 
 export interface WorkflowPaletteProps {
     trigger: WorkflowTrigger
-    onAddNode: (type: NodeType) => void
     onEditTrigger: () => void
     disabled?: boolean
 }
 
-export default function WorkflowPalette({ trigger, onAddNode, onEditTrigger, disabled }: WorkflowPaletteProps) {
+export default function WorkflowPalette({ trigger, onEditTrigger, disabled }: WorkflowPaletteProps) {
     const triggerMeta = TRIGGER_META[trigger.type]
     return (
         <div className="flex h-full flex-col gap-4 overflow-y-auto p-3">
@@ -43,7 +42,7 @@ export default function WorkflowPalette({ trigger, onAddNode, onEditTrigger, dis
                     </h3>
                     <div className="space-y-1.5">
                         {group.types.map((type) => (
-                            <PaletteItem key={type} type={type} onClick={() => onAddNode(type)} disabled={disabled} />
+                            <PaletteItem key={type} type={type} disabled={disabled} />
                         ))}
                     </div>
                 </div>
@@ -52,15 +51,22 @@ export default function WorkflowPalette({ trigger, onAddNode, onEditTrigger, dis
     )
 }
 
-function PaletteItem({ type, onClick, disabled }: { type: NodeType; onClick: () => void; disabled?: boolean }) {
+function PaletteItem({ type, disabled }: { type: NodeType; disabled?: boolean }) {
     const meta = NODE_META[type]
     return (
-        <button
-            type="button"
-            onClick={onClick}
-            disabled={disabled}
+        <div
+            role="button"
+            aria-disabled={disabled}
+            title={disabled ? undefined : "Drag onto the canvas to add"}
+            draggable={!disabled}
+            onDragStart={(e) => {
+                // Drag a node type onto the canvas to add it (drag-only; no click-to-add).
+                e.dataTransfer.setData(WORKFLOW_NODE_DND_MIME, type)
+                e.dataTransfer.effectAllowed = "copy"
+            }}
             className={cn(
-                "flex w-full items-center gap-2.5 rounded-md border border-border bg-card p-2.5 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50",
+                "flex w-full items-center gap-2.5 rounded-md border border-border bg-card p-2.5 text-left transition-colors hover:bg-accent",
+                disabled ? "cursor-not-allowed opacity-50" : "cursor-grab active:cursor-grabbing",
             )}
         >
             <div className={cn("grid size-8 shrink-0 place-items-center rounded-md", meta.accent)}>
@@ -70,6 +76,6 @@ function PaletteItem({ type, onClick, disabled }: { type: NodeType; onClick: () 
                 <div className="truncate text-sm font-medium">{meta.label}</div>
                 <div className="truncate text-xs text-muted-foreground">{meta.description}</div>
             </div>
-        </button>
+        </div>
     )
 }

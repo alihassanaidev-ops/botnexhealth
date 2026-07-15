@@ -13,11 +13,11 @@ import {
     Background,
     BackgroundVariant,
     Controls,
-    MiniMap,
     Panel,
     ReactFlow,
     ReactFlowProvider,
     useNodesState,
+    useReactFlow,
     type NodeMouseHandler,
     type OnConnect,
     type OnNodeDrag,
@@ -25,8 +25,9 @@ import {
 import "@xyflow/react/dist/style.css"
 import { LayoutGrid } from "lucide-react"
 import { StepNodeCard, TriggerNodeCard } from "./WorkflowNode"
+import { WORKFLOW_NODE_DND_MIME } from "@/lib/workflow/catalog"
 import type { FlowEdge, FlowNode } from "@/lib/workflow/graph"
-import type { NodePosition } from "@/types/workflow"
+import type { NodePosition, NodeType } from "@/types/workflow"
 
 /** Stable nodeTypes map for React Flow (module scope so the reference never changes). */
 const workflowNodeTypes = {
@@ -49,6 +50,8 @@ export interface WorkflowCanvasProps {
     onNodePositionChange?: (id: string, position: NodePosition) => void
     /** Re-run the auto-layout and drop manual positions. */
     onTidyLayout?: () => void
+    /** Palette node dropped on the canvas at a flow-space position (author mode). */
+    onAddNodeAt?: (type: NodeType, position: NodePosition) => void
 }
 
 function InnerCanvas({
@@ -61,7 +64,9 @@ function InnerCanvas({
     onConnectNodes,
     onNodePositionChange,
     onTidyLayout,
+    onAddNodeAt,
 }: WorkflowCanvasProps) {
+    const { screenToFlowPosition } = useReactFlow()
     // Local node state so React Flow can drive drag interactions smoothly; we re-sync
     // from the derived prop whenever the definition/selection changes. (Prop remains the
     // single source of truth — drag results are bubbled up via onNodeDragStop.)
@@ -94,6 +99,24 @@ function InnerCanvas({
         [onNodePositionChange],
     )
 
+    const handleDragOver = useCallback((e: React.DragEvent) => {
+        if (!e.dataTransfer.types.includes(WORKFLOW_NODE_DND_MIME)) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = "copy"
+    }, [])
+
+    const handleDrop = useCallback(
+        (e: React.DragEvent) => {
+            const type = e.dataTransfer.getData(WORKFLOW_NODE_DND_MIME)
+            if (!type) return
+            e.preventDefault()
+            // Convert the cursor point to flow coordinates so the node lands under the drop.
+            const position = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+            onAddNodeAt?.(type as NodeType, position)
+        },
+        [screenToFlowPosition, onAddNodeAt],
+    )
+
     return (
         <ReactFlow
             nodes={rfNodes}
@@ -104,6 +127,8 @@ function InnerCanvas({
             onPaneClick={() => onSelect?.(null)}
             onConnect={editable ? handleConnect : undefined}
             onNodeDragStop={editable ? handleNodeDragStop : undefined}
+            onDragOver={editable ? handleDragOver : undefined}
+            onDrop={editable ? handleDrop : undefined}
             nodesDraggable={!!editable}
             nodesConnectable={!!editable}
             edgesFocusable={false}
@@ -114,7 +139,7 @@ function InnerCanvas({
             className="bg-muted/20"
         >
             <Background variant={BackgroundVariant.Dots} gap={18} size={1} className="opacity-60" />
-            {!minimal && <Controls showInteractive={false} />}
+            {!minimal && <Controls showInteractive={false} showFitView />}
             {editable && onTidyLayout && (
                 <Panel position="top-right">
                     <button
@@ -125,14 +150,6 @@ function InnerCanvas({
                         <LayoutGrid className="h-3.5 w-3.5" /> Tidy layout
                     </button>
                 </Panel>
-            )}
-            {!minimal && (
-                <MiniMap
-                    pannable
-                    zoomable
-                    className="!bg-background/80 !border !border-border"
-                    maskColor="rgba(0,0,0,0.06)"
-                />
             )}
         </ReactFlow>
     )

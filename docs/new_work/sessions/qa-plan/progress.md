@@ -98,3 +98,99 @@ drove a genuine end-to-end round-trip against the sandbox:
 - Cleanup: appointment cancelled, endpoint deleted (204), secret cleared + container recreated, location
   reverted to NULL, local test rows purged, tunnel stopped. `git status` clean (docs only).
 **The "empty tenant" blocker was resolved by booking a bookable provider/type/operatory. Plan 09 = 100%.**
+
+## 2026-07-15 — Layer 6: Frontend panel verification (browser walk-through)
+Ran the dashboard (`nexus-dashboard-web`, Vite/React) at localhost:3000 against the local API + seeded DB.
+Seeded 4 demo campaigns for `bright-smile-dental` (all Plan 06 templates) via the definition service so the
+Plan 02/08 screens have real data. Verified route map + RBAC + login/MFA (TOTP). UI plans in scope: **02**
+(workflow builder), **08** (campaign mgmt), **11** (usage/cost cards + group rollup), **12** (DNC), plus
+settings (10/05) + callbacks (07). Voice (03) has no UI by design.
+
+**QA gap found + fixed — Workflow builder (Plan 02): palette had no drag-to-add.**
+- **Gap:** the palette was **click-to-add only** (`WorkflowPalette` used `onClick` buttons). New nodes are
+  unconnected, so the deterministic layered layout parks them in a **trailing column stacked off-screen**
+  (`graph.ts computeDepths` → `maxDepth+1`), making it feel like "nothing happened, just a config panel opened."
+  Functionally it worked; discoverability was poor. No on-canvas delete/keyboard-delete either (delete lives as
+  the "Delete step" button in the config panel — accepted as-is by the reviewer).
+- **Fix (frontend, presentational only — no execution-semantics change):** added **drag-to-add**. Palette items
+  are now `draggable` and set a typed DataTransfer MIME (`WORKFLOW_NODE_DND_MIME` in `lib/workflow/catalog.ts`);
+  the canvas wires `onDragOver`/`onDrop` and uses React Flow `screenToFlowPosition` to drop the node **under the
+  cursor**, pinning it into `def.layout` via the existing `setNodePosition`. Click-to-add kept as a fallback.
+  Files: `catalog.ts`, `WorkflowPalette.tsx`, `WorkflowCanvas.tsx`, `WorkflowBuilder.tsx`.
+- **Verified:** `tsc --noEmit` clean; workflow FE tests green (WorkflowBuilder.render/publish + WorkflowTemplates,
+  7 tests). Manual re-verify by the reviewer pending.
+
+## 2026-07-15 — Layer 6b: Automated headless-browser verification (Playwright) ✅ ALL PASS
+No Playwright MCP is connected (MCP needs a Claude Code restart to load), so ran a **headless Playwright script**
+against the live app (host node v22; `/tmp/pw-verify/verify.mjs`). Login is MFA-gated: scripted API-driven login
+that computes the TOTP with node:crypto (SHA1/6/30) off the `setup/options` secret, then relied on the HttpOnly
+refresh cookie + the app's boot-refresh to hydrate the session (access token is in-memory only — `token-manager.ts`).
+Used **fresh (no-MFA) accounts** so as not to touch the reviewer's `bright-smile-dental` admin (which now has a
+real TOTP factor); seeded 4 campaigns into `lakeview-orthodontics` for the inst-admin run.
+
+Results (10 screens + 3 role logins, screenshots in `/tmp/pw-verify/shots/`):
+- **login** inst-admin / group-admin / staff — all PASS (TOTP enrolled programmatically).
+- **01 campaigns list** (Plan 08) — all 4 campaigns render.
+- **02 campaign detail** (Plan 08+11) — run/usage/cost/enroll/halt/pause controls present.
+- **03 builder** (Plan 02) — 6 draggable palette items, 3 canvas nodes.
+- **04 drag-to-add** (the fix) — **synthetic DnD drop added a node, canvas 3→4** ✅ (screenshot shows a new Wait node).
+- **05 versions** (Plan 02) — version history renders.
+- **06 do-not-contact** (Plan 12), **07 settings** (Plan 10/05: email/from/address), **08 callbacks** (Plan 07) — all render.
+- **09 group dashboard** (Plan 11 rollup) — renders for GROUP_ADMIN.
+- **10 RBAC** — STAFF hitting `/institution-admin/campaigns` is redirected to `/dashboard` (blocked) ✅.
+- **No real API errors** — only the expected boot 401 (pre-refresh) and an SSE (`/institution/events`) stream
+  aborting on navigation; both cosmetic.
+- **Cleanup:** deleted the TOTP factors + recovery codes enrolled for the 3 test accounts (reset to 0 / fresh).
+  Left seeded campaigns (bright-smile-dental + lakeview-orthodontics) in place as demo data.
+**Frontend UI (Plans 02/08/11/12 + 10/05/07) verified end-to-end in a real browser. drag-to-add confirmed working.**
+
+## 2026-07-15 — Layer 6c: EXHAUSTIVE per-control Playwright pass + a real bug
+Deep script (`/tmp/pw-verify/deep-verify.mjs` + `builder2.mjs`) clicking individual controls on a throwaway
+"QA Sandbox" campaign (lakeview) so mutations/destructive actions didn't touch demo data.
+
+**Verified working (per-control):** builder toolbar (Versions/Test run/Pause-Resume/Archive/Publish/Tidy),
+drag-to-add, **content-class select**, **consent toggle**, validation shows errors + **Publish correctly disabled
+while errors exist**, tidy layout, **test-run dialog opens**, versions page, pause/resume (toasts). Campaigns list:
+New-from-template, Refresh, outbound-halt dialog (cancelled). Detail: usage cards 5/5, Enroll dialog, Halt dialog
+(cancelled). Settings: Save billing, New transfer Row, Save ROI config. Callbacks: filters, Reveal, Resolve dialog.
+Group: controls + practice filter. **DNC add opt-out works** (valid phone → 201) + list renders.
+
+**Could NOT cleanly auto-confirm (Playwright actionability quirk on React-Flow palette/nodes — NOT proven broken;
+the handlers are proven via drag-to-add which adds nodes, and the user manually confirmed click-to-add):**
+click-to-add per node type, per-node StepConfigPanel fields (SMS/email/voice/wait/condition/exit), edit-message,
+delete-step. `.click()` on `button[draggable=true]` / `.react-flow__node` timed out — a test-harness limitation.
+
+**🐞 REAL BUG FOUND — Do-Not-Contact add: 500 on invalid phone.**
+- `POST /api/institution/do-not-contact` with an **invalid** phone (e.g. a `555` fake number) → **500 Internal
+  Server Error** (unhandled `ValueError("Recipient phone number is required")` at `sms_compliance.py:68`, via
+  `hash_phone` returning empty for an unparseable number; route `do_not_contact.py:88` doesn't catch it).
+- Frontend surfaces it as an opaque **"Network Error"** (the 500 response is CORS-blocked from the browser).
+- **Happy path works:** valid numbers (`+12128675309`, `+442071838750`) → **201 Created**.
+- **Severity: low–med** (bad UX on bad input; not a crash of the happy path). **Fix:** catch `ValueError` in the
+  route → return 422 with a helpful message, and/or client-side validate the phone before submit.
+
+**Possible (unconfirmed) — Publish via UI:** publishing after toggling *consent_required* off returned
+"Failed to publish — the server rejected the definition." Likely **correct server-side guarding** (SMS without
+consent), not a confirmed bug — needs a deliberate check.
+
+**Cleanup:** MFA factors reset (0) on all test accounts; QA Sandbox deleted; test DNC rows deleted; lakeview
+billing email reverted; 4 lakeview demo campaigns left in place. No code changes this round (verification only).
+
+## 2026-07-16 — Layer 6d: Workflow builder UX polish (5 reviewer-requested fixes)
+1. **Drag-drop no longer opens the config panel** — `onAddNodeAt` (WorkflowBuilder.tsx) no longer calls
+   `onSelect(newId)`; dropping a node just places it.
+2. **Removed click-to-add** — palette items are now **drag-only** (`WorkflowPalette.tsx`: dropped the `onClick`/
+   `onAddNode` wiring; items are `<div role=button draggable>` with a "Drag onto the canvas" title). Removed the
+   now-unused `onAddNode` from WorkflowBuilder.
+3. **Config panel opacity** — `StepConfigPanel` `SheetContent` was translucent because the shared `sheetVariants`
+   uses `bg-gradient-to-b from-background to-accent/30` (lower half faded). Overrode with a solid
+   `[background:hsl(var(--background))] shadow-2xl` on the builder's panel.
+4. **Zoom controls visible** — React-Flow `Controls` rendered as a white strip (xyflow's dark palette is gated
+   behind OS `prefers-color-scheme`, but the app forces dark via a `.dark` class → it got the light `#fefefe`
+   defaults). First CSS attempt lost to xyflow's stylesheet (imported after `index.css`); fixed by overriding
+   both the xyflow CSS vars (`--xy-controls-button-*`) and the resolved styles with **`!important`** in
+   `index.css`. Now a dark strip with legible +/−/fit icons (screenshot-confirmed).
+5. **Removed the minimap** — dropped `<MiniMap>` (import + JSX) from `WorkflowCanvas.tsx`.
+Verified: `tsc --noEmit` clean; 9 workflow FE tests pass; Playwright screenshots confirm opaque panel, visible
+zoom controls, and no minimap. Files: WorkflowBuilder.tsx, WorkflowPalette.tsx, StepConfigPanel.tsx,
+WorkflowCanvas.tsx, index.css.

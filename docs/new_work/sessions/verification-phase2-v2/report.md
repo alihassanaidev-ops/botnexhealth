@@ -18,6 +18,10 @@ the author. Test baseline below.
 > the subscription/backfill/reconciliation/reschedule flows against a live NexHealth tenant (D-5/D-6). **Pending
 > CTO sign-off (back Monday 2026-07-13).** See the Decision Log in `../outbound-followups-and-gaps.md`. Percentages
 > and per-plan findings below are unchanged.
+>
+> **✅ RESOLVED (2026-07-16):** both remainders closed. **Plan 09 → 100%** (real webhook round-trip verified 2026-07-15).
+> **Plan 05 → 100% (agreed scope)** — per-tenant domain automation (E-4) + HTML (E-3) **deferred/dropped**; CTO chose
+> to manage clinic email domains **manually** in one Resend account. The "~70%/~80%" figures above are pre-resolution.
 
 > **✅ Post-verification fixes (2026-07-13).** The v3 verification (`../verification-phase2-v3/report.md`) surfaced
 > three actionable findings, now **fixed** (session `../qa-prep-3-fixes/`): (1) **Plan 05** — the Resend
@@ -93,7 +97,7 @@ dispatch) and per-clinic *isolation* (Retell workspace/BYO-SIP) remain valid, no
 | 02 | Visual Builder UI | ✅ Complete | **100%** | unchanged |
 | 03 | Outbound Voice | ✅ Complete (channel functionally complete; residual = FE/external/infra, no functional gap) | **100%** | ↑ from ~89% |
 | 04 | Outbound SMS | ✅ Complete (spec residuals assessed not-required) | **100%** | ↑ from ~78% (S-2 routing + residuals deemed not-required) |
-| 05 | Outbound Email | 🟢 Launch-compliant (sends + unsubscribe + bounce/complaint; per-tenant domain external) | **~70%** | ↑↑ from ~38% (transactional sends + unsubscribe + bounce/complaint) |
+| 05 | Outbound Email | 🟢 Launch-compliant (sends + unsubscribe + bounce/complaint); per-tenant domain **deferred/dropped (managed manually per CTO)** | **100%** | agreed scope complete; E-4 domain automation out of scope |
 | 06 | Four Live Campaigns | ✅ Complete for agreed scope (Sales Qualification dropped by product) | **100%** | ↑ from ~62–65% |
 | 07 | AI Callback Handling | ✅ Complete for purpose (leaner opt-in design; spec residuals not-required) | **100%** | ↑ from ~63% |
 | 08 | Campaign Mgmt / Analytics UI | ✅ Complete for essential operator scope (CSV/revenue/timelines/ops/SSE deferred/not-required) | **100%** | ↑ from ~22% |
@@ -219,7 +223,7 @@ unchanged.
 staff-routed inbound replies. **Complete for its product purpose;** the remaining plan-spec tables are hardening/
 redundant and were deliberately not built (per the "only build what's required" principle).
 
-### Plan 05 — Outbound Email — 🟢 ~70% (launch-compliant v1; per-tenant sending domain is the external remainder)
+### Plan 05 — Outbound Email — 🟢 100% (agreed scope; per-tenant sending domain deferred/dropped per CTO)
 **Built:** `EmailNodeExecutor` sends plain-text Resend email, gated; from-address institution override + platform
 fallback (`resolve_email_from`); reuses the sandboxed SMS renderer; **send-time idempotency** (`already_sent` guard
 + Resend `Idempotency-Key: email:{run}:{node}` header, `email_node_executor.py:51-56,106-110`); **usage metered by
@@ -238,10 +242,12 @@ marketing email stays gated (compliance-correct), not silently broken.
 - Both **suppress EMAIL only** by writing a **revoked EMAIL `ConsentRecord`** (new `record_email_consent[_identity]`
   on `SmsComplianceService`) via a Celery task under the `celery` RLS context — the gate then blocks (revoked beats
   implied). **No migration** (reuses `ConsentRecord.email_hash`). 12 tests.
-**Remaining — external / deferred / not-required:**
-- ⚠️ **Per-tenant sending domain (SPF/DKIM/DMARC + warm-up) — EXTERNAL** (DNS/vendor, overlaps Plan 10). Email sends
-  from the shared platform Resend domain today (works); a per-clinic domain is the deliverability/brand item for
-  scale. This is why Plan 05 is not marked 100%.
+**Remaining — DEFERRED / DROPPED (out of scope → Plan 05 marked 100% for agreed scope):**
+- ⏹️ **Per-tenant sending-domain automation (E-4: SPF/DKIM/DMARC + warm-up) — DEFERRED/DROPPED (CTO decision 2026-07-16).**
+  The team will **manage clinic email domains manually** in a single Resend account (one API key hosts many verified
+  domains; per-clinic from-address already supported via `email_from_address`) rather than building provisioning
+  automation. Email sends from the shared platform Resend domain today and works. So this is **no longer a code gap**
+  → Plan 05 is **complete for the agreed scope (100%)**.
 - *Deferred:* HTML/branded body (owner: plain-text v1). *Not-required:* `email_sending_profiles`/`workflow_email_
   templates`/`workflow_email_attempts` (attempts-log — same call as the SMS attempts table); $0 cost (Option B); analytics/UI (Plan 08).
 - **Resend webhook institution-scoping** relies on an echoed `institution_id` tag (added to the send) — the exact
@@ -492,7 +498,7 @@ pipeline and is compliance-correctly gated in the meantime.
   (gate + basis + DNC route + implied transactional consent; commercial capture deferred with lead-intake). Marked
   complete because remaining items were built where required and otherwise assessed **not-required / dropped /
   deferred-per-client / other-lane** — not by implementing everything.
-- **Substantial (60–95%):** Plan 05 (~70%). _(Plan 09 reached 100% on 2026-07-15 after the real webhook round-trip — now complete.)_
+- **Substantial (60–95%):** none. _(Plan 09 reached 100% on 2026-07-15 after the real webhook round-trip; Plan 05 marked 100% on 2026-07-16 — agreed scope complete, per-tenant domain automation deferred/dropped per CTO.)_
 - **Minimal:** none.
 - **Not started (0%):** none.
 
@@ -526,8 +532,10 @@ The full, prioritized, de-duplicated remaining-work list lives in **one place** 
    subscription/backfill/reconciliation jobs against a live NexHealth tenant (they're mock-tested only), then decide
    whether `recall_eligibility_working_set` is actually needed. Reschedule re-enroll + freshness window + projection
    + event-ledger are done and Postgres-verified.
-2. **Plan 05 scale email** — per-tenant sending domain (SPF/DKIM/DMARC + warm-up) is external/vendor work; HTML is
-   optional polish. Launch-compliant transactional email already sends with unsubscribe/bounce/complaint handling.
+2. **Plan 05 — COMPLETE (100%, agreed scope) as of 2026-07-16.** Launch-compliant transactional email sends with
+   unsubscribe/bounce/complaint handling. Per-tenant sending-domain automation (E-4) + HTML (E-3) are
+   **deferred/dropped** — the CTO decided to manage clinic domains **manually** in one Resend account (per-clinic
+   from-address already supported), so there's no remaining code work.
 3. **Plan 03 front-end (V-8 UI)** + **spoken-opt-out A-8 detection field** (V-2 write+wiring built + config-gated;
    CTO supplies the Retell field name); **SMS crash-window claim (XC-1b SMS)** — assessed not-required for now.
    *(Plans 04, 06, 07, 08, 11 are complete; S-2 free-text inbound routing done.)*

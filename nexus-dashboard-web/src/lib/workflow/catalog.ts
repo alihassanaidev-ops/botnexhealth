@@ -107,6 +107,9 @@ export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; ty
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
 ]
 
+/** DataTransfer MIME used to drag a palette node type onto the canvas. */
+export const WORKFLOW_NODE_DND_MIME = "application/x-nexus-node-type"
+
 export const CONDITION_OP_LABELS: Record<ConditionOp, string> = {
     eq: "equals",
     neq: "does not equal",

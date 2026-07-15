@@ -194,14 +194,17 @@ export default function WorkflowBuilder() {
         setPanelOpen(sel !== null)
     }, [])
 
-    const onAddNode = useCallback(
-        (type: NodeType) => {
+    // Drag-drop from the palette: add the node and pin it to the drop position so it
+    // lands under the cursor instead of the auto-layout's trailing column. We do NOT
+    // auto-select it — dropping should not pop the config panel open.
+    const onAddNodeAt = useCallback(
+        (type: NodeType, position: { x: number; y: number }) => {
             if (!def) return
             const newId = genId(type, def.nodes.map((n) => n.id))
-            applyDef(addNode(def, createNode(type, newId)))
-            onSelect(newId)
+            const withNode = addNode(def, createNode(type, newId))
+            applyDef(setNodePosition(withNode, newId, position))
         },
-        [def, applyDef, onSelect],
+        [def, applyDef],
     )
 
     const onNodeChange = useCallback(
@@ -393,7 +396,6 @@ export default function WorkflowBuilder() {
                 <aside className="w-56 shrink-0 border-r border-border">
                     <WorkflowPalette
                         trigger={def.trigger}
-                        onAddNode={onAddNode}
                         onEditTrigger={() => onSelect(TRIGGER_NODE_ID)}
                         disabled={readOnly}
                     />
@@ -409,6 +411,7 @@ export default function WorkflowBuilder() {
                         onConnectNodes={onConnectNodes}
                         onNodePositionChange={onNodePositionChange}
                         onTidyLayout={onTidyLayout}
+                        onAddNodeAt={onAddNodeAt}
                     />
                 </div>
 

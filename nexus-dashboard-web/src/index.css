@@ -227,3 +227,42 @@
     opacity: 1;
   }
 }
+
+/* React Flow zoom/fit controls — theme-aware so the +/- icons are visible.
+   xyflow's dark palette is gated behind the OS `prefers-color-scheme`, but this app
+   forces dark via a `.dark` class, so the controls otherwise get the light (white)
+   defaults. Override both the xyflow CSS vars and the resolved styles with !important
+   (xyflow's stylesheet is imported after index.css, so specificity alone loses). */
+.react-flow {
+  --xy-controls-button-background-color-default: hsl(var(--card));
+  --xy-controls-button-background-color-hover-default: hsl(var(--accent));
+  --xy-controls-button-color-default: hsl(var(--foreground));
+  --xy-controls-button-color-hover-default: hsl(var(--foreground));
+  --xy-controls-button-border-color-default: hsl(var(--border));
+}
+
+.react-flow__controls {
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.3) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background-color: hsl(var(--card)) !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+  width: 26px;
+  height: 26px;
+}
+
+.react-flow__controls-button:hover {
+  background-color: hsl(var(--accent)) !important;
+}
+
+.react-flow__controls-button svg,
+.react-flow__controls-button svg path {
+  fill: hsl(var(--foreground)) !important;
+  max-width: 14px;
+  max-height: 14px;
+}
