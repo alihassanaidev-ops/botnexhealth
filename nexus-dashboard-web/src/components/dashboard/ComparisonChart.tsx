@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react"
 import { Bar, BarChart, Cell, Label, Pie, PieChart, XAxis, YAxis } from "recharts"
-import { Loader2, PieChart as PieIcon } from "lucide-react"
+import { PieChart as PieIcon } from "lucide-react"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig,
 } from "@/components/ui/chart"
+import { ChartSkeleton } from "@/components/ui/skeletons"
 
 export interface ComparisonMetricDef {
     key: string
@@ -98,9 +99,7 @@ export function ComparisonChart({ title, rows, metrics, loading = false, emptyTe
             </CardHeader>
             <CardContent className="flex-1 flex flex-col justify-center">
                 {loading ? (
-                    <div className="flex items-center justify-center py-12">
-                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                    </div>
+                    <ChartSkeleton />
                 ) : !rows.length ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center gap-2">
                         <PieIcon className="h-7 w-7 text-muted-foreground/30" />

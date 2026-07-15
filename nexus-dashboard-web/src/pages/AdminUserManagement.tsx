@@ -24,8 +24,9 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, RefreshCw, ChevronLeft, ChevronRight, Trash2, MailPlus } from "lucide-react";
+import { RefreshCw, ChevronLeft, ChevronRight, Trash2, MailPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TableSkeleton } from "@/components/ui/skeletons";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 
@@ -192,9 +193,7 @@ export default function AdminUserManagement() {
                     </div>
 
                     {loading && users.length === 0 ? (
-                        <div className="flex justify-center p-8">
-                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                        </div>
+                        <TableSkeleton rows={6} cols={4} />
                     ) : (
                         <div className="space-y-4">
                             <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm">

@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Separator } from "@/components/ui/separator"
+import { CardsSkeleton } from "@/components/ui/skeletons"
 import {
     Dialog,
     DialogContent,
@@ -219,11 +220,7 @@ export default function EmailTemplates() {
     }
 
     if (loading) {
-        return (
-            <div className="flex items-center justify-center h-64">
-                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-        )
+        return <CardsSkeleton count={4} />
     }
 
     // Template list view

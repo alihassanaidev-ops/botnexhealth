@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { FormSkeleton } from "@/components/ui/skeletons"
 import {
     Table,
     TableBody,
@@ -347,9 +348,7 @@ export default function InstitutionSettings() {
         return (
             <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
                 <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-                <div className="flex items-center justify-center min-h-[400px]">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
+                <FormSkeleton rows={6} />
             </div>
         )
     }
@@ -566,9 +565,7 @@ export default function InstitutionSettings() {
                     </CardHeader>
                     <CardContent>
                         {transferNumbersLoading ? (
-                            <div className="flex items-center justify-center py-8">
-                                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                            </div>
+                            <FormSkeleton rows={3} />
                         ) : transferNumbers.length === 0 ? (
                             <p className="text-muted-foreground text-center py-8">No transfer numbers found</p>
                         ) : (

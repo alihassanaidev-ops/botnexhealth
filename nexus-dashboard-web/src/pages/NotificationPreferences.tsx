@@ -28,6 +28,7 @@ import {
     TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
+import { FormSkeleton } from "@/components/ui/skeletons"
 
 const TEMPLATE_META: Record<string, { label: string; description: string; icon: React.ElementType }> = {
     call_summary: {
@@ -180,11 +181,7 @@ export default function NotificationPreferences() {
     }
 
     if (loading) {
-        return (
-            <div className="flex items-center justify-center h-64">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-        )
+        return <FormSkeleton rows={5} />
     }
 
     return (
@@ -318,9 +315,7 @@ export default function NotificationPreferences() {
 
                             {/* List */}
                             {extRecipientsLoading ? (
-                                <div className="flex justify-center py-4">
-                                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                                </div>
+                                <FormSkeleton rows={3} />
                             ) : extRecipients.length === 0 ? (
                                 <p className="text-[11px] text-muted-foreground text-center py-4">
                                     No external recipients configured.

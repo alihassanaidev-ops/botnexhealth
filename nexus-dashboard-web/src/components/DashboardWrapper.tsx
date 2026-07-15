@@ -2,6 +2,7 @@ import { Outlet, Navigate, useLocation } from "react-router-dom";
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
 import { TopNav } from "@/components/TopNav"
+import { PageSkeleton } from "@/components/ui/skeletons"
 import { useAuth } from "@/context/AuthContext"
 
 export default function DashboardWrapper() {
@@ -9,12 +10,7 @@ export default function DashboardWrapper() {
     const location = useLocation();
 
     if (isLoading) {
-        return (
-            <div className="flex flex-col items-center justify-center h-screen gap-3">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-600 dark:border-zinc-400" />
-                <p className="text-sm text-muted-foreground">Loading your session...</p>
-            </div>
-        );
+        return <PageSkeleton />;
     }
 
     if (!user) {

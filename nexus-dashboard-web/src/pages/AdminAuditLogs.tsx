@@ -10,8 +10,9 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TableSkeleton } from "@/components/ui/skeletons";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 
@@ -108,9 +109,7 @@ export default function AdminAuditLogs() {
                 </CardHeader>
                 <CardContent>
                     {loading && logs.length === 0 ? (
-                        <div className="flex justify-center p-8">
-                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                        </div>
+                        <TableSkeleton rows={8} cols={4} />
                     ) : logs.length === 0 ? (
                         <div className="text-center p-8 text-muted-foreground">
                             No audit logs found.

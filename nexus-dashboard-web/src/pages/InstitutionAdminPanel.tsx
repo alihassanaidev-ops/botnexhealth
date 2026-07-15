@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { FormSkeleton } from "@/components/ui/skeletons"
 import {
     calculateROI,
     getAggregateDashboard,
@@ -143,9 +144,7 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
                     <DialogTitle>Operating Hours: {location.name}</DialogTitle>
                 </DialogHeader>
                 {loading ? (
-                    <div className="flex items-center justify-center py-12">
-                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                    </div>
+                    <FormSkeleton rows={5} />
                 ) : (
                     <div className="space-y-3">
                         {hours.map((hour) => (
@@ -356,9 +355,7 @@ export default function InstitutionAdminPanel() {
                         </CardHeader>
                         <CardContent>
                             {roiLoading ? (
-                                <div className="flex items-center justify-center py-8">
-                                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                                </div>
+                                <FormSkeleton rows={3} />
                             ) : roiCalculation ? (
                                 <div className="space-y-4">
                                     {/* ROI hero */}
