@@ -192,7 +192,9 @@ export default function SchedulerCalendar({
             const s = toMin(w.begin_time), e = toMin(w.end_time)
             if (s != null) lo = Math.min(lo, s); if (e != null) hi = Math.max(hi, e)
         }
-        return [Math.floor(lo / 60) * 60, Math.ceil(hi / 60) * 60]
+        // Pad an empty hour before the first / after the last window so the
+        // earliest label isn't jammed in the top corner and tiles have breathing room.
+        return [Math.max(0, Math.floor(lo / 60) * 60 - 60), Math.min(24 * 60, Math.ceil(hi / 60) * 60 + 60)]
     }, [visibleWindows])
     const totalH = (maxMin - minMin) * PX_MIN
     const hours: number[] = []; for (let m = minMin; m <= maxMin; m += 60) hours.push(m)
@@ -331,7 +333,7 @@ export default function SchedulerCalendar({
                             ))}
                         </div>
                         {/* body */}
-                        <div style={gridTemplate || { display: "flex", minWidth: "max-content" }}>
+                        <div style={{ ...(gridTemplate || { display: "flex", minWidth: "max-content" }), paddingTop: 6, paddingBottom: 8 }}>
                             <div className="relative flex-none" style={gridTemplate ? undefined : { width: GUTTER_W }}>
                                 {hours.map((m) => (
                                     <div key={m} className="relative pr-2 text-right font-mono text-[10.5px] text-muted-foreground" style={{ height: 60 * PX_MIN }}>
