@@ -15,10 +15,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("calls", sa.Column("booked_appointment_type_id", sa.String(length=100), nullable=True))
-    op.add_column("calls", sa.Column("booked_appointment_type_name", sa.String(length=255), nullable=True))
+    # Idempotent (IF NOT EXISTS): on a live prod DB the columns are pre-applied
+    # before the code rollout to avoid a migrate-after-traffic-shift 500 window,
+    # so this upgrade must reconcile cleanly whether or not they already exist.
+    op.execute("ALTER TABLE calls ADD COLUMN IF NOT EXISTS booked_appointment_type_id VARCHAR(100)")
+    op.execute("ALTER TABLE calls ADD COLUMN IF NOT EXISTS booked_appointment_type_name VARCHAR(255)")
 
 
 def downgrade() -> None:
-    op.drop_column("calls", "booked_appointment_type_name")
-    op.drop_column("calls", "booked_appointment_type_id")
+    op.execute("ALTER TABLE calls DROP COLUMN IF EXISTS booked_appointment_type_name")
+    op.execute("ALTER TABLE calls DROP COLUMN IF EXISTS booked_appointment_type_id")
