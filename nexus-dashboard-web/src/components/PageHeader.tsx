@@ -22,8 +22,8 @@ export function PageHeader({
         <div className={cn("flex flex-wrap items-start justify-between gap-4", className)}>
             <div className="flex items-start gap-3">
                 {Icon && (
-                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
-                        <Icon className="h-5 w-5" />
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-neutral-900 text-white ring-1 ring-black/5 dark:bg-neutral-800 dark:ring-white/10">
+                        <Icon className="h-5 w-5" strokeWidth={1.75} />
                     </span>
                 )}
                 <div className="space-y-1">
