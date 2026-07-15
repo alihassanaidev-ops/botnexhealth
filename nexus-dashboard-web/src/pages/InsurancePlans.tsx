@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react"
 import { Loader2, Pencil, Plus, RefreshCcw, Shield, Trash2, X } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -138,26 +139,25 @@ export default function InsurancePlans() {
     return (
         <div className="relative space-y-6 bg-background">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Insurance Plans</h1>
-                    <p className="mt-1 text-muted-foreground">
-                        Manage accepted insurance plans for your location. The AI agent uses this list to answer caller questions.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button variant="outline" onClick={loadPlans} disabled={loading || !selectedSlug}>
-                        {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-                        Refresh
-                    </Button>
-                    {canManage && (
-                        <Button onClick={openCreateForm} disabled={!selectedSlug}>
-                            <Plus className="mr-2 h-4 w-4" />
-                            Add Plan
+            <PageHeader
+                icon={Shield}
+                title="Insurance Plans"
+                description="Manage accepted insurance plans for your location. The AI agent uses this list to answer caller questions."
+                actions={
+                    <>
+                        <Button variant="outline" onClick={loadPlans} disabled={loading || !selectedSlug}>
+                            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                            Refresh
                         </Button>
-                    )}
-                </div>
-            </div>
+                        {canManage && (
+                            <Button onClick={openCreateForm} disabled={!selectedSlug}>
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add Plan
+                            </Button>
+                        )}
+                    </>
+                }
+            />
 
             {showLocationPicker && (
                 <div className="max-w-xs space-y-2">
