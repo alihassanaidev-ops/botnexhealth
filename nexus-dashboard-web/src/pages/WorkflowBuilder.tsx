@@ -314,8 +314,11 @@ export default function WorkflowBuilder() {
             setDirty(false)
             localStorage.removeItem(draftKey(id))
             toast.success("Changes published")
-        } catch {
-            toast.error("Failed to publish — the server rejected the definition")
+        } catch (err) {
+            // Surface the real server reason (e.g. a status conflict or validation
+            // detail) instead of a generic "rejected the definition" message.
+            const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+            toast.error(detail ? `Couldn't publish: ${detail}` : "Failed to publish — please try again")
         } finally {
             setBusy(false)
         }

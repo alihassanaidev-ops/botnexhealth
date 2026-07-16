@@ -33,6 +33,10 @@ _EDITABLE_STATUSES = {AutomationWorkflowStatus.DRAFT.value}
 _PUBLISHABLE_STATUSES = {
     AutomationWorkflowStatus.DRAFT.value,
     AutomationWorkflowStatus.PAUSED.value,
+    # Active is publishable too: editing a live campaign and re-publishing snapshots a
+    # new version and keeps it active (hot-swap). In-flight runs pin their version at
+    # enroll time, so they keep running the old definition; new enrollments use the new one.
+    AutomationWorkflowStatus.ACTIVE.value,
 }
 # Non-terminal runs that an emergency halt must actively terminate.
 _IN_FLIGHT_RUN_STATUSES = (

@@ -194,3 +194,16 @@ billing email reverted; 4 lakeview demo campaigns left in place. No code changes
 Verified: `tsc --noEmit` clean; 9 workflow FE tests pass; Playwright screenshots confirm opaque panel, visible
 zoom controls, and no minimap. Files: WorkflowBuilder.tsx, WorkflowPalette.tsx, StepConfigPanel.tsx,
 WorkflowCanvas.tsx, index.css.
+
+## 2026-07-16 — Layer 6e: FIX — "Publish changes" on an active campaign (was 409 → misleading error)
+**Bug:** editing a **live (active)** campaign and clicking "Publish changes" failed with a **409 Conflict**
+(`definition_service.py:142` — `_PUBLISHABLE_STATUSES` was `{draft, paused}`, excluding active), which the UI
+showed as the misleading *"Failed to publish — the server rejected the definition."* Client `/validate` returned
+200 (definition was valid); the 409 was a **status** conflict, not a definition problem. Since the builder treats
+active campaigns as editable/publishable, this broke publishing edits to every live campaign.
+**Fix A (backend):** added `ACTIVE` to `_PUBLISHABLE_STATUSES` → publishing a live campaign snapshots a new
+version and stays active (hot-swap). In-flight runs pin their version at enroll time, so they keep the old
+definition; new enrollments use the new one. **Fix C (frontend):** `WorkflowBuilder.tsx` publish `catch` now
+surfaces the server's real `detail` (`Couldn't publish: …`) instead of the generic message.
+**Verified:** service-layer test — publishing an ACTIVE workflow bumps version 1→#2, stays active, no 409;
+57 backend unit tests pass; frontend `tsc` clean. Files: `definition_service.py`, `WorkflowBuilder.tsx`.
