@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
     addNode,
+    autoLayoutDefinition,
     blankDefinition,
     clearLayout,
     computeDepths,
@@ -73,12 +74,20 @@ describe("workflow graph — derivation", () => {
         expect(edges.some((e) => e.source === "wait-1" && e.target === "exit-1")).toBe(true)
     })
 
+    it("uses smoothstep smart edge routing for derived edges", () => {
+        const { edges } = definitionToFlow(LINEAR)
+        expect(edges.every((e) => e.type === "smoothstep")).toBe(true)
+        expect(edges.every((e) => e.pathOptions && typeof e.pathOptions === "object")).toBe(true)
+        expect(edges.every((e) => e.interactionWidth === 18)).toBe(true)
+    })
+
     it("condition nodes emit two handled edges (true/false)", () => {
         const { edges } = definitionToFlow(BRANCHED)
         const out = edges.filter((e) => e.source === "cond-1")
         expect(out).toHaveLength(2)
         expect(out.some((e) => e.sourceHandle === "true" && e.target === "exit-yes")).toBe(true)
         expect(out.some((e) => e.sourceHandle === "false" && e.target === "exit-no")).toBe(true)
+        expect(out.every((e) => e.labelShowBg)).toBe(true)
     })
 
     it("lays out nodes in columns by depth (trigger=0, entry=1)", () => {
@@ -231,13 +240,30 @@ describe("workflow graph — presentational layout (Phase 4)", () => {
         expect(typeof wait.position.x).toBe("number")
     })
 
-    it("Tidy layout (clearLayout) drops manual positions so auto-layout resumes", () => {
+    it("clearLayout drops manual positions so fallback layout resumes", () => {
         const withPos = setNodePosition(LINEAR, "sms-1", { x: 999, y: 777 })
         const tidied = clearLayout(withPos)
         expect(tidied.layout).toBeUndefined()
         const auto = definitionToFlow(LINEAR).nodes.find((n) => n.id === "sms-1")!
         const tidiedSms = definitionToFlow(tidied).nodes.find((n) => n.id === "sms-1")!
         expect(tidiedSms.position).toEqual(auto.position)
+    })
+
+    it("autoLayoutDefinition writes fresh presentational positions for every rendered node", () => {
+        const withPos = setNodePosition(BRANCHED, "cond-1", { x: 999, y: 777 })
+        const laidOut = autoLayoutDefinition(withPos)
+        expect(laidOut.layout?.[TRIGGER_NODE_ID]).toBeTruthy()
+        expect(laidOut.layout?.["cond-1"]).toBeTruthy()
+        expect(laidOut.layout?.["exit-yes"]).toBeTruthy()
+        expect(laidOut.layout?.["exit-no"]).toBeTruthy()
+        expect(laidOut.layout?.["cond-1"]).not.toEqual({ x: 999, y: 777 })
+        expect(laidOut.nodes).toEqual(withPos.nodes)
+        expect(laidOut.entry_node_id).toBe(withPos.entry_node_id)
+    })
+
+    it("autoLayoutDefinition keeps true branches above false branches when possible", () => {
+        const laidOut = autoLayoutDefinition(BRANCHED)
+        expect(laidOut.layout?.["exit-yes"].y).toBeLessThan(laidOut.layout?.["exit-no"].y ?? 0)
     })
 
     it("layout is purely presentational — it never changes derived edges/semantics", () => {

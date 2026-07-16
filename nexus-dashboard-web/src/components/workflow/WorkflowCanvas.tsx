@@ -4,9 +4,9 @@
  *
  * In `editable` mode nodes can be dragged (positions bubble up as presentational
  * `layout` — never touching execution semantics) and edges can be drawn between
- * handles (which sets the source node's `next_node_id` / condition branch). A
- * "Tidy layout" action clears manual positions and re-runs the deterministic
- * auto-layout. Read-only previews (default) keep nodes fixed & non-connectable.
+ * handles (which sets the source node's `next_node_id` / condition branch). The
+ * Auto layout action persists a computed presentational layout. Read-only previews
+ * (default) keep nodes fixed & non-connectable.
  */
 import { useCallback, useEffect } from "react"
 import {
@@ -23,7 +23,7 @@ import {
     type OnNodeDrag,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
-import { LayoutGrid } from "lucide-react"
+import { LayoutGrid, Loader2 } from "lucide-react"
 import { StepNodeCard, TriggerNodeCard } from "./WorkflowNode"
 import { WORKFLOW_NODE_DND_MIME } from "@/lib/workflow/catalog"
 import type { FlowEdge, FlowNode } from "@/lib/workflow/graph"
@@ -48,8 +48,9 @@ export interface WorkflowCanvasProps {
     onConnectNodes?: (sourceId: string, targetId: string, handle?: "true" | "false") => void
     /** Node drag settled: persist its presentational position. */
     onNodePositionChange?: (id: string, position: NodePosition) => void
-    /** Re-run the auto-layout and drop manual positions. */
-    onTidyLayout?: () => void
+    /** Re-run the auto-layout and persist fresh presentational positions. */
+    onAutoLayout?: () => void | Promise<void>
+    autoLayoutBusy?: boolean
     /** Palette node dropped on the canvas at a flow-space position (author mode). */
     onAddNodeAt?: (type: NodeType, position: NodePosition) => void
 }
@@ -63,7 +64,8 @@ function InnerCanvas({
     editable,
     onConnectNodes,
     onNodePositionChange,
-    onTidyLayout,
+    onAutoLayout,
+    autoLayoutBusy,
     onAddNodeAt,
 }: WorkflowCanvasProps) {
     const { screenToFlowPosition } = useReactFlow()
@@ -140,14 +142,20 @@ function InnerCanvas({
         >
             <Background variant={BackgroundVariant.Dots} gap={18} size={1} className="opacity-60" />
             {!minimal && <Controls showInteractive={false} showFitView />}
-            {editable && onTidyLayout && (
+            {editable && onAutoLayout && (
                 <Panel position="top-right">
                     <button
                         type="button"
-                        onClick={onTidyLayout}
+                        onClick={onAutoLayout}
+                        disabled={autoLayoutBusy}
                         className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/90 px-2.5 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-muted"
                     >
-                        <LayoutGrid className="h-3.5 w-3.5" /> Tidy layout
+                        {autoLayoutBusy ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                            <LayoutGrid className="h-3.5 w-3.5" />
+                        )}
+                        Auto layout
                     </button>
                 </Panel>
             )}

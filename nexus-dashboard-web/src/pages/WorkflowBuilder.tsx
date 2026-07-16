@@ -27,7 +27,6 @@ import {
 import {
     addNode,
     blankDefinition,
-    clearLayout,
     connectNodes,
     createNode,
     definitionToFlow,
@@ -78,6 +77,7 @@ export default function WorkflowBuilder() {
     const [dirty, setDirty] = useState(false)
     const [loading, setLoading] = useState(true)
     const [busy, setBusy] = useState(false)
+    const [layouting, setLayouting] = useState(false)
     const [selectedId, setSelectedId] = useState<string | null>(null)
     const [panelOpen, setPanelOpen] = useState(false)
     const [testOpen, setTestOpen] = useState(false)
@@ -254,8 +254,15 @@ export default function WorkflowBuilder() {
         },
         [def, applyDef],
     )
-    const onTidyLayout = useCallback(() => {
-        if (def) applyDef(clearLayout(def))
+    const onAutoLayout = useCallback(async () => {
+        if (!def) return
+        setLayouting(true)
+        try {
+            const { elkAutoLayoutDefinition } = await import("@/lib/workflow/elk-layout")
+            applyDef(await elkAutoLayoutDefinition(def))
+        } finally {
+            setLayouting(false)
+        }
     }, [def, applyDef])
 
     const onDiscard = useCallback(() => {
@@ -413,7 +420,8 @@ export default function WorkflowBuilder() {
                         editable={!readOnly}
                         onConnectNodes={onConnectNodes}
                         onNodePositionChange={onNodePositionChange}
-                        onTidyLayout={onTidyLayout}
+                        onAutoLayout={onAutoLayout}
+                        autoLayoutBusy={layouting}
                         onAddNodeAt={onAddNodeAt}
                     />
                 </div>

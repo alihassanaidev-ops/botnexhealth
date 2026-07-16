@@ -19,21 +19,21 @@ function flow() {
     return definitionToFlow(DEF)
 }
 
-describe("WorkflowCanvas — Tidy layout control", () => {
-    it("shows a Tidy layout button in editable mode and invokes onTidyLayout on click", async () => {
-        const onTidyLayout = vi.fn()
+describe("WorkflowCanvas — Auto layout control", () => {
+    it("shows an Auto layout button in editable mode and invokes onAutoLayout on click", async () => {
+        const onAutoLayout = vi.fn()
         const { nodes, edges } = flow()
         render(
-            <WorkflowCanvas nodes={nodes} edges={edges} editable onTidyLayout={onTidyLayout} />,
+            <WorkflowCanvas nodes={nodes} edges={edges} editable onAutoLayout={onAutoLayout} />,
         )
-        const btn = await screen.findByRole("button", { name: /tidy layout/i })
+        const btn = await screen.findByRole("button", { name: /auto layout/i })
         await userEvent.click(btn)
-        expect(onTidyLayout).toHaveBeenCalledTimes(1)
+        expect(onAutoLayout).toHaveBeenCalledTimes(1)
     })
 
     it("hides editing affordances in read-only (non-editable) preview mode", () => {
         const { nodes, edges } = flow()
-        render(<WorkflowCanvas nodes={nodes} edges={edges} onTidyLayout={vi.fn()} minimal />)
-        expect(screen.queryByRole("button", { name: /tidy layout/i })).not.toBeInTheDocument()
+        render(<WorkflowCanvas nodes={nodes} edges={edges} onAutoLayout={vi.fn()} minimal />)
+        expect(screen.queryByRole("button", { name: /auto layout/i })).not.toBeInTheDocument()
     })
 })
