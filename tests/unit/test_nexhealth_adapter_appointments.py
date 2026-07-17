@@ -191,6 +191,118 @@ async def test_create_availability_wraps_body_under_availability_key(
     }
 
 
+# ── Slots: next_available_date hint ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_find_available_slots_surfaces_next_available_date(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """When a provider group is empty, NexHealth's next_available_date must be
+    surfaced (per-provider + as the earliest) instead of silently dropped."""
+    adapter = _make_adapter()
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        return {
+            "data": [
+                {"lid": 1, "pid": 123, "slots": [], "next_available_date": "2026-08-01"}
+            ]
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.find_available_slots(
+        start_date="2026-07-20", days=1, provider_id="nh-123", appointment_type_id="nh-50"
+    )
+
+    assert result.slots == []
+    assert result.next_available_date == "2026-08-01"
+    assert result.next_available_by_provider == {"nh-123": "2026-08-01"}
+
+
+@pytest.mark.asyncio
+async def test_find_available_slots_returns_earliest_across_providers(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        return {
+            "data": [
+                {"lid": 1, "pid": 123, "slots": [], "next_available_date": "2026-09-15"},
+                {"lid": 1, "pid": 456, "slots": [], "next_available_date": "2026-08-03"},
+            ]
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.find_available_slots(
+        start_date="2026-07-20", days=1, provider_id=["nh-123", "nh-456"], appointment_type_id="nh-50"
+    )
+
+    assert result.next_available_date == "2026-08-03"
+    assert result.next_available_by_provider == {
+        "nh-123": "2026-09-15",
+        "nh-456": "2026-08-03",
+    }
+
+
+@pytest.mark.asyncio
+async def test_find_available_slots_none_when_no_availability_in_window(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """next_available_date null (no openings within lookahead) → None, not error."""
+    adapter = _make_adapter()
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        return {"data": [{"lid": 1, "pid": 123, "slots": [], "next_available_date": None}]}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.find_available_slots(
+        start_date="2026-07-20", days=1, provider_id="nh-123", appointment_type_id="nh-50"
+    )
+
+    assert result.slots == []
+    assert result.next_available_date is None
+    assert result.next_available_by_provider == {}
+
+
+@pytest.mark.asyncio
+async def test_get_available_slots_still_returns_plain_list(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Back-compat: get_available_slots keeps returning a flat UniversalSlot list."""
+    from src.app.pms.models import UniversalSlot
+
+    adapter = _make_adapter()
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        return {
+            "data": [
+                {
+                    "lid": 1,
+                    "pid": 123,
+                    "slots": [
+                        {"time": "2026-07-20T09:00:00-04:00", "end_time": "2026-07-20T09:30:00-04:00"}
+                    ],
+                    "next_available_date": None,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    slots = await adapter.get_available_slots(
+        start_date="2026-07-20", days=1, provider_id="nh-123", appointment_type_id="nh-50"
+    )
+
+    assert isinstance(slots, list)
+    assert len(slots) == 1
+    assert isinstance(slots[0], UniversalSlot)
+    assert slots[0].provider_id == "nh-123"
+
+
 # ── Reschedule ordering: book new before cancelling old ─────────────────────
 
 

@@ -692,13 +692,14 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             return {"error": validation_error}
 
     try:
-        slots = await ctx.adapter.get_available_slots(
+        slot_result = await ctx.adapter.find_available_slots(
             start_date=start_date,
             days=args.get("days", 7),
             provider_id=provider_ids if provider_ids is not None else None,
             appointment_type_id=appt_type_id,
             operatory_ids=args.get("operatory_ids"),
         )
+        slots = slot_result.slots
 
         # Apply provider-level filters (buffer + time restriction)
         try:
@@ -767,10 +768,32 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         random.shuffle(provider_ids)
         slots = [slot for pid in provider_ids for slot in grouped[pid]]
 
+        # When the requested window is fully booked, hand the agent the PMS's
+        # next-available-date hint so it can jump straight there instead of
+        # probing day-by-day. Only meaningful when we surfaced no slots.
+        next_available_date = slot_result.next_available_date if not slots else None
+
+        if slots:
+            message = f"Found {len(slots)} available slot(s)."
+        elif next_available_date:
+            message = (
+                f"No availability on {start_date}. "
+                f"The next available date is {next_available_date}."
+            )
+        else:
+            message = (
+                f"No availability on {start_date}, and no upcoming openings were "
+                "found within the booking window."
+            )
+
         return {
             "slots_count": len(slots),
             "slots": [s.model_dump() for s in slots],
-            "message": f"Found {len(slots)} available slot(s).",
+            "next_available_date": next_available_date,
+            "next_available_by_provider": (
+                slot_result.next_available_by_provider if not slots else {}
+            ),
+            "message": message,
         }
     except Exception as e:
         logger.error(

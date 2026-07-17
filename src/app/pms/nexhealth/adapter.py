@@ -18,6 +18,7 @@ from src.app.pms.models import (
     BookingResult,
     PatientCreateRequest,
     SetupStep,
+    SlotSearchResult,
     UniversalAppointmentType,
     UniversalLocation,
     UniversalOperatory,
@@ -328,6 +329,23 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
     ) -> list[UniversalSlot]:
+        result = await self.find_available_slots(
+            start_date=start_date,
+            days=days,
+            provider_id=provider_id,
+            appointment_type_id=appointment_type_id,
+            operatory_ids=operatory_ids,
+        )
+        return result.slots
+
+    async def find_available_slots(
+        self,
+        start_date: str,
+        days: int = 7,
+        provider_id: str | list[str] | None = None,
+        appointment_type_id: str | None = None,
+        operatory_ids: list[str] | None = None,
+    ) -> SlotSearchResult:
         params: dict[str, Any] = {
             "start_date": start_date,
             "days": days,
@@ -353,8 +371,11 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             params["operatory_ids[]"] = [_strip(oid) for oid in operatory_ids]
 
         raw = await handle_nexhealth_request(self._client, "GET", "/appointment_slots", params=params)
-        # NexHealth returns nested: data = [{lid, pid, slots: [{time, end_time, ...}]}]
+        # NexHealth returns nested: data = [{lid, pid, slots: [...], next_available_date}]
+        # When a provider group has no slots in the window, next_available_date
+        # holds the next date that does (or null if none within ~180 days).
         result: list[UniversalSlot] = []
+        next_by_provider: dict[str, str] = {}
         for group in raw.get("data", []):
             group_pid = group.get("pid")
             group_lid = group.get("lid")
@@ -362,7 +383,16 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
                 slot["_pid"] = group_pid
                 slot["_lid"] = group_lid
                 result.append(mappers.to_slot(slot, appointment_type_id))
-        return result
+            next_date = group.get("next_available_date")
+            if next_date and group_pid is not None:
+                next_by_provider[mappers._pid(group_pid)] = next_date
+
+        earliest = min(next_by_provider.values()) if next_by_provider else None
+        return SlotSearchResult(
+            slots=result,
+            next_available_date=earliest,
+            next_available_by_provider=next_by_provider,
+        )
 
     # ── Booking ──────────────────────────────────────────────────────────
 

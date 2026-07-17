@@ -15,6 +15,7 @@ from src.app.pms.models import (
     BookingResult,
     PatientCreateRequest,
     SetupStep,
+    SlotSearchResult,
     UniversalAppointmentType,
     UniversalLocation,
     UniversalOperatory,
@@ -69,6 +70,29 @@ class PMSAdapter(ABC):
         operatory_ids: list[str] | None = None,
     ) -> list[UniversalSlot]:
         ...
+
+    async def find_available_slots(
+        self,
+        start_date: str,
+        days: int = 7,
+        provider_id: str | list[str] | None = None,
+        appointment_type_id: str | None = None,
+        operatory_ids: list[str] | None = None,
+    ) -> SlotSearchResult:
+        """Slots plus a "next available date" hint.
+
+        Default implementation wraps :meth:`get_available_slots` and reports no
+        next-available hint. Adapters whose PMS returns that hint (NexHealth)
+        override this to surface it without an extra API call.
+        """
+        slots = await self.get_available_slots(
+            start_date=start_date,
+            days=days,
+            provider_id=provider_id,
+            appointment_type_id=appointment_type_id,
+            operatory_ids=operatory_ids,
+        )
+        return SlotSearchResult(slots=slots)
 
     # --- Booking ---
 
