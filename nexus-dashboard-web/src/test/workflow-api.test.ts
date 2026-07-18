@@ -77,24 +77,26 @@ describe("workflow-api", () => {
         expect(get).toHaveBeenCalledWith("/automation/templates")
     })
 
-    it("createWorkflowFromTemplate fetches the template then creates via the working create endpoint", async () => {
-        get.mockResolvedValue({
-            data: { id: "tpl-1", name: "Reminder", description: "", trigger_type: "manual", definition: DEF, tags: [] },
-        })
+    it("createWorkflowFromTemplate posts to the guided instantiate endpoint", async () => {
         post.mockResolvedValue({ data: { id: "w3", name: "Reminder" } })
         const wf = await createWorkflowFromTemplate("tpl-1")
-        expect(get).toHaveBeenCalledWith("/automation/templates/tpl-1")
-        expect(post).toHaveBeenCalledWith("/automation/workflows", { name: "Reminder", definition: DEF })
+        expect(post).toHaveBeenCalledWith("/automation/templates/tpl-1/instantiate", {})
         expect(wf).toMatchObject({ id: "w3" })
     })
 
-    it("createWorkflowFromTemplate honors a custom name", async () => {
-        get.mockResolvedValue({
-            data: { id: "tpl-1", name: "Reminder", description: "", trigger_type: "manual", definition: DEF, tags: [] },
-        })
+    it("createWorkflowFromTemplate forwards guided setup values", async () => {
         post.mockResolvedValue({ data: { id: "w4" } })
-        await createWorkflowFromTemplate("tpl-1", "  My Campaign  ")
-        expect(post).toHaveBeenCalledWith("/automation/workflows", { name: "My Campaign", definition: DEF })
+        await createWorkflowFromTemplate("tpl-1", "  My Campaign  ", {
+            locationId: "loc-1",
+            voiceAgentId: " agent-1 ",
+            setupOptions: { copy_variant: "standard" },
+        })
+        expect(post).toHaveBeenCalledWith("/automation/templates/tpl-1/instantiate", {
+            name: "My Campaign",
+            location_id: "loc-1",
+            voice_agent_id: "agent-1",
+            setup_options: { copy_variant: "standard" },
+        })
     })
 
     it("listVersions GETs the workflow's versions collection", async () => {

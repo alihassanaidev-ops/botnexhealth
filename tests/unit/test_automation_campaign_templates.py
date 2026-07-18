@@ -9,11 +9,16 @@ import pytest
 
 from src.app.services.automation.campaign_templates import (
     TEMPLATES,
+    VOICE_AGENT_PLACEHOLDER,
     get_template,
+    instantiate_definition,
     list_templates,
+    template_tokens,
 )
+from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.api.routes.automation_templates import (
+    CampaignTemplateInstantiateRequest,
     CampaignTemplateResponse,
     get_campaign_template,
     instantiate_template,
@@ -34,17 +39,21 @@ def test_template_definition_is_valid_workflow_schema(template_id: str) -> None:
     assert defn.entry_node_id in {n.id for n in defn.nodes}
 
 
-def test_all_four_templates_present() -> None:
+def test_priority_dental_templates_present() -> None:
     assert set(TEMPLATES.keys()) == {
         "appointment-reminder-24h",
         "appointment-confirmation-48h",
         "recall-sms-6month",
         "reactivation-sms-email-18month",
+        "no-show-recovery",
+        "cancellation-rebooking",
+        "callback-automation",
+        "unscheduled-treatment-followup",
     }
 
 
 def test_list_templates_returns_all() -> None:
-    assert len(list_templates()) == 4
+    assert len(list_templates()) == 8
 
 
 def test_get_template_known_id() -> None:
@@ -83,6 +92,59 @@ def test_recall_templates_use_recall_scan_trigger() -> None:
         assert t.definition["trigger"]["type"] == "recall_scan"
 
 
+def test_callback_template_requires_voice_agent_substitution() -> None:
+    template = TEMPLATES["callback-automation"]
+    assert any(
+        node.get("retell_agent_id") == VOICE_AGENT_PLACEHOLDER
+        for node in template.definition["nodes"]
+        if node["type"] == "send_voice"
+    )
+
+    with pytest.raises(ValueError):
+        instantiate_definition(template)
+
+    definition = instantiate_definition(template, voice_agent_id="agent_clinic_1")
+    voice = next(node for node in definition["nodes"] if node["type"] == "send_voice")
+    assert voice["retell_agent_id"] == "agent_clinic_1"
+
+
+def test_template_metadata_has_required_dental_contract() -> None:
+    for template in TEMPLATES.values():
+        metadata = template.metadata
+        assert metadata.category in {
+            "appointment_ops",
+            "recall",
+            "treatment",
+            "callback",
+            "reactivation",
+        }
+        assert metadata.goal
+        assert metadata.outcome_labels
+        assert metadata.supported_channels
+        assert metadata.required_readiness_checks
+        assert metadata.default_compliance_content_class in {
+            "transactional_care",
+            "recall",
+            "sales",
+            "marketing",
+        }
+        assert metadata.default_frequency_cap.max_per_day == 1
+        assert metadata.default_frequency_cap.max_per_rolling_7_days == 3
+        assert metadata.analytics_outcome_map
+        assert metadata.sample_preview_context
+
+
+def test_template_tokens_are_cataloged_and_declared_when_required() -> None:
+    catalog_names = {field.name for field in MERGE_FIELD_CATALOG}
+    for template in TEMPLATES.values():
+        tokens = set(template_tokens(template.definition))
+        assert tokens <= catalog_names
+        assert set(template.metadata.required_merge_fields) <= catalog_names
+        assert set(template.metadata.required_merge_fields) <= (
+            tokens | set(template.metadata.sample_preview_context.keys())
+        )
+
+
 # ---------------------------------------------------------------------------
 # Reactivation template has multi-step flow with exit nodes
 # ---------------------------------------------------------------------------
@@ -105,6 +167,8 @@ def test_campaign_template_response_from_template() -> None:
     resp = CampaignTemplateResponse.from_template(t)
     assert resp.id == "recall-sms-6month"
     assert "sms" in resp.tags
+    assert resp.category == "recall"
+    assert resp.metadata["pms_capability_requirements"] == ["patient_recalls"]
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +179,7 @@ def test_campaign_template_response_from_template() -> None:
 def test_list_route_returns_all_templates() -> None:
     user = MagicMock()
     result = asyncio.run(list_campaign_templates(user))
-    assert len(result) == 4
+    assert len(result) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +253,16 @@ def test_instantiate_creates_and_publishes_workflow() -> None:
             return_value=mock_svc,
         ),
     ):
-        result = asyncio.run(instantiate_template("appointment-reminder-24h", user))
+        result = asyncio.run(
+            instantiate_template(
+                "appointment-reminder-24h",
+                user,
+                data=CampaignTemplateInstantiateRequest(
+                    name="My Reminder",
+                    location_id="loc-1",
+                ),
+            )
+        )
 
     assert result.id == "wf-new"
     assert result.status == "active"
@@ -199,10 +272,27 @@ def test_instantiate_creates_and_publishes_workflow() -> None:
     _, create_kwargs = mock_svc.create_draft.call_args
     assert "trigger_type" not in create_kwargs
     assert "definition" not in create_kwargs
+    assert create_kwargs["name"] == "My Reminder"
+    assert create_kwargs["location_id"] == "loc-1"
+    assert create_kwargs["category"] == "appointment_ops"
     # the template definition must be published as a version
     mock_svc.publish_version.assert_awaited_once()
     published_def = mock_svc.publish_version.call_args.args[1]
     assert published_def == TEMPLATES["appointment-reminder-24h"].definition
+    assert mock_svc.publish_version.call_args.kwargs["content_classification"] == "transactional_care"
+
+
+def test_instantiate_voice_template_without_agent_raises_422() -> None:
+    from fastapi import HTTPException
+
+    user = MagicMock()
+    user.institution_id = "inst-1"
+    user.id = "user-1"
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(instantiate_template("callback-automation", user))
+
+    assert exc_info.value.status_code == 422
 
 
 def test_instantiate_unknown_template_raises_404() -> None:

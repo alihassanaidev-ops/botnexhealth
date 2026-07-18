@@ -109,6 +109,7 @@ export interface SendVoiceNode {
     next_node_id: string
     respect_quiet_hours?: boolean
     max_attempts?: number
+    wait_for_outcome?: boolean
 }
 export interface SendEmailNode {
     type: "send_email"

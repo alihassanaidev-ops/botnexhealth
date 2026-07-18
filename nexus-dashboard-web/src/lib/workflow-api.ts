@@ -16,6 +16,40 @@ import type {
 } from "@/types/workflow"
 
 /** Response of `GET /automation/templates` (definition is the Plan-01 shape). */
+export interface CampaignTemplateFrequencyCap {
+    max_per_day: number
+    max_per_rolling_7_days: number
+}
+
+export interface CampaignTemplateSetupField {
+    id: string
+    label: string
+    type: "location" | "select" | "text"
+    required?: boolean
+    default?: string
+    placeholder?: string
+    options?: string[]
+}
+
+export interface CampaignTemplateMetadata {
+    category: string
+    goal: string
+    outcome_labels: string[]
+    supported_channels: string[]
+    required_readiness_checks: string[]
+    required_merge_fields: string[]
+    default_compliance_content_class: string
+    default_audience: string
+    default_eligibility_rules: string[]
+    default_frequency_cap: CampaignTemplateFrequencyCap
+    default_staff_handoff_reason: string | null
+    analytics_outcome_map: Record<string, string>
+    sample_preview_context: Record<string, unknown>
+    setup_fields: CampaignTemplateSetupField[]
+    copy_variants: { id: string; label: string }[]
+    pms_capability_requirements: string[]
+}
+
 export interface CampaignTemplate {
     id: string
     name: string
@@ -23,6 +57,8 @@ export interface CampaignTemplate {
     trigger_type: string
     definition: WorkflowDefinition
     tags: string[]
+    category: string
+    metadata: CampaignTemplateMetadata
 }
 
 // ---- Workflows ----
@@ -190,22 +226,24 @@ export async function getTemplate(id: string): Promise<CampaignTemplate> {
     return data
 }
 
-/**
- * Clone a template into a new workflow.
- *
- * NOTE (limitation): the backend `POST /automation/templates/{id}/instantiate`
- * endpoint is broken (TPL-01/02 — `create_draft` signature mismatch + never persists
- * a version). We therefore clone via the working create endpoint: fetch the template
- * definition and `POST /automation/workflows`. When instantiate is fixed this can call
- * it directly with no consumer change.
- */
+/** Clone a template into a new workflow through the guided instantiate endpoint. */
 export async function createWorkflowFromTemplate(
     templateId: string,
     name?: string,
+    setup?: {
+        locationId?: string | null
+        voiceAgentId?: string | null
+        setupOptions?: Record<string, unknown>
+    },
 ): Promise<AutomationWorkflow> {
-    const template = await getTemplate(templateId)
-    return createWorkflow({
-        name: name?.trim() || template.name,
-        definition: template.definition,
-    })
+    const body: Record<string, unknown> = {}
+    if (name?.trim()) body.name = name.trim()
+    if (setup?.locationId) body.location_id = setup.locationId
+    if (setup?.voiceAgentId?.trim()) body.voice_agent_id = setup.voiceAgentId.trim()
+    if (setup?.setupOptions) body.setup_options = setup.setupOptions
+    const { data } = await api.post<AutomationWorkflow>(
+        `/automation/templates/${templateId}/instantiate`,
+        body,
+    )
+    return data
 }

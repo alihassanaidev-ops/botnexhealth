@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.app.api.deps import (
     get_current_institution_or_location_admin,
@@ -17,6 +18,7 @@ from src.app.models.user import User
 from src.app.services.automation.campaign_templates import (
     CampaignTemplate,
     get_template,
+    instantiate_definition,
     list_templates,
 )
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
@@ -39,6 +41,8 @@ class CampaignTemplateResponse(BaseModel):
     trigger_type: str
     definition: dict[str, Any]
     tags: list[str]
+    category: str
+    metadata: dict[str, Any]
 
     @classmethod
     def from_template(cls, t: CampaignTemplate) -> "CampaignTemplateResponse":
@@ -49,7 +53,16 @@ class CampaignTemplateResponse(BaseModel):
             trigger_type=t.trigger_type,
             definition=t.definition,
             tags=t.tags,
+            category=t.category,
+            metadata=asdict(t.metadata),
         )
+
+
+class CampaignTemplateInstantiateRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    location_id: str | None = None
+    voice_agent_id: str | None = Field(None, max_length=255)
+    setup_options: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +98,7 @@ async def get_campaign_template(
 async def instantiate_template(
     template_id: str,
     current_user: _InstitutionAdmin,
+    data: CampaignTemplateInstantiateRequest | None = None,
 ) -> WorkflowResponse:
     """Instantiate a campaign template as a new workflow.
 
@@ -102,17 +116,30 @@ async def instantiate_template(
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
 
+    data = data or CampaignTemplateInstantiateRequest()
+    try:
+        definition = instantiate_definition(template, voice_agent_id=data.voice_agent_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
     user_id = str(current_user.id) if getattr(current_user, "id", None) else None
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
         wf = await svc.create_draft(
             institution_id=str(current_user.institution_id),
-            name=template.name,
+            name=(data.name.strip() if data.name else template.name),
+            location_id=data.location_id,
+            description=template.description,
+            category=template.category,
             created_by_user_id=user_id,
         )
         await svc.publish_version(
             wf,
-            template.definition,
+            definition,
+            content_classification=template.metadata.default_compliance_content_class,
             published_by_user_id=user_id,
         )
         return WorkflowResponse.from_model(wf)
