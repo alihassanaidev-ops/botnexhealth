@@ -1,4 +1,4 @@
-import ELK, { type ElkNode } from "elkjs"
+import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js"
 import {
     TRIGGER_NODE_ID,
     autoLayoutDefinition,

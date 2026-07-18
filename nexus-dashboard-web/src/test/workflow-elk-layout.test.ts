@@ -3,7 +3,7 @@ import type { WorkflowDefinition } from "@/types/workflow"
 
 const layoutMock = vi.fn()
 
-vi.mock("elkjs", () => ({
+vi.mock("elkjs/lib/elk.bundled.js", () => ({
     default: vi.fn().mockImplementation(function ElkMock() {
         return { layout: layoutMock }
     }),
