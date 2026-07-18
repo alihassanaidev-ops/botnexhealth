@@ -6,9 +6,11 @@ import {
     ArrowLeft,
     Ban,
     BarChart3,
+    CalendarDays,
     CheckCircle2,
     Clock3,
     DollarSign,
+    Filter,
     Hash,
     Loader2,
     Mail,
@@ -21,6 +23,7 @@ import {
     ShieldAlert,
     TrendingUp,
     UserPlus,
+    Users,
     XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -28,6 +31,7 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
     Dialog,
     DialogContent,
@@ -56,8 +60,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
     archiveCampaign,
     cancelCampaignRun,
+    enrollCampaignAudience,
     enrollContactInCampaign,
     emergencyHaltCampaign,
+    getCampaignAudience,
     getCampaignAnalytics,
     getCampaign,
     getCampaignOperations,
@@ -67,7 +73,9 @@ import {
     getUsageSummary,
     listCampaignRuns,
     pauseCampaign,
+    previewCampaignAudience,
     resumeCampaign,
+    saveCampaignAudience,
 } from "@/lib/automation-api"
 import { listContacts, type ContactListItem } from "@/lib/contacts-api"
 import { cn } from "@/lib/utils"
@@ -75,6 +83,9 @@ import type {
     AutomationWorkflow,
     AutomationWorkflowRun,
     CampaignAnalytics,
+    CampaignAudienceExclusions,
+    CampaignAudienceFilters,
+    CampaignAudiencePreview,
     CampaignOperationItem,
     CampaignOperations,
     CampaignOverview,
@@ -114,6 +125,28 @@ const CHANNEL_LABELS: Record<string, string> = {
     sms: "SMS",
     email: "Email",
     voice: "Voice",
+}
+
+const DEFAULT_AUDIENCE_FILTERS: CampaignAudienceFilters = {
+    has_no_future_appointment: false,
+    recall_due_before: null,
+    last_visit_before: null,
+    appointment_type_id_in: [],
+    provider_id_in: [],
+    location_id_in: [],
+    preferred_language_in: [],
+    contact_channel_available: [],
+}
+
+const DEFAULT_AUDIENCE_EXCLUSIONS: CampaignAudienceExclusions = {
+    no_consent: true,
+    do_not_contact: true,
+    suppressed: true,
+    contacted_within_days: 1,
+    max_contacts_per_rolling_7_days: 3,
+    already_enrolled_active: true,
+    already_booked: true,
+    missing_required_merge_context: true,
 }
 
 function fmt(iso: string | null): string {
@@ -158,6 +191,17 @@ function percent(value: number | null | undefined): string {
 function label(value: string | null | undefined): string {
     if (!value) return "-"
     return value.replace(/_/g, " ")
+}
+
+function csv(value: string[] | undefined): string {
+    return (value ?? []).join(", ")
+}
+
+function fromCsv(value: string): string[] {
+    return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
 }
 
 function isCancelable(run: Pick<CampaignRunListItem, "status">): boolean {
@@ -682,6 +726,292 @@ function OperationRow({
     )
 }
 
+function AudienceTab({ campaign }: { campaign: AutomationWorkflow | null }) {
+    const [filters, setFilters] = useState<CampaignAudienceFilters>(DEFAULT_AUDIENCE_FILTERS)
+    const [exclusions, setExclusions] = useState<CampaignAudienceExclusions>(DEFAULT_AUDIENCE_EXCLUSIONS)
+    const [preview, setPreview] = useState<CampaignAudiencePreview | null>(null)
+    const [loading, setLoading] = useState(false)
+    const [saving, setSaving] = useState(false)
+    const [enrolling, setEnrolling] = useState(false)
+
+    useEffect(() => {
+        let cancelled = false
+        async function load() {
+            if (!campaign) return
+            setLoading(true)
+            try {
+                const definition = await getCampaignAudience(campaign.id)
+                if (cancelled) return
+                setFilters({ ...DEFAULT_AUDIENCE_FILTERS, ...definition.segment })
+                setExclusions({ ...DEFAULT_AUDIENCE_EXCLUSIONS, ...definition.exclusions })
+            } catch {
+                if (!cancelled) toast.error("Failed to load audience")
+            } finally {
+                if (!cancelled) setLoading(false)
+            }
+        }
+        load()
+        return () => {
+            cancelled = true
+        }
+    }, [campaign])
+
+    if (!campaign) {
+        return <Card><CardContent className="p-6 text-sm text-muted-foreground">Campaign not found.</CardContent></Card>
+    }
+    const activeCampaign = campaign
+
+    const patchFilters = (patch: CampaignAudienceFilters) => {
+        setFilters((current) => ({ ...current, ...patch }))
+        setPreview(null)
+    }
+    const patchExclusions = (patch: CampaignAudienceExclusions) => {
+        setExclusions((current) => ({ ...current, ...patch }))
+        setPreview(null)
+    }
+    const channelSet = new Set(filters.contact_channel_available ?? [])
+    const reasons = Object.entries(preview?.counts_by_reason ?? {}).sort((a, b) => b[1] - a[1])
+
+    async function handleSave() {
+        setSaving(true)
+        try {
+            await saveCampaignAudience(activeCampaign.id, { filters, exclusions })
+            toast.success("Audience saved")
+        } catch {
+            toast.error("Failed to save audience")
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    async function handlePreview() {
+        setLoading(true)
+        try {
+            setPreview(await previewCampaignAudience(activeCampaign.id, { filters, exclusions, sample_limit: 40 }))
+        } catch {
+            toast.error("Failed to preview audience")
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    async function handleEnroll() {
+        if (!preview) return
+        setEnrolling(true)
+        try {
+            const result = await enrollCampaignAudience(activeCampaign.id, {
+                preview_id: preview.preview_id,
+                max_enrollments: 500,
+            })
+            toast.success(`${number(result.enqueued)} patient${result.enqueued === 1 ? "" : "s"} queued`)
+            setPreview(await previewCampaignAudience(activeCampaign.id, { filters, exclusions, sample_limit: 40 }))
+        } catch {
+            toast.error("Audience enrollment is blocked")
+        } finally {
+            setEnrolling(false)
+        }
+    }
+
+    return (
+        <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+                <Stat icon={<Users className="h-3.5 w-3.5" />} label="Included" value={number(preview?.included_count)} tone="text-emerald-600" />
+                <Stat icon={<Ban className="h-3.5 w-3.5" />} label="Excluded" value={number(preview?.excluded_count)} tone="text-red-600" />
+                <Stat icon={<Hash className="h-3.5 w-3.5" />} label="Candidates" value={number(preview?.total_candidates)} />
+                <Stat icon={<CalendarDays className="h-3.5 w-3.5" />} label="Preview expires" value={preview ? fmt(preview.expires_at) : "-"} />
+            </div>
+
+            <Card>
+                <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                        <Filter className="h-4 w-4" />
+                        Audience
+                    </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                    <div className="grid gap-3 md:grid-cols-3">
+                        <label className="space-y-1.5 text-sm">
+                            <span className="text-xs font-medium text-muted-foreground">Recall due before</span>
+                            <Input
+                                type="date"
+                                value={filters.recall_due_before ?? ""}
+                                onChange={(event) => patchFilters({ recall_due_before: event.target.value || null })}
+                            />
+                        </label>
+                        <label className="space-y-1.5 text-sm">
+                            <span className="text-xs font-medium text-muted-foreground">Last visit before</span>
+                            <Input
+                                type="date"
+                                value={filters.last_visit_before ?? ""}
+                                onChange={(event) => patchFilters({ last_visit_before: event.target.value || null })}
+                            />
+                        </label>
+                        <label className="space-y-1.5 text-sm">
+                            <span className="text-xs font-medium text-muted-foreground">Contacted within days</span>
+                            <Input
+                                type="number"
+                                min={0}
+                                max={365}
+                                value={exclusions.contacted_within_days ?? ""}
+                                onChange={(event) => patchExclusions({ contacted_within_days: event.target.value === "" ? null : Number(event.target.value) })}
+                            />
+                        </label>
+                        <label className="space-y-1.5 text-sm">
+                            <span className="text-xs font-medium text-muted-foreground">Appointment type IDs</span>
+                            <Input
+                                value={csv(filters.appointment_type_id_in)}
+                                onChange={(event) => patchFilters({ appointment_type_id_in: fromCsv(event.target.value) })}
+                                placeholder="type-1, type-2"
+                            />
+                        </label>
+                        <label className="space-y-1.5 text-sm">
+                            <span className="text-xs font-medium text-muted-foreground">Provider IDs</span>
+                            <Input
+                                value={csv(filters.provider_id_in)}
+                                onChange={(event) => patchFilters({ provider_id_in: fromCsv(event.target.value) })}
+                                placeholder="provider-1"
+                            />
+                        </label>
+                        <label className="space-y-1.5 text-sm">
+                            <span className="text-xs font-medium text-muted-foreground">Location IDs</span>
+                            <Input
+                                value={csv(filters.location_id_in)}
+                                onChange={(event) => patchFilters({ location_id_in: fromCsv(event.target.value) })}
+                                placeholder="location-1"
+                            />
+                        </label>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="space-y-3">
+                            <p className="text-xs font-medium text-muted-foreground">Filters</p>
+                            <CheckRow
+                                label="No future appointment"
+                                checked={Boolean(filters.has_no_future_appointment)}
+                                onChecked={(checked) => patchFilters({ has_no_future_appointment: checked })}
+                            />
+                            <div className="flex flex-wrap gap-3">
+                                {(["sms", "email", "voice"] as const).map((channel) => (
+                                    <CheckRow
+                                        key={channel}
+                                        label={`${CHANNEL_LABELS[channel]} available`}
+                                        checked={channelSet.has(channel)}
+                                        onChecked={(checked) => {
+                                            const next = new Set(channelSet)
+                                            if (checked) next.add(channel)
+                                            else next.delete(channel)
+                                            patchFilters({ contact_channel_available: Array.from(next) })
+                                        }}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                        <div className="space-y-3">
+                            <p className="text-xs font-medium text-muted-foreground">Exclusions</p>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                                <CheckRow label="No consent" checked={Boolean(exclusions.no_consent)} onChecked={(checked) => patchExclusions({ no_consent: checked })} />
+                                <CheckRow label="Do not contact" checked={Boolean(exclusions.do_not_contact)} onChecked={(checked) => patchExclusions({ do_not_contact: checked })} />
+                                <CheckRow label="Suppressed" checked={Boolean(exclusions.suppressed)} onChecked={(checked) => patchExclusions({ suppressed: checked })} />
+                                <CheckRow label="Already enrolled" checked={Boolean(exclusions.already_enrolled_active)} onChecked={(checked) => patchExclusions({ already_enrolled_active: checked })} />
+                                <CheckRow label="Already booked" checked={Boolean(exclusions.already_booked)} onChecked={(checked) => patchExclusions({ already_booked: checked })} />
+                                <CheckRow label="Missing context" checked={Boolean(exclusions.missing_required_merge_context)} onChecked={(checked) => patchExclusions({ missing_required_merge_context: checked })} />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap justify-end gap-2">
+                        <Button variant="outline" onClick={handleSave} disabled={saving || loading}>
+                            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Save
+                        </Button>
+                        <Button variant="outline" onClick={handlePreview} disabled={loading || saving}>
+                            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Preview
+                        </Button>
+                        <Button onClick={handleEnroll} disabled={!preview || preview.included_count === 0 || activeCampaign.status !== "active" || enrolling}>
+                            {enrolling && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Enroll preview
+                        </Button>
+                    </div>
+                </CardContent>
+            </Card>
+
+            {preview && (
+                <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
+                    <Card>
+                        <CardHeader className="pb-3">
+                            <CardTitle className="text-base font-semibold">Exclusions</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            {reasons.length ? (
+                                <ul className="space-y-2">
+                                    {reasons.map(([reason, count]) => (
+                                        <li key={reason} className="flex items-center justify-between gap-3 text-sm">
+                                            <span className="capitalize text-muted-foreground">{label(reason)}</span>
+                                            <span className="font-medium tabular-nums">{number(count)}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <p className="text-sm text-muted-foreground">No exclusions in the latest preview.</p>
+                            )}
+                            {preview.warnings.length > 0 && (
+                                <div className="mt-4 space-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
+                                    {preview.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="pb-3">
+                            <CardTitle className="text-base font-semibold">Sample patients</CardTitle>
+                        </CardHeader>
+                        <CardContent className="p-0">
+                            {preview.samples.length === 0 ? (
+                                <p className="p-6 text-sm text-muted-foreground">No sample rows returned.</p>
+                            ) : (
+                                <ul className="divide-y divide-border">
+                                    {preview.samples.map((sample) => (
+                                        <li key={`${sample.status}:${sample.contact_id}`} className="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_140px_190px] sm:items-center">
+                                            <div className="min-w-0">
+                                                <p className="truncate text-sm font-medium">{sample.display_name ?? "Unnamed patient"}</p>
+                                                <p className="text-xs text-muted-foreground">{sample.phone_masked ?? sample.email_masked ?? "No channel on file"}</p>
+                                            </div>
+                                            <Badge variant="outline" className={cn("w-fit capitalize", sample.status === "included" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}>
+                                                {sample.status}
+                                            </Badge>
+                                            <span className="text-xs capitalize text-muted-foreground">
+                                                {sample.reasons.length ? sample.reasons.map(label).join(", ") : "Ready"}
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
+        </div>
+    )
+}
+
+function CheckRow({
+    label: text,
+    checked,
+    onChecked,
+}: {
+    label: string
+    checked: boolean
+    onChecked: (checked: boolean) => void
+}) {
+    return (
+        <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={checked} onCheckedChange={(value) => onChecked(value === true)} />
+            <span>{text}</span>
+        </label>
+    )
+}
+
 function AnalyticsTab({
     analytics,
     loading,
@@ -1173,6 +1503,7 @@ export default function CampaignDetail() {
             <Tabs defaultValue="overview" className="space-y-4">
                 <TabsList>
                     <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="audience">Audience</TabsTrigger>
                     <TabsTrigger value="runs">Runs</TabsTrigger>
                     <TabsTrigger value="operations">Operations</TabsTrigger>
                     <TabsTrigger value="analytics">Analytics</TabsTrigger>
@@ -1184,6 +1515,9 @@ export default function CampaignDetail() {
                         campaignUsage={campaignUsage}
                         loading={loading}
                     />
+                </TabsContent>
+                <TabsContent value="audience">
+                    <AudienceTab campaign={campaign} />
                 </TabsContent>
                 <TabsContent value="runs">
                     <RunsTab

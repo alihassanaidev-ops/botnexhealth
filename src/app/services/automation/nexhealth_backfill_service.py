@@ -219,6 +219,8 @@ class NexHealthAppointmentSyncService:
             start_time=start_time,
             event=f"appointment.{mode}",
             cancelled=cancelled,
+            provider_id=_provider_id(appointment),
+            appointment_type_id=_appointment_type_id(appointment),
         )
 
         cancelled_runs = 0
@@ -288,6 +290,20 @@ def _patient_id(appt: dict[str, Any]) -> str | None:
     value = appt.get("patient_id")
     if value is None and isinstance(appt.get("patient"), dict):
         value = appt["patient"].get("id")
+    return str(value) if value not in (None, "") else None
+
+
+def _provider_id(appt: dict[str, Any]) -> str | None:
+    value = appt.get("provider_id")
+    if value is None and isinstance(appt.get("provider"), dict):
+        value = appt["provider"].get("id")
+    return str(value) if value not in (None, "") else None
+
+
+def _appointment_type_id(appt: dict[str, Any]) -> str | None:
+    value = appt.get("appointment_type_id")
+    if value is None and isinstance(appt.get("appointment_type"), dict):
+        value = appt["appointment_type"].get("id")
     return str(value) if value not in (None, "") else None
 
 

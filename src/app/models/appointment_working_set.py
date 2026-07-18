@@ -69,6 +69,8 @@ class AppointmentWorkingSet(Base):
         ForeignKey("contacts.id", ondelete="SET NULL"),
         nullable=True,
     )
+    provider_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    appointment_type_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
 
     # Scheduling state we compare against to detect a reschedule.
     start_time: Mapped[datetime | None] = mapped_column(

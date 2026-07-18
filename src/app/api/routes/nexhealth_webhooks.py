@@ -162,6 +162,10 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     nexhealth_patient_id: str | None = (
         str(appt["patient_id"]) if appt.get("patient_id") else None
     )
+    provider_id: str | None = str(appt["provider_id"]) if appt.get("provider_id") else None
+    appointment_type_id: str | None = (
+        str(appt["appointment_type_id"]) if appt.get("appointment_type_id") else None
+    )
     is_cancelled = _appointment_is_cancelled(event, appt)
 
     # location_id + id are always required; start_time only for the enroll path
@@ -253,6 +257,8 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
             start_time=start_time,
             event=event,
             cancelled=is_cancelled,
+            provider_id=provider_id,
+            appointment_type_id=appointment_type_id,
         )
         change = upsert.change
         await proj.complete_event(institution_id=institution_id, dedup_key=dedup_key)

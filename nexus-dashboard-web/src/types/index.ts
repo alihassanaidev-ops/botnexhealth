@@ -748,6 +748,73 @@ export interface CampaignOperations {
     generated_at: string;
 }
 
+export interface CampaignAudienceFilters {
+    has_no_future_appointment?: boolean;
+    recall_due_before?: string | null;
+    last_visit_before?: string | null;
+    appointment_type_id_in?: string[];
+    provider_id_in?: string[];
+    location_id_in?: string[];
+    preferred_language_in?: string[];
+    contact_channel_available?: Array<"sms" | "email" | "voice">;
+}
+
+export interface CampaignAudienceExclusions {
+    no_consent?: boolean;
+    do_not_contact?: boolean;
+    suppressed?: boolean;
+    contacted_within_days?: number | null;
+    max_contacts_per_rolling_7_days?: number | null;
+    already_enrolled_active?: boolean;
+    already_booked?: boolean;
+    missing_required_merge_context?: boolean;
+}
+
+export interface CampaignAudienceDefinition {
+    workflow_id: string;
+    location_id: string | null;
+    segment: CampaignAudienceFilters;
+    exclusions: CampaignAudienceExclusions;
+    persisted: boolean;
+    updated_at: string | null;
+}
+
+export interface CampaignAudienceSample {
+    contact_id: string;
+    display_name: string | null;
+    phone_masked: string | null;
+    email_masked: string | null;
+    status: "included" | "excluded";
+    reasons: string[];
+}
+
+export interface CampaignAudiencePreview {
+    preview_id: string;
+    workflow_id: string;
+    workflow_version_id: string | null;
+    location_id: string | null;
+    segment: CampaignAudienceFilters;
+    exclusions: CampaignAudienceExclusions;
+    total_candidates: number;
+    included_count: number;
+    excluded_count: number;
+    counts_by_reason: Record<string, number>;
+    samples: CampaignAudienceSample[];
+    warnings: string[];
+    estimate_basis: string;
+    generated_at: string;
+    expires_at: string;
+}
+
+export interface CampaignAudienceEnrollResult {
+    workflow_id: string;
+    workflow_version_id: string;
+    preview_id: string;
+    enqueued: number;
+    skipped: number;
+    counts_by_reason: Record<string, number>;
+}
+
 export interface ChannelUsage {
     channel: string;
     event_count: number;

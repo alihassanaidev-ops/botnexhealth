@@ -30,6 +30,13 @@ from src.app.services.automation.launch_checklist_service import (
     CampaignLaunchChecklist,
     CampaignLaunchChecklistService,
 )
+from src.app.services.automation.audience_service import (
+    AudienceEnrollResult,
+    AudiencePreviewResult,
+    AudienceSample,
+    AudienceSegment,
+    CampaignAudienceService,
+)
 from src.app.services.automation.campaign_operations_service import (
     CampaignOperationsService,
     RunListFilters,
@@ -304,6 +311,103 @@ class LaunchChecklistResponse(BaseModel):
                 for item in checklist.items
             ],
         )
+
+
+class AudienceDefinitionResponse(BaseModel):
+    workflow_id: str
+    location_id: str | None
+    segment: dict[str, Any]
+    exclusions: dict[str, Any]
+    persisted: bool
+    updated_at: datetime | None = None
+
+
+class AudienceDefinitionRequest(BaseModel):
+    filters: dict[str, Any] = Field(default_factory=dict)
+    exclusions: dict[str, Any] = Field(default_factory=dict)
+
+    def to_segment(self) -> AudienceSegment:
+        return AudienceSegment(filters=self.filters, exclusions=self.exclusions)
+
+
+class AudiencePreviewRequest(AudienceDefinitionRequest):
+    sample_limit: int = Field(default=25, ge=0, le=100)
+
+
+class AudienceSampleResponse(BaseModel):
+    contact_id: str
+    display_name: str | None
+    phone_masked: str | None
+    email_masked: str | None
+    status: Literal["included", "excluded"]
+    reasons: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_service(cls, sample: AudienceSample) -> "AudienceSampleResponse":
+        return cls(**sample.__dict__)
+
+
+class AudiencePreviewResponse(BaseModel):
+    preview_id: str
+    workflow_id: str
+    workflow_version_id: str | None
+    location_id: str | None
+    segment: dict[str, Any]
+    exclusions: dict[str, Any]
+    total_candidates: int
+    included_count: int
+    excluded_count: int
+    counts_by_reason: dict[str, int]
+    samples: list[AudienceSampleResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    estimate_basis: str
+    generated_at: datetime
+    expires_at: datetime
+
+    @classmethod
+    def from_service(cls, preview: AudiencePreviewResult) -> "AudiencePreviewResponse":
+        return cls(
+            preview_id=preview.preview_id,
+            workflow_id=preview.workflow_id,
+            workflow_version_id=preview.workflow_version_id,
+            location_id=preview.location_id,
+            segment=preview.segment,
+            exclusions=preview.exclusions,
+            total_candidates=preview.total_candidates,
+            included_count=preview.included_count,
+            excluded_count=preview.excluded_count,
+            counts_by_reason=preview.counts_by_reason,
+            samples=[AudienceSampleResponse.from_service(sample) for sample in preview.samples],
+            warnings=preview.warnings,
+            estimate_basis=preview.estimate_basis,
+            generated_at=preview.generated_at,
+            expires_at=preview.expires_at,
+        )
+
+
+class AudienceEnrollRequest(BaseModel):
+    preview_id: str | None = None
+    filters: dict[str, Any] | None = None
+    exclusions: dict[str, Any] | None = None
+    max_enrollments: int = Field(default=500, ge=1, le=500)
+
+    def to_segment(self) -> AudienceSegment | None:
+        if self.filters is None and self.exclusions is None:
+            return None
+        return AudienceSegment(filters=self.filters or {}, exclusions=self.exclusions or {})
+
+
+class AudienceEnrollResponse(BaseModel):
+    workflow_id: str
+    workflow_version_id: str
+    preview_id: str
+    enqueued: int
+    skipped: int
+    counts_by_reason: dict[str, int]
+
+    @classmethod
+    def from_service(cls, result: AudienceEnrollResult) -> "AudienceEnrollResponse":
+        return cls(**result.__dict__)
 
 
 class CampaignOverviewResponse(BaseModel):
@@ -894,6 +998,151 @@ async def preview_launch_checklist(
             location_id=data.location_id,
         )
         return LaunchChecklistResponse.from_service(checklist)
+
+
+@router.get("/{workflow_id}/audience", response_model=AudienceDefinitionResponse)
+async def get_audience_definition(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> AudienceDefinitionResponse:
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        row = await CampaignAudienceService(session).get_definition(
+            institution_id=inst_id,
+            workflow_id=workflow_id,
+        )
+        if row is None:
+            segment = AudienceSegment()
+            payload = segment.model_dump(mode="json")
+            return AudienceDefinitionResponse(
+                workflow_id=workflow_id,
+                location_id=str(wf.location_id) if wf.location_id else None,
+                segment=payload["filters"],
+                exclusions=payload["exclusions"],
+                persisted=False,
+            )
+        return AudienceDefinitionResponse(
+            workflow_id=workflow_id,
+            location_id=str(row.location_id) if row.location_id else None,
+            segment=row.segment or {},
+            exclusions=row.exclusions or {},
+            persisted=True,
+            updated_at=row.updated_at,
+        )
+
+
+@router.put("/{workflow_id}/audience", response_model=AudienceDefinitionResponse)
+async def put_audience_definition(
+    workflow_id: str,
+    data: AudienceDefinitionRequest,
+    current_user: _InstitutionAdmin,
+) -> AudienceDefinitionResponse:
+    inst_id = _institution_id(current_user)
+    try:
+        segment = data.to_segment()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        row = await CampaignAudienceService(session).upsert_definition(
+            wf,
+            institution_id=inst_id,
+            segment=segment,
+            actor_user_id=str(current_user.id),
+        )
+        await session.commit()
+        return AudienceDefinitionResponse(
+            workflow_id=workflow_id,
+            location_id=str(row.location_id) if row.location_id else None,
+            segment=row.segment or {},
+            exclusions=row.exclusions or {},
+            persisted=True,
+            updated_at=row.updated_at,
+        )
+
+
+@router.post("/{workflow_id}/audience/preview", response_model=AudiencePreviewResponse)
+async def preview_audience(
+    workflow_id: str,
+    data: AudiencePreviewRequest,
+    current_user: _InstitutionOrLocationAdmin,
+) -> AudiencePreviewResponse:
+    inst_id = _institution_id(current_user)
+    try:
+        segment = data.to_segment()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        preview = await CampaignAudienceService(session).preview(
+            wf,
+            institution_id=inst_id,
+            segment=segment,
+            actor_user_id=str(current_user.id),
+            sample_limit=data.sample_limit,
+        )
+        await session.commit()
+        return AudiencePreviewResponse.from_service(preview)
+
+
+@router.post(
+    "/{workflow_id}/audience/enroll",
+    response_model=AudienceEnrollResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def enroll_audience(
+    workflow_id: str,
+    data: AudienceEnrollRequest,
+    current_user: _InstitutionAdmin,
+) -> AudienceEnrollResponse:
+    inst_id = _institution_id(current_user)
+    try:
+        segment = data.to_segment()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        if wf.status != AutomationWorkflowStatus.ACTIVE.value:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Workflow is not active (status={wf.status})",
+            )
+        if not wf.current_version_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Workflow has no published version",
+            )
+        checklist = await CampaignLaunchChecklistService(session).build(
+            wf,
+            institution_id=inst_id,
+        )
+        if checklist.blockers_count:
+            blockers = [item.id for item in checklist.items if item.status == "blocked"]
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": "Launch checklist has blockers; audience enrollment is disabled.",
+                    "blockers": blockers,
+                },
+            )
+        try:
+            result = await CampaignAudienceService(session).enqueue_enrollment(
+                wf,
+                institution_id=inst_id,
+                segment=segment,
+                actor_user_id=str(current_user.id),
+                preview_id=data.preview_id,
+                max_enrollments=data.max_enrollments,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        await session.commit()
+        return AudienceEnrollResponse.from_service(result)
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)

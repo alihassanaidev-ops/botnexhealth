@@ -25,6 +25,10 @@ from src.app.models.campaign_analytics import (  # noqa: F401 — model registra
     CampaignMetricsDaily,
     CampaignOutcomeDefinition,
 )
+from src.app.models.campaign_audience import (  # noqa: F401 — model registration
+    CampaignAudienceDefinition,
+    CampaignAudiencePreview,
+)
 from src.app.models.inbound_sms_message import (  # noqa: F401 — model registration
     InboundSmsMessage,
 )
@@ -129,6 +133,8 @@ __all__ = [
     "CampaignStaffHandoff",
     "CampaignMetricsDaily",
     "CampaignOutcomeDefinition",
+    "CampaignAudienceDefinition",
+    "CampaignAudiencePreview",
     "CustomFieldDefinition",
     "CustomFieldValue",
     "EntityType",

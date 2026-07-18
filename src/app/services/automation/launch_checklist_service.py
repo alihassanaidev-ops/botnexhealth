@@ -7,6 +7,7 @@ while this report explains the launch state and dependency gaps in one place.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.appointment_working_set import AppointmentWorkingSet
 from src.app.models.automation_workflow import AutomationWorkflow
+from src.app.models.campaign_audience import CampaignAudiencePreview
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.nexhealth_webhook_subscription import (
     NexHealthWebhookSubscription,
@@ -147,7 +149,10 @@ class CampaignLaunchChecklistService:
         )
         items += self._handoff_items(definition)
 
-        audience_status, audience_message = self._audience_status(definition)
+        latest_preview = await self._latest_audience_preview(str(workflow.id))
+        audience_status, audience_message, estimated_audience = self._audience_status(
+            definition, latest_preview
+        )
         items.append(
             CampaignLaunchChecklistItem(
                 id="audience_estimate",
@@ -156,28 +161,45 @@ class CampaignLaunchChecklistService:
                 status=audience_status,
                 message=audience_message,
                 fix_href="/institution-admin/campaigns/audience",
-                metadata={"trigger_type": definition.trigger.type},
+                metadata={
+                    "trigger_type": definition.trigger.type,
+                    "preview_id": str(latest_preview.id) if latest_preview else None,
+                    "included_count": latest_preview.included_count if latest_preview else None,
+                    "excluded_count": latest_preview.excluded_count if latest_preview else None,
+                    "counts_by_reason": latest_preview.counts_by_reason if latest_preview else {},
+                    "expires_at": latest_preview.expires_at.isoformat() if latest_preview else None,
+                },
             )
         )
 
         per_contact = _planned_sends_per_contact(send_nodes)
-        estimated_send_volume: dict[str, int] | None = None
+        estimated_send_volume: dict[str, int] | None = (
+            {channel: count * estimated_audience for channel, count in per_contact.items()}
+            if estimated_audience is not None
+            else None
+        )
         estimated_cost_cents: int | None = None
-        estimate_basis = (
-            "Audience preview is not available yet; showing planned sends per enrolled contact."
+        estimate_basis = ("Audience preview provides the current count; projected cost awaits channel pricing configuration."
+            if estimated_audience is not None
+            else "Audience preview is not available yet; showing planned sends per enrolled contact."
         )
         items.append(
             CampaignLaunchChecklistItem(
                 id="send_volume_cost",
                 section="estimates",
                 label="Estimated send volume and cost",
-                status="unknown",
+                status="warning" if estimated_send_volume is not None else "unknown",
                 message=(
-                    "Exact send volume and projected spend need an audience count. "
+                    f"Previewed audience can attempt {_format_volume(estimated_send_volume)}; projected spend is not configured."
+                    if estimated_send_volume is not None
+                    else "Exact send volume and projected spend need an audience count. "
                     f"Per enrolled contact, this workflow can attempt {_format_volume(per_contact)}."
                 ),
                 fix_href="/institution-admin/campaigns/audience",
-                metadata={"planned_sends_per_contact": per_contact},
+                metadata={
+                    "planned_sends_per_contact": per_contact,
+                    "estimated_send_volume": estimated_send_volume,
+                },
             )
         )
 
@@ -185,7 +207,7 @@ class CampaignLaunchChecklistService:
             workflow=workflow,
             location_id=location_id_text,
             items=items,
-            estimated_audience=None,
+            estimated_audience=estimated_audience,
             estimated_send_volume=estimated_send_volume,
             estimated_cost_cents=estimated_cost_cents,
             estimate_basis=estimate_basis,
@@ -591,22 +613,64 @@ class CampaignLaunchChecklistService:
         ]
 
     @staticmethod
-    def _audience_status(definition: WorkflowDefinition) -> tuple[ChecklistStatus, str]:
+    def _audience_status(
+        definition: WorkflowDefinition,
+        latest_preview: CampaignAudiencePreview | None,
+    ) -> tuple[ChecklistStatus, str, int | None]:
+        if latest_preview is not None:
+            if latest_preview.included_count > 0:
+                return (
+                    "pass",
+                    (
+                        f"Latest preview includes {latest_preview.included_count} patient(s) "
+                        f"and excludes {latest_preview.excluded_count}."
+                    ),
+                    latest_preview.included_count,
+                )
+            return (
+                "warning",
+                f"Latest preview has no included patients and excludes {latest_preview.excluded_count}.",
+                0,
+            )
         trigger_type = definition.trigger.type
         if trigger_type in _BROAD_TRIGGER_TYPES:
             return (
                 "blocked",
                 "Broad campaign audience size is unknown until audience preview is available.",
+                None,
             )
         if trigger_type in {"manual", "bulk_import"}:
             return (
                 "warning",
                 "Audience is selected at enrollment/import time; preview exclusions are not available yet.",
+                None,
             )
         return (
             "unknown",
             "This event-triggered campaign has no fixed audience before matching events arrive.",
+            None,
         )
+
+    async def _latest_audience_preview(self, workflow_id: str) -> CampaignAudiencePreview | None:
+        try:
+            result = await self.session.execute(
+                select(CampaignAudiencePreview)
+                .where(
+                    CampaignAudiencePreview.workflow_id == workflow_id,
+                    CampaignAudiencePreview.expires_at > datetime.now(timezone.utc),
+                )
+                .order_by(CampaignAudiencePreview.created_at.desc())
+                .limit(1)
+            )
+        except StopAsyncIteration:
+            return None
+        preview = result.scalar_one_or_none()
+        if inspect.isawaitable(preview):
+            close = getattr(preview, "close", None)
+            if callable(close):
+                close()
+            return None
+        return preview
 
     async def _subscription(
         self, institution_id: str, location_id: str

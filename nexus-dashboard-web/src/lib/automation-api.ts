@@ -3,6 +3,11 @@ import type {
     AutomationWorkflow,
     CampaignAnalytics,
     AutomationWorkflowRun,
+    CampaignAudienceDefinition,
+    CampaignAudienceEnrollResult,
+    CampaignAudienceExclusions,
+    CampaignAudienceFilters,
+    CampaignAudiencePreview,
     CampaignOperations,
     CampaignOverview,
     CampaignRunFilters,
@@ -90,6 +95,60 @@ export async function getRunTimeline(
 export async function getCampaignOperations(workflowId: string): Promise<CampaignOperations> {
     const { data } = await api.get<CampaignOperations>(
         `/automation/workflows/${workflowId}/operations`,
+    )
+    return data
+}
+
+export async function getCampaignAudience(
+    workflowId: string,
+): Promise<CampaignAudienceDefinition> {
+    const { data } = await api.get<CampaignAudienceDefinition>(
+        `/automation/workflows/${workflowId}/audience`,
+    )
+    return data
+}
+
+export async function saveCampaignAudience(
+    workflowId: string,
+    payload: {
+        filters: CampaignAudienceFilters
+        exclusions: CampaignAudienceExclusions
+    },
+): Promise<CampaignAudienceDefinition> {
+    const { data } = await api.put<CampaignAudienceDefinition>(
+        `/automation/workflows/${workflowId}/audience`,
+        payload,
+    )
+    return data
+}
+
+export async function previewCampaignAudience(
+    workflowId: string,
+    payload: {
+        filters: CampaignAudienceFilters
+        exclusions: CampaignAudienceExclusions
+        sample_limit?: number
+    },
+): Promise<CampaignAudiencePreview> {
+    const { data } = await api.post<CampaignAudiencePreview>(
+        `/automation/workflows/${workflowId}/audience/preview`,
+        payload,
+    )
+    return data
+}
+
+export async function enrollCampaignAudience(
+    workflowId: string,
+    payload: {
+        preview_id?: string | null
+        filters?: CampaignAudienceFilters
+        exclusions?: CampaignAudienceExclusions
+        max_enrollments?: number
+    },
+): Promise<CampaignAudienceEnrollResult> {
+    const { data } = await api.post<CampaignAudienceEnrollResult>(
+        `/automation/workflows/${workflowId}/audience/enroll`,
+        payload,
     )
     return data
 }

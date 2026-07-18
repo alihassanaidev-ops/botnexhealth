@@ -154,6 +154,8 @@ class NexHealthProjectionService:
         start_time: str | None,
         event: str,
         cancelled: bool,
+        provider_id: str | None = None,
+        appointment_type_id: str | None = None,
     ) -> UpsertResult:
         """UPSERT the projection row and classify the change vs the stored state."""
         incoming_start = _parse_dt(start_time)
@@ -178,6 +180,8 @@ class NexHealthProjectionService:
                 nexhealth_appointment_id=appointment_id,
                 nexhealth_patient_id=nexhealth_patient_id,
                 contact_id=contact_id,
+                provider_id=provider_id,
+                appointment_type_id=appointment_type_id,
                 start_time=incoming_start,
                 status=new_status,
                 last_event=event,
@@ -194,6 +198,8 @@ class NexHealthProjectionService:
         row.location_id = location_id or row.location_id
         row.nexhealth_patient_id = nexhealth_patient_id or row.nexhealth_patient_id
         row.contact_id = contact_id or row.contact_id
+        row.provider_id = provider_id or getattr(row, "provider_id", None)
+        row.appointment_type_id = appointment_type_id or getattr(row, "appointment_type_id", None)
         row.last_event = event
         row.last_synced_at = now
         row.updated_at = now
