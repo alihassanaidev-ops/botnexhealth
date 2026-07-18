@@ -26,8 +26,8 @@ from src.app.services.automation.definition_service import AutomationWorkflowDef
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.content_compliance_validator import ContentComplianceValidator
 from src.app.services.automation.dry_run import simulate_run
+from src.app.services.automation.merge_field_catalog import fields_for
 from src.app.services.automation.validation_service import WorkflowValidationService
-from src.app.services.automation.template_renderer import STATIC_MERGE_FIELDS
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.step_dispatcher import build_dispatcher
 
@@ -170,6 +170,11 @@ class MergeFieldResponse(BaseModel):
     description: str
     sample: str
     group: str
+    availability: str
+    requires: list[str] = Field(default_factory=list)
+    phi_level: str
+    channels: list[str] = Field(default_factory=list)
+    trigger_types: list[str] = Field(default_factory=list)
 
 
 class ChannelReadinessDetail(BaseModel):
@@ -359,13 +364,14 @@ async def list_workflows(current_user: _InstitutionAdmin) -> list[WorkflowRespon
 @router.get("/merge-fields", response_model=list[MergeFieldResponse])
 async def list_merge_fields(
     current_user: _InstitutionOrLocationAdmin,
+    trigger_type: Annotated[str | None, Query()] = None,
+    channel: Annotated[str | None, Query()] = None,
+    include_unavailable: Annotated[bool, Query()] = False,
 ) -> list[MergeFieldResponse]:
-    """Return the catalog of static merge fields the message renderer substitutes.
+    """Return the merge-field catalog the message renderer substitutes.
 
-    Sourced from the renderer's own ``STATIC_MERGE_FIELDS`` (single source of
-    truth) so the builder's insert-field menu can never advertise a token the
-    engine won't fill. Campaign/trigger-context values are additionally
-    substitutable at runtime but are dynamic and not enumerated here.
+    Sourced from the backend catalog so the builder's insert-field menu can
+    filter by trigger/channel without drifting from render semantics.
 
     NOTE: declared before ``/{workflow_id}`` so this literal path is not
     captured as a workflow id by the parameterised route.
@@ -373,13 +379,22 @@ async def list_merge_fields(
     return [
         MergeFieldResponse(
             name=f.name,
-            token="{{" + f.name + "}}",
+            token=f.token,
             label=f.label,
             description=f.description,
             sample=f.sample,
             group=f.group,
+            availability=f.availability,
+            requires=list(f.requires),
+            phi_level=f.phi_level,
+            channels=list(f.channels),
+            trigger_types=list(f.triggers),
         )
-        for f in STATIC_MERGE_FIELDS
+        for f in fields_for(
+            trigger_type=trigger_type,
+            channel=channel,
+            include_unavailable=include_unavailable,
+        )
     ]
 
 

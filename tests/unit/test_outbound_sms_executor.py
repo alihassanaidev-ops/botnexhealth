@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from src.app.services.automation.definition_schema import SendSmsNode
 from src.app.services.automation.template_renderer import render_sms_body
 
@@ -61,6 +59,22 @@ def test_render_context_passthrough():
         "Appt on {{appointment_date}}", None, None, {"appointment_date": "July 10"}
     )
     assert result == "Appt on July 10"
+
+
+def test_render_nested_appointment_context():
+    result = render_sms_body(
+        "Hi {{patient_first_name}}, {{provider_name}} sees you {{appointment_date}} at {{appointment_time}}.",
+        None,
+        None,
+        {
+            "patient_first_name": "Sam",
+            "appointment": {
+                "start_time": "2026-07-22T14:00:00+00:00",
+                "provider_name": "Dr. Smith",
+            },
+        },
+    )
+    assert result == "Hi Sam, Dr. Smith sees you July 22, 2026 at 2:00 PM."
 
 
 def test_render_unknown_var_becomes_blank():

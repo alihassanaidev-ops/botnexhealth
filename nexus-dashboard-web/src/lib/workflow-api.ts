@@ -134,9 +134,18 @@ export async function getChannelReadiness(locationId: string): Promise<ChannelRe
 }
 
 /** The catalog of merge tokens the engine can resolve (`GET .../merge-fields`). */
-export async function listMergeFields(): Promise<MergeFieldCatalogItem[]> {
+export async function listMergeFields(opts?: {
+    triggerType?: string
+    channel?: "sms" | "email" | "voice"
+    includeUnavailable?: boolean
+}): Promise<MergeFieldCatalogItem[]> {
+    const params = new URLSearchParams()
+    if (opts?.triggerType) params.set("trigger_type", opts.triggerType)
+    if (opts?.channel) params.set("channel", opts.channel)
+    if (opts?.includeUnavailable) params.set("include_unavailable", "true")
+    const query = params.toString()
     const { data } = await api.get<MergeFieldCatalogItem[]>(
-        "/automation/workflows/merge-fields",
+        `/automation/workflows/merge-fields${query ? `?${query}` : ""}`,
     )
     return data
 }

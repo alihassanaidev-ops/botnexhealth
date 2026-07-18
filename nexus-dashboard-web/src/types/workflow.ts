@@ -18,6 +18,7 @@ export type TriggerType =
     | "recall_scan"
     | "manual"
     | "bulk_import"
+    | "callback_requested"
 
 export interface AppointmentOffsetTrigger {
     type: "appointment_offset"
@@ -36,12 +37,16 @@ export interface ManualTrigger {
 export interface BulkImportTrigger {
     type: "bulk_import"
 }
+export interface CallbackRequestedTrigger {
+    type: "callback_requested"
+}
 
 export type WorkflowTrigger =
     | AppointmentOffsetTrigger
     | RecallScanTrigger
     | ManualTrigger
     | BulkImportTrigger
+    | CallbackRequestedTrigger
 
 // ---------------------------------------------------------------------------
 // Wait delay (discriminated on `delay_type`)
@@ -249,6 +254,14 @@ export interface MergeField {
     token: string
     label: string
     sample: string
+    name?: string
+    description?: string
+    group?: string
+    availability?: "required_context" | "optional_context" | "derived"
+    requires?: string[]
+    phi_level?: "none" | "low" | "medium" | "high"
+    channels?: Array<"sms" | "email" | "voice">
+    trigger_types?: TriggerType[]
 }
 
 export interface MergeFieldCatalogItem {
@@ -258,6 +271,11 @@ export interface MergeFieldCatalogItem {
     description: string
     sample: string
     group: string
+    availability: "required_context" | "optional_context" | "derived"
+    requires: string[]
+    phi_level: "none" | "low" | "medium" | "high"
+    channels: Array<"sms" | "email" | "voice">
+    trigger_types: TriggerType[]
 }
 
 // ---------------------------------------------------------------------------

@@ -24,7 +24,9 @@ import { Switch } from "@/components/ui/switch"
 import {
     Select,
     SelectContent,
+    SelectGroup,
     SelectItem,
+    SelectLabel,
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
@@ -147,6 +149,11 @@ function TriggerForm({
                         No timing configuration — contacts are enrolled manually or by import.
                     </p>
                 )}
+                {trigger.type === "callback_requested" && (
+                    <p className="text-sm text-muted-foreground">
+                        Enrolls when an inbound interaction requests staff follow-up.
+                    </p>
+                )}
             </div>
         </>
     )
@@ -176,8 +183,8 @@ function NodeForm({
             </SheetHeader>
 
             <div className="space-y-4 py-4">
-                {node.type === "send_sms" && <SmsFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
-                {node.type === "send_email" && <EmailFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
+                {node.type === "send_sms" && <SmsFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />}
+                {node.type === "send_email" && <EmailFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "send_voice" && <VoiceFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "wait" && <WaitFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "condition" && (
@@ -247,13 +254,25 @@ function NodeForm({
 // ---------------------------------------------------------------------------
 // Per-type field groups
 // ---------------------------------------------------------------------------
-function SmsFields({ node, onChange, readOnly }: { node: SendSmsNode; onChange: (n: WorkflowNode) => void; readOnly?: boolean }) {
+function SmsFields({
+    node,
+    def,
+    onChange,
+    readOnly,
+}: {
+    node: SendSmsNode
+    def: WorkflowDefinition
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
     return (
         <>
             <MessageField
                 label="Message"
                 value={node.body_template}
                 onChange={(v) => onChange({ ...node, body_template: v })}
+                triggerType={def.trigger.type}
+                channel="sms"
                 readOnly={readOnly}
             />
             <div className="space-y-1.5">
@@ -265,7 +284,17 @@ function SmsFields({ node, onChange, readOnly }: { node: SendSmsNode; onChange: 
     )
 }
 
-function EmailFields({ node, onChange, readOnly }: { node: SendEmailNode; onChange: (n: WorkflowNode) => void; readOnly?: boolean }) {
+function EmailFields({
+    node,
+    def,
+    onChange,
+    readOnly,
+}: {
+    node: SendEmailNode
+    def: WorkflowDefinition
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
     return (
         <>
             <Field label="Subject">
@@ -279,6 +308,8 @@ function EmailFields({ node, onChange, readOnly }: { node: SendEmailNode; onChan
                 label="Body"
                 value={node.body_template}
                 onChange={(v) => onChange({ ...node, body_template: v })}
+                triggerType={def.trigger.type}
+                channel="email"
                 readOnly={readOnly}
             />
             <div className="space-y-1.5">
@@ -497,14 +528,24 @@ function MessageField({
     label,
     value,
     onChange,
+    triggerType,
+    channel,
     readOnly,
 }: {
     label: string
     value: string
     onChange: (v: string) => void
+    triggerType: TriggerType
+    channel: "sms" | "email" | "voice"
     readOnly?: boolean
 }) {
-    const mergeFields = useMergeFields()
+    const mergeFields = useMergeFields({ triggerType, channel })
+    const grouped = mergeFields.reduce<Record<string, typeof mergeFields>>((acc, field) => {
+        const group = field.group ?? "other"
+        acc[group] = acc[group] ?? []
+        acc[group].push(field)
+        return acc
+    }, {})
     return (
         <div className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -515,10 +556,17 @@ function MessageField({
                             <SelectValue placeholder="Insert field" />
                         </SelectTrigger>
                         <SelectContent>
-                            {mergeFields.map((f) => (
-                                <SelectItem key={f.token} value={f.token} className="text-xs">
-                                    {f.label}
-                                </SelectItem>
+                            {Object.entries(grouped).map(([group, fields]) => (
+                                <SelectGroup key={group}>
+                                    <SelectLabel className="text-[11px] uppercase text-muted-foreground">
+                                        {group}
+                                    </SelectLabel>
+                                    {fields.map((f) => (
+                                        <SelectItem key={f.token} value={f.token} className="text-xs">
+                                            {f.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectGroup>
                             ))}
                         </SelectContent>
                     </Select>
@@ -599,6 +647,8 @@ function defaultTrigger(type: TriggerType): WorkflowTrigger {
         case "manual":
             return { type }
         case "bulk_import":
+            return { type }
+        case "callback_requested":
             return { type }
     }
 }

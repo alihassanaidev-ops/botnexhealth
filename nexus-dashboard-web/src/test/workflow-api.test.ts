@@ -151,11 +151,31 @@ describe("workflow-api", () => {
     it("listMergeFields GETs the merge-field catalog", async () => {
         get.mockResolvedValue({
             data: [
-                { name: "clinic_name", token: "{{clinic_name}}", label: "Clinic name", description: "", sample: "X", group: "clinic" },
+                {
+                    name: "clinic_name",
+                    token: "{{clinic_name}}",
+                    label: "Clinic name",
+                    description: "",
+                    sample: "X",
+                    group: "clinic",
+                    availability: "derived",
+                    requires: [],
+                    phi_level: "none",
+                    channels: ["sms", "email", "voice"],
+                    trigger_types: ["appointment_offset", "recall_scan", "manual", "bulk_import", "callback_requested"],
+                },
             ],
         })
         const fields = await listMergeFields()
         expect(get).toHaveBeenCalledWith("/automation/workflows/merge-fields")
         expect(fields[0].token).toBe("{{clinic_name}}")
+    })
+
+    it("listMergeFields forwards trigger and channel filters", async () => {
+        get.mockResolvedValue({ data: [] })
+        await listMergeFields({ triggerType: "appointment_offset", channel: "sms" })
+        expect(get).toHaveBeenCalledWith(
+            "/automation/workflows/merge-fields?trigger_type=appointment_offset&channel=sms",
+        )
     })
 })

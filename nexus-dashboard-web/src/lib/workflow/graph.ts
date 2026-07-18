@@ -448,6 +448,8 @@ export function createTrigger(type: TriggerType): WorkflowTrigger {
             return { type }
         case "bulk_import":
             return { type }
+        case "callback_requested":
+            return { type }
     }
 }
 

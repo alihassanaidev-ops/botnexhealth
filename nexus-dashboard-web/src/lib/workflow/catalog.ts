@@ -14,6 +14,7 @@ import {
     Phone,
     RefreshCw,
     Upload,
+    PhoneIncoming,
     type LucideIcon,
 } from "lucide-react"
 import type { ConditionOp, NodeType, TriggerType } from "@/types/workflow"
@@ -98,6 +99,11 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
         label: "Bulk import",
         description: "Enroll a batch of imported contacts.",
         icon: Upload,
+    },
+    callback_requested: {
+        label: "Callback requested",
+        description: "Enroll patients who asked for a callback.",
+        icon: PhoneIncoming,
     },
 }
 

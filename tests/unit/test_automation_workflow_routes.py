@@ -15,10 +15,7 @@ from src.app.api.routes.automation_workflows import (
     WorkflowCreateRequest,
     WorkflowResponse,
     WorkflowRunResponse,
-    WorkflowUpdateRequest,
-    _get_workflow_or_404,
     _institution_id,
-    archive_workflow,
     cancel_run,
     create_workflow,
     enroll_in_workflow,
@@ -27,11 +24,8 @@ from src.app.api.routes.automation_workflows import (
     list_merge_fields,
     list_workflow_versions,
     list_workflows,
-    pause_workflow,
     publish_workflow,
-    resume_workflow,
     router as workflows_router,
-    update_workflow,
     validate_definition,
 )
 
@@ -535,6 +529,23 @@ def test_list_merge_fields_returns_catalog_with_tokens():
     for f in result:
         assert f.token == "{{" + f.name + "}}"
         assert f.label and f.sample and f.group
+        assert f.availability in {"required_context", "optional_context", "derived"}
+        assert f.phi_level in {"none", "low", "medium", "high"}
+        assert f.channels
+        assert f.trigger_types
+
+
+def test_list_merge_fields_filters_by_trigger_and_channel():
+    user = _make_user()
+    result = asyncio.run(
+        list_merge_fields(user, trigger_type="appointment_offset", channel="sms")
+    )
+    names = {f.name for f in result}
+
+    assert "appointment_date" in names
+    assert "provider_name" in names
+    assert "recall_due_date" not in names
+    assert "appointment_type" not in names  # high-PHI appointment type is email-only
 
 
 def test_merge_field_catalog_does_not_drift_from_renderer():

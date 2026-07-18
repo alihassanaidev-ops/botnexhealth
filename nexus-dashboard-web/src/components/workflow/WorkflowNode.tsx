@@ -52,6 +52,8 @@ function triggerSummary(t: WorkflowTrigger): string {
             return "Manual / bulk enrollment"
         case "bulk_import":
             return "Bulk import"
+        case "callback_requested":
+            return "Callback request"
     }
 }
 
@@ -124,4 +126,3 @@ export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
         </div>
     )
 }
-

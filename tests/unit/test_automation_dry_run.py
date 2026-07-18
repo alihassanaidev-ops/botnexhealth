@@ -26,6 +26,23 @@ def test_dry_run_sms_to_exit_renders_sample_merge() -> None:
     assert "Jordan" in (r.steps[0].detail or "")  # sample merge value rendered
 
 
+def test_dry_run_renders_dental_sample_merge_fields() -> None:
+    d = _defn(
+        [
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "Visit {{appointment_date}} at {{appointment_time}} with {{provider_name}}",
+                "next_node_id": "x1",
+            },
+            {"type": "exit", "id": "x1", "outcome": "sent"},
+        ],
+        "s1",
+    )
+    r = simulate_run(d)
+    assert r.steps[0].detail == "Visit July 22, 2026 at 2:00 PM with Dr. Smith"
+
+
 def test_dry_run_condition_follows_choice() -> None:
     d = _defn(
         [

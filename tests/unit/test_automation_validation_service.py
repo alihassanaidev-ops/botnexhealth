@@ -48,6 +48,66 @@ def test_transactional_with_consent_is_clean() -> None:
     assert not any(i.code == "content_class_unset" for i in issues)
 
 
+def test_unknown_merge_field_warns() -> None:
+    definition = {
+        **_SEND_NO_CLASS,
+        "nodes": [
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "Hi {{does_not_exist}}",
+                "next_node_id": "x1",
+            },
+            {"type": "exit", "id": "x1", "outcome": "done"},
+        ],
+    }
+    issues = _validate(definition)
+    assert any(i.code == "merge_field_unknown" and i.node_id == "s1" for i in issues)
+
+
+def test_merge_field_unavailable_for_trigger_warns() -> None:
+    definition = {
+        **_SEND_NO_CLASS,
+        "trigger": {"type": "manual"},
+        "nodes": [
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "Your appointment is {{appointment_date}}",
+                "next_node_id": "x1",
+            },
+            {"type": "exit", "id": "x1", "outcome": "done"},
+        ],
+    }
+    issues = _validate(definition)
+    assert any(
+        i.code == "merge_field_unavailable_for_trigger" and i.node_id == "s1"
+        for i in issues
+    )
+
+
+def test_merge_field_unavailable_for_channel_warns() -> None:
+    definition = {
+        **_SEND_NO_CLASS,
+        "trigger": {"type": "appointment_offset", "offset_hours": -24},
+        "nodes": [
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "Type {{appointment_type}}",
+                "next_node_id": "x1",
+            },
+            {"type": "exit", "id": "x1", "outcome": "done"},
+        ],
+    }
+    issues = _validate(definition)
+    assert any(
+        i.code == "merge_field_unavailable_for_channel" and i.node_id == "s1"
+        for i in issues
+    )
+    assert any(i.code == "merge_field_phi_warning" and i.node_id == "s1" for i in issues)
+
+
 def test_unreachable_node_is_warned() -> None:
     definition = {
         "trigger": {"type": "manual"},

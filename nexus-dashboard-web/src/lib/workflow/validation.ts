@@ -12,7 +12,7 @@
  */
 import type { ValidationIssue, WorkflowDefinition, WorkflowNode } from "@/types/workflow"
 import { referencedIds, TRIGGER_NODE_ID } from "./graph"
-import { unknownTokens } from "./merge-fields"
+import { unavailableTokens, unknownTokens } from "./merge-fields"
 
 const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
@@ -132,7 +132,7 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                     })
                 }
                 checkAttempts(node.max_attempts, node.id, issues)
-                checkTokens(node.body_template, node.id, issues)
+                checkTokens(node.body_template, node.id, def, "sms", issues)
                 break
             }
             case "send_email": {
@@ -152,8 +152,8 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                     })
                 }
                 checkAttempts(node.max_attempts, node.id, issues)
-                checkTokens(node.subject_template, node.id, issues)
-                checkTokens(node.body_template, node.id, issues)
+                checkTokens(node.subject_template, node.id, def, "email", issues)
+                checkTokens(node.body_template, node.id, def, "email", issues)
                 break
             }
             case "send_voice": {
@@ -228,7 +228,13 @@ function checkAttempts(
     }
 }
 
-function checkTokens(template: string, nodeId: string, issues: ValidationIssue[]): void {
+function checkTokens(
+    template: string,
+    nodeId: string,
+    def: WorkflowDefinition,
+    channel: "sms" | "email" | "voice",
+    issues: ValidationIssue[],
+): void {
     const unknown = unknownTokens(template)
     if (unknown.length) {
         issues.push({
@@ -236,6 +242,18 @@ function checkTokens(template: string, nodeId: string, issues: ValidationIssue[]
             severity: "warning",
             message: `Unknown merge field(s): ${unknown.join(", ")}.`,
             fix: "Use a field from the merge-field list, or these will render as placeholders.",
+        })
+    }
+    const unavailable = unavailableTokens(template, {
+        triggerType: def.trigger.type,
+        channel,
+    }).filter((token) => !unknown.includes(token))
+    if (unavailable.length) {
+        issues.push({
+            node_id: nodeId,
+            severity: "warning",
+            message: `Unavailable merge field(s): ${unavailable.join(", ")}.`,
+            fix: "Use fields available for this trigger and channel.",
         })
     }
 }

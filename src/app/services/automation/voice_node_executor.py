@@ -25,6 +25,7 @@ from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import SendVoiceNode
+from src.app.services.automation.merge_field_catalog import MergeContextBuilder
 from src.app.services.automation.retell_outbound_client import (
     RetellAmbiguousError,
     RetellOutboundClient,
@@ -157,13 +158,18 @@ class VoiceNodeExecutor:
             await self.runtime.fail_run(run, reason="send_voice: Retell not configured (RETELL_API_SECRET)")
             return node.next_node_id
 
-        first_name = (contact.first_name or "").strip()
         clinic_name = getattr(location, "name", None)
+        merge_context = MergeContextBuilder.build(
+            contact=contact,
+            location=location,
+            context=MergeContextBuilder.normalize_raw_context(context),
+        )
         dynamic_variables = {
-            "first_name": first_name,
+            "first_name": merge_context.get("patient_first_name", ""),
             "user_number": to_number,
             "clinic_name": clinic_name or "",
             "compliance_disclosure": _ai_call_disclosure(clinic_name),
+            **merge_context,
         }
         metadata = {
             "workflow_run_id": str(run.id),

@@ -20,6 +20,7 @@ This service *invokes* compliance policy; it does not define Plan 12's semantic 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -34,11 +35,14 @@ from src.app.services.automation.definition_schema import (
     WaitNode,
     WorkflowDefinition,
 )
+from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG, MergeFieldSpec
 
 logger = logging.getLogger(__name__)
 
 _SEND_NODE_TYPES = (SendSmsNode, SendVoiceNode, SendEmailNode)
 _MARKETING_CLASSES = {"sales", "marketing"}
+_TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
+_CATALOG_BY_NAME: dict[str, MergeFieldSpec] = {field.name: field for field in MERGE_FIELD_CATALOG}
 
 
 @dataclass
@@ -136,6 +140,7 @@ class WorkflowValidationService:
         issues: list[ValidationIssue] = []
         issues += self._unreachable_nodes(definition)
         issues += self._consent_and_content(definition)
+        issues += self._merge_field_issues(definition)
         issues += await self.content_validator.validate(
             definition, institution_id=institution_id, location_id=location_id
         )
@@ -208,3 +213,99 @@ class WorkflowValidationService:
                 )
             )
         return issues
+
+    @staticmethod
+    def _merge_field_issues(definition: WorkflowDefinition) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        trigger_type = definition.trigger.type
+
+        for node in definition.nodes:
+            channel = _node_channel(node)
+            if channel is None:
+                continue
+
+            for field_path, template in _node_templates(node):
+                for token in _extract_token_names(template):
+                    field = _CATALOG_BY_NAME.get(token)
+                    if field is None:
+                        issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                message=(
+                                    f"Unknown merge field '{{{{{token}}}}}' will render blank."
+                                ),
+                                node_id=node.id,
+                                field_path=[field_path],
+                                code="merge_field_unknown",
+                            )
+                        )
+                        continue
+
+                    if trigger_type not in field.triggers:
+                        issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                message=(
+                                    f"Merge field '{field.token}' is not available for "
+                                    f"{trigger_type} workflows."
+                                ),
+                                node_id=node.id,
+                                field_path=[field_path],
+                                code="merge_field_unavailable_for_trigger",
+                            )
+                        )
+
+                    if channel not in field.channels:
+                        issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                message=(
+                                    f"Merge field '{field.token}' is not available for "
+                                    f"{channel} messages."
+                                ),
+                                node_id=node.id,
+                                field_path=[field_path],
+                                code="merge_field_unavailable_for_channel",
+                            )
+                        )
+
+                    if field.phi_level == "high" and channel in {"sms", "voice"}:
+                        issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                message=(
+                                    f"Merge field '{field.token}' may expose sensitive "
+                                    f"clinical context on {channel}."
+                                ),
+                                node_id=node.id,
+                                field_path=[field_path],
+                                code="merge_field_phi_warning",
+                            )
+                        )
+
+        return issues
+
+
+def _extract_token_names(template: str) -> list[str]:
+    return list(dict.fromkeys(match.group(1) for match in _TOKEN_RE.finditer(template)))
+
+
+def _node_channel(node: object) -> str | None:
+    if isinstance(node, SendSmsNode):
+        return "sms"
+    if isinstance(node, SendEmailNode):
+        return "email"
+    if isinstance(node, SendVoiceNode):
+        return "voice"
+    return None
+
+
+def _node_templates(node: object) -> list[tuple[str, str]]:
+    if isinstance(node, SendSmsNode):
+        return [("body_template", node.body_template)]
+    if isinstance(node, SendEmailNode):
+        return [
+            ("subject_template", node.subject_template),
+            ("body_template", node.body_template),
+        ]
+    return []

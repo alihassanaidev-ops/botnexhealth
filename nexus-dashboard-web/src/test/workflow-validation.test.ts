@@ -77,6 +77,25 @@ describe("workflow validation", () => {
         ).toBe(true)
     })
 
+    it("warns when a merge field is unavailable for the trigger", () => {
+        const def = base()
+        def.trigger = { type: "manual" }
+        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{appointment_date}}"
+        const issues = validateDefinition(def)
+        expect(
+            issues.some((i) => i.severity === "warning" && i.message.includes("Unavailable merge field")),
+        ).toBe(true)
+    })
+
+    it("warns when a merge field is unavailable for the message channel", () => {
+        const def = base()
+        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{appointment_type}}"
+        const issues = validateDefinition(def)
+        expect(
+            issues.some((i) => i.severity === "warning" && i.message.includes("Unavailable merge field")),
+        ).toBe(true)
+    })
+
     it("warns on unreachable nodes", () => {
         const def = base()
         def.nodes.push({ type: "exit", id: "orphan", outcome: null })

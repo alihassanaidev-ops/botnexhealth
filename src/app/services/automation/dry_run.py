@@ -19,10 +19,8 @@ from src.app.services.automation.definition_schema import (
     WaitNode,
     WorkflowDefinition,
 )
-from src.app.services.automation.template_renderer import (
-    STATIC_MERGE_FIELDS,
-    render_sms_body,
-)
+from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG
+from src.app.services.automation.template_renderer import render_sms_body
 
 _MAX_STEPS = 50
 
@@ -45,7 +43,7 @@ class DryRunResult:
 def _sample_context(extra: dict | None) -> dict:
     """Sample merge values so previews render realistic copy. Caller-supplied
     context overrides the defaults."""
-    ctx = {spec.name: spec.sample for spec in STATIC_MERGE_FIELDS}
+    ctx = {spec.name: spec.sample for spec in MERGE_FIELD_CATALOG}
     if extra:
         ctx.update(extra)
     return ctx

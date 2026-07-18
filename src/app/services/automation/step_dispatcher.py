@@ -96,6 +96,7 @@ class WorkflowStepDispatcher:
     ) -> DispatchResult:
         """Advance run from current_step_id (or entry node) until wait or exit."""
         now = now or datetime.now(tz=timezone.utc)
+        context = {**(run.trigger_metadata or {}), **(context or {})}
         node_map = {n.id: n for n in definition.nodes}
         current_node_id = run.current_step_id or definition.entry_node_id
         steps_advanced = 0

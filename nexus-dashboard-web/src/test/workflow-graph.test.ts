@@ -146,6 +146,8 @@ describe("workflow graph — factories", () => {
         expect(createTrigger("appointment_offset")).toMatchObject({ offset_hours: -24 })
         expect(createTrigger("recall_scan")).toMatchObject({ recall_interval_months: 6 })
         expect(createTrigger("manual").type).toBe("manual")
+        expect(createTrigger("bulk_import").type).toBe("bulk_import")
+        expect(createTrigger("callback_requested").type).toBe("callback_requested")
     })
     it("blankDefinition is a valid minimal graph", () => {
         const def = blankDefinition()
