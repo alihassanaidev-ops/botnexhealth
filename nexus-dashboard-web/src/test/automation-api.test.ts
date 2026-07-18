@@ -5,7 +5,10 @@ import {
     cancelCampaignRun,
     enrollContactInCampaign,
     emergencyHaltCampaign,
+    getCampaignOperations,
+    getCampaignOverview,
     getOutboundHaltStatus,
+    getRunTimeline,
     getUsageByCampaign,
     getUsageSummary,
     listCampaignRuns,
@@ -32,9 +35,39 @@ beforeEach(() => {
 
 describe("automation-api", () => {
     it("lists campaign runs with a bounded limit", async () => {
-        get.mockResolvedValue({ data: [] })
-        await listCampaignRuns("wf-1", 25)
+        get.mockResolvedValue({ data: { items: [], limit: 25, next_cursor: null } })
+        await listCampaignRuns("wf-1", { limit: 25 })
         expect(get).toHaveBeenCalledWith("/automation/workflows/wf-1/runs?limit=25")
+    })
+
+    it("lists campaign runs with operational filters", async () => {
+        get.mockResolvedValue({ data: { items: [], limit: 50, next_cursor: "next" } })
+        await listCampaignRuns("wf-1", {
+            status: "waiting",
+            channel: "sms",
+            outcome: "booked",
+            current_node: "wait-1",
+            contact_search: "Jordan",
+            failure_reason: "blocked",
+            cursor: "cursor-1",
+        })
+        expect(get).toHaveBeenCalledWith(
+            "/automation/workflows/wf-1/runs?limit=50&status=waiting&outcome=booked&current_node=wait-1&channel=sms&failure_reason=blocked&contact_search=Jordan&cursor=cursor-1",
+        )
+    })
+
+    it("fetches campaign overview, operations, and run timeline", async () => {
+        get.mockResolvedValueOnce({ data: { workflow_id: "wf-1" } })
+        get.mockResolvedValueOnce({ data: { failed_sends: [] } })
+        get.mockResolvedValueOnce({ data: { items: [] } })
+
+        await getCampaignOverview("wf-1")
+        await getCampaignOperations("wf-1")
+        await getRunTimeline("wf-1", "run-1")
+
+        expect(get).toHaveBeenNthCalledWith(1, "/automation/workflows/wf-1/overview")
+        expect(get).toHaveBeenNthCalledWith(2, "/automation/workflows/wf-1/operations")
+        expect(get).toHaveBeenNthCalledWith(3, "/automation/workflows/wf-1/runs/run-1/timeline")
     })
 
     it("cancels a campaign run", async () => {

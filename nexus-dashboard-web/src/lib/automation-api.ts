@@ -2,8 +2,13 @@ import api from "@/lib/api"
 import type {
     AutomationWorkflow,
     AutomationWorkflowRun,
+    CampaignOperations,
+    CampaignOverview,
+    CampaignRunFilters,
+    CampaignRunList,
     CampaignUsageReport,
     OutboundHaltStatus,
+    RunTimeline,
     UsageSummary,
     WorkflowHaltResult,
 } from "@/types"
@@ -35,10 +40,45 @@ export async function archiveCampaign(id: string): Promise<AutomationWorkflow> {
 
 export async function listCampaignRuns(
     workflowId: string,
-    limit = 50,
-): Promise<AutomationWorkflowRun[]> {
-    const { data } = await api.get<AutomationWorkflowRun[]>(
-        `/automation/workflows/${workflowId}/runs?limit=${limit}`,
+    filters: CampaignRunFilters = {},
+): Promise<CampaignRunList> {
+    const params = new URLSearchParams()
+    params.set("limit", String(filters.limit ?? 50))
+    if (filters.status) params.set("status", filters.status)
+    if (filters.outcome) params.set("outcome", filters.outcome)
+    if (filters.current_node) params.set("current_node", filters.current_node)
+    if (filters.next_due_from) params.set("next_due_from", filters.next_due_from)
+    if (filters.next_due_to) params.set("next_due_to", filters.next_due_to)
+    if (filters.channel) params.set("channel", filters.channel)
+    if (filters.failure_reason) params.set("failure_reason", filters.failure_reason)
+    if (filters.contact_search) params.set("contact_search", filters.contact_search)
+    if (filters.cursor) params.set("cursor", filters.cursor)
+    const { data } = await api.get<CampaignRunList>(
+        `/automation/workflows/${workflowId}/runs?${params.toString()}`,
+    )
+    return data
+}
+
+export async function getCampaignOverview(workflowId: string): Promise<CampaignOverview> {
+    const { data } = await api.get<CampaignOverview>(
+        `/automation/workflows/${workflowId}/overview`,
+    )
+    return data
+}
+
+export async function getRunTimeline(
+    workflowId: string,
+    runId: string,
+): Promise<RunTimeline> {
+    const { data } = await api.get<RunTimeline>(
+        `/automation/workflows/${workflowId}/runs/${runId}/timeline`,
+    )
+    return data
+}
+
+export async function getCampaignOperations(workflowId: string): Promise<CampaignOperations> {
+    const { data } = await api.get<CampaignOperations>(
+        `/automation/workflows/${workflowId}/operations`,
     )
     return data
 }

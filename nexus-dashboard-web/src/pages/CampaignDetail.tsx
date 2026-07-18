@@ -1,27 +1,31 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { Link, useParams } from "react-router-dom"
 import {
-    ArrowLeft,
-    RefreshCcw,
-    Pause,
-    Play,
-    Archive,
-    Loader2,
     ActivitySquare,
-    ShieldAlert,
+    Archive,
+    ArrowLeft,
     Ban,
+    CheckCircle2,
+    Clock3,
     DollarSign,
-    MessageSquare,
-    Phone,
-    Mail,
     Hash,
-    UserPlus,
+    Loader2,
+    Mail,
+    MessageSquare,
+    Pause,
+    Phone,
+    Play,
+    RefreshCcw,
     Search,
+    ShieldAlert,
+    UserPlus,
+    XCircle,
 } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { toast } from "sonner"
+
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Input } from "@/components/ui/input"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
     Dialog,
     DialogContent,
@@ -30,49 +34,82 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
-import { toast } from "sonner"
-import { cn } from "@/lib/utils"
+import { Input } from "@/components/ui/input"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
+import {
+    Sheet,
+    SheetContent,
+    SheetDescription,
+    SheetHeader,
+    SheetTitle,
+} from "@/components/ui/sheet"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
     archiveCampaign,
     cancelCampaignRun,
     enrollContactInCampaign,
     emergencyHaltCampaign,
     getCampaign,
+    getCampaignOperations,
+    getCampaignOverview,
+    getRunTimeline,
     getUsageByCampaign,
     getUsageSummary,
     listCampaignRuns,
     pauseCampaign,
     resumeCampaign,
 } from "@/lib/automation-api"
-import {
-    listContacts,
-    type ContactListItem,
-} from "@/lib/contacts-api"
+import { listContacts, type ContactListItem } from "@/lib/contacts-api"
+import { cn } from "@/lib/utils"
 import type {
     AutomationWorkflow,
     AutomationWorkflowRun,
+    CampaignOperationItem,
+    CampaignOperations,
+    CampaignOverview,
+    CampaignRunFilters,
+    CampaignRunListItem,
     CampaignUsage,
+    RunTimeline,
     UsageSummary,
 } from "@/types"
 
 const WORKFLOW_STATUS_STYLES: Record<string, string> = {
-    active: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800",
-    paused: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800",
-    archived: "bg-zinc-100 text-zinc-500 border-zinc-200 dark:bg-zinc-800/60 dark:text-zinc-400 dark:border-zinc-700",
-    draft: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 dark:border-blue-800",
+    active: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400",
+    paused: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400",
+    archived: "border-zinc-200 bg-zinc-100 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-400",
+    draft: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-400",
 }
 
 const RUN_STATUS_STYLES: Record<string, string> = {
-    running: "text-blue-600 dark:text-blue-400",
-    completed: "text-emerald-600 dark:text-emerald-400",
-    cancelled: "text-zinc-500 dark:text-zinc-400",
-    failed: "text-red-600 dark:text-red-400",
+    pending: "border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300",
+    running: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-400",
+    waiting: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400",
+    completed: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400",
+    cancelled: "border-zinc-200 bg-zinc-100 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-400",
+    failed: "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400",
+    blocked: "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400",
 }
 
 const TRIGGER_LABELS: Record<string, string> = {
     appointment_offset: "Appointment reminder",
-    recall_scan: "Recall / reactivation",
+    recall_scan: "Recall",
     manual: "Manual",
+    bulk_import: "Bulk import",
+    callback_requested: "Callback",
+}
+
+const CHANNEL_LABELS: Record<string, string> = {
+    sms: "SMS",
+    email: "Email",
+    voice: "Voice",
 }
 
 function fmt(iso: string | null): string {
@@ -85,16 +122,16 @@ function fmt(iso: string | null): string {
     })
 }
 
-function elapsed(run: AutomationWorkflowRun): string {
+function elapsed(run: CampaignRunListItem): string {
     const start = run.started_at ? new Date(run.started_at).getTime() : null
     const end = run.completed_at ? new Date(run.completed_at).getTime() : null
     if (!start) return "-"
     const ms = (end ?? Date.now()) - start
-    const s = Math.max(Math.floor(ms / 1000), 0)
-    if (s < 60) return `${s}s`
-    const m = Math.floor(s / 60)
-    if (m < 60) return `${m}m ${s % 60}s`
-    return `${Math.floor(m / 60)}h ${m % 60}m`
+    const seconds = Math.max(Math.floor(ms / 1000), 0)
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m ${seconds % 60}s`
+    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
 function money(value: number | undefined, currency = "USD"): string {
@@ -109,25 +146,55 @@ function number(value: number | undefined): string {
     return new Intl.NumberFormat().format(value ?? 0)
 }
 
-function isCancelable(run: AutomationWorkflowRun): boolean {
-    return !["completed", "cancelled", "failed"].includes(run.status)
+function label(value: string | null | undefined): string {
+    if (!value) return "-"
+    return value.replace(/_/g, " ")
+}
+
+function isCancelable(run: Pick<CampaignRunListItem, "status">): boolean {
+    return !["completed", "cancelled", "failed", "blocked"].includes(run.status)
 }
 
 interface StatProps {
     icon: ReactNode
     label: string
     value: string
+    tone?: string
 }
 
-function Stat({ icon, label, value }: StatProps) {
+function Stat({ icon, label, value, tone }: StatProps) {
     return (
         <div className="rounded-md border border-border bg-card px-4 py-3">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {icon}
                 {label}
             </div>
-            <p className="mt-2 text-xl font-semibold tabular-nums">{value}</p>
+            <p className={cn("mt-2 text-xl font-semibold tabular-nums", tone)}>{value}</p>
         </div>
+    )
+}
+
+function StatusBadge({ status }: { status: string }) {
+    return (
+        <Badge
+            variant="outline"
+            className={cn("capitalize", RUN_STATUS_STYLES[status] ?? "border-border")}
+        >
+            {label(status)}
+        </Badge>
+    )
+}
+
+function WorkflowStatusBadge({ status }: { status: string }) {
+    return (
+        <span
+            className={cn(
+                "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize",
+                WORKFLOW_STATUS_STYLES[status] ?? WORKFLOW_STATUS_STYLES.draft,
+            )}
+        >
+            {status}
+        </span>
     )
 }
 
@@ -156,7 +223,10 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
                 if (!cancelled) setLoading(false)
             }
         }, 250)
-        return () => { cancelled = true; clearTimeout(t) }
+        return () => {
+            cancelled = true
+            clearTimeout(t)
+        }
     }, [search])
 
     async function enroll(contact: ContactListItem) {
@@ -186,7 +256,7 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
                     </DialogDescription>
                 </DialogHeader>
                 <div className="relative">
-                    <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                         autoFocus
                         placeholder="Search patients by name"
@@ -241,39 +311,462 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
     )
 }
 
+function OverviewTab({
+    overview,
+    usageSummary,
+    campaignUsage,
+    loading,
+}: {
+    overview: CampaignOverview | null
+    usageSummary: UsageSummary | null
+    campaignUsage: CampaignUsage | null
+    loading: boolean
+}) {
+    const runCounts = overview?.run_counts ?? {}
+    const readiness = overview?.readiness
+    return (
+        <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+                {loading ? (
+                    Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)
+                ) : (
+                    <>
+                        <Stat icon={<ActivitySquare className="h-3.5 w-3.5" />} label="Active runs" value={number((runCounts.running ?? 0) + (runCounts.waiting ?? 0) + (runCounts.pending ?? 0))} />
+                        <Stat icon={<CheckCircle2 className="h-3.5 w-3.5" />} label="Completed" value={number(runCounts.completed)} tone="text-emerald-600" />
+                        <Stat icon={<XCircle className="h-3.5 w-3.5" />} label="Failed or blocked" value={number((runCounts.failed ?? 0) + (runCounts.blocked ?? 0))} tone="text-red-600" />
+                        <Stat icon={<Clock3 className="h-3.5 w-3.5" />} label="Readiness" value={label(readiness?.overall_status)} />
+                    </>
+                )}
+            </div>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base font-semibold">Campaign state</CardTitle>
+                    </CardHeader>
+                    <CardContent className="grid gap-3 text-sm md:grid-cols-2">
+                        <InfoRow label="Latest version" value={overview?.latest_version ? `v${overview.latest_version.version_number}` : "-"} />
+                        <InfoRow label="Trigger" value={overview?.trigger_type ? (TRIGGER_LABELS[overview.trigger_type] ?? overview.trigger_type) : "-"} />
+                        <InfoRow label="Channels" value={overview?.channels.length ? overview.channels.map((c) => CHANNEL_LABELS[c] ?? c).join(", ") : "-"} />
+                        <InfoRow label="Content class" value={label(overview?.latest_version?.content_classification)} />
+                        <InfoRow label="Checklist blockers" value={number(readiness?.blockers_count)} />
+                        <InfoRow label="Checklist warnings" value={number((readiness?.warnings_count ?? 0) + (readiness?.unknown_count ?? 0))} />
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base font-semibold">Recent outcomes</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        {overview?.recent_outcomes.length ? (
+                            <ul className="space-y-2">
+                                {overview.recent_outcomes.map((row) => (
+                                    <li key={row.run_id} className="flex items-center justify-between gap-3 text-sm">
+                                        <span className="truncate font-mono text-xs text-muted-foreground">{row.run_id.slice(0, 8)}</span>
+                                        <span className="capitalize">{label(row.outcome)}</span>
+                                        <span className="text-xs text-muted-foreground">{fmt(row.completed_at ?? row.created_at)}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="text-sm text-muted-foreground">No outcomes recorded yet.</p>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
+            <Card>
+                <CardHeader className="pb-3">
+                    <CardTitle className="text-base font-semibold">Usage, last 30 days</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {loading ? (
+                        <div className="grid gap-3 md:grid-cols-5">
+                            {Array.from({ length: 5 }).map((_, i) => (
+                                <Skeleton key={i} className="h-20 w-full" />
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="grid gap-3 md:grid-cols-5">
+                            <Stat icon={<DollarSign className="h-3.5 w-3.5" />} label="Campaign cost" value={money(campaignUsage?.total_cost, usageSummary?.currency)} />
+                            <Stat icon={<Hash className="h-3.5 w-3.5" />} label="Events" value={number(campaignUsage?.event_count)} />
+                            <Stat icon={<MessageSquare className="h-3.5 w-3.5" />} label="SMS segments" value={number(campaignUsage?.total_segments)} />
+                            <Stat icon={<Phone className="h-3.5 w-3.5" />} label="Voice minutes" value={number(campaignUsage?.total_minutes)} />
+                            <Stat icon={<Mail className="h-3.5 w-3.5" />} label="Emails" value={number(campaignUsage?.total_emails)} />
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+        </div>
+    )
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+    return (
+        <div>
+            <p className="text-xs text-muted-foreground">{label}</p>
+            <p className="mt-1 font-medium capitalize">{value}</p>
+        </div>
+    )
+}
+
+function RunsTab({
+    runs,
+    loading,
+    filters,
+    onFiltersChange,
+    onSelectRun,
+    onCancelRun,
+    acting,
+    nextCursor,
+    onLoadMore,
+}: {
+    runs: CampaignRunListItem[]
+    loading: boolean
+    filters: CampaignRunFilters
+    onFiltersChange: (filters: CampaignRunFilters) => void
+    onSelectRun: (run: CampaignRunListItem) => void
+    onCancelRun: (run: CampaignRunListItem) => void
+    acting: string | null
+    nextCursor: string | null
+    onLoadMore: () => void
+}) {
+    return (
+        <Card>
+            <CardHeader className="space-y-3 pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                        <ActivitySquare className="h-4 w-4" />
+                        Runs
+                        {!loading && <span className="text-xs font-normal text-muted-foreground">({runs.length})</span>}
+                    </CardTitle>
+                </div>
+                <RunFilters filters={filters} onChange={onFiltersChange} />
+            </CardHeader>
+            <CardContent className="p-0">
+                {loading ? (
+                    <div className="space-y-2 p-4">
+                        {Array.from({ length: 5 }).map((_, i) => (
+                            <Skeleton key={i} className="h-10 w-full" />
+                        ))}
+                    </div>
+                ) : runs.length === 0 ? (
+                    <EmptyState />
+                ) : (
+                    <>
+                        <div className="hidden grid-cols-[1fr_120px_120px_120px_150px_150px_84px] gap-x-4 border-b border-border px-4 py-2 md:grid">
+                            <HeaderCell>Patient or run</HeaderCell>
+                            <HeaderCell>Status</HeaderCell>
+                            <HeaderCell>Step</HeaderCell>
+                            <HeaderCell>Outcome</HeaderCell>
+                            <HeaderCell>Next action</HeaderCell>
+                            <HeaderCell>Elapsed</HeaderCell>
+                            <span />
+                        </div>
+                        <ul className="divide-y divide-border">
+                            {runs.map((run) => (
+                                <li
+                                    key={run.id}
+                                    className="grid gap-3 px-4 py-3 md:grid-cols-[1fr_120px_120px_120px_150px_150px_84px] md:items-center md:gap-x-4"
+                                >
+                                    <button
+                                        type="button"
+                                        className="min-w-0 text-left"
+                                        onClick={() => onSelectRun(run)}
+                                    >
+                                        <p className="truncate text-sm font-medium">
+                                            {run.contact_name ?? "Patient unavailable"}
+                                        </p>
+                                        <p className="font-mono text-xs text-muted-foreground">{run.id.slice(0, 8)}</p>
+                                    </button>
+                                    <StatusBadge status={run.status} />
+                                    <span className="text-xs capitalize text-muted-foreground">{label(run.current_step_type ?? run.current_step_id)}</span>
+                                    <span className="text-xs capitalize text-muted-foreground">{label(run.outcome)}</span>
+                                    <span className="text-xs text-muted-foreground">{fmt(run.next_due_at)}</span>
+                                    <span className="text-xs text-muted-foreground">{elapsed(run)}</span>
+                                    <div className="flex justify-end gap-1">
+                                        <Button variant="ghost" size="sm" onClick={() => onSelectRun(run)}>
+                                            Timeline
+                                        </Button>
+                                        {isCancelable(run) && (
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8 text-red-600 hover:text-red-700"
+                                                onClick={() => onCancelRun(run)}
+                                                disabled={acting !== null}
+                                                title="Cancel run"
+                                            >
+                                                {acting === run.id ? (
+                                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                ) : (
+                                                    <Ban className="h-3.5 w-3.5" />
+                                                )}
+                                            </Button>
+                                        )}
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                        {nextCursor && (
+                            <div className="border-t border-border p-3">
+                                <Button variant="outline" size="sm" onClick={onLoadMore}>
+                                    Load more
+                                </Button>
+                            </div>
+                        )}
+                    </>
+                )}
+            </CardContent>
+        </Card>
+    )
+}
+
+function HeaderCell({ children }: { children: ReactNode }) {
+    return <span className="text-xs font-medium text-muted-foreground">{children}</span>
+}
+
+function EmptyState() {
+    return (
+        <div className="flex flex-col items-center gap-2 px-4 py-12 text-center text-muted-foreground">
+            <div className="grid size-12 place-items-center rounded-full bg-muted">
+                <ActivitySquare className="h-6 w-6 opacity-40" />
+            </div>
+            <p className="text-sm font-medium text-foreground/70">No runs match this view</p>
+            <p className="text-xs">Patients enrolled in this campaign will appear here.</p>
+        </div>
+    )
+}
+
+function RunFilters({
+    filters,
+    onChange,
+}: {
+    filters: CampaignRunFilters
+    onChange: (filters: CampaignRunFilters) => void
+}) {
+    const set = (patch: CampaignRunFilters) => onChange({ ...filters, cursor: undefined, ...patch })
+    return (
+        <div className="grid gap-2 md:grid-cols-[130px_130px_130px_1fr_1fr_1fr_1fr]">
+            <Select value={filters.status ?? "all"} onValueChange={(value) => set({ status: value === "all" ? undefined : value })}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    {["pending", "running", "waiting", "completed", "cancelled", "failed", "blocked"].map((status) => (
+                        <SelectItem key={status} value={status}>{label(status)}</SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
+            <Select value={filters.channel ?? "all"} onValueChange={(value) => set({ channel: value === "all" ? undefined : value as "sms" | "email" | "voice" })}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                    <SelectItem value="all">All channels</SelectItem>
+                    <SelectItem value="sms">SMS</SelectItem>
+                    <SelectItem value="email">Email</SelectItem>
+                    <SelectItem value="voice">Voice</SelectItem>
+                </SelectContent>
+            </Select>
+            <Select value={filters.next_due_to ? "due" : "all"} onValueChange={(value) => set(value === "due" ? { next_due_to: new Date().toISOString() } : { next_due_to: undefined })}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                    <SelectItem value="all">Any due time</SelectItem>
+                    <SelectItem value="due">Due now</SelectItem>
+                </SelectContent>
+            </Select>
+            <Input
+                className="h-8 text-xs"
+                placeholder="Outcome"
+                value={filters.outcome ?? ""}
+                onChange={(event) => set({ outcome: event.target.value || undefined })}
+            />
+            <Input
+                className="h-8 text-xs"
+                placeholder="Current step"
+                value={filters.current_node ?? ""}
+                onChange={(event) => set({ current_node: event.target.value || undefined })}
+            />
+            <Input
+                className="h-8 text-xs"
+                placeholder="Patient"
+                value={filters.contact_search ?? ""}
+                onChange={(event) => set({ contact_search: event.target.value || undefined })}
+            />
+            <Input
+                className="h-8 text-xs"
+                placeholder="Failure reason"
+                value={filters.failure_reason ?? ""}
+                onChange={(event) => set({ failure_reason: event.target.value || undefined })}
+            />
+        </div>
+    )
+}
+
+function OperationsTab({
+    operations,
+    loading,
+    onSelectRun,
+}: {
+    operations: CampaignOperations | null
+    loading: boolean
+    onSelectRun: (runId: string) => void
+}) {
+    const sections = [
+        ["Stuck waiting", operations?.stuck_waiting_runs ?? []],
+        ["Failed sends", operations?.failed_sends ?? []],
+        ["Suppressions and skips", operations?.suppressed_skipped_runs ?? []],
+    ] as const
+    return (
+        <div className="grid gap-4 lg:grid-cols-3">
+            {sections.map(([title, items]) => (
+                <Card key={title}>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base font-semibold">{title}</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        {loading ? (
+                            <div className="space-y-2">
+                                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
+                            </div>
+                        ) : items.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">No items.</p>
+                        ) : (
+                            <ul className="space-y-3">
+                                {items.map((item) => (
+                                    <OperationRow key={item.id} item={item} onSelectRun={onSelectRun} />
+                                ))}
+                            </ul>
+                        )}
+                    </CardContent>
+                </Card>
+            ))}
+        </div>
+    )
+}
+
+function OperationRow({
+    item,
+    onSelectRun,
+}: {
+    item: CampaignOperationItem
+    onSelectRun: (runId: string) => void
+}) {
+    return (
+        <li className="rounded-md border border-border p-3">
+            <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{item.title}</p>
+                    <p className="text-xs text-muted-foreground">{fmt(item.occurred_at)}</p>
+                </div>
+                <Badge variant="outline" className="capitalize">{label(item.severity)}</Badge>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">{item.reason ?? "Needs review."}</p>
+            <div className="mt-3 flex items-center justify-between gap-2">
+                <span className="font-mono text-xs text-muted-foreground">{item.run_id.slice(0, 8)}</span>
+                <Button variant="outline" size="sm" onClick={() => onSelectRun(item.run_id)}>
+                    Timeline
+                </Button>
+            </div>
+        </li>
+    )
+}
+
+function TimelineDrawer({
+    timeline,
+    loading,
+    onClose,
+}: {
+    timeline: RunTimeline | null
+    loading: boolean
+    onClose: () => void
+}) {
+    return (
+        <Sheet open={Boolean(timeline) || loading} onOpenChange={(open) => !open && onClose()}>
+            <SheetContent className="w-full overflow-y-auto sm:max-w-2xl">
+                <SheetHeader>
+                    <SheetTitle>Run timeline</SheetTitle>
+                    <SheetDescription>
+                        {timeline?.contact.display_name ?? "Patient context masked"} ({timeline?.run.id.slice(0, 8) ?? "loading"})
+                    </SheetDescription>
+                </SheetHeader>
+                {loading ? (
+                    <div className="mt-6 space-y-3">
+                        {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
+                    </div>
+                ) : timeline ? (
+                    <div className="mt-6 space-y-4">
+                        <div className="grid gap-3 rounded-md border border-border p-3 text-sm sm:grid-cols-3">
+                            <InfoRow label="Status" value={label(timeline.run.status)} />
+                            <InfoRow label="Current step" value={label(timeline.run.current_step_type ?? timeline.run.current_step_id)} />
+                            <InfoRow label="Outcome" value={label(timeline.run.outcome)} />
+                        </div>
+                        <ol className="space-y-3">
+                            {timeline.items.map((item) => (
+                                <li key={`${item.kind}:${item.id}`} className="rounded-md border border-border p-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-medium">{item.title}</p>
+                                            <p className="text-xs text-muted-foreground">{fmt(item.occurred_at)}</p>
+                                        </div>
+                                        {item.status && <Badge variant="outline" className="capitalize">{label(item.status)}</Badge>}
+                                    </div>
+                                    {item.summary && <p className="mt-2 text-sm text-muted-foreground">{item.summary}</p>}
+                                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                                        {item.channel && <span>Channel: {CHANNEL_LABELS[item.channel] ?? item.channel}</span>}
+                                        {item.step_id && <span>Step: {item.step_id}</span>}
+                                    </div>
+                                </li>
+                            ))}
+                        </ol>
+                    </div>
+                ) : null}
+            </SheetContent>
+        </Sheet>
+    )
+}
+
 export default function CampaignDetail() {
     const { id } = useParams<{ id: string }>()
     const [campaign, setCampaign] = useState<AutomationWorkflow | null>(null)
-    const [runs, setRuns] = useState<AutomationWorkflowRun[]>([])
+    const [overview, setOverview] = useState<CampaignOverview | null>(null)
+    const [runs, setRuns] = useState<CampaignRunListItem[]>([])
+    const [nextCursor, setNextCursor] = useState<string | null>(null)
+    const [operations, setOperations] = useState<CampaignOperations | null>(null)
     const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null)
     const [campaignUsage, setCampaignUsage] = useState<CampaignUsage | null>(null)
+    const [filters, setFilters] = useState<CampaignRunFilters>({ limit: 50 })
     const [loading, setLoading] = useState(true)
     const [runsLoading, setRunsLoading] = useState(true)
+    const [operationsLoading, setOperationsLoading] = useState(true)
+    const [timelineLoading, setTimelineLoading] = useState(false)
+    const [timeline, setTimeline] = useState<RunTimeline | null>(null)
     const [acting, setActing] = useState<string | null>(null)
     const [archiveOpen, setArchiveOpen] = useState(false)
     const [haltOpen, setHaltOpen] = useState(false)
     const [enrollOpen, setEnrollOpen] = useState(false)
-    const [cancelTarget, setCancelTarget] = useState<AutomationWorkflowRun | null>(null)
+    const [cancelTarget, setCancelTarget] = useState<CampaignRunListItem | null>(null)
 
-    async function refresh() {
+    const activeRuns =
+        (overview?.run_counts.pending ?? 0) +
+        (overview?.run_counts.running ?? 0) +
+        (overview?.run_counts.waiting ?? 0)
+
+    const refreshAll = useCallback(async () => {
         if (!id) return
         setLoading(true)
         setRunsLoading(true)
+        setOperationsLoading(true)
         try {
-            const [wf, wfRuns, summary, byCampaign] = await Promise.all([
+            const [wf, ov, runPage, ops, summary, byCampaign] = await Promise.all([
                 getCampaign(id),
-                listCampaignRuns(id),
+                getCampaignOverview(id),
+                listCampaignRuns(id, { ...filters, cursor: undefined }),
+                getCampaignOperations(id),
                 getUsageSummary(),
-                // The /by-campaign endpoint has no per-workflow filter; it returns the
-                // top-N workflows by spend. We request the backend max (200) and pick this
-                // campaign out client-side. Caveat: for an institution with >200 campaigns,
-                // a campaign outside the top-200-by-spend will not appear here and its usage
-                // cards fall back to the neutral empty state (0). If exact per-campaign usage
-                // for such tail campaigns is required, add a workflow_id filter to the route.
                 getUsageByCampaign(undefined, 200),
             ])
             setCampaign(wf)
-            setRuns(wfRuns)
+            setOverview(ov)
+            setRuns(runPage.items)
+            setNextCursor(runPage.next_cursor)
+            setOperations(ops)
             setUsageSummary(summary)
             setCampaignUsage(byCampaign.campaigns.find((row) => row.workflow_id === id) ?? null)
         } catch {
@@ -281,10 +774,27 @@ export default function CampaignDetail() {
         } finally {
             setLoading(false)
             setRunsLoading(false)
+            setOperationsLoading(false)
         }
-    }
+    }, [id, filters])
 
-    useEffect(() => { refresh() }, [id])
+    const refreshRuns = useCallback(async (next?: string | null) => {
+        if (!id) return
+        setRunsLoading(true)
+        try {
+            const runPage = await listCampaignRuns(id, { ...filters, cursor: next ?? undefined })
+            setRuns((prev) => next ? [...prev, ...runPage.items] : runPage.items)
+            setNextCursor(runPage.next_cursor)
+        } catch {
+            toast.error("Failed to load campaign runs")
+        } finally {
+            setRunsLoading(false)
+        }
+    }, [id, filters])
+
+    useEffect(() => {
+        refreshAll()
+    }, [refreshAll])
 
     async function handlePause() {
         if (!campaign) return
@@ -292,6 +802,7 @@ export default function CampaignDetail() {
         try {
             setCampaign(await pauseCampaign(campaign.id))
             toast.success("Campaign paused")
+            await refreshAll()
         } catch {
             toast.error("Failed to pause campaign")
         } finally {
@@ -305,6 +816,7 @@ export default function CampaignDetail() {
         try {
             setCampaign(await resumeCampaign(campaign.id))
             toast.success("Campaign resumed")
+            await refreshAll()
         } catch {
             toast.error("Failed to resume campaign")
         } finally {
@@ -319,6 +831,7 @@ export default function CampaignDetail() {
             setCampaign(await archiveCampaign(campaign.id))
             toast.success("Campaign archived")
             setArchiveOpen(false)
+            await refreshAll()
         } catch {
             toast.error("Failed to archive campaign")
         } finally {
@@ -334,7 +847,7 @@ export default function CampaignDetail() {
             setCampaign((prev) => prev ? { ...prev, status: result.status as AutomationWorkflow["status"] } : prev)
             toast.success(`Campaign halted. ${result.halted_runs} runs stopped.`)
             setHaltOpen(false)
-            await refresh()
+            await refreshAll()
         } catch {
             toast.error("Failed to halt campaign")
         } finally {
@@ -346,10 +859,10 @@ export default function CampaignDetail() {
         if (!campaign || !cancelTarget) return
         setActing(cancelTarget.id)
         try {
-            const updated = await cancelCampaignRun(campaign.id, cancelTarget.id)
-            setRuns((prev) => prev.map((run) => run.id === updated.id ? updated : run))
+            await cancelCampaignRun(campaign.id, cancelTarget.id)
             toast.success("Run cancelled")
             setCancelTarget(null)
+            await refreshAll()
         } catch {
             toast.error("Failed to cancel run")
         } finally {
@@ -357,16 +870,38 @@ export default function CampaignDetail() {
         }
     }
 
-    function handleManualEnrolled(run: AutomationWorkflowRun) {
-        setRuns((prev) => [run, ...prev.filter((existing) => existing.id !== run.id)])
+    async function openTimeline(run: CampaignRunListItem) {
+        if (!campaign) return
+        setTimelineLoading(true)
+        setTimeline(null)
+        try {
+            setTimeline(await getRunTimeline(campaign.id, run.id))
+        } catch {
+            toast.error("Failed to load run timeline")
+        } finally {
+            setTimelineLoading(false)
+        }
+    }
+
+    async function openTimelineById(runId: string) {
+        if (!campaign) return
+        setTimelineLoading(true)
+        setTimeline(null)
+        try {
+            setTimeline(await getRunTimeline(campaign.id, runId))
+        } catch {
+            toast.error("Failed to load run timeline")
+        } finally {
+            setTimelineLoading(false)
+        }
+    }
+
+    function handleManualEnrolled() {
+        refreshAll()
     }
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" />
-            </div>
-
+        <div className="flex-1 space-y-6 bg-background p-8 pt-6">
             <div className="flex items-center gap-3">
                 <Button variant="ghost" size="icon" asChild className="h-8 w-8">
                     <Link to="/institution-admin/campaigns">
@@ -376,7 +911,7 @@ export default function CampaignDetail() {
                 <span className="text-sm text-muted-foreground">Campaigns</span>
             </div>
 
-            {loading ? (
+            {loading && !campaign ? (
                 <div className="space-y-3">
                     <Skeleton className="h-9 w-64" />
                     <Skeleton className="h-5 w-40" />
@@ -385,94 +920,46 @@ export default function CampaignDetail() {
                 <div className="flex items-start justify-between gap-4">
                     <div className="space-y-1">
                         <h2 className="text-3xl font-bold tracking-tight">{campaign.name}</h2>
-                        <div className="flex items-center gap-3">
-                            <span
-                                className={cn(
-                                    "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize",
-                                    WORKFLOW_STATUS_STYLES[campaign.status] ?? WORKFLOW_STATUS_STYLES.draft,
-                                )}
-                            >
-                                {campaign.status}
-                            </span>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <WorkflowStatusBadge status={campaign.status} />
                             <span className="text-xs text-muted-foreground">
                                 {campaign.trigger_type
                                     ? (TRIGGER_LABELS[campaign.trigger_type] ?? campaign.trigger_type)
                                     : "No trigger"}
                             </span>
+                            <span className="text-xs text-muted-foreground">
+                                {number(activeRuns)} active run{activeRuns === 1 ? "" : "s"}
+                            </span>
                         </div>
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={refresh}
-                            disabled={loading || acting !== null}
-                            className="gap-1.5"
-                        >
+                        <Button variant="outline" size="sm" onClick={refreshAll} disabled={loading || acting !== null} className="gap-1.5">
                             <RefreshCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
                             Refresh
                         </Button>
                         {campaign.status === "active" && (
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={acting !== null}
-                                onClick={handlePause}
-                                className="gap-1.5"
-                            >
-                                {acting === "workflow" ? (
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                    <Pause className="h-3.5 w-3.5" />
-                                )}
+                            <Button variant="outline" size="sm" disabled={acting !== null} onClick={handlePause} className="gap-1.5">
+                                {acting === "workflow" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />}
                                 Pause
                             </Button>
                         )}
                         {campaign.status === "paused" && (
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={acting !== null}
-                                onClick={handleResume}
-                                className="gap-1.5"
-                            >
-                                {acting === "workflow" ? (
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                    <Play className="h-3.5 w-3.5" />
-                                )}
+                            <Button variant="outline" size="sm" disabled={acting !== null} onClick={handleResume} className="gap-1.5">
+                                {acting === "workflow" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                                 Resume
                             </Button>
                         )}
                         {campaign.status !== "archived" && (
                             <>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={acting !== null || campaign.status !== "active"}
-                                    onClick={() => setEnrollOpen(true)}
-                                    className="gap-1.5"
-                                >
+                                <Button variant="outline" size="sm" disabled={acting !== null || campaign.status !== "active"} onClick={() => setEnrollOpen(true)} className="gap-1.5">
                                     <UserPlus className="h-3.5 w-3.5" />
                                     Enroll
                                 </Button>
-                                <Button
-                                    variant="destructive"
-                                    size="sm"
-                                    disabled={acting !== null}
-                                    onClick={() => setHaltOpen(true)}
-                                    className="gap-1.5"
-                                >
+                                <Button variant="destructive" size="sm" disabled={acting !== null} onClick={() => setHaltOpen(true)} className="gap-1.5">
                                     <ShieldAlert className="h-3.5 w-3.5" />
                                     Halt
                                 </Button>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={acting !== null}
-                                    onClick={() => setArchiveOpen(true)}
-                                    className="gap-1.5"
-                                >
+                                <Button variant="outline" size="sm" disabled={acting !== null} onClick={() => setArchiveOpen(true)} className="gap-1.5">
                                     <Archive className="h-3.5 w-3.5" />
                                     Archive
                                 </Button>
@@ -481,138 +968,61 @@ export default function CampaignDetail() {
                     </div>
                 </div>
             ) : (
-                <p className="text-muted-foreground text-sm">Campaign not found.</p>
+                <p className="text-sm text-muted-foreground">Campaign not found.</p>
             )}
 
-            <Card>
-                <CardHeader className="pb-3">
-                    <CardTitle className="text-base font-semibold">Usage, last 30 days</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    {loading ? (
-                        <div className="grid gap-3 md:grid-cols-5">
-                            {Array.from({ length: 5 }).map((_, i) => (
-                                <Skeleton key={i} className="h-20 w-full" />
-                            ))}
-                        </div>
-                    ) : (
-                        <div className="grid gap-3 md:grid-cols-5">
-                            <Stat
-                                icon={<DollarSign className="h-3.5 w-3.5" />}
-                                label="Campaign cost"
-                                value={money(campaignUsage?.total_cost, usageSummary?.currency)}
-                            />
-                            <Stat
-                                icon={<Hash className="h-3.5 w-3.5" />}
-                                label="Campaign events"
-                                value={number(campaignUsage?.event_count)}
-                            />
-                            <Stat
-                                icon={<MessageSquare className="h-3.5 w-3.5" />}
-                                label="SMS segments"
-                                value={number(campaignUsage?.total_segments)}
-                            />
-                            <Stat
-                                icon={<Phone className="h-3.5 w-3.5" />}
-                                label="Voice minutes"
-                                value={number(campaignUsage?.total_minutes)}
-                            />
-                            <Stat
-                                icon={<Mail className="h-3.5 w-3.5" />}
-                                label="Emails"
-                                value={number(campaignUsage?.total_emails)}
-                            />
-                        </div>
-                    )}
-                </CardContent>
-            </Card>
-
-            <Card>
-                <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center gap-2 text-base font-semibold">
-                        <ActivitySquare className="h-4 w-4" />
-                        Runs
-                        {!runsLoading && (
-                            <span className="ml-1 text-xs font-normal text-muted-foreground">
-                                ({runs.length})
-                            </span>
-                        )}
-                    </CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                    {runsLoading ? (
-                        <div className="space-y-2 p-4">
-                            {Array.from({ length: 5 }).map((_, i) => (
-                                <Skeleton key={i} className="h-10 w-full" />
-                            ))}
-                        </div>
-                    ) : runs.length === 0 ? (
-                        <div className="flex flex-col items-center gap-2 px-4 py-12 text-center text-muted-foreground">
-                            <div className="grid size-12 place-items-center rounded-full bg-muted">
-                                <ActivitySquare className="h-6 w-6 opacity-40" />
-                            </div>
-                            <p className="text-sm font-medium text-foreground/70">No runs yet</p>
-                            <p className="text-xs">Patients enrolled in this campaign will appear here.</p>
-                        </div>
-                    ) : (
-                        <>
-                            <div className="grid grid-cols-[1fr_100px_100px_140px_140px_80px_70px] gap-x-4 border-b border-border px-4 py-2">
-                                <span className="text-xs font-medium text-muted-foreground">Run ID</span>
-                                <span className="text-xs font-medium text-muted-foreground">Status</span>
-                                <span className="text-xs font-medium text-muted-foreground">Outcome</span>
-                                <span className="text-xs font-medium text-muted-foreground">Started</span>
-                                <span className="text-xs font-medium text-muted-foreground">Completed</span>
-                                <span className="text-xs font-medium text-muted-foreground">Elapsed</span>
-                                <span />
-                            </div>
-                            <ul className="divide-y divide-border">
-                                {runs.map((run) => (
-                                    <li
-                                        key={run.id}
-                                        className="grid grid-cols-[1fr_100px_100px_140px_140px_80px_70px] items-center gap-x-4 px-4 py-2.5"
-                                    >
-                                        <span className="font-mono text-xs text-muted-foreground truncate">
-                                            {run.id.slice(0, 8)}...
-                                        </span>
-                                        <span
-                                            className={cn(
-                                                "text-xs font-medium capitalize",
-                                                RUN_STATUS_STYLES[run.status] ?? "text-foreground",
-                                            )}
-                                        >
-                                            {run.status}
-                                        </span>
-                                        <span className="text-xs text-muted-foreground capitalize">
-                                            {run.outcome ?? "-"}
-                                        </span>
-                                        <span className="text-xs text-muted-foreground">{fmt(run.started_at)}</span>
-                                        <span className="text-xs text-muted-foreground">{fmt(run.completed_at)}</span>
-                                        <span className="text-xs text-muted-foreground">{elapsed(run)}</span>
-                                        <div className="flex justify-end">
-                                            {isCancelable(run) && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-8 w-8 text-red-600 hover:text-red-700"
-                                                    onClick={() => setCancelTarget(run)}
-                                                    disabled={acting !== null}
-                                                    title="Cancel run"
-                                                >
-                                                    {acting === run.id ? (
-                                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                                    ) : (
-                                                        <Ban className="h-3.5 w-3.5" />
-                                                    )}
-                                                </Button>
-                                            )}
-                                        </div>
-                                    </li>
-                                ))}
-                            </ul>
-                        </>
-                    )}
-                </CardContent>
-            </Card>
+            <Tabs defaultValue="overview" className="space-y-4">
+                <TabsList>
+                    <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="runs">Runs</TabsTrigger>
+                    <TabsTrigger value="operations">Operations</TabsTrigger>
+                    <TabsTrigger value="analytics">Analytics</TabsTrigger>
+                </TabsList>
+                <TabsContent value="overview">
+                    <OverviewTab
+                        overview={overview}
+                        usageSummary={usageSummary}
+                        campaignUsage={campaignUsage}
+                        loading={loading}
+                    />
+                </TabsContent>
+                <TabsContent value="runs">
+                    <RunsTab
+                        runs={runs}
+                        loading={runsLoading}
+                        filters={filters}
+                        onFiltersChange={setFilters}
+                        onSelectRun={openTimeline}
+                        onCancelRun={setCancelTarget}
+                        acting={acting}
+                        nextCursor={nextCursor}
+                        onLoadMore={() => refreshRuns(nextCursor)}
+                    />
+                </TabsContent>
+                <TabsContent value="operations">
+                    <OperationsTab
+                        operations={operations}
+                        loading={operationsLoading}
+                        onSelectRun={openTimelineById}
+                    />
+                </TabsContent>
+                <TabsContent value="analytics">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-base font-semibold">Outcome analytics</CardTitle>
+                        </CardHeader>
+                        <CardContent className="grid gap-3 md:grid-cols-4">
+                            {Object.entries(overview?.outcome_counts ?? {}).length === 0 ? (
+                                <p className="text-sm text-muted-foreground">No outcomes recorded yet.</p>
+                            ) : (
+                                Object.entries(overview?.outcome_counts ?? {}).map(([outcome, count]) => (
+                                    <Stat key={outcome} icon={<Hash className="h-3.5 w-3.5" />} label={label(outcome)} value={number(count)} />
+                                ))
+                            )}
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+            </Tabs>
 
             <Dialog open={archiveOpen} onOpenChange={(open) => !open && setArchiveOpen(false)}>
                 <DialogContent className="max-w-md">
@@ -623,9 +1033,7 @@ export default function CampaignDetail() {
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setArchiveOpen(false)} disabled={acting !== null}>
-                            Cancel
-                        </Button>
+                        <Button variant="outline" onClick={() => setArchiveOpen(false)} disabled={acting !== null}>Cancel</Button>
                         <Button variant="destructive" onClick={handleArchive} disabled={acting !== null}>
                             {acting === "archive" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             Archive
@@ -643,9 +1051,7 @@ export default function CampaignDetail() {
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setHaltOpen(false)} disabled={acting !== null}>
-                            Cancel
-                        </Button>
+                        <Button variant="outline" onClick={() => setHaltOpen(false)} disabled={acting !== null}>Cancel</Button>
                         <Button variant="destructive" onClick={handleEmergencyHalt} disabled={acting !== null}>
                             {acting === "halt" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             Halt campaign
@@ -663,9 +1069,7 @@ export default function CampaignDetail() {
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setCancelTarget(null)} disabled={acting !== null}>
-                            Keep run
-                        </Button>
+                        <Button variant="outline" onClick={() => setCancelTarget(null)} disabled={acting !== null}>Keep run</Button>
                         <Button variant="destructive" onClick={handleCancelRun} disabled={acting !== null}>
                             {acting === cancelTarget?.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             Cancel run
@@ -681,6 +1085,14 @@ export default function CampaignDetail() {
                     onEnrolled={handleManualEnrolled}
                 />
             )}
+            <TimelineDrawer
+                timeline={timeline}
+                loading={timelineLoading}
+                onClose={() => {
+                    setTimeline(null)
+                    setTimelineLoading(false)
+                }}
+            />
         </div>
     )
 }

@@ -581,6 +581,128 @@ export interface AutomationWorkflowRun {
     created_at: string;
 }
 
+export interface CampaignRunListItem {
+    id: string;
+    workflow_id: string;
+    workflow_version_id: string;
+    status: string;
+    current_step_id: string | null;
+    current_step_type: string | null;
+    outcome: string | null;
+    blocked_reason: string | null;
+    contact_id: string | null;
+    contact_name: string | null;
+    next_due_at: string | null;
+    latest_event_at: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    created_at: string;
+}
+
+export interface CampaignRunList {
+    items: CampaignRunListItem[];
+    limit: number;
+    next_cursor: string | null;
+}
+
+export interface CampaignOverview {
+    workflow_id: string;
+    workflow_name: string;
+    workflow_status: string;
+    trigger_type: string | null;
+    location_id: string | null;
+    latest_version: {
+        id: string;
+        version_number: number;
+        published_at: string;
+        is_current: boolean;
+        content_classification: string | null;
+    } | null;
+    readiness: {
+        overall_status: string;
+        blockers_count: number;
+        warnings_count: number;
+        unknown_count: number;
+        estimate_basis: string;
+        generated_at: string;
+    };
+    channels: string[];
+    run_counts: Record<string, number>;
+    outcome_counts: Record<string, number>;
+    channel_attempts: Record<string, {
+        event_count: number;
+        segments: number;
+        dials: number;
+        emails: number;
+        minutes: number;
+        cost: number;
+    }>;
+    recent_outcomes: Array<{
+        run_id: string;
+        status: string;
+        outcome: string | null;
+        completed_at: string | null;
+        created_at: string;
+    }>;
+    generated_at: string;
+}
+
+export interface CampaignRunFilters {
+    status?: string;
+    outcome?: string;
+    current_node?: string;
+    next_due_from?: string;
+    next_due_to?: string;
+    channel?: "sms" | "email" | "voice";
+    failure_reason?: string;
+    contact_search?: string;
+    cursor?: string;
+    limit?: number;
+}
+
+export interface RunTimelineItem {
+    id: string;
+    kind: string;
+    occurred_at: string;
+    title: string;
+    status: string | null;
+    step_id: string | null;
+    channel: string | null;
+    summary: string | null;
+    metadata: Record<string, unknown>;
+}
+
+export interface RunTimeline {
+    run: CampaignRunListItem;
+    contact: {
+        id: string | null;
+        display_name: string | null;
+        phone_masked: string | null;
+    };
+    items: RunTimelineItem[];
+}
+
+export interface CampaignOperationItem {
+    id: string;
+    run_id: string;
+    kind: string;
+    severity: string;
+    title: string;
+    status: string | null;
+    step_id: string | null;
+    occurred_at: string | null;
+    cancel_eligible: boolean;
+    replay_eligible: boolean;
+    reason: string | null;
+}
+
+export interface CampaignOperations {
+    stuck_waiting_runs: CampaignOperationItem[];
+    failed_sends: CampaignOperationItem[];
+    suppressed_skipped_runs: CampaignOperationItem[];
+    generated_at: string;
+}
+
 export interface ChannelUsage {
     channel: string;
     event_count: number;

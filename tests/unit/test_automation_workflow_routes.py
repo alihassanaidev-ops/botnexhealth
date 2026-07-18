@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.app.api.routes.automation_workflows import (
+    CampaignRunListResponse,
     EnrollRequest,
     LaunchChecklistPreviewRequest,
     ValidateDefinitionRequest,
@@ -20,10 +21,14 @@ from src.app.api.routes.automation_workflows import (
     cancel_run,
     create_workflow,
     enroll_in_workflow,
+    get_campaign_operations,
+    get_campaign_overview,
     get_run_status,
+    get_run_timeline,
     get_launch_checklist,
     get_workflow,
     list_merge_fields,
+    list_runs,
     list_workflow_versions,
     list_workflows,
     preview_launch_checklist,
@@ -33,6 +38,15 @@ from src.app.api.routes.automation_workflows import (
 )
 from src.app.services.automation.launch_checklist_service import (
     CampaignLaunchChecklist,
+)
+from src.app.services.automation.campaign_operations_service import (
+    CampaignOperations,
+    CampaignOverview,
+    CampaignRunList,
+    CampaignRunListItem,
+    OperationItem,
+    RunTimeline,
+    TimelineItem,
 )
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
@@ -73,8 +87,11 @@ def _make_run(status="waiting"):
     r.outcome = None
     r.started_at = _NOW
     r.completed_at = None
+    r.blocked_reason = None
     r.created_at = _NOW
     r.trigger_metadata = {}
+    r.workflow_version_id = "ver-1"
+    r.contact_id = "contact-1"
     return r
 
 
@@ -93,6 +110,26 @@ def _checklist():
         estimate_basis="test",
         generated_at=_NOW,
         items=[],
+    )
+
+
+def _run_list_item(run_id="run-1"):
+    return CampaignRunListItem(
+        id=run_id,
+        workflow_id="wf-1",
+        workflow_version_id="ver-1",
+        status="waiting",
+        current_step_id="wait-1",
+        current_step_type="wait",
+        outcome=None,
+        blocked_reason=None,
+        contact_id="contact-1",
+        contact_name="Jordan Rivera",
+        next_due_at=_NOW,
+        latest_event_at=_NOW,
+        started_at=_NOW,
+        completed_at=None,
+        created_at=_NOW,
     )
 
 
@@ -357,6 +394,182 @@ def test_preview_launch_checklist_uses_unsaved_definition():
         definition_dict=draft,
         location_id="loc-1",
     )
+
+
+# ---------------------------------------------------------------------------
+# campaign overview and operations
+# ---------------------------------------------------------------------------
+
+
+def test_get_campaign_overview_returns_operational_summary():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    operations_svc = AsyncMock()
+    operations_svc.overview = AsyncMock(
+        return_value=CampaignOverview(
+            workflow_id="wf-1",
+            workflow_name="Test Workflow",
+            workflow_status="active",
+            trigger_type="manual",
+            location_id="loc-1",
+            latest_version={"id": "ver-1", "version_number": 1},
+            readiness={"overall_status": "pass", "blockers_count": 0},
+            channels=["sms"],
+            run_counts={"waiting": 2},
+            outcome_counts={"booked": 1},
+            channel_attempts={"sms": {"event_count": 3}},
+            recent_outcomes=[],
+            generated_at=_NOW,
+        )
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignOperationsService",
+            return_value=operations_svc,
+        ),
+    ):
+        result = asyncio.run(get_campaign_overview("wf-1", user))
+
+    assert result.workflow_id == "wf-1"
+    assert result.run_counts["waiting"] == 2
+    operations_svc.overview.assert_awaited_once_with(wf, institution_id="inst-1")
+
+
+def test_list_runs_uses_filters_and_returns_cursor_response():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    operations_svc = AsyncMock()
+    operations_svc.list_runs = AsyncMock(
+        return_value=CampaignRunList(
+            items=[_run_list_item()],
+            limit=25,
+            next_cursor="cursor-1",
+        )
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignOperationsService",
+            return_value=operations_svc,
+        ),
+    ):
+        result = asyncio.run(
+            list_runs(
+                "wf-1",
+                user,
+                limit=25,
+                status_filter="waiting",
+                channel="sms",
+                contact_search="Jordan",
+            )
+        )
+
+    assert isinstance(result, CampaignRunListResponse)
+    assert result.items[0].contact_name == "Jordan Rivera"
+    assert result.next_cursor == "cursor-1"
+    filters = operations_svc.list_runs.await_args.kwargs["filters"]
+    assert filters.status == "waiting"
+    assert filters.channel == "sms"
+    assert filters.contact_search == "Jordan"
+
+
+def test_get_run_timeline_returns_phi_light_items():
+    user = _make_user()
+    operations_svc = AsyncMock()
+    operations_svc.timeline = AsyncMock(
+        return_value=RunTimeline(
+            run=_run_list_item(),
+            contact={"id": "contact-1", "display_name": "Jordan Rivera", "phone_masked": None},
+            items=[
+                TimelineItem(
+                    id="event-1",
+                    kind="inbound_reply",
+                    occurred_at=_NOW,
+                    title="Inbound SMS reply",
+                    status="confirm",
+                    channel="sms",
+                    summary="Intent: confirm",
+                )
+            ],
+        )
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignOperationsService",
+            return_value=operations_svc,
+        ),
+    ):
+        result = asyncio.run(get_run_timeline("wf-1", "run-1", user))
+
+    assert result.contact["display_name"] == "Jordan Rivera"
+    assert result.items[0].kind == "inbound_reply"
+    assert "body" not in result.items[0].metadata
+
+
+def test_get_campaign_operations_returns_sections():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    operations_svc = AsyncMock()
+    item = OperationItem(
+        id="op-1",
+        run_id="run-1",
+        kind="failed_send",
+        severity="critical",
+        title="SMS send failed",
+        status="twilio_error",
+        step_id="sms-1",
+        occurred_at=_NOW,
+        cancel_eligible=True,
+        replay_eligible=False,
+        reason="twilio_error",
+    )
+    operations_svc.operations = AsyncMock(
+        return_value=CampaignOperations(
+            stuck_waiting_runs=[],
+            failed_sends=[item],
+            suppressed_skipped_runs=[],
+            generated_at=_NOW,
+        )
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignOperationsService",
+            return_value=operations_svc,
+        ),
+    ):
+        result = asyncio.run(get_campaign_operations("wf-1", user))
+
+    assert result.failed_sends[0].title == "SMS send failed"
+    assert result.failed_sends[0].replay_eligible is False
 
 
 # ---------------------------------------------------------------------------

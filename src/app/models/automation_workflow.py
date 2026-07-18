@@ -237,6 +237,24 @@ class AutomationWorkflowRun(Base):
         Index("ix_automation_workflow_runs_location_status", "location_id", "status"),
         Index("ix_automation_workflow_runs_contact", "institution_id", "contact_id"),
         Index("ix_automation_workflow_runs_workflow", "workflow_id", "created_at"),
+        Index(
+            "ix_automation_workflow_runs_workflow_status_created",
+            "workflow_id",
+            "status",
+            "created_at",
+        ),
+        Index(
+            "ix_automation_workflow_runs_workflow_current_step",
+            "workflow_id",
+            "current_step_id",
+            "created_at",
+        ),
+        Index(
+            "ix_automation_workflow_runs_workflow_outcome",
+            "workflow_id",
+            "outcome",
+            "created_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(

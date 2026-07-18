@@ -30,6 +30,10 @@ from src.app.services.automation.launch_checklist_service import (
     CampaignLaunchChecklist,
     CampaignLaunchChecklistService,
 )
+from src.app.services.automation.campaign_operations_service import (
+    CampaignOperationsService,
+    RunListFilters,
+)
 from src.app.services.automation.merge_field_catalog import fields_for
 from src.app.services.automation.validation_service import WorkflowValidationService
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
@@ -118,6 +122,30 @@ class WorkflowRunResponse(BaseModel):
             completed_at=run.completed_at,
             created_at=run.created_at,
         )
+
+
+class CampaignRunListItemResponse(BaseModel):
+    id: str
+    workflow_id: str
+    workflow_version_id: str
+    status: str
+    current_step_id: str | None
+    current_step_type: str | None
+    outcome: str | None
+    blocked_reason: str | None
+    contact_id: str | None
+    contact_name: str | None
+    next_due_at: datetime | None
+    latest_event_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class CampaignRunListResponse(BaseModel):
+    items: list[CampaignRunListItemResponse] = Field(default_factory=list)
+    limit: int
+    next_cursor: str | None
 
 
 class WorkflowVersionResponse(BaseModel):
@@ -271,6 +299,61 @@ class LaunchChecklistResponse(BaseModel):
                 for item in checklist.items
             ],
         )
+
+
+class CampaignOverviewResponse(BaseModel):
+    workflow_id: str
+    workflow_name: str
+    workflow_status: str
+    trigger_type: str | None
+    location_id: str | None
+    latest_version: dict[str, Any] | None
+    readiness: dict[str, Any]
+    channels: list[str]
+    run_counts: dict[str, int]
+    outcome_counts: dict[str, int]
+    channel_attempts: dict[str, dict[str, Any]]
+    recent_outcomes: list[dict[str, Any]]
+    generated_at: datetime
+
+
+class TimelineItemResponse(BaseModel):
+    id: str
+    kind: str
+    occurred_at: datetime
+    title: str
+    status: str | None = None
+    step_id: str | None = None
+    channel: str | None = None
+    summary: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunTimelineResponse(BaseModel):
+    run: CampaignRunListItemResponse
+    contact: dict[str, Any]
+    items: list[TimelineItemResponse] = Field(default_factory=list)
+
+
+class OperationItemResponse(BaseModel):
+    id: str
+    run_id: str
+    kind: str
+    severity: str
+    title: str
+    status: str | None
+    step_id: str | None
+    occurred_at: datetime | None
+    cancel_eligible: bool
+    replay_eligible: bool
+    reason: str | None
+
+
+class CampaignOperationsResponse(BaseModel):
+    stuck_waiting_runs: list[OperationItemResponse] = Field(default_factory=list)
+    failed_sends: list[OperationItemResponse] = Field(default_factory=list)
+    suppressed_skipped_runs: list[OperationItemResponse] = Field(default_factory=list)
+    generated_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -657,6 +740,24 @@ async def get_launch_checklist(
         return LaunchChecklistResponse.from_service(checklist)
 
 
+@router.get("/{workflow_id}/overview", response_model=CampaignOverviewResponse)
+async def get_campaign_overview(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> CampaignOverviewResponse:
+    """Return an operational campaign summary: latest version, readiness,
+    channels, run status counts, usage by channel, and recent outcomes."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        overview = await CampaignOperationsService(session).overview(
+            wf,
+            institution_id=inst_id,
+        )
+        return CampaignOverviewResponse(**overview.__dict__)
+
+
 @router.post("/{workflow_id}/launch-checklist/preview", response_model=LaunchChecklistResponse)
 async def preview_launch_checklist(
     workflow_id: str,
@@ -866,25 +967,78 @@ async def enroll_in_workflow(
     return WorkflowRunResponse.from_model(run)
 
 
-@router.get("/{workflow_id}/runs", response_model=list[WorkflowRunResponse])
+@router.get("/{workflow_id}/runs", response_model=CampaignRunListResponse)
 async def list_runs(
     workflow_id: str,
     current_user: _InstitutionOrLocationAdmin,
     limit: int = Query(50, ge=1, le=500),
-) -> list[WorkflowRunResponse]:
+    cursor: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    outcome: str | None = Query(None),
+    current_node: str | None = Query(None),
+    next_due_from: datetime | None = Query(None),
+    next_due_to: datetime | None = Query(None),
+    channel: str | None = Query(None, pattern="^(sms|email|voice)$"),
+    failure_reason: str | None = Query(None),
+    contact_search: str | None = Query(None),
+) -> CampaignRunListResponse:
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
-        result = await session.execute(
-            sa_select(AutomationWorkflowRun)
-            .where(
-                AutomationWorkflowRun.workflow_id == workflow_id,
-                AutomationWorkflowRun.institution_id == inst_id,
-            )
-            .order_by(AutomationWorkflowRun.created_at.desc())
-            .limit(limit)
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, inst_id)
+        runs = await CampaignOperationsService(session).list_runs(
+            workflow_id,
+            institution_id=inst_id,
+            filters=RunListFilters(
+                status=status_filter,
+                outcome=outcome,
+                current_node=current_node,
+                next_due_from=next_due_from,
+                next_due_to=next_due_to,
+                channel=channel,
+                failure_reason=failure_reason,
+                contact_search=contact_search,
+                cursor=cursor,
+                limit=limit,
+            ),
         )
-        runs = result.scalars().all()
-    return [WorkflowRunResponse.from_model(r) for r in runs]
+    return CampaignRunListResponse(
+        items=[CampaignRunListItemResponse(**item.__dict__) for item in runs.items],
+        limit=runs.limit,
+        next_cursor=runs.next_cursor,
+    )
+
+
+@router.get("/{workflow_id}/operations", response_model=CampaignOperationsResponse)
+async def get_campaign_operations(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    limit: int = Query(25, ge=1, le=100),
+) -> CampaignOperationsResponse:
+    """Return current operational exceptions for the campaign."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, inst_id)
+        operations = await CampaignOperationsService(session).operations(
+            workflow_id,
+            institution_id=inst_id,
+            limit=limit,
+        )
+    return CampaignOperationsResponse(
+        stuck_waiting_runs=[
+            OperationItemResponse(**item.__dict__)
+            for item in operations.stuck_waiting_runs
+        ],
+        failed_sends=[
+            OperationItemResponse(**item.__dict__) for item in operations.failed_sends
+        ],
+        suppressed_skipped_runs=[
+            OperationItemResponse(**item.__dict__)
+            for item in operations.suppressed_skipped_runs
+        ],
+        generated_at=operations.generated_at,
+    )
 
 
 @router.get("/{workflow_id}/runs/{run_id}", response_model=WorkflowRunResponse)
@@ -903,6 +1057,29 @@ async def get_run_status(
         ):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return WorkflowRunResponse.from_model(run)
+
+
+@router.get("/{workflow_id}/runs/{run_id}/timeline", response_model=RunTimelineResponse)
+async def get_run_timeline(
+    workflow_id: str,
+    run_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> RunTimelineResponse:
+    """Return a PHI-light timeline for one campaign run."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        timeline = await CampaignOperationsService(session).timeline(
+            workflow_id,
+            run_id,
+            institution_id=inst_id,
+        )
+        if timeline is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    return RunTimelineResponse(
+        run=CampaignRunListItemResponse(**timeline.run.__dict__),
+        contact=timeline.contact,
+        items=[TimelineItemResponse(**item.__dict__) for item in timeline.items],
+    )
 
 
 @router.post("/{workflow_id}/runs/{run_id}/cancel", response_model=WorkflowRunResponse)
