@@ -29,6 +29,7 @@ from src.app.api.routes.twilio_webhooks import (
         ("Yes, START please", "START"),
         ("HELP", "HELP"),
         ("more info please", "HELP"),
+        ("cancel my notifications", "STOP"),
         # STOP wins over START in the unlikely "STOP and START" case.
         ("STOP and START", "STOP"),
         # French / CASL opt-out keywords (accented and un-accented forms).
@@ -46,6 +47,7 @@ from src.app.api.routes.twilio_webhooks import (
         ("Thanks!", ""),
         ("STOPPING by tomorrow", ""),  # not a whole-word STOP
         ("CANCELLATION confirmed", ""),  # not a whole-word CANCEL
+        ("cancel my appointment", ""),  # campaign handoff, not SMS opt-out
     ],
 )
 def test_classify_intent_finds_keywords_anywhere(body: str, expected: str) -> None:

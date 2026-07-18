@@ -16,8 +16,10 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
 
 from src.app.config import settings
+from src.app.database import get_system_db_session
+from src.app.services.automation.campaign_response_service import CampaignResponseService
 from src.app.services.email_unsubscribe import verify_unsubscribe_token
-from src.app.services.sms_privacy import hash_email
+from src.app.services.sms_privacy import hash_email, safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,12 @@ async def unsubscribe(token: str = Query(..., description="Signed unsubscribe to
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired unsubscribe link")
     institution_id, email_hash = verified
     _enqueue_suppress(institution_id, email_hash, reason="unsubscribe")
+    await _record_email_response_best_effort(
+        institution_id=institution_id,
+        event_type="unsubscribe",
+        source_event_id=f"unsubscribe:{email_hash}",
+        raw_payload={"email_hash": email_hash},
+    )
     logger.info("email unsubscribe: institution=%s email_hash=%s", institution_id, email_hash[:12])
     return PlainTextResponse(
         "You've been unsubscribed. You will no longer receive emails from this clinic."
@@ -134,6 +142,12 @@ async def resend_webhook(request: Request) -> dict[str, Any]:
         if institution_id:
             # Scope came through on the event — suppress directly.
             _enqueue_suppress(institution_id, email_hash, reason=reason)
+            await _record_email_response_best_effort(
+                institution_id=institution_id,
+                event_type=event_type,
+                source_event_id=str(data.get("email_id") or data.get("id") or ""),
+                raw_payload={"type": event_type, "email_hash": email_hash},
+            )
         else:
             # No institution tag (Resend omits custom tags on bounce/complaint) —
             # resolve the institution(s) from the recipient's email_hash in the task.
@@ -145,3 +159,32 @@ async def resend_webhook(request: Request) -> dict[str, Any]:
         event_type, bool(institution_id), suppressed,
     )
     return {"status": "processed", "type": event_type, "suppressed": suppressed}
+
+
+async def _record_email_response_best_effort(
+    *,
+    institution_id: str,
+    event_type: str,
+    source_event_id: str | None,
+    raw_payload: dict[str, Any],
+) -> None:
+    try:
+        async with get_system_db_session(
+            "celery",
+            institution_id=institution_id,
+            external_id=f"email_response:{source_event_id or event_type}",
+        ) as session:
+            await CampaignResponseService(session).record_email_response(
+                institution_id=institution_id,
+                event_type=event_type,
+                source_event_id=source_event_id or None,
+                raw_payload=raw_payload,
+            )
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001 - compliance webhook must not fail on analytics.
+        logger.error(
+            "email response event record failed: institution=%s type=%s error=%s",
+            institution_id,
+            event_type,
+            safe_error_summary(exc),
+        )

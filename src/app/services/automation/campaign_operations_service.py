@@ -28,6 +28,7 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowTimer,
     AutomationWorkflowVersion,
 )
+from src.app.models.campaign_response import CampaignResponseEvent, CampaignStaffHandoff
 from src.app.models.contact import Contact
 from src.app.models.inbound_sms_message import InboundSmsMessage
 from src.app.models.outbound_voice import WorkflowVoiceAttempt
@@ -127,6 +128,8 @@ class CampaignOverview:
     channels: list[str]
     run_counts: dict[str, int]
     outcome_counts: dict[str, int]
+    response_counts: dict[str, int]
+    open_handoff_count: int
     channel_attempts: dict[str, dict[str, Any]]
     recent_outcomes: list[dict[str, Any]]
     generated_at: datetime
@@ -152,6 +155,7 @@ class CampaignOperations:
     stuck_waiting_runs: list[OperationItem]
     failed_sends: list[OperationItem]
     suppressed_skipped_runs: list[OperationItem]
+    open_handoffs: list[OperationItem]
     generated_at: datetime
 
 
@@ -221,6 +225,25 @@ class CampaignOperationsService:
                 .group_by(UsageEvent.channel)
             )
         ).all()
+        response_rows = (
+            await self.session.execute(
+                select(CampaignResponseEvent.normalized_intent, func.count())
+                .where(
+                    CampaignResponseEvent.institution_id == institution_id,
+                    CampaignResponseEvent.workflow_id == str(workflow.id),
+                )
+                .group_by(CampaignResponseEvent.normalized_intent)
+            )
+        ).all()
+        open_handoff_count = (
+            await self.session.execute(
+                select(func.count(CampaignStaffHandoff.id)).where(
+                    CampaignStaffHandoff.institution_id == institution_id,
+                    CampaignStaffHandoff.workflow_id == str(workflow.id),
+                    CampaignStaffHandoff.status.in_(["open", "assigned"]),
+                )
+            )
+        ).scalar_one()
         recent_runs = (
             await self.session.execute(
                 select(AutomationWorkflowRun)
@@ -245,6 +268,8 @@ class CampaignOperationsService:
             channels=channels,
             run_counts={str(status): int(count) for status, count in status_rows},
             outcome_counts={str(outcome): int(count) for outcome, count in outcome_rows},
+            response_counts={str(intent): int(count) for intent, count in response_rows},
+            open_handoff_count=int(open_handoff_count or 0),
             channel_attempts={
                 str(channel): {
                     "event_count": int(count),
@@ -312,6 +337,8 @@ class CampaignOperationsService:
         items.extend(await self._timer_items(run))
         items.extend(await self._sms_items(run))
         items.extend(await self._inbound_sms_items(run))
+        items.extend(await self._response_items(run))
+        items.extend(await self._handoff_items(run))
         items.extend(await self._voice_items(run))
         items.extend(await self._usage_items(run))
 
@@ -329,10 +356,12 @@ class CampaignOperationsService:
         stuck = await self._stuck_waiting(workflow_id, institution_id, now=now, limit=limit)
         failed = await self._failed_sends(workflow_id, institution_id, limit=limit)
         suppressed = await self._suppressed_or_skipped(workflow_id, institution_id, limit=limit)
+        handoffs = await self._open_handoffs(workflow_id, institution_id, limit=limit)
         return CampaignOperations(
             stuck_waiting_runs=stuck,
             failed_sends=failed,
             suppressed_skipped_runs=suppressed,
+            open_handoffs=handoffs,
             generated_at=now,
         )
 
@@ -635,6 +664,62 @@ class CampaignOperationsService:
             for row in rows
         ]
 
+    async def _response_items(self, run: AutomationWorkflowRun) -> list[TimelineItem]:
+        rows = (
+            await self.session.execute(
+                select(CampaignResponseEvent)
+                .where(CampaignResponseEvent.workflow_run_id == str(run.id))
+                .order_by(CampaignResponseEvent.occurred_at)
+            )
+        ).scalars().all()
+        return [
+            TimelineItem(
+                id=str(row.id),
+                kind="patient_response",
+                occurred_at=row.occurred_at,
+                title="Patient response",
+                status=row.normalized_intent,
+                channel=row.channel,
+                summary=row.summary or f"Intent: {row.normalized_intent}",
+                metadata={
+                    "normalized_outcome": row.normalized_outcome,
+                    "source": row.source,
+                    "source_event_type": row.source_event_type,
+                    "source_event_id": row.source_event_id,
+                    "confidence": row.confidence,
+                },
+            )
+            for row in rows
+        ]
+
+    async def _handoff_items(self, run: AutomationWorkflowRun) -> list[TimelineItem]:
+        rows = (
+            await self.session.execute(
+                select(CampaignStaffHandoff)
+                .where(CampaignStaffHandoff.workflow_run_id == str(run.id))
+                .order_by(CampaignStaffHandoff.created_at)
+            )
+        ).scalars().all()
+        return [
+            TimelineItem(
+                id=str(row.id),
+                kind="staff_handoff",
+                occurred_at=row.created_at,
+                title="Staff handoff",
+                status=row.status,
+                summary=row.summary or row.reason,
+                metadata={
+                    "reason": row.reason,
+                    "response_event_id": row.response_event_id,
+                    "assignee_user_id": row.assignee_user_id,
+                    "due_at": row.due_at,
+                    "resolved_at": row.resolved_at,
+                    "resolution_outcome": row.resolution_outcome,
+                },
+            )
+            for row in rows
+        ]
+
     async def _voice_items(self, run: AutomationWorkflowRun) -> list[TimelineItem]:
         rows = (
             await self.session.execute(
@@ -807,6 +892,39 @@ class CampaignOperationsService:
                 reason=step.result_code or step.status,
             )
             for run, step in rows
+        ]
+
+    async def _open_handoffs(
+        self, workflow_id: str, institution_id: str, *, limit: int
+    ) -> list[OperationItem]:
+        rows = (
+            await self.session.execute(
+                select(CampaignStaffHandoff)
+                .where(
+                    CampaignStaffHandoff.workflow_id == workflow_id,
+                    CampaignStaffHandoff.institution_id == institution_id,
+                    CampaignStaffHandoff.status.in_(["open", "assigned"]),
+                    CampaignStaffHandoff.workflow_run_id.is_not(None),
+                )
+                .order_by(CampaignStaffHandoff.created_at.asc())
+                .limit(limit)
+            )
+        ).scalars().all()
+        return [
+            OperationItem(
+                id=str(row.id),
+                run_id=str(row.workflow_run_id),
+                kind="staff_handoff",
+                severity="warning" if row.status == "open" else "info",
+                title="Patient response needs staff review",
+                status=row.status,
+                step_id=None,
+                occurred_at=row.created_at,
+                cancel_eligible=False,
+                replay_eligible=False,
+                reason=row.summary or row.reason,
+            )
+            for row in rows
         ]
 
 

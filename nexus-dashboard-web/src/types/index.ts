@@ -629,6 +629,8 @@ export interface CampaignOverview {
     channels: string[];
     run_counts: Record<string, number>;
     outcome_counts: Record<string, number>;
+    response_counts: Record<string, number>;
+    open_handoff_count: number;
     channel_attempts: Record<string, {
         event_count: number;
         segments: number;
@@ -700,6 +702,7 @@ export interface CampaignOperations {
     stuck_waiting_runs: CampaignOperationItem[];
     failed_sends: CampaignOperationItem[];
     suppressed_skipped_runs: CampaignOperationItem[];
+    open_handoffs: CampaignOperationItem[];
     generated_at: string;
 }
 

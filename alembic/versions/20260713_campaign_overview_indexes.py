@@ -15,6 +15,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Alembic's default version table is varchar(32); this revision id is 34
+    # chars, so widen before Alembic records the completed step.
+    op.execute("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE varchar(64)")
     for stmt in (
         "CREATE INDEX IF NOT EXISTS ix_automation_workflow_runs_workflow_status_created "
         "ON automation_workflow_runs (workflow_id, status, created_at)",

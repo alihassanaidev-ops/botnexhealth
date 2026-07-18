@@ -959,6 +959,16 @@ async def _resume_voice_outcome_async(
         await AutomationWorkflowSchedulerService(session).cancel_timers_for_run(run.id)
 
         # Write the outcome into the run context so the downstream branch reads it.
+        from src.app.services.automation.campaign_response_service import (
+            CampaignResponseService,
+        )
+
+        await CampaignResponseService(session).record_voice_response(
+            institution_id=institution_id,
+            retell_call_id=retell_call_id,
+            call_outcome=call_outcome,
+            disconnection_reason=disconnection_reason,
+        )
         md = dict(run.trigger_metadata or {})
         md["call_outcome"] = call_outcome
         run.trigger_metadata = md

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -27,6 +26,7 @@ from src.app.services.sms_privacy import (
     safe_error_summary,
 )
 from src.app.services.sms_service import SmsService
+from src.app.services.automation.sms_intent_parser import parse_sms_intent
 from src.app.services.usage_metering_service import (
     parse_cost_amount,
     parse_segments,
@@ -42,28 +42,6 @@ router = APIRouter(prefix="/twilio/webhooks", tags=["Twilio Webhooks"])
 # follow-on "delivered" callback that Twilio sends after "sent".
 _TERMINAL_SMS_STATUSES = {"delivered", "sent", "failed", "undelivered"}
 
-# CASL (Canada) requires honoring French opt-out/help keywords alongside the
-# English ones. Entries are stored UPPERCASE (incl. accented forms) because the
-# body is uppercased before tokenizing and Python's str.upper() maps é→É, ê→Ê.
-STOP_KEYWORDS = {
-    "STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT",
-    "ARRET", "ARRÊT", "DESABONNER", "DÉSABONNER", "RETIRER", "SUPPRIMER",
-}
-START_KEYWORDS = {"START", "UNSTOP"}
-HELP_KEYWORDS = {"HELP", "INFO", "AIDE"}
-
-# Confirmation replies are intentionally narrow because they write back to the PMS.
-# STOP/START/HELP are classified first, so opt-out safety always wins.
-CONFIRMATION_KEYWORDS = {"YES", "Y", "CONFIRM", "C", "1"}
-
-# Tokenize on any non-letter run. Catches phrasings like "please stop calling"
-# and "STOP!" without false-positives on partial words inside other tokens.
-# Unicode letter class (not just A-Z) so accented French keywords like ARRÊT
-# and DÉSABONNER survive tokenization instead of splitting around the accent.
-_TOKEN_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
-_CONFIRMATION_TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
-
-
 def _classify_intent(body: str) -> str:
     """Return STOP/START/HELP if any keyword appears as a whole token.
 
@@ -71,14 +49,8 @@ def _classify_intent(body: str) -> str:
     is the safer default. HELP is only returned when no opt-out keyword is
     present.
     """
-    tokens = set(_TOKEN_RE.findall(body.upper()))
-    if tokens & STOP_KEYWORDS:
-        return "STOP"
-    if tokens & START_KEYWORDS:
-        return "START"
-    if tokens & HELP_KEYWORDS:
-        return "HELP"
-    return ""
+    result = parse_sms_intent(body)
+    return result.compliance_keyword or ""
 
 
 def _classify_confirmation_reply(body: str) -> bool:
@@ -87,8 +59,7 @@ def _classify_confirmation_reply(body: str) -> bool:
     Mixed replies such as "yes but reschedule" are deliberately not confirmed;
     a false PMS confirmation is more expensive than a missed confirmation.
     """
-    tokens = _CONFIRMATION_TOKEN_RE.findall(body.upper())
-    return len(tokens) == 1 and tokens[0] in CONFIRMATION_KEYWORDS
+    return parse_sms_intent(body).intent == "confirm"
 
 
 @router.post("/inbound-sms")
@@ -97,7 +68,8 @@ async def inbound_sms(request: Request) -> Response:
     from_number = _field(form, "From")
     to_number = _field(form, "To")
     body = (_field(form, "Body") or "").strip()
-    intent = _classify_intent(body)
+    parsed_reply = parse_sms_intent(body)
+    intent = parsed_reply.compliance_keyword or ""
     keyword = intent  # back-compat with audit metadata that records "keyword"
 
     async with get_system_db_session(
@@ -125,17 +97,6 @@ async def inbound_sms(request: Request) -> Response:
         # Persist every inbound reply (S-2). One intent-classified row per inbound,
         # best-effort correlated to a contact + open run; committed by whichever
         # branch runs below. Does not alter the opt-out/confirm control flow.
-        if intent == "STOP":
-            _inbound_intent = "stop"
-        elif intent == "START":
-            _inbound_intent = "start"
-        elif intent == "HELP":
-            _inbound_intent = "help"
-        elif from_number and _classify_confirmation_reply(body):
-            _inbound_intent = "confirm"
-        else:
-            _inbound_intent = "free_text"
-
         from src.app.services.automation.inbound_sms_routing_service import (
             InboundSmsRoutingService,
         )
@@ -146,8 +107,18 @@ async def inbound_sms(request: Request) -> Response:
             from_number=from_number,
             to_number=to_number,
             body=body,
-            intent=_inbound_intent,
+            intent=parsed_reply.intent,
             message_sid=_field(form, "MessageSid"),
+        )
+        from src.app.services.automation.campaign_response_service import (
+            CampaignResponseService,
+        )
+
+        _, _handoff = await CampaignResponseService(session).record_sms_response(
+            _inbound_msg,
+            body=body,
+            raw_payload=dict(form),
+            parsed=parsed_reply,
         )
 
         if intent == "STOP":
@@ -187,7 +158,7 @@ async def inbound_sms(request: Request) -> Response:
             await session.commit()
             return _twiml(_help_text(location))
 
-        if from_number and _classify_confirmation_reply(body):
+        if from_number and parsed_reply.intent == "confirm":
             from src.app.tasks.automation_workflow import resume_sms_confirmation
 
             resume_sms_confirmation.delay(
@@ -200,41 +171,56 @@ async def inbound_sms(request: Request) -> Response:
             await session.commit()
             return _twiml("Thanks, we received your confirmation reply.")
 
-        # Free text (v1: no NLU) — surface to staff so they can continue manually.
+        # Free text / non-automated patient requests — surface to staff so they can
+        # continue manually.
         # The reply is already persisted above; here we alert staff via the existing
         # in-app + SSE notification path (Celery, so the webhook stays fast).
-        try:
-            from src.app.tasks.in_app_notifications import enqueue_in_app_notifications
+        if parsed_reply.requires_handoff:
+            try:
+                from src.app.tasks.in_app_notifications import enqueue_in_app_notifications
 
-            enqueue_in_app_notifications(
-                call_id="",
-                institution_id=str(location.institution_id),
-                location_id=str(location.id),
-                call_status=None,
-                call_tags_csv=None,
-                title="New patient SMS reply",
-                message=f"A patient replied by SMS at {location.name}. Open to respond.",
-                notification_type=NotificationType.INBOUND_SMS_REPLY.value,
-                data={
-                    "inbound_sms_message_id": str(_inbound_msg.id),
-                    "contact_id": _inbound_msg.contact_id,
-                    "workflow_run_id": _inbound_msg.workflow_run_id,
-                },
-            )
-        except Exception as notif_err:  # noqa: BLE001 — never fail the webhook on notify
-            logger.error(
-                "Failed to enqueue inbound-SMS staff notification: location_hash=%s error=%s",
+                enqueue_in_app_notifications(
+                    call_id="",
+                    institution_id=str(location.institution_id),
+                    location_id=str(location.id),
+                    call_status=None,
+                    call_tags_csv=None,
+                    title="Patient campaign response",
+                    message=f"A patient SMS reply at {location.name} needs staff review.",
+                    notification_type=NotificationType.INBOUND_SMS_REPLY.value,
+                    data={
+                        "inbound_sms_message_id": str(_inbound_msg.id),
+                        "contact_id": _inbound_msg.contact_id,
+                        "workflow_run_id": _inbound_msg.workflow_run_id,
+                        "campaign_staff_handoff_id": str(_handoff.id) if _handoff else None,
+                        "patient_response_intent": parsed_reply.intent,
+                    },
+                )
+            except Exception as notif_err:  # noqa: BLE001 — never fail the webhook on notify
+                logger.error(
+                    "Failed to enqueue inbound-SMS staff notification: location_hash=%s error=%s",
+                    hash_for_logging(str(location.id)),
+                    safe_error_summary(notif_err),
+                )
+
+        if parsed_reply.requires_handoff:
+            logger.info(
+                "Inbound SMS staff handoff: from_hash=%s to_hash=%s location_hash=%s intent=%s persisted=%s",
+                hash_for_logging(from_number),
+                hash_for_logging(to_number),
                 hash_for_logging(str(location.id)),
-                safe_error_summary(notif_err),
+                parsed_reply.intent,
+                _inbound_msg.id,
             )
-
-        logger.info(
-            "Inbound SMS free-text: from_hash=%s to_hash=%s location_hash=%s persisted=%s",
-            hash_for_logging(from_number),
-            hash_for_logging(to_number),
-            hash_for_logging(str(location.id)),
-            _inbound_msg.id,
-        )
+        else:
+            logger.info(
+                "Inbound SMS response event: from_hash=%s to_hash=%s location_hash=%s intent=%s persisted=%s",
+                hash_for_logging(from_number),
+                hash_for_logging(to_number),
+                hash_for_logging(str(location.id)),
+                parsed_reply.intent,
+                _inbound_msg.id,
+            )
         await session.commit()
         return _twiml("")
 

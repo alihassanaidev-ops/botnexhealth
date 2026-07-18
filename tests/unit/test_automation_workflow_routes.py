@@ -419,6 +419,8 @@ def test_get_campaign_overview_returns_operational_summary():
             channels=["sms"],
             run_counts={"waiting": 2},
             outcome_counts={"booked": 1},
+            response_counts={"confirm": 1},
+            open_handoff_count=0,
             channel_attempts={"sms": {"event_count": 3}},
             recent_outcomes=[],
             generated_at=_NOW,
@@ -550,6 +552,7 @@ def test_get_campaign_operations_returns_sections():
             stuck_waiting_runs=[],
             failed_sends=[item],
             suppressed_skipped_runs=[],
+            open_handoffs=[],
             generated_at=_NOW,
         )
     )

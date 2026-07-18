@@ -312,6 +312,8 @@ class CampaignOverviewResponse(BaseModel):
     channels: list[str]
     run_counts: dict[str, int]
     outcome_counts: dict[str, int]
+    response_counts: dict[str, int]
+    open_handoff_count: int
     channel_attempts: dict[str, dict[str, Any]]
     recent_outcomes: list[dict[str, Any]]
     generated_at: datetime
@@ -353,6 +355,7 @@ class CampaignOperationsResponse(BaseModel):
     stuck_waiting_runs: list[OperationItemResponse] = Field(default_factory=list)
     failed_sends: list[OperationItemResponse] = Field(default_factory=list)
     suppressed_skipped_runs: list[OperationItemResponse] = Field(default_factory=list)
+    open_handoffs: list[OperationItemResponse] = Field(default_factory=list)
     generated_at: datetime
 
 
@@ -1036,6 +1039,9 @@ async def get_campaign_operations(
         suppressed_skipped_runs=[
             OperationItemResponse(**item.__dict__)
             for item in operations.suppressed_skipped_runs
+        ],
+        open_handoffs=[
+            OperationItemResponse(**item.__dict__) for item in operations.open_handoffs
         ],
         generated_at=operations.generated_at,
     )

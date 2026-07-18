@@ -17,6 +17,10 @@ from src.app.models.appointment_working_set import (  # noqa: F401 — model reg
     AppointmentWorkingSet,
 )
 from src.app.models.call import Call, CallDirection, CallStatus, PatientStatus
+from src.app.models.campaign_response import (  # noqa: F401 — model registration
+    CampaignResponseEvent,
+    CampaignStaffHandoff,
+)
 from src.app.models.inbound_sms_message import (  # noqa: F401 — model registration
     InboundSmsMessage,
 )
@@ -117,6 +121,8 @@ __all__ = [
     "CallStatus",
     "CallDirection",
     "PatientStatus",
+    "CampaignResponseEvent",
+    "CampaignStaffHandoff",
     "CustomFieldDefinition",
     "CustomFieldValue",
     "EntityType",

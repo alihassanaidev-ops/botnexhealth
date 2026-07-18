@@ -323,17 +323,20 @@ function OverviewTab({
     loading: boolean
 }) {
     const runCounts = overview?.run_counts ?? {}
+    const responseCounts = overview?.response_counts ?? {}
+    const responseTotal = Object.values(responseCounts).reduce((sum, count) => sum + count, 0)
     const readiness = overview?.readiness
     return (
         <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-5">
                 {loading ? (
-                    Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)
+                    Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)
                 ) : (
                     <>
                         <Stat icon={<ActivitySquare className="h-3.5 w-3.5" />} label="Active runs" value={number((runCounts.running ?? 0) + (runCounts.waiting ?? 0) + (runCounts.pending ?? 0))} />
                         <Stat icon={<CheckCircle2 className="h-3.5 w-3.5" />} label="Completed" value={number(runCounts.completed)} tone="text-emerald-600" />
                         <Stat icon={<XCircle className="h-3.5 w-3.5" />} label="Failed or blocked" value={number((runCounts.failed ?? 0) + (runCounts.blocked ?? 0))} tone="text-red-600" />
+                        <Stat icon={<MessageSquare className="h-3.5 w-3.5" />} label="Responses" value={number(responseTotal)} />
                         <Stat icon={<Clock3 className="h-3.5 w-3.5" />} label="Readiness" value={label(readiness?.overall_status)} />
                     </>
                 )}
@@ -350,6 +353,7 @@ function OverviewTab({
                         <InfoRow label="Content class" value={label(overview?.latest_version?.content_classification)} />
                         <InfoRow label="Checklist blockers" value={number(readiness?.blockers_count)} />
                         <InfoRow label="Checklist warnings" value={number((readiness?.warnings_count ?? 0) + (readiness?.unknown_count ?? 0))} />
+                        <InfoRow label="Open handoffs" value={number(overview?.open_handoff_count)} />
                     </CardContent>
                 </Card>
                 <Card>
@@ -609,12 +613,13 @@ function OperationsTab({
     onSelectRun: (runId: string) => void
 }) {
     const sections = [
+        ["Patient handoffs", operations?.open_handoffs ?? []],
         ["Stuck waiting", operations?.stuck_waiting_runs ?? []],
         ["Failed sends", operations?.failed_sends ?? []],
         ["Suppressions and skips", operations?.suppressed_skipped_runs ?? []],
     ] as const
     return (
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 lg:grid-cols-4">
             {sections.map(([title, items]) => (
                 <Card key={title}>
                     <CardHeader className="pb-3">
@@ -1007,20 +1012,36 @@ export default function CampaignDetail() {
                     />
                 </TabsContent>
                 <TabsContent value="analytics">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-base font-semibold">Outcome analytics</CardTitle>
-                        </CardHeader>
-                        <CardContent className="grid gap-3 md:grid-cols-4">
-                            {Object.entries(overview?.outcome_counts ?? {}).length === 0 ? (
-                                <p className="text-sm text-muted-foreground">No outcomes recorded yet.</p>
-                            ) : (
-                                Object.entries(overview?.outcome_counts ?? {}).map(([outcome, count]) => (
-                                    <Stat key={outcome} icon={<Hash className="h-3.5 w-3.5" />} label={label(outcome)} value={number(count)} />
-                                ))
-                            )}
-                        </CardContent>
-                    </Card>
+                    <div className="grid gap-4 lg:grid-cols-2">
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-base font-semibold">Outcome analytics</CardTitle>
+                            </CardHeader>
+                            <CardContent className="grid gap-3 md:grid-cols-2">
+                                {Object.entries(overview?.outcome_counts ?? {}).length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No outcomes recorded yet.</p>
+                                ) : (
+                                    Object.entries(overview?.outcome_counts ?? {}).map(([outcome, count]) => (
+                                        <Stat key={outcome} icon={<Hash className="h-3.5 w-3.5" />} label={label(outcome)} value={number(count)} />
+                                    ))
+                                )}
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="text-base font-semibold">Patient responses</CardTitle>
+                            </CardHeader>
+                            <CardContent className="grid gap-3 md:grid-cols-2">
+                                {Object.entries(overview?.response_counts ?? {}).length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No responses recorded yet.</p>
+                                ) : (
+                                    Object.entries(overview?.response_counts ?? {}).map(([intent, count]) => (
+                                        <Stat key={intent} icon={<MessageSquare className="h-3.5 w-3.5" />} label={label(intent)} value={number(count)} />
+                                    ))
+                                )}
+                            </CardContent>
+                        </Card>
+                    </div>
                 </TabsContent>
             </Tabs>
 
