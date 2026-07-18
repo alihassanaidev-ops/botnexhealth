@@ -38,6 +38,7 @@ from src.app.api.routes.sms import institution_router as institution_sms_router
 from src.app.api.routes.dead_letter import router as dead_letter_router
 from src.app.api.routes.automation_workflows import router as automation_workflows_router
 from src.app.api.routes.automation_templates import router as automation_templates_router
+from src.app.api.routes.campaign_analytics import router as campaign_analytics_router
 from src.app.api.routes.outbound_voice import router as outbound_voice_router
 from src.app.api.routes.nexhealth_webhooks import router as nexhealth_webhooks_router
 
@@ -277,6 +278,7 @@ def create_app() -> FastAPI:
     app.include_router(dead_letter_router, prefix="/api")
     app.include_router(automation_workflows_router, prefix="/api")
     app.include_router(automation_templates_router, prefix="/api")
+    app.include_router(campaign_analytics_router, prefix="/api")
     app.include_router(outbound_voice_router, prefix="/api")
 
     return app

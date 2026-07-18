@@ -1,6 +1,7 @@
 import api from "@/lib/api"
 import type {
     AutomationWorkflow,
+    CampaignAnalytics,
     AutomationWorkflowRun,
     CampaignOperations,
     CampaignOverview,
@@ -62,6 +63,16 @@ export async function listCampaignRuns(
 export async function getCampaignOverview(workflowId: string): Promise<CampaignOverview> {
     const { data } = await api.get<CampaignOverview>(
         `/automation/workflows/${workflowId}/overview`,
+    )
+    return data
+}
+
+export async function getCampaignAnalytics(
+    workflowId: string,
+    range?: { startDate?: string; endDate?: string },
+): Promise<CampaignAnalytics> {
+    const { data } = await api.get<CampaignAnalytics>(
+        `/automation/workflows/${workflowId}/analytics${rangeQuery(range)}`,
     )
     return data
 }

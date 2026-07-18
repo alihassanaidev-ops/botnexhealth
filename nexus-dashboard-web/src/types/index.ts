@@ -649,6 +649,48 @@ export interface CampaignOverview {
     generated_at: string;
 }
 
+export interface CampaignAnalytics {
+    workflow_id: string;
+    workflow_name: string;
+    category: string;
+    start_date: string;
+    end_date: string;
+    summary: Record<string, number>;
+    channels: Array<{
+        channel: string;
+        attempted: number;
+        delivered: number;
+        failed: number;
+        responded: number;
+    }>;
+    outcomes: Array<{
+        key: string;
+        label: string;
+        group: string;
+        count: number;
+        rate: number | null;
+        description: string;
+    }>;
+    trend: Array<{
+        date: string;
+        enrollments: number;
+        sends: number;
+        responses: number;
+        confirmed: number;
+        booked: number;
+        handoffs: number;
+        total_cost: number;
+    }>;
+    cost: {
+        currency: string;
+        total_cost: number;
+        cost_per_booking: number | null;
+        cost_per_confirmation: number | null;
+    };
+    generated_at: string;
+    rollup_fresh_at: string | null;
+}
+
 export interface CampaignRunFilters {
     status?: string;
     outcome?: string;

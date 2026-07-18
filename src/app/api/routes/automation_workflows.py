@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -33,6 +33,11 @@ from src.app.services.automation.launch_checklist_service import (
 from src.app.services.automation.campaign_operations_service import (
     CampaignOperationsService,
     RunListFilters,
+)
+from src.app.services.automation.campaign_analytics_service import (
+    CampaignAnalytics,
+    CampaignAnalyticsService,
+    resolve_window,
 )
 from src.app.services.automation.merge_field_catalog import fields_for
 from src.app.services.automation.validation_service import WorkflowValidationService
@@ -317,6 +322,91 @@ class CampaignOverviewResponse(BaseModel):
     channel_attempts: dict[str, dict[str, Any]]
     recent_outcomes: list[dict[str, Any]]
     generated_at: datetime
+
+
+class ChannelAnalyticsResponse(BaseModel):
+    channel: str
+    attempted: int
+    delivered: int
+    failed: int
+    responded: int
+
+
+class OutcomeAnalyticsResponse(BaseModel):
+    key: str
+    label: str
+    group: str
+    count: int
+    rate: float | None
+    description: str
+
+
+class TrendPointResponse(BaseModel):
+    date: str
+    enrollments: int
+    sends: int
+    responses: int
+    confirmed: int
+    booked: int
+    handoffs: int
+    total_cost: float
+
+
+class CostSummaryResponse(BaseModel):
+    currency: str
+    total_cost: float
+    cost_per_booking: float | None
+    cost_per_confirmation: float | None
+
+
+class CampaignAnalyticsResponse(BaseModel):
+    workflow_id: str
+    workflow_name: str
+    category: str
+    start_date: str
+    end_date: str
+    summary: dict[str, int]
+    channels: list[ChannelAnalyticsResponse]
+    outcomes: list[OutcomeAnalyticsResponse]
+    trend: list[TrendPointResponse]
+    cost: CostSummaryResponse
+    generated_at: datetime
+    rollup_fresh_at: datetime | None
+
+    @classmethod
+    def from_service(cls, analytics: CampaignAnalytics) -> "CampaignAnalyticsResponse":
+        return cls(
+            workflow_id=analytics.workflow_id,
+            workflow_name=analytics.workflow_name,
+            category=analytics.category,
+            start_date=analytics.start_date.isoformat(),
+            end_date=analytics.end_date.isoformat(),
+            summary=analytics.summary,
+            channels=[
+                ChannelAnalyticsResponse(**channel.__dict__)
+                for channel in analytics.channels
+            ],
+            outcomes=[
+                OutcomeAnalyticsResponse(**outcome.__dict__)
+                for outcome in analytics.outcomes
+            ],
+            trend=[
+                TrendPointResponse(
+                    date=point.date.isoformat(),
+                    enrollments=point.enrollments,
+                    sends=point.sends,
+                    responses=point.responses,
+                    confirmed=point.confirmed,
+                    booked=point.booked,
+                    handoffs=point.handoffs,
+                    total_cost=point.total_cost,
+                )
+                for point in analytics.trend
+            ],
+            cost=CostSummaryResponse(**analytics.cost.__dict__),
+            generated_at=analytics.generated_at,
+            rollup_fresh_at=analytics.rollup_fresh_at,
+        )
 
 
 class TimelineItemResponse(BaseModel):
@@ -759,6 +849,31 @@ async def get_campaign_overview(
             institution_id=inst_id,
         )
         return CampaignOverviewResponse(**overview.__dict__)
+
+
+@router.get("/{workflow_id}/analytics", response_model=CampaignAnalyticsResponse)
+async def get_campaign_analytics(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    start_date: date | None = Query(None, description="Inclusive range start (YYYY-MM-DD)"),
+    end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
+) -> CampaignAnalyticsResponse:
+    """Return normalized outcome analytics from the daily campaign rollup."""
+    inst_id = _institution_id(current_user)
+    try:
+        start, end = resolve_window(start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        analytics = await CampaignAnalyticsService(session).workflow_analytics(
+            wf,
+            institution_id=inst_id,
+            start_date=start,
+            end_date=end,
+        )
+        return CampaignAnalyticsResponse.from_service(analytics)
 
 
 @router.post("/{workflow_id}/launch-checklist/preview", response_model=LaunchChecklistResponse)

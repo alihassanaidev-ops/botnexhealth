@@ -5,6 +5,7 @@ import {
     cancelCampaignRun,
     enrollContactInCampaign,
     emergencyHaltCampaign,
+    getCampaignAnalytics,
     getCampaignOperations,
     getCampaignOverview,
     getOutboundHaltStatus,
@@ -68,6 +69,14 @@ describe("automation-api", () => {
         expect(get).toHaveBeenNthCalledWith(1, "/automation/workflows/wf-1/overview")
         expect(get).toHaveBeenNthCalledWith(2, "/automation/workflows/wf-1/operations")
         expect(get).toHaveBeenNthCalledWith(3, "/automation/workflows/wf-1/runs/run-1/timeline")
+    })
+
+    it("fetches campaign analytics with a date range", async () => {
+        get.mockResolvedValue({ data: { workflow_id: "wf-1", outcomes: [] } })
+        await getCampaignAnalytics("wf-1", { startDate: "2026-07-01", endDate: "2026-07-18" })
+        expect(get).toHaveBeenCalledWith(
+            "/automation/workflows/wf-1/analytics?start_date=2026-07-01&end_date=2026-07-18",
+        )
     })
 
     it("cancels a campaign run", async () => {

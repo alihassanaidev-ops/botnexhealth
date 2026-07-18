@@ -5,6 +5,7 @@ import {
     Archive,
     ArrowLeft,
     Ban,
+    BarChart3,
     CheckCircle2,
     Clock3,
     DollarSign,
@@ -18,6 +19,7 @@ import {
     RefreshCcw,
     Search,
     ShieldAlert,
+    TrendingUp,
     UserPlus,
     XCircle,
 } from "lucide-react"
@@ -56,6 +58,7 @@ import {
     cancelCampaignRun,
     enrollContactInCampaign,
     emergencyHaltCampaign,
+    getCampaignAnalytics,
     getCampaign,
     getCampaignOperations,
     getCampaignOverview,
@@ -71,6 +74,7 @@ import { cn } from "@/lib/utils"
 import type {
     AutomationWorkflow,
     AutomationWorkflowRun,
+    CampaignAnalytics,
     CampaignOperationItem,
     CampaignOperations,
     CampaignOverview,
@@ -144,6 +148,11 @@ function money(value: number | undefined, currency = "USD"): string {
 
 function number(value: number | undefined): string {
     return new Intl.NumberFormat().format(value ?? 0)
+}
+
+function percent(value: number | null | undefined): string {
+    if (value === null || value === undefined) return "-"
+    return `${Math.round(value * 100)}%`
 }
 
 function label(value: string | null | undefined): string {
@@ -673,6 +682,188 @@ function OperationRow({
     )
 }
 
+function AnalyticsTab({
+    analytics,
+    loading,
+}: {
+    analytics: CampaignAnalytics | null
+    loading: boolean
+}) {
+    const summary = analytics?.summary ?? {}
+    const totalSends =
+        (summary.sms_sent ?? 0) +
+        (summary.voice_attempted ?? 0) +
+        (summary.email_sent ?? 0)
+    const totalResponses =
+        (summary.sms_replied ?? 0) +
+        (summary.voice_answered ?? 0) +
+        (summary.email_clicked ?? 0)
+    return (
+        <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-5">
+                {loading ? (
+                    Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)
+                ) : (
+                    <>
+                        <Stat icon={<UserPlus className="h-3.5 w-3.5" />} label="Enrollments" value={number(summary.enrollments)} />
+                        <Stat icon={<BarChart3 className="h-3.5 w-3.5" />} label="Send attempts" value={number(totalSends)} />
+                        <Stat icon={<MessageSquare className="h-3.5 w-3.5" />} label="Responses" value={number(totalResponses)} />
+                        <Stat icon={<CheckCircle2 className="h-3.5 w-3.5" />} label="Confirmed" value={number(summary.confirmed)} tone="text-emerald-600" />
+                        <Stat icon={<DollarSign className="h-3.5 w-3.5" />} label="Cost" value={money(analytics?.cost.total_cost, analytics?.cost.currency)} />
+                    </>
+                )}
+            </div>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                            <TrendingUp className="h-4 w-4" />
+                            Outcome analytics
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        {loading ? (
+                            <div className="grid gap-3 md:grid-cols-2">
+                                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
+                            </div>
+                        ) : analytics?.outcomes.length ? (
+                            <div className="grid gap-3 md:grid-cols-2">
+                                {analytics.outcomes.map((outcome) => (
+                                    <div key={outcome.key} className="rounded-md border border-border p-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <p className="truncate text-sm font-medium">{outcome.label}</p>
+                                                <p className="mt-1 text-xs text-muted-foreground">{outcome.description}</p>
+                                            </div>
+                                            <Badge variant="outline" className="capitalize">{label(outcome.group)}</Badge>
+                                        </div>
+                                        <div className="mt-4 flex items-end justify-between gap-3">
+                                            <span className="text-2xl font-semibold tabular-nums">{number(outcome.count)}</span>
+                                            <span className="text-sm text-muted-foreground">{percent(outcome.rate)}</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <p className="text-sm text-muted-foreground">No analytics rollup rows for this range.</p>
+                        )}
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base font-semibold">Cost per result</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        <InfoRow label="Cost per booking" value={analytics?.cost.cost_per_booking === null || analytics?.cost.cost_per_booking === undefined ? "-" : money(analytics.cost.cost_per_booking, analytics.cost.currency)} />
+                        <InfoRow label="Cost per confirmation" value={analytics?.cost.cost_per_confirmation === null || analytics?.cost.cost_per_confirmation === undefined ? "-" : money(analytics.cost.cost_per_confirmation, analytics.cost.currency)} />
+                        <InfoRow label="Booked" value={number(summary.booked)} />
+                        <InfoRow label="Staff handoffs" value={number(summary.staff_handoff)} />
+                        <InfoRow label="Rollup freshness" value={analytics?.rollup_fresh_at ? fmt(analytics.rollup_fresh_at) : "-"} />
+                    </CardContent>
+                </Card>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base font-semibold">Channel funnel</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        {loading ? (
+                            Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)
+                        ) : analytics?.channels.length ? (
+                            analytics.channels.map((channel) => <ChannelFunnel key={channel.channel} channel={channel} />)
+                        ) : (
+                            <p className="text-sm text-muted-foreground">No channel activity yet.</p>
+                        )}
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base font-semibold">Daily trend</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        {loading ? (
+                            <div className="space-y-2">
+                                {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+                            </div>
+                        ) : analytics?.trend.length ? (
+                            <div className="overflow-x-auto">
+                                <table className="w-full min-w-[560px] text-sm">
+                                    <thead className="text-xs text-muted-foreground">
+                                        <tr className="border-b border-border">
+                                            <th className="py-2 text-left font-medium">Date</th>
+                                            <th className="py-2 text-right font-medium">Enroll</th>
+                                            <th className="py-2 text-right font-medium">Sends</th>
+                                            <th className="py-2 text-right font-medium">Responses</th>
+                                            <th className="py-2 text-right font-medium">Confirmed</th>
+                                            <th className="py-2 text-right font-medium">Booked</th>
+                                            <th className="py-2 text-right font-medium">Cost</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {analytics.trend.map((point) => (
+                                            <tr key={point.date} className="border-b border-border/60 last:border-0">
+                                                <td className="py-2">{point.date}</td>
+                                                <td className="py-2 text-right tabular-nums">{number(point.enrollments)}</td>
+                                                <td className="py-2 text-right tabular-nums">{number(point.sends)}</td>
+                                                <td className="py-2 text-right tabular-nums">{number(point.responses)}</td>
+                                                <td className="py-2 text-right tabular-nums">{number(point.confirmed)}</td>
+                                                <td className="py-2 text-right tabular-nums">{number(point.booked)}</td>
+                                                <td className="py-2 text-right tabular-nums">{money(point.total_cost, analytics.cost.currency)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <p className="text-sm text-muted-foreground">No daily metrics in this range.</p>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
+        </div>
+    )
+}
+
+function ChannelFunnel({
+    channel,
+}: {
+    channel: CampaignAnalytics["channels"][number]
+}) {
+    const max = Math.max(channel.attempted, channel.delivered, channel.responded, channel.failed, 1)
+    const rows = [
+        ["Attempted", channel.attempted],
+        ["Delivered", channel.delivered],
+        ["Responded", channel.responded],
+        ["Failed", channel.failed],
+    ] as const
+    return (
+        <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium">{CHANNEL_LABELS[channel.channel] ?? label(channel.channel)}</p>
+                <span className="text-xs text-muted-foreground">{number(channel.attempted)} attempts</span>
+            </div>
+            <div className="space-y-1.5">
+                {rows.map(([name, value]) => (
+                    <div key={name} className="grid grid-cols-[82px_minmax(0,1fr)_56px] items-center gap-2 text-xs">
+                        <span className="text-muted-foreground">{name}</span>
+                        <span className="h-2 overflow-hidden rounded-sm bg-muted">
+                            <span
+                                className={cn(
+                                    "block h-full rounded-sm",
+                                    name === "Failed" ? "bg-red-500" : "bg-emerald-500",
+                                )}
+                                style={{ width: `${Math.max((value / max) * 100, value > 0 ? 4 : 0)}%` }}
+                            />
+                        </span>
+                        <span className="text-right tabular-nums">{number(value)}</span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
 function TimelineDrawer({
     timeline,
     loading,
@@ -731,6 +922,7 @@ export default function CampaignDetail() {
     const { id } = useParams<{ id: string }>()
     const [campaign, setCampaign] = useState<AutomationWorkflow | null>(null)
     const [overview, setOverview] = useState<CampaignOverview | null>(null)
+    const [analytics, setAnalytics] = useState<CampaignAnalytics | null>(null)
     const [runs, setRuns] = useState<CampaignRunListItem[]>([])
     const [nextCursor, setNextCursor] = useState<string | null>(null)
     const [operations, setOperations] = useState<CampaignOperations | null>(null)
@@ -759,9 +951,10 @@ export default function CampaignDetail() {
         setRunsLoading(true)
         setOperationsLoading(true)
         try {
-            const [wf, ov, runPage, ops, summary, byCampaign] = await Promise.all([
+            const [wf, ov, analyticsData, runPage, ops, summary, byCampaign] = await Promise.all([
                 getCampaign(id),
                 getCampaignOverview(id),
+                getCampaignAnalytics(id),
                 listCampaignRuns(id, { ...filters, cursor: undefined }),
                 getCampaignOperations(id),
                 getUsageSummary(),
@@ -769,6 +962,7 @@ export default function CampaignDetail() {
             ])
             setCampaign(wf)
             setOverview(ov)
+            setAnalytics(analyticsData)
             setRuns(runPage.items)
             setNextCursor(runPage.next_cursor)
             setOperations(ops)
@@ -1012,36 +1206,7 @@ export default function CampaignDetail() {
                     />
                 </TabsContent>
                 <TabsContent value="analytics">
-                    <div className="grid gap-4 lg:grid-cols-2">
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-base font-semibold">Outcome analytics</CardTitle>
-                            </CardHeader>
-                            <CardContent className="grid gap-3 md:grid-cols-2">
-                                {Object.entries(overview?.outcome_counts ?? {}).length === 0 ? (
-                                    <p className="text-sm text-muted-foreground">No outcomes recorded yet.</p>
-                                ) : (
-                                    Object.entries(overview?.outcome_counts ?? {}).map(([outcome, count]) => (
-                                        <Stat key={outcome} icon={<Hash className="h-3.5 w-3.5" />} label={label(outcome)} value={number(count)} />
-                                    ))
-                                )}
-                            </CardContent>
-                        </Card>
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-base font-semibold">Patient responses</CardTitle>
-                            </CardHeader>
-                            <CardContent className="grid gap-3 md:grid-cols-2">
-                                {Object.entries(overview?.response_counts ?? {}).length === 0 ? (
-                                    <p className="text-sm text-muted-foreground">No responses recorded yet.</p>
-                                ) : (
-                                    Object.entries(overview?.response_counts ?? {}).map(([intent, count]) => (
-                                        <Stat key={intent} icon={<MessageSquare className="h-3.5 w-3.5" />} label={label(intent)} value={number(count)} />
-                                    ))
-                                )}
-                            </CardContent>
-                        </Card>
-                    </div>
+                    <AnalyticsTab analytics={analytics} loading={loading} />
                 </TabsContent>
             </Tabs>
 
