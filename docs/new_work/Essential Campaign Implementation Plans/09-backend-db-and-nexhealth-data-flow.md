@@ -239,8 +239,8 @@ Estimated duration: 4 weeks for the campaign-critical data foundation.
 - Audience preview and segmentation.
 - Rich merge fields.
 - Patient response handling and analytics.
-- NexHealth vendor confirmation for exact current webhook subscription creation payloads and signature headers in production.
-- Product/compliance decision on which procedure/treatment fields may appear in patient-facing messages.
+- Current NexHealth integration version and subscription path used by the production adapter.
+- Product/compliance policy: procedure/treatment fields are stored for campaign decisions and analytics, but are not exposed in patient-facing messages by default.
 
 ## Edge Cases
 

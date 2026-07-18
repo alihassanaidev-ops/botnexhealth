@@ -128,7 +128,7 @@ Estimated duration: 2 weeks.
 
 - NexHealth appointment projection/backfill for appointment fields.
 - Reference-data sync for provider, appointment type, operatory, and location names.
-- Booking-link service or existing patient booking route decision.
+- Booking/reschedule link generation or existing patient booking route integration.
 - Template expansion plan for dental-specific templates.
 - Launch checklist plan for merge-field readiness.
 
