@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from src.app.api.routes.automation_workflows import (
     EnrollRequest,
+    LaunchChecklistPreviewRequest,
     ValidateDefinitionRequest,
     WorkflowCreateRequest,
     WorkflowResponse,
@@ -20,13 +21,18 @@ from src.app.api.routes.automation_workflows import (
     create_workflow,
     enroll_in_workflow,
     get_run_status,
+    get_launch_checklist,
     get_workflow,
     list_merge_fields,
     list_workflow_versions,
     list_workflows,
+    preview_launch_checklist,
     publish_workflow,
     router as workflows_router,
     validate_definition,
+)
+from src.app.services.automation.launch_checklist_service import (
+    CampaignLaunchChecklist,
 )
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
@@ -70,6 +76,24 @@ def _make_run(status="waiting"):
     r.created_at = _NOW
     r.trigger_metadata = {}
     return r
+
+
+def _checklist():
+    return CampaignLaunchChecklist(
+        workflow_id="wf-1",
+        workflow_version_id="ver-1",
+        location_id="loc-1",
+        overall_status="pass",
+        blockers_count=0,
+        warnings_count=0,
+        unknown_count=0,
+        estimated_audience=None,
+        estimated_send_volume=None,
+        estimated_cost_cents=None,
+        estimate_basis="test",
+        generated_at=_NOW,
+        items=[],
+    )
 
 
 def _make_session(wf=None, run=None, version=None):
@@ -259,6 +283,80 @@ def test_publish_workflow_calls_publish_version():
         asyncio.run(publish_workflow("wf-1", user))
 
     mock_svc.publish_version.assert_awaited_once_with(wf)
+
+
+# ---------------------------------------------------------------------------
+# launch checklist
+# ---------------------------------------------------------------------------
+
+
+def test_get_launch_checklist_returns_saved_definition_report():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    checklist_svc = AsyncMock()
+    checklist_svc.build = AsyncMock(return_value=_checklist())
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignLaunchChecklistService",
+            return_value=checklist_svc,
+        ),
+    ):
+        result = asyncio.run(get_launch_checklist("wf-1", user, location_id="loc-1"))
+
+    assert result.workflow_id == "wf-1"
+    assert result.overall_status == "pass"
+    checklist_svc.build.assert_awaited_once_with(
+        wf,
+        institution_id="inst-1",
+        location_id="loc-1",
+    )
+
+
+def test_preview_launch_checklist_uses_unsaved_definition():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    draft = {"trigger": {"type": "manual"}, "entry_node_id": "x1", "nodes": []}
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    checklist_svc = AsyncMock()
+    checklist_svc.build = AsyncMock(return_value=_checklist())
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignLaunchChecklistService",
+            return_value=checklist_svc,
+        ),
+    ):
+        result = asyncio.run(
+            preview_launch_checklist(
+                "wf-1",
+                LaunchChecklistPreviewRequest(definition=draft, location_id="loc-1"),
+                user,
+            )
+        )
+
+    assert result.workflow_version_id == "ver-1"
+    checklist_svc.build.assert_awaited_once_with(
+        wf,
+        institution_id="inst-1",
+        definition_dict=draft,
+        location_id="loc-1",
+    )
 
 
 # ---------------------------------------------------------------------------

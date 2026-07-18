@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom"
 import WorkflowBuilder from "@/pages/WorkflowBuilder"
 import {
     getWorkflow,
+    previewLaunchChecklist,
     updateWorkflow,
     validateDefinition,
 } from "@/lib/workflow-api"
@@ -17,6 +18,8 @@ vi.mock("@/lib/workflow-api", () => ({
     resumeWorkflow: vi.fn(),
     archiveWorkflow: vi.fn(),
     validateDefinition: vi.fn(),
+    getChannelReadiness: vi.fn(),
+    previewLaunchChecklist: vi.fn(),
     listMergeFields: vi.fn().mockResolvedValue([]),
 }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
@@ -24,6 +27,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 const get = getWorkflow as ReturnType<typeof vi.fn>
 const patch = updateWorkflow as ReturnType<typeof vi.fn>
 const validate = validateDefinition as ReturnType<typeof vi.fn>
+const previewChecklist = previewLaunchChecklist as ReturnType<typeof vi.fn>
 
 // A well-formed workflow: no client-side validation errors.
 const WORKFLOW: AutomationWorkflow = {
@@ -40,6 +44,32 @@ const WORKFLOW: AutomationWorkflow = {
     current_version_id: "v-1",
     created_at: "2026-07-03T00:00:00Z",
     updated_at: "2026-07-03T00:00:00Z",
+}
+
+const LAUNCH_CHECKLIST = {
+    workflow_id: "wf-1",
+    workflow_version_id: "v-1",
+    location_id: null,
+    overall_status: "warning",
+    blockers_count: 0,
+    warnings_count: 1,
+    unknown_count: 1,
+    estimated_audience: null,
+    estimated_send_volume: null,
+    estimated_cost_cents: null,
+    estimate_basis: "Audience preview is not available yet.",
+    generated_at: "2026-07-18T00:00:00Z",
+    items: [
+        {
+            id: "audience_estimate",
+            section: "audience",
+            label: "Audience estimate and exclusions",
+            status: "warning",
+            message: "Audience is selected at enrollment/import time.",
+            fix_href: null,
+            metadata: {},
+        },
+    ],
 }
 
 function renderBuilder() {
@@ -65,6 +95,8 @@ beforeEach(() => {
     get.mockReset()
     patch.mockReset()
     validate.mockReset()
+    previewChecklist.mockReset()
+    previewChecklist.mockResolvedValue(LAUNCH_CHECKLIST)
     localStorage.clear()
 })
 

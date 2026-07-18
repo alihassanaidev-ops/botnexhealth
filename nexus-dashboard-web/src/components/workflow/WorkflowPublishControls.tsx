@@ -17,6 +17,8 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import LaunchChecklistPanel from "@/components/workflow/LaunchChecklistPanel"
+import type { LaunchChecklist } from "@/types/workflow"
 
 export interface WorkflowPublishControlsProps {
     status: string
@@ -28,6 +30,8 @@ export interface WorkflowPublishControlsProps {
      * channel that isn't set up for its location (Plan 02 B6). Does NOT block publish.
      */
     readinessWarning?: string | null
+    launchChecklist?: LaunchChecklist | null
+    launchChecklistLoading?: boolean
     onPublish: () => void
     onDiscard: () => void
     onPause: () => void
@@ -96,6 +100,11 @@ export default function WorkflowPublishControls(props: WorkflowPublishControlsPr
                             <span>{props.readinessWarning}</span>
                         </div>
                     )}
+                    <LaunchChecklistPanel
+                        checklist={props.launchChecklist ?? null}
+                        loading={props.launchChecklistLoading}
+                        compact
+                    />
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setConfirmPublish(false)}>Cancel</Button>
                         <Button

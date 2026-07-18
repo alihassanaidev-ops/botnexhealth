@@ -5,12 +5,14 @@ import {
     createWorkflowFromTemplate,
     dryRun,
     getChannelReadiness,
+    getLaunchChecklist,
     getWorkflow,
     listMergeFields,
     listTemplates,
     listVersions,
     listWorkflows,
     publishWorkflow,
+    previewLaunchChecklist,
     updateWorkflow,
     validateDefinition,
 } from "@/lib/workflow-api"
@@ -146,6 +148,24 @@ describe("workflow-api", () => {
         )
         expect(res.email).toBe(false)
         expect(res.voice_configurable).toBe(true)
+    })
+
+    it("getLaunchChecklist GETs the saved checklist with optional location context", async () => {
+        get.mockResolvedValue({ data: { workflow_id: "w1", items: [] } })
+        const res = await getLaunchChecklist("w1", { locationId: "loc-1" })
+        expect(get).toHaveBeenCalledWith(
+            "/automation/workflows/w1/launch-checklist?location_id=loc-1",
+        )
+        expect(res.workflow_id).toBe("w1")
+    })
+
+    it("previewLaunchChecklist POSTs an unsaved definition", async () => {
+        post.mockResolvedValue({ data: { workflow_id: "w1", items: [] } })
+        await previewLaunchChecklist("w1", DEF, { locationId: "loc-1" })
+        expect(post).toHaveBeenCalledWith(
+            "/automation/workflows/w1/launch-checklist/preview",
+            { definition: DEF, location_id: "loc-1" },
+        )
     })
 
     it("listMergeFields GETs the merge-field catalog", async () => {

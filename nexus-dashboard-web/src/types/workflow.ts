@@ -229,6 +229,38 @@ export interface ChannelReadiness {
 }
 
 // ---------------------------------------------------------------------------
+// Launch checklist — `GET /automation/workflows/{id}/launch-checklist` and
+// `POST /automation/workflows/{id}/launch-checklist/preview`.
+// ---------------------------------------------------------------------------
+export type LaunchChecklistStatus = "pass" | "warning" | "blocked" | "unknown"
+
+export interface LaunchChecklistItem {
+    id: string
+    section: string
+    label: string
+    status: LaunchChecklistStatus
+    message: string
+    fix_href: string | null
+    metadata: Record<string, unknown>
+}
+
+export interface LaunchChecklist {
+    workflow_id: string
+    workflow_version_id: string | null
+    location_id: string | null
+    overall_status: LaunchChecklistStatus
+    blockers_count: number
+    warnings_count: number
+    unknown_count: number
+    estimated_audience: number | null
+    estimated_send_volume: Record<string, number> | null
+    estimated_cost_cents: number | null
+    estimate_basis: string
+    generated_at: string
+    items: LaunchChecklistItem[]
+}
+
+// ---------------------------------------------------------------------------
 // Version history — `GET /automation/workflows/{id}/versions` (newest-first)
 // ---------------------------------------------------------------------------
 export interface WorkflowVersion {

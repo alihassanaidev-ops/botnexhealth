@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import WorkflowBuilder from "@/pages/WorkflowBuilder"
-import { getWorkflow } from "@/lib/workflow-api"
+import { getWorkflow, previewLaunchChecklist } from "@/lib/workflow-api"
 import type { AutomationWorkflow } from "@/types"
 
 vi.mock("@/lib/workflow-api", () => ({
@@ -11,10 +11,15 @@ vi.mock("@/lib/workflow-api", () => ({
     pauseWorkflow: vi.fn(),
     resumeWorkflow: vi.fn(),
     archiveWorkflow: vi.fn(),
+    validateDefinition: vi.fn(),
+    getChannelReadiness: vi.fn(),
+    previewLaunchChecklist: vi.fn(),
+    listMergeFields: vi.fn().mockResolvedValue([]),
 }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
 
 const get = getWorkflow as ReturnType<typeof vi.fn>
+const previewChecklist = previewLaunchChecklist as ReturnType<typeof vi.fn>
 
 const WORKFLOW: AutomationWorkflow = {
     id: "wf-1",
@@ -52,6 +57,32 @@ function renderBuilder() {
 
 beforeEach(() => {
     get.mockReset()
+    previewChecklist.mockReset()
+    previewChecklist.mockResolvedValue({
+        workflow_id: "wf-1",
+        workflow_version_id: "v-1",
+        location_id: null,
+        overall_status: "warning",
+        blockers_count: 0,
+        warnings_count: 1,
+        unknown_count: 1,
+        estimated_audience: null,
+        estimated_send_volume: null,
+        estimated_cost_cents: null,
+        estimate_basis: "Audience preview is not available yet.",
+        generated_at: "2026-07-18T00:00:00Z",
+        items: [
+            {
+                id: "audience_estimate",
+                section: "audience",
+                label: "Audience estimate and exclusions",
+                status: "warning",
+                message: "Audience is selected at enrollment/import time.",
+                fix_href: null,
+                metadata: {},
+            },
+        ],
+    })
     localStorage.clear()
 })
 
@@ -69,6 +100,7 @@ describe("WorkflowBuilder page (smoke)", () => {
         await waitFor(() => {
             expect(screen.getByText(/all checks passed/i)).toBeInTheDocument()
         })
+        expect(await screen.findByText("Launch checklist")).toBeInTheDocument()
     })
 
     it("surfaces a validation error for a workflow with no exit", async () => {

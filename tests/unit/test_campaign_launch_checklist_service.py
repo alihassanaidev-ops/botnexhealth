@@ -1,0 +1,108 @@
+"""Unit tests for CampaignLaunchChecklistService (Plan 02)."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.nexhealth_webhook_subscription import (
+    NexHealthWebhookSubscription,
+    NexHealthWebhookSubscriptionStatus,
+)
+from src.app.services.automation.launch_checklist_service import (
+    CampaignLaunchChecklistService,
+)
+
+_NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+
+
+def _workflow(definition: dict, *, location_id: str | None = None):
+    wf = MagicMock()
+    wf.id = "wf-1"
+    wf.current_version_id = "ver-1"
+    wf.location_id = location_id
+    wf.definition = definition
+    return wf
+
+
+def _result(value):
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = value
+    return result
+
+
+def _run(service: CampaignLaunchChecklistService, workflow, **kwargs):
+    return asyncio.run(
+        service.build(workflow, institution_id="inst-1", **kwargs)
+    )
+
+
+def test_manual_campaign_surfaces_unknown_audience_and_cost() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "s1",
+        "nodes": [
+            {"type": "send_sms", "id": "s1", "body_template": "Hi", "next_node_id": "x1"},
+            {"type": "exit", "id": "x1", "outcome": "done"},
+        ],
+        "compliance": {"content_class": "transactional_care", "consent_required": True},
+    }
+    session = AsyncMock()
+    checklist = _run(CampaignLaunchChecklistService(session), _workflow(definition))
+
+    assert checklist.overall_status == "warning"
+    assert checklist.estimated_audience is None
+    assert checklist.estimated_send_volume is None
+    assert _item(checklist, "audience_estimate").status == "warning"
+    assert _item(checklist, "send_volume_cost").status == "unknown"
+
+
+def test_marketing_without_consent_blocks_launch_checklist() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "s1",
+        "nodes": [
+            {"type": "send_sms", "id": "s1", "body_template": "Hi", "next_node_id": "x1"},
+            {"type": "exit", "id": "x1", "outcome": "done"},
+        ],
+        "compliance": {"content_class": "marketing", "consent_required": False},
+    }
+    session = AsyncMock()
+    checklist = _run(CampaignLaunchChecklistService(session), _workflow(definition))
+
+    assert checklist.overall_status == "blocked"
+    assert checklist.blockers_count >= 1
+    assert _item(checklist, "compliance_classification").status == "blocked"
+
+
+def test_appointment_campaign_passes_fresh_nexhealth_check() -> None:
+    definition = {
+        "trigger": {"type": "appointment_offset", "offset_hours": -24},
+        "entry_node_id": "x1",
+        "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
+    }
+    location = MagicMock(spec=InstitutionLocation)
+    location.nexhealth_subdomain = "clinic"
+    location.nexhealth_location_id = "loc-ext"
+    subscription = MagicMock(spec=NexHealthWebhookSubscription)
+    subscription.id = "sub-1"
+    subscription.status = NexHealthWebhookSubscriptionStatus.ACTIVE.value
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=location)
+    session.execute = AsyncMock(side_effect=[_result(subscription), _result(_NOW)])
+
+    with patch("src.app.services.automation.launch_checklist_service.datetime") as dt:
+        dt.now.return_value = _NOW
+        dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        checklist = _run(
+            CampaignLaunchChecklistService(session),
+            _workflow(definition, location_id="loc-1"),
+        )
+
+    assert _item(checklist, "nexhealth_readiness").status == "pass"
+
+
+def _item(checklist, item_id: str):
+    return next(item for item in checklist.items if item.id == item_id)

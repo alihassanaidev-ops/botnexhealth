@@ -7,6 +7,7 @@ import api from "@/lib/api"
 import type { AutomationWorkflow } from "@/types"
 import type {
     ChannelReadiness,
+    LaunchChecklist,
     MergeFieldCatalogItem,
     TestRunResult,
     ValidateDefinitionResponse,
@@ -129,6 +130,34 @@ export async function dryRun(
 export async function getChannelReadiness(locationId: string): Promise<ChannelReadiness> {
     const { data } = await api.get<ChannelReadiness>(
         `/automation/workflows/channel-readiness?location_id=${encodeURIComponent(locationId)}`,
+    )
+    return data
+}
+
+export async function getLaunchChecklist(
+    workflowId: string,
+    opts?: { locationId?: string | null },
+): Promise<LaunchChecklist> {
+    const params = new URLSearchParams()
+    if (opts?.locationId) params.set("location_id", opts.locationId)
+    const query = params.toString()
+    const { data } = await api.get<LaunchChecklist>(
+        `/automation/workflows/${workflowId}/launch-checklist${query ? `?${query}` : ""}`,
+    )
+    return data
+}
+
+export async function previewLaunchChecklist(
+    workflowId: string,
+    definition: WorkflowDefinition,
+    opts?: { locationId?: string | null },
+): Promise<LaunchChecklist> {
+    const { data } = await api.post<LaunchChecklist>(
+        `/automation/workflows/${workflowId}/launch-checklist/preview`,
+        {
+            definition,
+            location_id: opts?.locationId ?? null,
+        },
     )
     return data
 }

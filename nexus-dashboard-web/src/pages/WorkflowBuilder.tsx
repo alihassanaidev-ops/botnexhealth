@@ -20,6 +20,7 @@ import {
     getChannelReadiness,
     getWorkflow,
     pauseWorkflow,
+    previewLaunchChecklist,
     resumeWorkflow,
     updateWorkflow,
     validateDefinition as validateDefinitionOnServer,
@@ -47,11 +48,13 @@ import StepConfigPanel from "@/components/workflow/StepConfigPanel"
 import WorkflowValidationPanel from "@/components/workflow/WorkflowValidationPanel"
 import WorkflowPublishControls from "@/components/workflow/WorkflowPublishControls"
 import ComplianceSettings from "@/components/workflow/ComplianceSettings"
+import LaunchChecklistPanel from "@/components/workflow/LaunchChecklistPanel"
 import TestRunDialog from "@/components/workflow/TestRunDialog"
 import type { AutomationWorkflow } from "@/types"
 import type {
     ChannelReadiness,
     ComplianceMetadata,
+    LaunchChecklist,
     NodeType,
     ValidationIssue,
     WorkflowDefinition,
@@ -83,6 +86,8 @@ export default function WorkflowBuilder() {
     const [testOpen, setTestOpen] = useState(false)
     const [backendIssues, setBackendIssues] = useState<ValidationIssue[]>([])
     const [readiness, setReadiness] = useState<ChannelReadiness | null>(null)
+    const [launchChecklist, setLaunchChecklist] = useState<LaunchChecklist | null>(null)
+    const [launchChecklistLoading, setLaunchChecklistLoading] = useState(false)
     const serverDef = useRef<WorkflowDefinition | null>(null)
 
     const readOnly = workflow?.status === "archived"
@@ -171,6 +176,31 @@ export default function WorkflowBuilder() {
         const names = unready.map((s) => s.label).join(", ")
         return `${names} ${unready.length > 1 ? "are" : "is"} not set up for this location. You can still publish, but those steps won't send until it's configured.`
     }, [channelStatuses])
+
+    useEffect(() => {
+        if (!id || !def) {
+            setLaunchChecklist(null)
+            return
+        }
+        let cancelled = false
+        setLaunchChecklistLoading(true)
+        const handle = window.setTimeout(() => {
+            previewLaunchChecklist(id, serializeDefinition(def), { locationId })
+                .then((checklist) => {
+                    if (!cancelled) setLaunchChecklist(checklist)
+                })
+                .catch(() => {
+                    if (!cancelled) setLaunchChecklist(null)
+                })
+                .finally(() => {
+                    if (!cancelled) setLaunchChecklistLoading(false)
+                })
+        }, 350)
+        return () => {
+            cancelled = true
+            window.clearTimeout(handle)
+        }
+    }, [id, def, locationId])
 
     const flow = useMemo(() => {
         if (!def) return { nodes: [] as FlowNode[], edges: [] }
@@ -391,6 +421,8 @@ export default function WorkflowBuilder() {
                         errorCount={errorCount}
                         busy={busy}
                         readinessWarning={readinessWarning}
+                        launchChecklist={launchChecklist}
+                        launchChecklistLoading={launchChecklistLoading}
                         onPublish={onPublish}
                         onDiscard={onDiscard}
                         onPause={() => runLifecycle(pauseWorkflow, "Campaign paused")}
@@ -438,6 +470,10 @@ export default function WorkflowBuilder() {
                         backendIssues={backendIssues}
                         readiness={channelStatuses}
                         onSelectNode={onSelect}
+                    />
+                    <LaunchChecklistPanel
+                        checklist={launchChecklist}
+                        loading={launchChecklistLoading}
                     />
                     {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </aside>

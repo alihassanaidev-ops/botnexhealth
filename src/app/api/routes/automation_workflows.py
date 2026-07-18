@@ -26,6 +26,10 @@ from src.app.services.automation.definition_service import AutomationWorkflowDef
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.content_compliance_validator import ContentComplianceValidator
 from src.app.services.automation.dry_run import simulate_run
+from src.app.services.automation.launch_checklist_service import (
+    CampaignLaunchChecklist,
+    CampaignLaunchChecklistService,
+)
 from src.app.services.automation.merge_field_catalog import fields_for
 from src.app.services.automation.validation_service import WorkflowValidationService
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
@@ -207,6 +211,66 @@ class DryRunResultResponse(BaseModel):
     steps: list[DryRunStepResponse] = Field(default_factory=list)
     outcome: str | None = None
     truncated: bool = False
+
+
+class LaunchChecklistPreviewRequest(BaseModel):
+    definition: dict[str, Any]
+    location_id: str | None = None
+
+
+class LaunchChecklistItemResponse(BaseModel):
+    id: str
+    section: str
+    label: str
+    status: Literal["pass", "warning", "blocked", "unknown"]
+    message: str
+    fix_href: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LaunchChecklistResponse(BaseModel):
+    workflow_id: str
+    workflow_version_id: str | None
+    location_id: str | None
+    overall_status: Literal["pass", "warning", "blocked", "unknown"]
+    blockers_count: int
+    warnings_count: int
+    unknown_count: int
+    estimated_audience: int | None
+    estimated_send_volume: dict[str, int] | None
+    estimated_cost_cents: int | None
+    estimate_basis: str
+    generated_at: datetime
+    items: list[LaunchChecklistItemResponse] = Field(default_factory=list)
+
+    @classmethod
+    def from_service(cls, checklist: CampaignLaunchChecklist) -> "LaunchChecklistResponse":
+        return cls(
+            workflow_id=checklist.workflow_id,
+            workflow_version_id=checklist.workflow_version_id,
+            location_id=checklist.location_id,
+            overall_status=checklist.overall_status,
+            blockers_count=checklist.blockers_count,
+            warnings_count=checklist.warnings_count,
+            unknown_count=checklist.unknown_count,
+            estimated_audience=checklist.estimated_audience,
+            estimated_send_volume=checklist.estimated_send_volume,
+            estimated_cost_cents=checklist.estimated_cost_cents,
+            estimate_basis=checklist.estimate_basis,
+            generated_at=checklist.generated_at,
+            items=[
+                LaunchChecklistItemResponse(
+                    id=item.id,
+                    section=item.section,
+                    label=item.label,
+                    status=item.status,
+                    message=item.message,
+                    fix_href=item.fix_href,
+                    metadata=item.metadata,
+                )
+                for item in checklist.items
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +636,45 @@ async def release_outbound_halt(
         await session.commit()
 
     return OutboundHaltResponse(halted=False)
+
+
+@router.get("/{workflow_id}/launch-checklist", response_model=LaunchChecklistResponse)
+async def get_launch_checklist(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    location_id: str | None = Query(None, description="Optional location context override"),
+) -> LaunchChecklistResponse:
+    """Return the launch-readiness checklist for the workflow's saved definition."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        checklist = await CampaignLaunchChecklistService(session).build(
+            wf,
+            institution_id=inst_id,
+            location_id=location_id,
+        )
+        return LaunchChecklistResponse.from_service(checklist)
+
+
+@router.post("/{workflow_id}/launch-checklist/preview", response_model=LaunchChecklistResponse)
+async def preview_launch_checklist(
+    workflow_id: str,
+    data: LaunchChecklistPreviewRequest,
+    current_user: _InstitutionAdmin,
+) -> LaunchChecklistResponse:
+    """Return launch readiness for an unsaved builder draft without persisting it."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        checklist = await CampaignLaunchChecklistService(session).build(
+            wf,
+            institution_id=inst_id,
+            definition_dict=data.definition,
+            location_id=data.location_id,
+        )
+        return LaunchChecklistResponse.from_service(checklist)
 
 
 @router.get("/{workflow_id}", response_model=WorkflowResponse)
