@@ -121,3 +121,25 @@ def test_voice_unknown_outcome_creates_handoff():
     assert event.workflow_run_id == "run-1"
     assert handoff is not None
     assert handoff.reason == "ambiguous_voice_outcome"
+
+
+def test_voice_failed_outcome_creates_handoff():
+    run = _run()
+    session = _session(run=run)
+    attempt = MagicMock()
+    attempt.location_id = "loc-1"
+    attempt.workflow_run_id = "run-1"
+    session.execute.side_effect = [_result(None), _result(attempt)]
+
+    event, handoff = asyncio.run(
+        CampaignResponseService(session).record_voice_response(
+            institution_id="inst-1",
+            retell_call_id="call-2",
+            call_outcome="failed",
+            disconnection_reason="dial_failed",
+        )
+    )
+
+    assert event.normalized_outcome == "failed"
+    assert handoff is not None
+    assert handoff.reason == "ambiguous_voice_outcome"

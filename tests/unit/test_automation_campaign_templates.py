@@ -106,6 +106,27 @@ def test_callback_template_requires_voice_agent_substitution() -> None:
     definition = instantiate_definition(template, voice_agent_id="agent_clinic_1")
     voice = next(node for node in definition["nodes"] if node["type"] == "send_voice")
     assert voice["retell_agent_id"] == "agent_clinic_1"
+    assert voice["wait_for_outcome"] is True
+
+    condition = next(node for node in definition["nodes"] if node["id"] == "check-call-outcome")
+    assert condition["rules"][0] == {
+        "field": "call_outcome",
+        "op": "in",
+        "value": ["answered", "transferred"],
+    }
+    assert any(
+        node["type"] == "exit" and node.get("outcome") == "staff_handoff"
+        for node in definition["nodes"]
+    )
+
+
+def test_callback_template_metadata_exposes_voice_outcome_readiness() -> None:
+    metadata = TEMPLATES["callback-automation"].metadata
+
+    assert "voice_outcome_wait" in metadata.required_readiness_checks
+    assert "callback_queue_source" in metadata.required_readiness_checks
+    assert {"answered", "booked", "transferred", "staff_handoff", "unreachable", "do_not_call"} <= set(metadata.outcome_labels)
+    assert metadata.analytics_outcome_map["failed"] == "unreachable"
 
 
 def test_template_metadata_has_required_dental_contract() -> None:

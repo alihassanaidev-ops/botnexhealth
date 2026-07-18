@@ -143,11 +143,11 @@ class CampaignResponseService:
             )
 
         handoff = None
-        if call_outcome == "unknown":
+        if call_outcome in {"unknown", "failed"}:
             handoff = await self._create_handoff(
                 event,
                 reason="ambiguous_voice_outcome",
-                summary="Voice call produced an unknown outcome.",
+                summary=f"Voice call produced a {call_outcome} outcome.",
             )
         await self.session.flush()
         return event, handoff

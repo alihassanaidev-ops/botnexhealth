@@ -485,6 +485,7 @@ export default function WorkflowBuilder() {
                 def={def}
                 selectedId={selectedId}
                 onNodeChange={onNodeChange}
+                onDefinitionChange={applyDef}
                 onTriggerChange={onTriggerChange}
                 onDeleteNode={onDeleteNode}
                 onSetEntry={onSetEntry}

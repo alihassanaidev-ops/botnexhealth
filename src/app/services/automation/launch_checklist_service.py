@@ -26,6 +26,8 @@ from src.app.models.nexhealth_webhook_subscription import (
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.content_compliance_validator import ContentComplianceValidator
 from src.app.services.automation.definition_schema import (
+    ConditionNode,
+    ExitNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -142,6 +144,7 @@ class CampaignLaunchChecklistService:
         )
         items += self._compliance_items(definition, send_nodes, errors, warnings)
         items += self._quiet_hours_item(send_nodes)
+        items += self._callback_items(definition)
         items += await self._nexhealth_items(
             definition,
             institution_id=institution_id,
@@ -613,6 +616,62 @@ class CampaignLaunchChecklistService:
         ]
 
     @staticmethod
+    def _callback_items(definition: WorkflowDefinition) -> list[CampaignLaunchChecklistItem]:
+        if definition.trigger.type != "callback_requested":
+            return []
+
+        voice_nodes = [n for n in definition.nodes if isinstance(n, SendVoiceNode)]
+        waits_for_outcome = [n.id for n in voice_nodes if n.wait_for_outcome]
+        return [
+            CampaignLaunchChecklistItem(
+                id="callback_queue_source",
+                section="operations",
+                label="Callback queue source",
+                status="pass",
+                message="Callback-requested workflows enroll from the existing callback classification queue.",
+                fix_href="/institution-admin/callbacks",
+            ),
+            CampaignLaunchChecklistItem(
+                id="callback_voice_profile",
+                section="channels",
+                label="Callback voice profile",
+                status="pass" if voice_nodes else "blocked",
+                message=(
+                    "Callback automation includes an outbound AI voice step."
+                    if voice_nodes
+                    else "Callback automation needs an outbound AI voice step."
+                ),
+                fix_href="#message-editor",
+                metadata={"node_ids": [n.id for n in voice_nodes]},
+            ),
+            CampaignLaunchChecklistItem(
+                id="voice_outcome_wait",
+                section="operations",
+                label="Voice outcome wait",
+                status="pass" if waits_for_outcome else "warning",
+                message=(
+                    "At least one voice step waits for Retell call_outcome before branching."
+                    if waits_for_outcome
+                    else "Enable wait_for_outcome so Retell outcomes can drive callback branches."
+                ),
+                fix_href="#message-editor",
+                metadata={"node_ids": waits_for_outcome or [n.id for n in voice_nodes]},
+            ),
+            CampaignLaunchChecklistItem(
+                id="callback_staff_fallback",
+                section="operations",
+                label="Staff fallback behavior",
+                status="pass" if _has_staff_handoff_exit(definition) else "warning",
+                message=(
+                    "A staff handoff exit is configured for unresolved callback outcomes."
+                    if _has_staff_handoff_exit(definition)
+                    else "Add a staff_handoff or handoff exit for ambiguous or failed callback outcomes."
+                ),
+                fix_href="#message-editor",
+            ),
+        ]
+
+    @staticmethod
     def _audience_status(
         definition: WorkflowDefinition,
         latest_preview: CampaignAudiencePreview | None,
@@ -717,6 +776,26 @@ def _channels_used(definition: WorkflowDefinition) -> set[str]:
         elif isinstance(node, SendVoiceNode):
             channels.add("voice")
     return channels
+
+
+def _has_staff_handoff_exit(definition: WorkflowDefinition) -> bool:
+    exits_by_id = {
+        node.id: node
+        for node in definition.nodes
+        if isinstance(node, ExitNode)
+    }
+    handoff_outcomes = {"handoff", "staff_handoff"}
+    for exit_node in exits_by_id.values():
+        if exit_node.outcome in handoff_outcomes:
+            return True
+    for node in definition.nodes:
+        if not isinstance(node, ConditionNode):
+            continue
+        for target_id in (node.true_next_node_id, node.false_next_node_id):
+            target = exits_by_id.get(target_id)
+            if target and target.outcome in handoff_outcomes:
+                return True
+    return False
 
 
 def _planned_sends_per_contact(send_nodes: list[Any]) -> dict[str, int]:

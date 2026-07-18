@@ -104,5 +104,39 @@ def test_appointment_campaign_passes_fresh_nexhealth_check() -> None:
     assert _item(checklist, "nexhealth_readiness").status == "pass"
 
 
+def test_callback_campaign_surfaces_voice_outcome_and_handoff_readiness() -> None:
+    definition = {
+        "trigger": {"type": "callback_requested"},
+        "entry_node_id": "voice-1",
+        "nodes": [
+            {
+                "type": "send_voice",
+                "id": "voice-1",
+                "retell_agent_id": "agent-1",
+                "wait_for_outcome": True,
+                "next_node_id": "condition-1",
+            },
+            {
+                "type": "condition",
+                "id": "condition-1",
+                "rules": [{"field": "call_outcome", "op": "eq", "value": "booked"}],
+                "true_next_node_id": "exit-booked",
+                "false_next_node_id": "exit-handoff",
+            },
+            {"type": "exit", "id": "exit-booked", "outcome": "booked"},
+            {"type": "exit", "id": "exit-handoff", "outcome": "staff_handoff"},
+        ],
+        "compliance": {"content_class": "transactional_care", "consent_required": True},
+    }
+    session = AsyncMock()
+
+    checklist = _run(CampaignLaunchChecklistService(session), _workflow(definition))
+
+    assert _item(checklist, "callback_queue_source").status == "pass"
+    assert _item(checklist, "callback_voice_profile").status == "pass"
+    assert _item(checklist, "voice_outcome_wait").status == "pass"
+    assert _item(checklist, "callback_staff_fallback").status == "pass"
+
+
 def _item(checklist, item_id: str):
     return next(item for item in checklist.items if item.id == item_id)

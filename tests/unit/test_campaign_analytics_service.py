@@ -57,6 +57,18 @@ def test_recall_category_uses_booking_as_success_label() -> None:
     assert definitions[0].label == "Recall Booked"
 
 
+def test_callback_category_exposes_voice_outcome_labels() -> None:
+    wf = _workflow(name="Callback Automation", category="callback", trigger="callback_requested")
+
+    definitions = analytics.outcome_definitions(analytics.campaign_category(wf))
+    labels_by_key = {definition.key: definition.label for definition in definitions}
+
+    assert labels_by_key["voice_answered"] == "Answered"
+    assert labels_by_key["voice_failed"] == "Unreachable"
+    assert labels_by_key["opt_out"] == "Do-Not-Call"
+    assert labels_by_key["transferred"] == "Transferred"
+
+
 def test_rollup_sql_covers_every_metrics_model_column() -> None:
     sql = str(analytics._INSERT_ROLLUP_SQL.text)
     for column in analytics.ROLLUP_METRIC_COLUMNS:

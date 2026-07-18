@@ -8,7 +8,7 @@
  * source of truth). Edges are authored via the next-step selectors here — not by
  * dragging on the canvas (Plan 02 architecture decision).
  */
-import { Trash2, Flag, Plus } from "lucide-react"
+import { Trash2, Flag, Plus, GitBranch } from "lucide-react"
 import {
     Sheet,
     SheetContent,
@@ -33,7 +33,7 @@ import {
 import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
-import { TRIGGER_NODE_ID } from "@/lib/workflow/graph"
+import { addVoiceOutcomeBranch, TRIGGER_NODE_ID, VOICE_OUTCOME_BRANCH_VALUES } from "@/lib/workflow/graph"
 import type {
     ConditionNode,
     ConditionOp,
@@ -58,6 +58,7 @@ export interface StepConfigPanelProps {
     /** Selected node id, `TRIGGER_NODE_ID` for the trigger, or null. */
     selectedId: string | null
     onNodeChange: (node: WorkflowNode) => void
+    onDefinitionChange: (def: WorkflowDefinition) => void
     onTriggerChange: (trigger: WorkflowTrigger) => void
     onDeleteNode: (id: string) => void
     onSetEntry: (id: string) => void
@@ -166,6 +167,7 @@ function NodeForm({
     def,
     node,
     onNodeChange,
+    onDefinitionChange,
     onDeleteNode,
     onSetEntry,
     readOnly,
@@ -185,7 +187,15 @@ function NodeForm({
             <div className="space-y-4 py-4">
                 {node.type === "send_sms" && <SmsFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "send_email" && <EmailFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />}
-                {node.type === "send_voice" && <VoiceFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
+                {node.type === "send_voice" && (
+                    <VoiceFields
+                        node={node}
+                        def={def}
+                        onChange={onNodeChange}
+                        onDefinitionChange={onDefinitionChange}
+                        readOnly={readOnly}
+                    />
+                )}
                 {node.type === "wait" && <WaitFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "condition" && (
                     <ConditionFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
@@ -321,7 +331,19 @@ function EmailFields({
     )
 }
 
-function VoiceFields({ node, onChange, readOnly }: { node: SendVoiceNode; onChange: (n: WorkflowNode) => void; readOnly?: boolean }) {
+function VoiceFields({
+    node,
+    def,
+    onChange,
+    onDefinitionChange,
+    readOnly,
+}: {
+    node: SendVoiceNode
+    def: WorkflowDefinition
+    onChange: (n: WorkflowNode) => void
+    onDefinitionChange: (def: WorkflowDefinition) => void
+    readOnly?: boolean
+}) {
     return (
         <>
             <Field label="Retell agent ID" hint="The location's outbound voice agent.">
@@ -332,6 +354,45 @@ function VoiceFields({ node, onChange, readOnly }: { node: SendVoiceNode; onChan
                     onChange={(e) => onChange({ ...node, retell_agent_id: e.target.value })}
                 />
             </Field>
+            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
+                <div>
+                    <Label className="text-sm">Wait for voice outcome</Label>
+                    <p className="text-xs text-muted-foreground">
+                        Pause this run until the Retell post-call webhook writes call_outcome.
+                    </p>
+                </div>
+                <Switch
+                    checked={node.wait_for_outcome ?? false}
+                    disabled={readOnly}
+                    onCheckedChange={(checked) => onChange({ ...node, wait_for_outcome: checked })}
+                />
+            </div>
+            {!readOnly && (
+                <div className="space-y-2 rounded-md border border-border p-3">
+                    <div className="space-y-1">
+                        <Label className="text-sm">Voice outcome branch</Label>
+                        <p className="text-xs text-muted-foreground">
+                            Adds a call_outcome condition with booked and staff handoff exits.
+                        </p>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                        {VOICE_OUTCOME_BRANCH_VALUES.map((value) => (
+                            <span key={value} className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                                {value}
+                            </span>
+                        ))}
+                    </div>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => onDefinitionChange(addVoiceOutcomeBranch(def, node.id))}
+                    >
+                        <GitBranch className="h-3.5 w-3.5" /> Add outcome branch
+                    </Button>
+                </div>
+            )}
             <AttemptsField value={node.max_attempts ?? 1} onChange={(v) => onChange({ ...node, max_attempts: v })} readOnly={readOnly} />
         </>
     )

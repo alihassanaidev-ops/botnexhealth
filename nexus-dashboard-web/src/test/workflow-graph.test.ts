@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
     addNode,
+    addVoiceOutcomeBranch,
     autoLayoutDefinition,
     blankDefinition,
     clearLayout,
@@ -18,6 +19,7 @@ import {
     setNodePosition,
     TRIGGER_NODE_ID,
     updateNode,
+    VOICE_OUTCOME_BRANCH_VALUES,
 } from "@/lib/workflow/graph"
 import type { WorkflowDefinition } from "@/types/workflow"
 
@@ -140,6 +142,7 @@ describe("workflow graph — factories", () => {
     it("createNode yields schema-shaped defaults", () => {
         expect(createNode("wait", "w").type).toBe("wait")
         expect(createNode("send_sms", "s")).toMatchObject({ max_attempts: 1, body_template: "" })
+        expect(createNode("send_voice", "v")).toMatchObject({ wait_for_outcome: false, max_attempts: 1 })
         expect(createNode("condition", "c")).toMatchObject({ logic: "AND" })
     })
     it("createTrigger yields sensible defaults", () => {
@@ -215,6 +218,42 @@ describe("workflow graph — drag-to-connect (Phase 4)", () => {
     it("is immutable — the original definition is untouched", () => {
         connectNodes(LINEAR, "sms-1", "exit-1")
         expect((LINEAR.nodes[0] as { next_node_id: string }).next_node_id).toBe("wait-1")
+    })
+})
+
+describe("workflow graph — voice outcome branch helper", () => {
+    it("adds a call_outcome condition and staff handoff fallback after a voice node", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "callback_requested" },
+            entry_node_id: "voice-1",
+            nodes: [
+                {
+                    type: "send_voice",
+                    id: "voice-1",
+                    retell_agent_id: "agent-1",
+                    next_node_id: "exit-1",
+                    wait_for_outcome: false,
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+        }
+
+        const next = addVoiceOutcomeBranch(def, "voice-1")
+        const voice = next.nodes.find((n) => n.id === "voice-1")
+        const condition = next.nodes.find((n) => n.type === "condition")
+        const handoff = next.nodes.find((n) => n.type === "exit" && n.outcome === "staff_handoff")
+
+        expect(VOICE_OUTCOME_BRANCH_VALUES).toContain("booked")
+        expect(voice?.type === "send_voice" && voice.wait_for_outcome).toBe(true)
+        expect(voice?.type === "send_voice" && voice.next_node_id).toBe(condition?.id)
+        expect(condition?.type === "condition" && condition.rules[0]).toMatchObject({
+            field: "call_outcome",
+            op: "eq",
+            value: "booked",
+        })
+        expect(handoff).toBeTruthy()
+        expect(def.nodes).toHaveLength(2)
     })
 })
 

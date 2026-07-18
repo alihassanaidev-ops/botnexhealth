@@ -23,6 +23,17 @@ import {
 } from "@/types/workflow"
 
 export const TRIGGER_NODE_ID = "__trigger__"
+export const VOICE_OUTCOME_BRANCH_VALUES = [
+    "booked",
+    "answered",
+    "transferred",
+    "callback_requested",
+    "voicemail",
+    "no_answer",
+    "busy",
+    "failed",
+    "do_not_call",
+] as const
 
 const COL_W = 300
 const ROW_H = 150
@@ -413,6 +424,7 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 next_node_id: "",
                 respect_quiet_hours: true,
                 max_attempts: 1,
+                wait_for_outcome: false,
             }
         case "send_email":
             return {
@@ -435,6 +447,50 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
             }
         case "exit":
             return { type, id, outcome: null }
+    }
+}
+
+/** Add a callback-oriented call_outcome branch after a voice node. */
+export function addVoiceOutcomeBranch(def: WorkflowDefinition, voiceNodeId: string): WorkflowDefinition {
+    const voice = def.nodes.find((n) => n.id === voiceNodeId)
+    if (!voice || voice.type !== "send_voice") return def
+
+    const existingIds = def.nodes.map((n) => n.id)
+    const conditionId = genId("condition", existingIds)
+    const bookedExitId = genId("exit", [...existingIds, conditionId])
+    const existingNext = def.nodes.find((n) => n.id === voice.next_node_id)
+    const reusableHandoffExit = existingNext?.type === "exit" ? existingNext.id : null
+    const handoffExitId = reusableHandoffExit ?? genId("exit", [...existingIds, conditionId, bookedExitId])
+
+    const condition: WorkflowNode = {
+        type: "condition",
+        id: conditionId,
+        logic: "AND",
+        rules: [{ field: "call_outcome", op: "eq", value: "booked" }],
+        true_next_node_id: bookedExitId,
+        false_next_node_id: handoffExitId,
+    }
+    const bookedExit: WorkflowNode = { type: "exit", id: bookedExitId, outcome: "booked" }
+    const handoffExit: WorkflowNode | null = reusableHandoffExit
+        ? null
+        : { type: "exit", id: handoffExitId, outcome: "staff_handoff" }
+
+    return {
+        ...def,
+        nodes: [
+            ...def.nodes.map((n) => {
+                if (n.id === voiceNodeId) {
+                    return { ...voice, wait_for_outcome: true, next_node_id: conditionId }
+                }
+                if (n.id === reusableHandoffExit && n.type === "exit") {
+                    return { ...n, outcome: "staff_handoff" }
+                }
+                return n
+            }),
+            condition,
+            bookedExit,
+            ...(handoffExit ? [handoffExit] : []),
+        ],
     }
 }
 

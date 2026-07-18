@@ -138,9 +138,13 @@ _OUTCOME_DEFINITIONS: dict[str, tuple[OutcomeDefinition, ...]] = {
         OutcomeDefinition("opt_out", "Opt-Out", "failure", "Patient opted out.", 40),
     ),
     "callback": (
-        OutcomeDefinition("callback_requested", "Callback Requests", "neutral", "Callbacks entering the campaign.", 10),
-        OutcomeDefinition("booked", "Booked By Callback", "success", "Callback outreach produced a booking.", 20),
-        OutcomeDefinition("staff_handoff", "Staff Handoff", "neutral", "Automation routed the run to staff.", 30),
+        OutcomeDefinition("callback_requested", "Callbacks Automated", "neutral", "Callback requests entering the campaign.", 10),
+        OutcomeDefinition("voice_answered", "Answered", "success", "AI voice callback reached the patient.", 20),
+        OutcomeDefinition("booked", "Booked By Callback", "success", "Callback outreach produced a booking.", 30),
+        OutcomeDefinition("transferred", "Transferred", "neutral", "AI voice transferred the call to staff.", 40),
+        OutcomeDefinition("staff_handoff", "Staff Handoff", "neutral", "Automation routed the run to staff.", 50),
+        OutcomeDefinition("voice_failed", "Unreachable", "failure", "Callback voice attempts did not reach the patient.", 60),
+        OutcomeDefinition("opt_out", "Do-Not-Call", "failure", "Patient asked not to be called.", 70),
     ),
     "treatment": (
         OutcomeDefinition("booked", "Treatment Visit Booked", "success", "Patient scheduled the next treatment visit.", 10),
