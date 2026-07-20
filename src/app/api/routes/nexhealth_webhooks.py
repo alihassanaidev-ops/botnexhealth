@@ -15,6 +15,8 @@ from src.app.config import settings
 from src.app.database import get_system_db_session
 from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
+from src.app.services.dead_letter import capture_dead_letter
+from src.app.services.sms_privacy import payload_hash, safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,28 @@ _PATIENT_EVENTS = frozenset({"patient_created", "patient_updated"})
 _SYNC_STATUS_EVENTS = frozenset({"sync_status_read_change", "sync_status_write_change"})
 _CANCEL_EVENTS: frozenset[str] = frozenset()  # no distinct cancel event; derived from the `cancelled` flag
 _HANDLED_EVENTS = _ENROLL_EVENTS | _CANCEL_EVENTS | _PATIENT_EVENTS | _SYNC_STATUS_EVENTS
+
+
+def _raw_payload_text(raw_body: bytes) -> str:
+    return raw_body.decode("utf-8", errors="replace")
+
+
+def _source_event_id(payload: dict[str, Any]) -> str | None:
+    for key in ("id", "event_id", "webhook_event_id", "delivery_id"):
+        value = payload.get(key)
+        if value not in (None, ""):
+            return str(value)
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("event_id", "webhook_event_id", "delivery_id"):
+            value = data.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return None
+
+
+def _dedup_fallback(payload: dict[str, Any]) -> str:
+    return payload_hash(payload)[:32]
 
 
 def _appointment_is_cancelled(event: str, appt: dict) -> bool:
@@ -203,6 +227,7 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
         )
+    raw_payload = _raw_payload_text(raw_body)
 
     # NexHealth uses `event_name` (e.g. "appointment_insertion.complete"); normalize to the base
     # token. Fall back to `event` for backward compatibility with older/synthetic payloads.
@@ -212,15 +237,30 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
         logger.debug("nexhealth_appointment_webhook: ignoring event=%s", event_name)
         return {"status": "ignored", "event": event_name}
     if event in _SYNC_STATUS_EVENTS:
-        return await _process_sync_status_webhook_payload(event=event, payload=payload)
+        return await _process_sync_status_webhook_payload(
+            event=event,
+            payload=payload,
+            raw_payload=raw_payload,
+        )
     if event in _PATIENT_EVENTS:
-        return await _process_patient_webhook_payload(event=event, payload=payload)
+        return await _process_patient_webhook_payload(
+            event=event,
+            payload=payload,
+            raw_payload=raw_payload,
+        )
 
     appointments = _appointment_payloads(payload, event)
     if event == "appointment_created" and len(appointments) > 1:
         results = []
         for appt in appointments:
-            results.append(await _process_appointment_event(event=event, appt=appt))
+            results.append(
+                await _process_appointment_event(
+                    event=event,
+                    appt=appt,
+                    payload=payload,
+                    raw_payload=raw_payload,
+                )
+            )
         queued = sum(1 for result in results if result.get("status") == "queued")
         return {
             "status": "queued" if queued else "processed",
@@ -231,7 +271,12 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
         }
 
     appt = appointments[0] if appointments else {}
-    return await _process_appointment_event(event=event, appt=appt)
+    return await _process_appointment_event(
+        event=event,
+        appt=appt,
+        payload=payload,
+        raw_payload=raw_payload,
+    )
 
 
 @router.post("/patients", status_code=status.HTTP_200_OK)
@@ -250,13 +295,18 @@ async def nexhealth_patient_webhook(request: Request) -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
         )
+    raw_payload = _raw_payload_text(raw_body)
 
     event_name: str = payload.get("event_name") or payload.get("event") or ""
     event: str = event_name.split(".", 1)[0]
     if event not in _PATIENT_EVENTS:
         logger.debug("nexhealth_patient_webhook: ignoring event=%s", event_name)
         return {"status": "ignored", "event": event_name}
-    return await _process_patient_webhook_payload(event=event, payload=payload)
+    return await _process_patient_webhook_payload(
+        event=event,
+        payload=payload,
+        raw_payload=raw_payload,
+    )
 
 
 @router.post("/sync-status", status_code=status.HTTP_200_OK)
@@ -275,17 +325,22 @@ async def nexhealth_sync_status_webhook(request: Request) -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
         )
+    raw_payload = _raw_payload_text(raw_body)
 
     event_name: str = payload.get("event_name") or payload.get("event") or ""
     event: str = event_name.split(".", 1)[0]
     if event not in _SYNC_STATUS_EVENTS:
         logger.debug("nexhealth_sync_status_webhook: ignoring event=%s", event_name)
         return {"status": "ignored", "event": event_name}
-    return await _process_sync_status_webhook_payload(event=event, payload=payload)
+    return await _process_sync_status_webhook_payload(
+        event=event,
+        payload=payload,
+        raw_payload=raw_payload,
+    )
 
 
 async def _process_sync_status_webhook_payload(
-    *, event: str, payload: dict[str, Any]
+    *, event: str, payload: dict[str, Any], raw_payload: str | None = None
 ) -> dict[str, Any]:
     subdomain = str(payload.get("subdomain") or "")
     if not subdomain:
@@ -329,7 +384,7 @@ async def _process_sync_status_webhook_payload(
         data.get("read_status_at")
         or data.get("write_status_at")
         or payload.get("event_time")
-        or "none"
+        or _dedup_fallback(payload)
     )
     dedup_key = f"{event}:{subdomain}:{','.join(local_location_ids)}:{dedup_basis}"
 
@@ -347,17 +402,33 @@ async def _process_sync_status_webhook_payload(
             institution_id=institution_id,
             event_type=event,
             dedup_key=dedup_key,
+            source_event_id=_source_event_id(payload),
+            payload=payload,
+            raw_payload=raw_payload,
         )
         if not claimed:
             await session.commit()
             return {"status": "duplicate", "event": event}
 
-        updated = await NexHealthSyncStatusService(session).upsert_for_locations(
-            event=event,
-            subdomain=subdomain,
-            locations=locations,
-            payload=payload,
-        )
+        try:
+            updated = await NexHealthSyncStatusService(session).upsert_for_locations(
+                event=event,
+                subdomain=subdomain,
+                locations=locations,
+                payload=payload,
+            )
+        except Exception as exc:  # noqa: BLE001 - valid webhooks are DLQ'd, not retried by NexHealth.
+            return await _dead_letter_claimed_webhook(
+                session=session,
+                projection=proj,
+                institution_id=institution_id,
+                location_id=local_location_ids[0] if local_location_ids else None,
+                dedup_key=dedup_key,
+                event=event,
+                payload=payload,
+                raw_payload=raw_payload,
+                error=exc,
+            )
         await proj.complete_event(institution_id=institution_id, dedup_key=dedup_key)
         await session.commit()
 
@@ -376,8 +447,53 @@ async def _process_sync_status_webhook_payload(
     }
 
 
+async def _dead_letter_claimed_webhook(
+    *,
+    session,
+    projection,
+    institution_id: str,
+    location_id: str | None,
+    dedup_key: str,
+    event: str,
+    payload: dict[str, Any],
+    raw_payload: str | None,
+    error: Exception,
+) -> dict[str, Any]:
+    row = await projection.complete_event(
+        institution_id=institution_id,
+        dedup_key=dedup_key,
+        error=str(error),
+    )
+    await session.commit()
+    await capture_dead_letter(
+        source="nexhealth_webhook",
+        event_type=event,
+        error=error,
+        payload=payload,
+        raw_payload=raw_payload,
+        attempts=row.attempts if row is not None else 1,
+        institution_id=institution_id,
+        location_id=location_id,
+    )
+    logger.warning(
+        "nexhealth_webhook: dead-lettered event=%s institution=%s location=%s dedup_hash=%s error=%s",
+        event,
+        institution_id,
+        location_id or "none",
+        _dedup_fallback({"dedup_key": dedup_key}),
+        safe_error_summary(error),
+    )
+    return {
+        "status": "failed",
+        "event": event,
+        "dead_lettered": True,
+        "institution_id": institution_id,
+        "location_id": location_id,
+    }
+
+
 async def _process_patient_webhook_payload(
-    *, event: str, payload: dict[str, Any]
+    *, event: str, payload: dict[str, Any], raw_payload: str | None = None
 ) -> dict[str, Any]:
     patients = _patient_payloads(payload)
     if not patients:
@@ -390,6 +506,8 @@ async def _process_patient_webhook_payload(
         await _process_patient_event(
             event=event,
             patient=patient,
+            payload=payload,
+            raw_payload=raw_payload,
             subdomain=str(payload.get("subdomain") or ""),
             event_time=str(payload.get("event_time") or ""),
         )
@@ -408,6 +526,8 @@ async def _process_patient_event(
     *,
     event: str,
     patient: dict[str, Any],
+    payload: dict[str, Any],
+    raw_payload: str | None,
     subdomain: str,
     event_time: str,
 ) -> dict[str, Any]:
@@ -448,7 +568,7 @@ async def _process_patient_event(
     institution_id = str(locations[0].institution_id)
     locations = [loc for loc in locations if str(loc.institution_id) == institution_id]
     local_location_ids = [str(loc.id) for loc in locations]
-    dedup_basis = patient.get("updated_at") or event_time or "none"
+    dedup_basis = patient.get("updated_at") or event_time or _dedup_fallback(payload)
     dedup_key = f"{event}:{patient_id}:{dedup_basis}"
 
     from src.app.services.automation.nexhealth_projection_service import (
@@ -473,6 +593,9 @@ async def _process_patient_event(
             patient_id=patient_id,
             event_type=event,
             dedup_key=dedup_key,
+            source_event_id=_source_event_id(payload),
+            payload=payload,
+            raw_payload=raw_payload,
         )
         if not claimed:
             await session.commit()
@@ -484,13 +607,26 @@ async def _process_patient_event(
             )
             return {"status": "duplicate", "patient_id": patient_id}
 
-        upsert = await proj.upsert_patient(
-            institution_id=institution_id,
-            patient=patient,
-            local_location_ids=local_location_ids,
-            nexhealth_location_ids=nexhealth_location_ids,
-            event=event,
-        )
+        try:
+            upsert = await proj.upsert_patient(
+                institution_id=institution_id,
+                patient=patient,
+                local_location_ids=local_location_ids,
+                nexhealth_location_ids=nexhealth_location_ids,
+                event=event,
+            )
+        except Exception as exc:  # noqa: BLE001 - valid webhooks are DLQ'd, not retried by NexHealth.
+            return await _dead_letter_claimed_webhook(
+                session=session,
+                projection=proj,
+                institution_id=institution_id,
+                location_id=local_location_ids[0] if local_location_ids else None,
+                dedup_key=dedup_key,
+                event=event,
+                payload=payload,
+                raw_payload=raw_payload,
+                error=exc,
+            )
         await proj.complete_event(institution_id=institution_id, dedup_key=dedup_key)
         await session.commit()
 
@@ -510,7 +646,13 @@ async def _process_patient_event(
     }
 
 
-async def _process_appointment_event(event: str, appt: dict[str, Any]) -> dict[str, Any]:
+async def _process_appointment_event(
+    event: str,
+    appt: dict[str, Any],
+    *,
+    payload: dict[str, Any],
+    raw_payload: str | None,
+) -> dict[str, Any]:
     nexhealth_location_id = str(appt.get("location_id", ""))
     appointment_id = str(appt.get("id", ""))
     start_time: str | None = appt.get("start_time")
@@ -594,6 +736,9 @@ async def _process_appointment_event(event: str, appt: dict[str, Any]) -> dict[s
             appointment_id=appointment_id,
             event_type=event,
             dedup_key=dedup_key,
+            source_event_id=_source_event_id(payload),
+            payload=payload,
+            raw_payload=raw_payload,
         )
         if not claimed:
             await session.commit()
@@ -603,18 +748,31 @@ async def _process_appointment_event(event: str, appt: dict[str, Any]) -> dict[s
             )
             return {"status": "duplicate", "appointment_id": appointment_id}
 
-        upsert = await proj.upsert_appointment(
-            institution_id=institution_id,
-            appointment_id=appointment_id,
-            location_id=location_id,
-            nexhealth_patient_id=nexhealth_patient_id,
-            contact_id=contact_id,
-            start_time=start_time,
-            event=event,
-            cancelled=is_cancelled,
-            provider_id=provider_id,
-            appointment_type_id=appointment_type_id,
-        )
+        try:
+            upsert = await proj.upsert_appointment(
+                institution_id=institution_id,
+                appointment_id=appointment_id,
+                location_id=location_id,
+                nexhealth_patient_id=nexhealth_patient_id,
+                contact_id=contact_id,
+                start_time=start_time,
+                event=event,
+                cancelled=is_cancelled,
+                provider_id=provider_id,
+                appointment_type_id=appointment_type_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - valid webhooks are DLQ'd, not retried by NexHealth.
+            return await _dead_letter_claimed_webhook(
+                session=session,
+                projection=proj,
+                institution_id=institution_id,
+                location_id=location_id,
+                dedup_key=dedup_key,
+                event=event,
+                payload=payload,
+                raw_payload=raw_payload,
+                error=exc,
+            )
         change = upsert.change
         await proj.complete_event(institution_id=institution_id, dedup_key=dedup_key)
         await session.commit()

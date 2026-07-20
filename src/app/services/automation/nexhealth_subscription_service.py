@@ -234,6 +234,19 @@ class NexHealthSubscriptionLifecycleService:
                         "stale_after_hours": stale_after_hours,
                     }
                     summary.stale_marked += 1
+                elif row.last_event_at is None:
+                    reference_at = (
+                        getattr(row, "created_at", None)
+                        or getattr(row, "updated_at", None)
+                        or row.last_health_check_at
+                    )
+                    if reference_at is not None and _as_utc(reference_at) < stale_before:
+                        row.status = NexHealthWebhookSubscriptionStatus.FAILED.value
+                        row.error_metadata = {
+                            "reason": "no_webhook_events_seen",
+                            "stale_after_hours": stale_after_hours,
+                        }
+                        summary.stale_marked += 1
             if hasattr(summary, row.status):
                 setattr(summary, row.status, getattr(summary, row.status) + 1)
             row.updated_at = now

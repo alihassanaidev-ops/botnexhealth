@@ -7,6 +7,9 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from src.app.config import settings
 from src.app.models.nexhealth_webhook_event import NexHealthWebhookStatus
 from src.app.services.automation.appointment_trigger_service import (
     make_appointment_idempotency_key,
@@ -149,6 +152,39 @@ def test_claim_event_fresh_processing_blocks():
         )
     )
     assert claimed is False
+
+
+def test_claim_event_stores_encrypted_raw_and_redacted_payload(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
+    session = _session(existing=None)
+    svc = NexHealthProjectionService(session)
+    payload = {
+        "id": "evt-1",
+        "event_name": "patient_updated",
+        "data": {"patient": {"id": "pat-1", "email": "sam@example.com"}},
+    }
+    raw_payload = '{"id":"evt-1","data":{"patient":{"email":"sam@example.com"}}}'
+
+    claimed = asyncio.run(
+        svc.claim_event(
+            institution_id="i",
+            patient_id="pat-1",
+            event_type="patient_updated",
+            dedup_key="k",
+            source_event_id="evt-1",
+            payload=payload,
+            raw_payload=raw_payload,
+        )
+    )
+
+    assert claimed is True
+    row = session.add.call_args.args[0]
+    assert row.source_event_id == "evt-1"
+    assert row.payload_hash
+    assert row.raw_payload == raw_payload
+    assert row.raw_payload_encrypted != raw_payload
+    assert row.redacted_payload["data"] == "[redacted]"
+    assert row.raw_payload_retain_until is not None
 
 
 # ── time-aware idempotency key (D-1) ─────────────────────────────────────────

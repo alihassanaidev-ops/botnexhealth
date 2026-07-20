@@ -78,3 +78,23 @@
 | Ruff | touched backend service/route/task/test files | no lint issues | all checks passed | passed |
 | Frontend vitest | `src/test/workflow-api.test.ts src/test/WorkflowTemplates.test.tsx` | API query params and unsupported template UI pass | 22 passed | passed |
 | Frontend eslint | touched frontend API/page/test files | no lint issues | passed | passed |
+
+## Session: webhook durability/ops hardening slice
+
+- **Status:** webhook durability/ops hardening slice complete; Plan 09 complete
+- Actions taken:
+  - Added encrypted raw/redacted payload storage to `nexhealth_webhook_events`.
+  - Added `source_event_id`, `payload_hash`, raw payload retain-until, and purge timestamp fields to improve debugability and dedupe diagnostics.
+  - Added 14-day raw NexHealth webhook envelope retention plus retention purge wiring.
+  - Updated appointment, patient, and sync-status webhook processors to store the raw envelope when claiming events.
+  - Added hash fallback dedupe basis for patient/sync-status events that arrive without timestamps.
+  - Added dead-letter capture for processor failures after a valid event is claimed, while acknowledging the webhook to avoid NexHealth endpoint deactivation from repeated 500s.
+  - Strengthened subscription health checks so active subscriptions with no received events are marked failed after the stale window.
+
+## Test Results: webhook durability/ops hardening slice
+
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Focused pytest | `tests/unit/test_nexhealth_projection.py tests/unit/test_nexhealth_appointment_webhook.py tests/unit/test_nexhealth_subscription_lifecycle.py tests/unit/test_retention_policy.py` | Webhook raw retention, DLQ, subscription monitoring, and retention purge behavior pass | 52 passed, 1 existing warning | passed |
+| Ruff | touched backend model/route/service/migration/test files | no lint issues | all checks passed | passed |
+| Alembic heads | `APP_ENV=local uv run alembic heads` | one current head | `20260720_nexhealth_webhook_durability (head)` | passed |

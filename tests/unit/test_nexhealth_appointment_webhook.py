@@ -86,6 +86,19 @@ def _patch_projection(change="new"):
     )
 
 
+def _patch_failing_projection():
+    from types import SimpleNamespace
+
+    inst = MagicMock()
+    inst.claim_event = AsyncMock(return_value=True)
+    inst.upsert_appointment = AsyncMock(side_effect=RuntimeError("projection failed"))
+    inst.complete_event = AsyncMock(return_value=SimpleNamespace(attempts=2))
+    return patch(
+        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+        return_value=inst,
+    ), inst
+
+
 def _patch_patient_projection(change="updated", contact_id="contact-patient-1"):
     from types import SimpleNamespace
 
@@ -520,6 +533,38 @@ async def test_webhook_ignores_unknown_location():
 
     assert result["status"] == "ignored"
     assert result["reason"] == "unknown_location"
+
+
+@pytest.mark.asyncio
+async def test_claimed_webhook_failure_is_dead_lettered_and_acknowledged():
+    location = _make_location()
+    contact = MagicMock()
+    contact.id = "contact-1"
+    lookup_session = _make_session(location=location, contact=contact)
+    webhook_session = _make_cm_session()
+    request = _make_request(_VALID_PAYLOAD)
+    projection_patch, projection = _patch_failing_projection()
+    capture_dead_letter = AsyncMock()
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+        side_effect=[lookup_session, webhook_session],
+    ), projection_patch, _patch_subscription_lifecycle(), patch(
+        "src.app.api.routes.nexhealth_webhooks.capture_dead_letter",
+        new=capture_dead_letter,
+    ):
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
+        result = await nexhealth_appointment_webhook(request)
+
+    assert result["status"] == "failed"
+    assert result["dead_lettered"] is True
+    projection.complete_event.assert_awaited_once()
+    assert projection.complete_event.call_args.kwargs["error"] == "projection failed"
+    capture_dead_letter.assert_awaited_once()
+    assert capture_dead_letter.call_args.kwargs["source"] == "nexhealth_webhook"
+    assert capture_dead_letter.call_args.kwargs["attempts"] == 2
+    webhook_session.commit.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

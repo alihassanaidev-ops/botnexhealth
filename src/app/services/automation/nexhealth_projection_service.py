@@ -33,6 +33,8 @@ from src.app.models.nexhealth_webhook_event import (
     NexHealthWebhookStatus,
 )
 from src.app.models.patient_working_set import PatientWorkingSet
+from src.app.services.retention_policy import default_nexhealth_webhook_raw_retain_until
+from src.app.services.sms_privacy import payload_hash, redact_payload, sanitize_provider_error
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,24 @@ def _same_instant(a: datetime | None, b: datetime | None) -> bool:
     return abs((a - b).total_seconds()) < 1.0
 
 
+def _refresh_event_payload(
+    row: NexHealthWebhookEvent,
+    *,
+    source_event_id: str | None,
+    payload: dict[str, Any] | None,
+    raw_payload: str | None,
+    now: datetime,
+) -> None:
+    if source_event_id:
+        row.source_event_id = source_event_id
+    if payload is not None:
+        row.payload_hash = payload_hash(payload)
+        redacted = redact_payload(payload)
+        row.redacted_payload = redacted if isinstance(redacted, dict) else {"payload": redacted}
+    if raw_payload is not None:
+        row.raw_payload = raw_payload
+        row.raw_payload_retain_until = default_nexhealth_webhook_raw_retain_until(now)
+
 @dataclass
 class UpsertResult:
     row: AppointmentWorkingSet
@@ -90,6 +110,9 @@ class NexHealthProjectionService:
         patient_id: str | None = None,
         event_type: str,
         dedup_key: str,
+        source_event_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        raw_payload: str | None = None,
     ) -> bool:
         """Claim an event for processing. Returns False if already seen (skip).
 
@@ -119,9 +142,17 @@ class NexHealthProjectionService:
                 existing.status = NexHealthWebhookStatus.PROCESSING.value
                 existing.attempts += 1
                 existing.updated_at = now
+                _refresh_event_payload(
+                    existing,
+                    source_event_id=source_event_id,
+                    payload=payload,
+                    raw_payload=raw_payload,
+                    now=now,
+                )
                 return True
             return False
 
+        now = datetime.now(timezone.utc)
         event = NexHealthWebhookEvent(
             institution_id=institution_id,
             nexhealth_appointment_id=appointment_id,
@@ -130,6 +161,14 @@ class NexHealthProjectionService:
             dedup_key=dedup_key,
             status=NexHealthWebhookStatus.PROCESSING.value,
             attempts=1,
+            source_event_id=source_event_id,
+        )
+        _refresh_event_payload(
+            event,
+            source_event_id=source_event_id,
+            payload=payload,
+            raw_payload=raw_payload,
+            now=now,
         )
         self.session.add(event)
         try:
@@ -139,7 +178,9 @@ class NexHealthProjectionService:
             return False
         return True
 
-    async def complete_event(self, *, institution_id: str, dedup_key: str, error: str | None = None) -> None:
+    async def complete_event(
+        self, *, institution_id: str, dedup_key: str, error: str | None = None
+    ) -> NexHealthWebhookEvent | None:
         row = (
             await self.session.execute(
                 select(NexHealthWebhookEvent).where(
@@ -149,13 +190,14 @@ class NexHealthProjectionService:
             )
         ).scalar_one_or_none()
         if row is None:
-            return
+            return None
         row.status = (
             NexHealthWebhookStatus.FAILED.value if error
             else NexHealthWebhookStatus.COMPLETED.value
         )
-        row.last_error = error
+        row.last_error = sanitize_provider_error(error) if error else None
         row.updated_at = datetime.now(timezone.utc)
+        return row
 
     async def upsert_appointment(
         self,

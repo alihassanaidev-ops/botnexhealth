@@ -6,7 +6,7 @@ Implement the Backend DB And NexHealth Data Flow plan after earlier plans are co
 
 ## Current Phase
 
-Prod-readiness slice 4 complete: PMS capability gating.
+Plan 09 complete: all prod-readiness slices implemented.
 
 ## Phases
 
@@ -14,7 +14,7 @@ Prod-readiness slice 4 complete: PMS capability gating.
 - **Sync-status support:** complete
 - **Backfill/reconciliation jobs:** complete
 - **PMS capability gating:** complete
-- **Webhook durability/ops hardening:** pending
+- **Webhook durability/ops hardening:** complete
 
 ## Key Questions
 
@@ -34,3 +34,5 @@ Prod-readiness slice 4 complete: PMS capability gating.
 | Keep existing basic recall scanner in this slice. | Recall polling already exists; durable recall working-set and unsupported-PMS UX belong with PMS capability gating. |
 | PMS capability support is read from NexHealth supported-API matrices and latest sync-status PMS identity. | Avoids hard-coding one PMS assumption per clinic and lets template/checklist/runtime gates use the same source of truth. |
 | Partial or unknown PMS support blocks gated campaign templates. | Recall/treatment/writeback flows should fail closed unless the selected clinic's PMS support is known. |
+| Claimed NexHealth webhook processor failures are dead-lettered and acknowledged. | Prevents NexHealth endpoint deactivation from repeated 500s while preserving repair/debug payloads. |
+| Raw NexHealth webhook envelopes are encrypted and retained short-term. | Operators can debug real delivery issues without keeping PHI-bearing raw payloads indefinitely. |

@@ -111,6 +111,28 @@ async def test_health_check_marks_stale_active_subscription_failed():
 
 
 @pytest.mark.asyncio
+async def test_health_check_marks_active_subscription_failed_when_no_events_seen():
+    stale = SimpleNamespace(
+        status=NexHealthWebhookSubscriptionStatus.ACTIVE.value,
+        last_event_at=None,
+        last_health_check_at=None,
+        created_at=datetime.now(timezone.utc) - timedelta(hours=48),
+        updated_at=datetime.now(timezone.utc) - timedelta(hours=48),
+        error_metadata=None,
+    )
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [stale]
+    svc = NexHealthSubscriptionLifecycleService(_session(result))
+
+    summary = await svc.health_check(stale_after_hours=24)
+
+    assert stale.status == NexHealthWebhookSubscriptionStatus.FAILED.value
+    assert stale.error_metadata["reason"] == "no_webhook_events_seen"
+    assert summary.failed == 1
+    assert summary.stale_marked == 1
+
+
+@pytest.mark.asyncio
 async def test_active_or_pending_targets_returns_subscription_ids():
     rows = [
         SimpleNamespace(institution_id="inst-1", id="sub-1"),
