@@ -616,7 +616,10 @@ class CampaignOperationsService:
         rows = (
             await self.session.execute(
                 select(SmsHistoryLog)
-                .where(SmsHistoryLog.workflow_run_id == str(run.id))
+                .where(
+                    SmsHistoryLog.institution_id == str(run.institution_id),
+                    SmsHistoryLog.workflow_run_id == str(run.id),
+                )
                 .order_by(SmsHistoryLog.timestamp)
             )
         ).scalars().all()
