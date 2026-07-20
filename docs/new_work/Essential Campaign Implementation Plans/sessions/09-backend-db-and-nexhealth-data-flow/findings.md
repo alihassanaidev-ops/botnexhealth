@@ -21,3 +21,6 @@
 | Store per-location PMS read/write sync health. | Launch checklist and runtime sends need a current operational signal without storing raw webhook payloads. |
 | Subscribe to sync-status events and poll `GET /sync_status`. | NexHealth sync-status webhooks are recovery-oriented and do not reliably report read/write failures. |
 | Block only known read-unhealthy stale/missing appointment sends at runtime. | Fresh local projections remain usable; stale projections are unsafe when live PMS reads are known down. |
+| Use `GET /patients` for patient repair/backfill. | Patient webhooks keep future changes fresh, but REST pulls are needed for initial history and missed-webhook repair. |
+| Reconciliation uses a one-hour overlap from the patient watermark. | `updated_since` can be inclusive or edge-sensitive; overlap plus idempotent upsert avoids missing records near the boundary. |
+| Defer recall working-set expansion to capability gating. | The existing recall scanner can poll due recalls, but production recall UX still needs PMS support checks and a durable recall projection. |

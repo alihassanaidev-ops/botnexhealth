@@ -53,6 +53,39 @@ async def test_create_reuses_shared_nexhealth_client(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_list_patients_uses_updated_since_and_location_params(monkeypatch: pytest.MonkeyPatch):
+    adapter = _make_adapter()
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(
+            {
+                "client": client,
+                "method": method,
+                "path": path,
+                "params": params,
+                "json": json,
+            }
+        )
+        return {"data": {"patients": [{"id": "pat-1"}]}, "count": 1}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    patients = await adapter.list_patients(updated_since="2026-07-21T09:00:00Z")
+
+    assert patients == [{"id": "pat-1"}]
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"] == "/patients"
+    assert calls[0]["params"] == {
+        "subdomain": "test-subdomain",
+        "location_id": "test-location",
+        "updated_since": "2026-07-21T09:00:00Z",
+        "page": 1,
+        "per_page": 50,
+    }
+
+
+@pytest.mark.asyncio
 async def test_has_provider_appointments_scans_multiple_pages(monkeypatch: pytest.MonkeyPatch):
     adapter = _make_adapter()
     calls: list[dict] = []

@@ -224,6 +224,28 @@ class NexHealthAdapter(
             return None
         return mappers.to_patient(patient)
 
+    async def list_patients(
+        self,
+        *,
+        updated_since: str | None = None,
+        max_items: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """List raw NexHealth patients for this location.
+
+        Used by campaign patient/contact backfill and reconciliation. It returns
+        raw payloads because ``NexHealthProjectionService.upsert_patient`` needs
+        NexHealth-specific fields such as ``location_ids`` and ``bio``.
+        """
+        params = self._default_params()
+        if updated_since:
+            params["updated_since"] = updated_since
+
+        async def fetch(page: int, per_page: int) -> dict[str, Any]:
+            p = {**params, "page": page, "per_page": per_page}
+            return await handle_nexhealth_request(self._client, "GET", "/patients", params=p)
+
+        return await fetch_all_pages(fetch, per_page=50, max_items=max_items)
+
     async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]:
         from src.app.api.models import (
             CreatePatientBio,

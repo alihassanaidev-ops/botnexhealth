@@ -42,6 +42,14 @@ class AppointmentSyncSummary:
     failed_locations: int = 0
 
 
+@dataclass
+class PatientSyncSummary:
+    locations_scanned: int = 0
+    patients_seen: int = 0
+    projected: int = 0
+    failed_locations: int = 0
+
+
 class NexHealthAppointmentSyncService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -274,6 +282,169 @@ class NexHealthAppointmentSyncService:
         return str(contact.id) if contact else None
 
 
+class NexHealthPatientSyncService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def run_backfill(self) -> PatientSyncSummary:
+        return await self._run(mode="backfill")
+
+    async def run_reconciliation(self) -> PatientSyncSummary:
+        return await self._run(mode="reconciliation")
+
+    async def _run(self, *, mode: SyncMode) -> PatientSyncSummary:
+        rows = await NexHealthAppointmentSyncService(self.session)._load_subscription_locations()
+        summary = PatientSyncSummary()
+        for idx, row in enumerate(rows):
+            if idx > 0:
+                await asyncio.sleep(
+                    random.uniform(_LOCATION_PACING_MIN_SECONDS, _LOCATION_PACING_MAX_SECONDS)
+                )
+            try:
+                await self._sync_location(
+                    mode=mode,
+                    subscription=row.subscription,
+                    institution=row.institution,
+                    location=row.location,
+                    summary=summary,
+                )
+            except Exception as exc:  # noqa: BLE001
+                summary.failed_locations += 1
+                row.subscription.status = NexHealthWebhookSubscriptionStatus.FAILED.value
+                row.subscription.error_metadata = {
+                    "type": type(exc).__name__,
+                    "mode": f"patient_{mode}",
+                }
+                logger.exception(
+                    "nexhealth patient %s failed institution=%s location=%s: %s",
+                    mode,
+                    row.institution.id,
+                    row.location.id,
+                    exc,
+                )
+        return summary
+
+    async def sync_subscription(
+        self,
+        *,
+        subscription_id: str,
+        mode: SyncMode,
+    ) -> PatientSyncSummary:
+        result = await self.session.execute(
+            select(
+                NexHealthWebhookSubscription,
+                Institution,
+                InstitutionLocation,
+            )
+            .join(Institution, Institution.id == NexHealthWebhookSubscription.institution_id)
+            .join(
+                InstitutionLocation,
+                InstitutionLocation.id == NexHealthWebhookSubscription.location_id,
+            )
+            .where(NexHealthWebhookSubscription.id == subscription_id)
+        )
+        row = result.first()
+        summary = PatientSyncSummary()
+        if row is None:
+            return summary
+        subscription, institution, location = row
+        await self._sync_location(
+            mode=mode,
+            subscription=subscription,
+            institution=institution,
+            location=location,
+            summary=summary,
+        )
+        return summary
+
+    async def _sync_location(
+        self,
+        *,
+        mode: SyncMode,
+        subscription: NexHealthWebhookSubscription,
+        institution: Institution,
+        location: InstitutionLocation,
+        summary: PatientSyncSummary,
+    ) -> None:
+        from src.app.pms.nexhealth.adapter import NexHealthAdapter
+
+        updated_since = _patient_updated_since(subscription) if mode == "reconciliation" else None
+        adapter = await NexHealthAdapter.create(institution, location)
+        try:
+            patients = await adapter.list_patients(
+                updated_since=updated_since.isoformat() if updated_since else None
+            )
+        finally:
+            await adapter.close()
+
+        summary.locations_scanned += 1
+        summary.patients_seen += len(patients)
+        for patient in patients:
+            if await self._project_patient(
+                institution_id=str(institution.id),
+                location=location,
+                patient=patient,
+                mode=mode,
+            ):
+                summary.projected += 1
+
+        now = datetime.now(timezone.utc)
+        if mode == "backfill":
+            subscription.last_patient_backfill_at = now
+        else:
+            subscription.last_patient_reconciliation_at = now
+        subscription.updated_at = now
+        if subscription.status == NexHealthWebhookSubscriptionStatus.PENDING.value:
+            subscription.error_metadata = None
+
+    async def _project_patient(
+        self,
+        *,
+        institution_id: str,
+        location: InstitutionLocation,
+        patient: dict[str, Any],
+        mode: SyncMode,
+    ) -> bool:
+        patient_id = _patient_record_id(patient)
+        if not patient_id:
+            return False
+        nexhealth_location_ids = _patient_location_ids(patient) or [
+            str(location.nexhealth_location_id)
+        ]
+        local_location_ids = await self._local_location_ids_for_patient(
+            institution_id=institution_id,
+            fallback_location_id=str(location.id),
+            nexhealth_location_ids=nexhealth_location_ids,
+            subdomain=str(location.nexhealth_subdomain),
+        )
+        await NexHealthProjectionService(self.session).upsert_patient(
+            institution_id=institution_id,
+            patient=patient,
+            local_location_ids=local_location_ids,
+            nexhealth_location_ids=nexhealth_location_ids,
+            event=f"patient.{mode}",
+        )
+        return True
+
+    async def _local_location_ids_for_patient(
+        self,
+        *,
+        institution_id: str,
+        fallback_location_id: str,
+        nexhealth_location_ids: list[str],
+        subdomain: str,
+    ) -> list[str]:
+        result = await self.session.execute(
+            select(InstitutionLocation).where(
+                InstitutionLocation.institution_id == institution_id,
+                InstitutionLocation.nexhealth_subdomain == subdomain,
+                InstitutionLocation.nexhealth_location_id.in_(nexhealth_location_ids),
+            )
+        )
+        location_ids = [str(location.id) for location in result.scalars().all()]
+        return location_ids or [fallback_location_id]
+
+
 @dataclass
 class _SubscriptionLocation:
     subscription: NexHealthWebhookSubscription
@@ -291,6 +462,38 @@ def _patient_id(appt: dict[str, Any]) -> str | None:
     if value is None and isinstance(appt.get("patient"), dict):
         value = appt["patient"].get("id")
     return str(value) if value not in (None, "") else None
+
+
+def _patient_record_id(patient: dict[str, Any]) -> str | None:
+    value = patient.get("id")
+    return str(value) if value not in (None, "") else None
+
+
+def _patient_location_ids(patient: dict[str, Any]) -> list[str]:
+    values = patient.get("location_ids") or patient.get("locations") or []
+    ids: list[str] = []
+    if isinstance(values, list):
+        for value in values:
+            if isinstance(value, dict):
+                value = value.get("id") or value.get("location_id")
+            if value not in (None, ""):
+                ids.append(str(value))
+    value = patient.get("location_id")
+    if value not in (None, ""):
+        ids.append(str(value))
+    return sorted(set(ids))
+
+
+def _patient_updated_since(subscription: NexHealthWebhookSubscription) -> datetime | None:
+    watermark = (
+        getattr(subscription, "last_patient_reconciliation_at", None)
+        or getattr(subscription, "last_patient_backfill_at", None)
+    )
+    if watermark is None:
+        return None
+    if watermark.tzinfo is None:
+        watermark = watermark.replace(tzinfo=timezone.utc)
+    return watermark - timedelta(hours=1)
 
 
 def _provider_id(appt: dict[str, Any]) -> str | None:

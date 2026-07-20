@@ -73,6 +73,11 @@ def _build_celery_app() -> Celery:
                 # after subscription setup or manually by operators.
                 "schedule": 6 * 3600.0,
             },
+            "reconcile-nexhealth-patients": {
+                "task": "src.app.tasks.automation_workflow.reconcile_nexhealth_patients",
+                # Repairs missed patient webhooks and keeps contact hints fresh.
+                "schedule": 6 * 3600.0,
+            },
             "poll-nexhealth-sync-statuses": {
                 "task": "src.app.tasks.automation_workflow.poll_nexhealth_sync_statuses",
                 # Sync-status webhooks mainly signal recovery; polling catches

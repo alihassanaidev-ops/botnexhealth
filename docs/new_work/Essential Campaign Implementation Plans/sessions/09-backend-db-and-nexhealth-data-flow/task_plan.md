@@ -6,13 +6,13 @@ Implement the Backend DB And NexHealth Data Flow plan after earlier plans are co
 
 ## Current Phase
 
-Prod-readiness slice 2 complete: sync-status support.
+Prod-readiness slice 3 complete: backfill/reconciliation jobs.
 
 ## Phases
 
 - **Patient webhook support:** complete
 - **Sync-status support:** complete
-- **Backfill/reconciliation jobs:** pending
+- **Backfill/reconciliation jobs:** complete
 - **PMS capability gating:** pending
 - **Webhook durability/ops hardening:** pending
 
@@ -29,3 +29,6 @@ Prod-readiness slice 2 complete: sync-status support.
 | Existing NexHealth receiver URL accepts patient events. | Current provider endpoint is already registered; this avoids needing an immediate endpoint migration while adding patient subscriptions. |
 | Sync-status webhooks update health but do not replace polling. | NexHealth recovery webhooks do not reliably report green-to-red failures, so `GET /sync_status` polling remains required. |
 | Known PMS read-down blocks appointment-triggered launch/runtime sends when projection is stale. | Appointment outreach is unsafe if local projection is stale and PMS reads are explicitly unhealthy. |
+| Patient backfill/reconciliation refreshes contact projections only. | Patient rows maintain identity/contact freshness; they do not directly enroll campaigns. |
+| Patient watermarks are separate from appointment watermarks. | Appointment repair and contact freshness have different API endpoints, rates, and update cadence. |
+| Keep existing basic recall scanner in this slice. | Recall polling already exists; durable recall working-set and unsupported-PMS UX belong with PMS capability gating. |

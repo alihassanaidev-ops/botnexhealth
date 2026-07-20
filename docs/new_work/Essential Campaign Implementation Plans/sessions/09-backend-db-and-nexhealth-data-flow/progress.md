@@ -37,3 +37,22 @@
 | Focused pytest | `tests/unit/test_nexhealth_subscription_lifecycle.py tests/unit/test_nexhealth_sync_status_service.py tests/unit/test_nexhealth_appointment_webhook.py tests/unit/test_campaign_launch_checklist_service.py tests/unit/test_pms_revalidation.py tests/unit/test_rbac_route_matrix.py` | Sync subscriptions, webhook handling, checklist, revalidation, RBAC pass | 547 passed, 2 existing warnings | passed |
 | Ruff | touched backend route/service/model/task/test files | no lint issues | all checks passed | passed |
 | Alembic heads | `APP_ENV=local uv run alembic heads` | one current head | `20260718_nexhealth_sync_status (head)` | passed |
+
+## Session: backfill/reconciliation jobs slice
+
+- **Status:** backfill/reconciliation slice complete; broader Plan 09 remains in progress
+- Actions taken:
+  - Added patient-specific backfill/reconciliation watermarks to `nexhealth_webhook_subscriptions`.
+  - Added raw `NexHealthAdapter.list_patients()` using `GET /patients`, pagination, location scope, and optional `updated_since`.
+  - Added `NexHealthPatientSyncService` to refresh contacts and `patient_working_set` from REST pulls.
+  - Added `backfill_nexhealth_patients` and `reconcile_nexhealth_patients` Celery tasks.
+  - Scheduled patient reconciliation every 6 hours to repair missed patient webhooks.
+  - Confirmed appointment backfill/reconciliation and basic recall polling already existed; durable recall working set stays with PMS capability gating.
+
+## Test Results: backfill/reconciliation slice
+
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Focused pytest | `tests/unit/test_nexhealth_backfill_reconciliation.py tests/unit/test_nexhealth_adapter_appointments.py tests/unit/test_nexhealth_projection.py tests/unit/test_nexhealth_subscription_lifecycle.py tests/unit/test_automation_plan09.py` | Appointment/patient sync, adapter pagination, projection, subscription, and recall scanner tests pass | 51 passed, 1 existing warning | passed |
+| Ruff | touched backend migration/model/adapter/service/task/test files | no lint issues | all checks passed | passed |
+| Alembic heads | `APP_ENV=local uv run alembic heads` | one current head | `20260719_patient_backfill_watermarks (head)` | passed |
