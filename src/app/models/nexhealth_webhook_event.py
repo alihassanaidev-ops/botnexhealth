@@ -57,6 +57,9 @@ class NexHealthWebhookEvent(Base):
     nexhealth_appointment_id: Mapped[str | None] = mapped_column(
         String(160), nullable=True, index=True
     )
+    nexhealth_patient_id: Mapped[str | None] = mapped_column(
+        String(160), nullable=True, index=True
+    )
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     # Semantic identity: "{event}:{appt_id}:{start_or_cancelled}".
     dedup_key: Mapped[str] = mapped_column(String(300), nullable=False)

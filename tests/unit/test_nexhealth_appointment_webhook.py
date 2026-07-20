@@ -13,6 +13,7 @@ import pytest
 from src.app.api.routes.nexhealth_webhooks import (
     _verify_signature,
     nexhealth_appointment_webhook,
+    nexhealth_patient_webhook,
 )
 
 
@@ -80,6 +81,30 @@ def _patch_projection(change="new"):
     inst.complete_event = AsyncMock()
     return patch(
         "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+        return_value=inst,
+    )
+
+
+def _patch_patient_projection(change="updated", contact_id="contact-patient-1"):
+    from types import SimpleNamespace
+
+    inst = MagicMock()
+    inst.claim_event = AsyncMock(return_value=True)
+    inst.upsert_patient = AsyncMock(
+        return_value=SimpleNamespace(contact=SimpleNamespace(id=contact_id), change=change)
+    )
+    inst.complete_event = AsyncMock()
+    return patch(
+        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+        return_value=inst,
+    )
+
+
+def _patch_subscription_lifecycle():
+    inst = MagicMock()
+    inst.record_event_seen = AsyncMock()
+    return patch(
+        "src.app.services.automation.nexhealth_subscription_service.NexHealthSubscriptionLifecycleService",
         return_value=inst,
     )
 
@@ -234,6 +259,52 @@ async def test_webhook_queues_task_with_no_contact():
     mock_reactivation.delay.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_webhook_queues_task_for_appointment_created_plural_payload():
+    """NexHealth documents appointment_created as data.appointments[]."""
+    location = _make_location()
+    contact = MagicMock()
+    contact.id = "contact-1"
+    mock_session = _make_session(location=location, contact=contact)
+    payload = {
+        "event_name": "appointment_created",
+        "data": {
+            "appointments": [
+                {
+                    "id": "appt-created-1",
+                    "location_id": "nexloc-1",
+                    "patient_id": "nexpat-42",
+                    "provider_id": "prov-1",
+                    "appointment_type_id": "type-1",
+                    "start_time": "2026-08-02T10:00:00Z",
+                }
+            ]
+        },
+    }
+    request = _make_request(payload)
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+        side_effect=[mock_session, _make_cm_session()],
+    ), _patch_projection(change="new"), patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+    ) as mock_task, patch(
+        "src.app.tasks.automation_workflow.resume_reactivation_booking"
+    ) as mock_reactivation:
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
+        mock_task.delay = MagicMock()
+        mock_reactivation.delay = MagicMock()
+        result = await nexhealth_appointment_webhook(request)
+
+    assert result["status"] == "queued"
+    assert result["appointment_id"] == "appt-created-1"
+    kwargs = mock_task.delay.call_args.kwargs
+    assert kwargs["appointment_id"] == "appt-created-1"
+    assert kwargs["trigger_metadata"]["event"] == "appointment_created"
+    assert kwargs["trigger_metadata"]["nexhealth_location_id"] == "nexloc-1"
+
+
 # ---------------------------------------------------------------------------
 # nexhealth_appointment_webhook — ignored cases
 # ---------------------------------------------------------------------------
@@ -241,7 +312,7 @@ async def test_webhook_queues_task_with_no_contact():
 
 @pytest.mark.asyncio
 async def test_webhook_ignores_unhandled_event():
-    payload = {**_VALID_PAYLOAD, "event_name": "patient_updated.complete"}
+    payload = {**_VALID_PAYLOAD, "event_name": "form_request_completed"}
     request = _make_request(payload)
 
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
@@ -250,7 +321,64 @@ async def test_webhook_ignores_unhandled_event():
         result = await nexhealth_appointment_webhook(request)
 
     assert result["status"] == "ignored"
-    assert result["event"] == "patient_updated.complete"
+    assert result["event"] == "form_request_completed"
+
+
+@pytest.mark.asyncio
+async def test_patient_event_refreshes_contact_projection_on_existing_appointment_url():
+    """Current NexHealth endpoint target can send patient events to the same receiver URL."""
+    location = _make_location()
+    lookup_session = AsyncMock()
+    lookup_session.__aenter__ = AsyncMock(return_value=lookup_session)
+    lookup_session.__aexit__ = AsyncMock(return_value=False)
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    lookup_session.execute = AsyncMock(return_value=loc_result)
+
+    webhook_session = _make_cm_session()
+    payload = {
+        "event_name": "patient_updated",
+        "subdomain": "silora-demo-practice",
+        "event_time": "2026-07-20T19:13:24Z",
+        "data": {
+            "patient": {
+                "id": "pat-1",
+                "first_name": "Sam",
+                "last_name": "Lee",
+                "email": "sam@example.com",
+                "location_ids": ["nexloc-1"],
+                "bio": {"phone_number": "+15551234567", "date_of_birth": "1990-01-01"},
+            }
+        },
+    }
+    request = _make_request(payload)
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+        side_effect=[lookup_session, webhook_session],
+    ), _patch_patient_projection(change="updated"), _patch_subscription_lifecycle():
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
+        result = await nexhealth_appointment_webhook(request)
+
+    assert result["status"] == "processed"
+    assert result["event"] == "patient_updated"
+    assert result["processed"] == 1
+    assert result["results"][0]["patient_id"] == "pat-1"
+    assert result["results"][0]["contact_id"] == "contact-patient-1"
+    webhook_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_patient_webhook_route_ignores_appointment_event():
+    request = _make_request(_VALID_PAYLOAD)
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
+        result = await nexhealth_patient_webhook(request)
+
+    assert result == {"status": "ignored", "event": "appointment_insertion.complete"}
 
 
 @pytest.mark.asyncio

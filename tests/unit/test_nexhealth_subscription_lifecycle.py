@@ -13,7 +13,10 @@ from src.app.models.nexhealth_webhook_subscription import (
 )
 from src.app.services.automation.nexhealth_subscription_service import (
     DEFAULT_APPOINTMENT_EVENTS,
+    DEFAULT_PATIENT_EVENTS,
+    DEFAULT_WEBHOOK_EVENTS,
     NexHealthSubscriptionLifecycleService,
+    _resource_type_for_event,
 )
 
 
@@ -42,8 +45,21 @@ async def test_ensure_location_subscription_creates_pending_row_without_callback
 
     assert created is True
     assert row.status == NexHealthWebhookSubscriptionStatus.PENDING.value
-    assert row.event_types == DEFAULT_APPOINTMENT_EVENTS
+    assert row.event_types == DEFAULT_WEBHOOK_EVENTS
+    assert DEFAULT_APPOINTMENT_EVENTS == [
+        "appointment_insertion",
+        "appointment_created",
+        "appointment_updated",
+    ]
+    assert DEFAULT_PATIENT_EVENTS == ["patient_created", "patient_updated"]
     session.add.assert_called_once()
+
+
+def test_resource_type_for_patient_and_appointment_events():
+    assert _resource_type_for_event("appointment_created") == "Appointment"
+    assert _resource_type_for_event("appointment_insertion.complete") == "Appointment"
+    assert _resource_type_for_event("patient_created") == "Patient"
+    assert _resource_type_for_event("patient_updated") == "Patient"
 
 
 @pytest.mark.asyncio

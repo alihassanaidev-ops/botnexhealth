@@ -25,14 +25,25 @@ from src.app.models.nexhealth_webhook_subscription import (
 
 logger = logging.getLogger(__name__)
 
-# NexHealth's valid appointment webhook events (verified live against the sandbox
-# 2026-07-14: only these two are accepted — cancellations/deletions arrive as
-# `appointment_updated`, not a distinct event). Subscribe with resource_type="Appointment".
+# NexHealth's appointment webhook events relevant to scheduled appointments.
+# `appointment_created` is the PMS-originated path: NexHealth fires it when it
+# detects a new appointment in the health record system. `appointment_insertion`
+# is the API-write path and `appointment_updated` carries changes/cancellations.
 DEFAULT_APPOINTMENT_EVENTS = [
     "appointment_insertion",
+    "appointment_created",
     "appointment_updated",
 ]
-_WEBHOOK_RESOURCE_TYPE = "Appointment"
+DEFAULT_PATIENT_EVENTS = [
+    "patient_created",
+    "patient_updated",
+]
+DEFAULT_WEBHOOK_EVENTS = DEFAULT_APPOINTMENT_EVENTS + DEFAULT_PATIENT_EVENTS
+
+_EVENT_RESOURCE_TYPES = {
+    **{event: "Appointment" for event in DEFAULT_APPOINTMENT_EVENTS},
+    **{event: "Patient" for event in DEFAULT_PATIENT_EVENTS},
+}
 
 
 @dataclass
@@ -87,7 +98,7 @@ class NexHealthSubscriptionLifecycleService:
                 institution=institution,
                 location=location,
                 callback_url=callback_url,
-                event_types=event_types or DEFAULT_APPOINTMENT_EVENTS,
+                event_types=event_types or DEFAULT_WEBHOOK_EVENTS,
             )
             created += int(was_created)
             updated += int(not was_created)
@@ -140,7 +151,7 @@ class NexHealthSubscriptionLifecycleService:
     ) -> tuple[NexHealthWebhookSubscription, bool]:
         institution_id = str(institution.id)
         location_id = str(location.id)
-        events = event_types or DEFAULT_APPOINTMENT_EVENTS
+        events = event_types or DEFAULT_WEBHOOK_EVENTS
         existing = (
             await self.session.execute(
                 select(NexHealthWebhookSubscription).where(
@@ -271,7 +282,7 @@ class NexHealthSubscriptionLifecycleService:
                     "POST",
                     f"/webhook_endpoints/{endpoint_id}/webhook_subscriptions",
                     params={"subdomain": subdomain},
-                    json={"resource_type": _WEBHOOK_RESOURCE_TYPE, "event": event},
+                    json={"resource_type": _resource_type_for_event(event), "event": event},
                 )
         except Exception as exc:  # noqa: BLE001
             row.status = NexHealthWebhookSubscriptionStatus.FAILED.value
@@ -311,6 +322,14 @@ def _extract_provider_subscription_id(raw: dict[str, Any]) -> str | None:
                 if value not in (None, ""):
                     return str(value)
     return None
+
+
+def _resource_type_for_event(event: str) -> str:
+    base = event.split(".", 1)[0]
+    try:
+        return _EVENT_RESOURCE_TYPES[base]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported NexHealth webhook event: {event}") from exc
 
 
 def _as_utc(dt: datetime) -> datetime:

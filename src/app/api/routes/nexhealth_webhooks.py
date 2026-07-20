@@ -20,16 +20,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/nexhealth/webhooks", tags=["NexHealth Webhooks"])
 
-# Events we act on. Cancellations arrive both as a dedicated event and as an
-# ``appointment.updated`` carrying ``cancelled: true`` — status is evaluated on
-# every update, not just the cancellation event (Plan 09 §Technical Considerations).
-# NexHealth sends an `event_name` (verified live/docs 2026-07-14) — only two appointment
-# events exist: `appointment_insertion` (created) and `appointment_updated` (any change, incl.
-# cancellations, which arrive as an update carrying `cancelled: true`, NOT a distinct event).
+# Events we act on. Cancellations arrive as ``appointment_updated`` carrying
+# ``cancelled: true`` — status is evaluated on every update, not just the
+# cancellation event (Plan 09 §Technical Considerations). NexHealth also sends
+# ``appointment_created`` when it detects a new appointment in the health record
+# system; that payload uses ``data.appointments[]`` instead of
+# ``data.appointment``.
 # Values may carry a `.complete` suffix (e.g. "appointment_insertion.complete") — normalized to base.
-_ENROLL_EVENTS = frozenset({"appointment_insertion", "appointment_updated"})
+_ENROLL_EVENTS = frozenset(
+    {"appointment_insertion", "appointment_created", "appointment_updated"}
+)
+_PATIENT_EVENTS = frozenset({"patient_created", "patient_updated"})
 _CANCEL_EVENTS: frozenset[str] = frozenset()  # no distinct cancel event; derived from the `cancelled` flag
-_HANDLED_EVENTS = _ENROLL_EVENTS | _CANCEL_EVENTS
+_HANDLED_EVENTS = _ENROLL_EVENTS | _CANCEL_EVENTS | _PATIENT_EVENTS
 
 
 def _appointment_is_cancelled(event: str, appt: dict) -> bool:
@@ -37,6 +40,59 @@ def _appointment_is_cancelled(event: str, appt: dict) -> bool:
     if event in _CANCEL_EVENTS:
         return True
     return bool(appt.get("cancelled", False) or appt.get("canceled", False))
+
+
+def _appointment_payloads(payload: dict[str, Any], event: str) -> list[dict[str, Any]]:
+    data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        return []
+
+    appointment = data.get("appointment")
+    if isinstance(appointment, dict):
+        return [appointment]
+
+    # NexHealth's documented appointment_created payload is plural:
+    # {"data": {"appointments": [{...}]}}.
+    appointments = data.get("appointments")
+    if isinstance(appointments, list):
+        return [appt for appt in appointments if isinstance(appt, dict)]
+
+    # Keep the event in the signature for future event-specific shapes and to
+    # make call sites read naturally.
+    _ = event
+    return []
+
+
+def _patient_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        return []
+
+    patient = data.get("patient") or data.get("user")
+    if isinstance(patient, dict):
+        return [patient]
+
+    patients = data.get("patients") or data.get("users")
+    if isinstance(patients, list):
+        return [item for item in patients if isinstance(item, dict)]
+
+    if data.get("id") is not None:
+        return [data]
+    return []
+
+
+def _patient_location_ids(patient: dict[str, Any]) -> list[str]:
+    values = patient.get("location_ids") or patient.get("locations") or []
+    if isinstance(values, list):
+        ids = []
+        for value in values:
+            if isinstance(value, dict):
+                value = value.get("id")
+            if value not in (None, ""):
+                ids.append(str(value))
+        return ids
+    value = patient.get("location_id")
+    return [str(value)] if value not in (None, "") else []
 
 
 async def _cancel_runs_for_appointment(
@@ -154,8 +210,187 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     if event not in _HANDLED_EVENTS:
         logger.debug("nexhealth_appointment_webhook: ignoring event=%s", event_name)
         return {"status": "ignored", "event": event_name}
+    if event in _PATIENT_EVENTS:
+        return await _process_patient_webhook_payload(event=event, payload=payload)
 
-    appt: dict = (payload.get("data") or {}).get("appointment") or {}
+    appointments = _appointment_payloads(payload, event)
+    if event == "appointment_created" and len(appointments) > 1:
+        results = []
+        for appt in appointments:
+            results.append(await _process_appointment_event(event=event, appt=appt))
+        queued = sum(1 for result in results if result.get("status") == "queued")
+        return {
+            "status": "queued" if queued else "processed",
+            "event": event,
+            "processed": len(results),
+            "queued": queued,
+            "results": results,
+        }
+
+    appt = appointments[0] if appointments else {}
+    return await _process_appointment_event(event=event, appt=appt)
+
+
+@router.post("/patients", status_code=status.HTTP_200_OK)
+async def nexhealth_patient_webhook(request: Request) -> dict[str, Any]:
+    """Handle NexHealth patient.created and patient.updated events."""
+    raw_body = await request.body()
+    _verify_signature(
+        raw_body,
+        request.headers.get("signature") or request.headers.get("X-NexHealth-Signature"),
+        request.headers.get("timestamp"),
+    )
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
+        )
+
+    event_name: str = payload.get("event_name") or payload.get("event") or ""
+    event: str = event_name.split(".", 1)[0]
+    if event not in _PATIENT_EVENTS:
+        logger.debug("nexhealth_patient_webhook: ignoring event=%s", event_name)
+        return {"status": "ignored", "event": event_name}
+    return await _process_patient_webhook_payload(event=event, payload=payload)
+
+
+async def _process_patient_webhook_payload(
+    *, event: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    patients = _patient_payloads(payload)
+    if not patients:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Patient payload missing required patient object",
+        )
+
+    results = [
+        await _process_patient_event(
+            event=event,
+            patient=patient,
+            subdomain=str(payload.get("subdomain") or ""),
+            event_time=str(payload.get("event_time") or ""),
+        )
+        for patient in patients
+    ]
+    processed = sum(1 for result in results if result.get("status") not in {"ignored"})
+    return {
+        "status": "processed" if processed else "ignored",
+        "event": event,
+        "processed": processed,
+        "results": results,
+    }
+
+
+async def _process_patient_event(
+    *,
+    event: str,
+    patient: dict[str, Any],
+    subdomain: str,
+    event_time: str,
+) -> dict[str, Any]:
+    patient_id = str(patient.get("id") or "")
+    if not patient_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Patient payload missing required field: id",
+        )
+
+    nexhealth_location_ids = _patient_location_ids(patient)
+    if not nexhealth_location_ids:
+        logger.warning(
+            "nexhealth_patient_webhook: patient=%s missing location_ids — skipping",
+            patient_id,
+        )
+        return {"status": "ignored", "reason": "missing_location_ids", "patient_id": patient_id}
+
+    async with get_system_db_session(
+        "nexhealth_lookup", external_id=patient_id
+    ) as session:
+        stmt = select(InstitutionLocation).where(
+            InstitutionLocation.nexhealth_location_id.in_(nexhealth_location_ids)
+        )
+        if subdomain:
+            stmt = stmt.where(InstitutionLocation.nexhealth_subdomain == subdomain)
+        loc_rows = await session.execute(stmt)
+        locations = list(loc_rows.scalars().all())
+
+    if not locations:
+        logger.warning(
+            "nexhealth_patient_webhook: unknown location_ids=%s patient=%s — skipping",
+            nexhealth_location_ids,
+            patient_id,
+        )
+        return {"status": "ignored", "reason": "unknown_location", "patient_id": patient_id}
+
+    institution_id = str(locations[0].institution_id)
+    locations = [loc for loc in locations if str(loc.institution_id) == institution_id]
+    local_location_ids = [str(loc.id) for loc in locations]
+    dedup_basis = patient.get("updated_at") or event_time or "none"
+    dedup_key = f"{event}:{patient_id}:{dedup_basis}"
+
+    from src.app.services.automation.nexhealth_projection_service import (
+        NexHealthProjectionService,
+    )
+    from src.app.services.automation.nexhealth_subscription_service import (
+        NexHealthSubscriptionLifecycleService,
+    )
+
+    async with get_system_db_session(
+        "nexhealth_webhooks", institution_id=institution_id, external_id=patient_id
+    ) as session:
+        lifecycle = NexHealthSubscriptionLifecycleService(session)
+        for location_id in local_location_ids:
+            await lifecycle.record_event_seen(
+                institution_id=institution_id,
+                location_id=location_id,
+            )
+        proj = NexHealthProjectionService(session)
+        claimed = await proj.claim_event(
+            institution_id=institution_id,
+            patient_id=patient_id,
+            event_type=event,
+            dedup_key=dedup_key,
+        )
+        if not claimed:
+            await session.commit()
+            logger.info(
+                "nexhealth_patient_webhook: duplicate event institution=%s patient=%s dedup=%s",
+                institution_id,
+                patient_id,
+                dedup_key,
+            )
+            return {"status": "duplicate", "patient_id": patient_id}
+
+        upsert = await proj.upsert_patient(
+            institution_id=institution_id,
+            patient=patient,
+            local_location_ids=local_location_ids,
+            nexhealth_location_ids=nexhealth_location_ids,
+            event=event,
+        )
+        await proj.complete_event(institution_id=institution_id, dedup_key=dedup_key)
+        await session.commit()
+
+    logger.info(
+        "nexhealth_patient_webhook: refreshed institution=%s patient=%s contact=%s event=%s change=%s",
+        institution_id,
+        patient_id,
+        upsert.contact.id,
+        event,
+        upsert.change,
+    )
+    return {
+        "status": upsert.change,
+        "patient_id": patient_id,
+        "contact_id": str(upsert.contact.id),
+        "institution_id": institution_id,
+    }
+
+
+async def _process_appointment_event(event: str, appt: dict[str, Any]) -> dict[str, Any]:
     nexhealth_location_id = str(appt.get("location_id", ""))
     appointment_id = str(appt.get("id", ""))
     start_time: str | None = appt.get("start_time")
