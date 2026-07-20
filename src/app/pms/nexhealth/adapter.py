@@ -176,14 +176,31 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
 
     async def search_patients(self, query: str, **kwargs: Any) -> list[UniversalPatient]:
         params = self._default_params()
-        # Determine which field to search
-        if kwargs.get("email"):
-            params["email"] = kwargs["email"]
-        elif kwargs.get("phone_number"):
-            params["phone_number"] = _normalize_phone_for_nexhealth(kwargs["phone_number"])
-        elif kwargs.get("date_of_birth"):
-            params["date_of_birth"] = kwargs["date_of_birth"]
-        else:
+        # Send EVERY criterion the caller supplied, not just the first one.
+        # NexHealth AND-combines name/email/phone/date_of_birth server-side, so
+        # passing e.g. name + DOB narrows to the exact patient. The old elif
+        # chain sent only one field (email > phone > dob > name precedence),
+        # which made a real, existing patient searched by name + DOB match on
+        # DOB alone — returning several people, tripping the "multiple matches"
+        # branch, and demoting the caller to a can't-confirm path.
+        email = kwargs.get("email")
+        phone = kwargs.get("phone_number")
+        dob = kwargs.get("date_of_birth")
+        if email:
+            params["email"] = email
+        if phone:
+            params["phone_number"] = _normalize_phone_for_nexhealth(phone)
+        if dob:
+            params["date_of_birth"] = dob
+        # `query` is free-text from callers that pass name-or-email-or-phone.
+        # Only send it as `name` when it isn't merely echoing a field already
+        # sent above, so we never issue name="foo@bar.com".
+        name = kwargs.get("name") or query
+        if name and name not in (email, phone):
+            params["name"] = name
+        # NexHealth requires at least one search criterion; preserve prior
+        # behavior of falling back to the raw query if nothing else was set.
+        if not any(k in params for k in ("email", "phone_number", "date_of_birth", "name")):
             params["name"] = query
 
         params.setdefault("page", 1)
