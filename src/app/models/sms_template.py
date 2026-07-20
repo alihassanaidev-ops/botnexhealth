@@ -26,6 +26,10 @@ class SmsTemplateType(str, Enum):
 
     # Confirmation texted to the patient once an appointment is booked on a call.
     APPOINTMENT_BOOKED = "appointment_booked"
+    # No-PMS ("none") variant: the AI can't truly book, so the patient is texted
+    # that their request was received and the office will confirm. Kept separate
+    # from APPOINTMENT_BOOKED so integrated confirmation SMS is untouched.
+    APPOINTMENT_REQUEST = "appointment_request"
 
 
 class SmsTemplate(Base):

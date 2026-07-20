@@ -290,77 +290,134 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
             location_id=str(location.id),
             external_id=call_id,
         ) as session:
-            booking = await resolve_booking_context(
-                session,
-                institution_id=institution.id,
-                retell_call_id=call_id,
-                timezone=location.timezone or "UTC",
-            )
-            if not booking or not booking.booked:
-                skip_reason = "no_booking"
-            elif not location.twilio_from_number:
-                skip_reason = "no_twilio_number"
-            else:
-                if call.direction == "outbound":
-                    patient_phone = call.to_number
-                else:
-                    patient_phone = call.from_number or call.to_number
+            if not institution.has_pms:
+                # No-PMS: nothing is ever booked, so send a "request received"
+                # acknowledgement instead of a confirmation — but only for calls
+                # the agent classified as a booking request (needs_booking),
+                # never every caller. Requires the call_analyzed classification
+                # to have landed (it writes call.call_status); if it hasn't yet,
+                # we skip rather than risk texting the wrong caller.
+                from src.app.models.call import Call, CallStatus
 
-                if not patient_phone:
-                    skip_reason = "no_patient_phone"
-                else:
-                    template = await SmsTemplateService(session).get_template_by_type(
-                        institution.id, SmsTemplateType.APPOINTMENT_BOOKED.value
-                    )
-                    if not template or not template.is_active:
-                        skip_reason = "template_inactive"
-                    else:
-                        dyn = call.collected_dynamic_variables or {}
-                        patient_name = dyn.get("patient_name") or dyn.get("name")
-                        if not patient_name and booking.patient_id:
-                            # Retell's collected_dynamic_variables are unreliable
-                            # in webhook payloads (often omitted), so fall back to
-                            # the PMS patient name — authoritative, collected at
-                            # intake — the same source the confirmation email uses.
-                            try:
-                                from src.app.pms.nexhealth.adapter import (
-                                    NexHealthAdapter,
-                                )
-
-                                _adapter = await NexHealthAdapter.create(
-                                    institution, location
-                                )
-                                _patient = await _adapter.get_patient(
-                                    booking.patient_id
-                                )
-                                if _patient:
-                                    patient_name = _patient.name or " ".join(
-                                        p
-                                        for p in (
-                                            _patient.first_name,
-                                            _patient.last_name,
-                                        )
-                                        if p
-                                    ).strip()
-                            except Exception as _name_err:
-                                logger.warning(
-                                    "PMS patient-name lookup failed: call_hash=%s error=%s",
-                                    hash_for_logging(call_id),
-                                    safe_error_summary(_name_err),
-                                )
-                        patient_name = patient_name or "there"
-                        body = SmsTemplateService.render(
-                            template.body,
-                            {
-                                "patient_name": patient_name,
-                                "location_name": location.name,
-                                "appointment_provider": booking.provider_name
-                                or "your provider",
-                                "appointment_datetime": booking.appointment_datetime
-                                or "your scheduled time",
-                                "appointment_service": booking.service or "",
-                            },
+                db_call = (
+                    await session.execute(
+                        select(Call).where(
+                            Call.retell_call_id == call_id,
+                            Call.institution_id == institution.id,
                         )
+                    )
+                ).scalar_one_or_none()
+                if (
+                    db_call is None
+                    or (db_call.call_status or "") != CallStatus.NEEDS_BOOKING.value
+                ):
+                    skip_reason = "not_booking_request"
+                elif not location.twilio_from_number:
+                    skip_reason = "no_twilio_number"
+                else:
+                    patient_phone = (
+                        call.to_number
+                        if call.direction == "outbound"
+                        else (call.from_number or call.to_number)
+                    )
+                    if not patient_phone:
+                        skip_reason = "no_patient_phone"
+                    else:
+                        template = await SmsTemplateService(session).get_template_by_type(
+                            institution.id, SmsTemplateType.APPOINTMENT_REQUEST.value
+                        )
+                        if not template or not template.is_active:
+                            skip_reason = "template_inactive"
+                        else:
+                            dyn = call.collected_dynamic_variables or {}
+                            # Patient's own phone → addressing them by name is
+                            # fine; fall back to a neutral greeting when absent.
+                            patient_name = (
+                                dyn.get("patient_name") or dyn.get("name") or "there"
+                            )
+                            body = SmsTemplateService.render(
+                                template.body,
+                                {
+                                    "patient_name": patient_name,
+                                    "location_name": location.name,
+                                    "availability": "",
+                                },
+                            )
+                # No PMS booking path for these tenants — fall through to the
+                # shared send/skip logic below with whatever was resolved above.
+                booking = None
+            else:
+                booking = await resolve_booking_context(
+                    session,
+                    institution_id=institution.id,
+                    retell_call_id=call_id,
+                    timezone=location.timezone or "UTC",
+                )
+                if not booking or not booking.booked:
+                    skip_reason = "no_booking"
+                elif not location.twilio_from_number:
+                    skip_reason = "no_twilio_number"
+                else:
+                    if call.direction == "outbound":
+                        patient_phone = call.to_number
+                    else:
+                        patient_phone = call.from_number or call.to_number
+
+                    if not patient_phone:
+                        skip_reason = "no_patient_phone"
+                    else:
+                        template = await SmsTemplateService(session).get_template_by_type(
+                            institution.id, SmsTemplateType.APPOINTMENT_BOOKED.value
+                        )
+                        if not template or not template.is_active:
+                            skip_reason = "template_inactive"
+                        else:
+                            dyn = call.collected_dynamic_variables or {}
+                            patient_name = dyn.get("patient_name") or dyn.get("name")
+                            if not patient_name and booking.patient_id:
+                                # Retell's collected_dynamic_variables are unreliable
+                                # in webhook payloads (often omitted), so fall back to
+                                # the PMS patient name — authoritative, collected at
+                                # intake — the same source the confirmation email uses.
+                                try:
+                                    from src.app.pms.nexhealth.adapter import (
+                                        NexHealthAdapter,
+                                    )
+
+                                    _adapter = await NexHealthAdapter.create(
+                                        institution, location
+                                    )
+                                    _patient = await _adapter.get_patient(
+                                        booking.patient_id
+                                    )
+                                    if _patient:
+                                        patient_name = _patient.name or " ".join(
+                                            p
+                                            for p in (
+                                                _patient.first_name,
+                                                _patient.last_name,
+                                            )
+                                            if p
+                                        ).strip()
+                                except Exception as _name_err:
+                                    logger.warning(
+                                        "PMS patient-name lookup failed: call_hash=%s error=%s",
+                                        hash_for_logging(call_id),
+                                        safe_error_summary(_name_err),
+                                    )
+                            patient_name = patient_name or "there"
+                            body = SmsTemplateService.render(
+                                template.body,
+                                {
+                                    "patient_name": patient_name,
+                                    "location_name": location.name,
+                                    "appointment_provider": booking.provider_name
+                                    or "your provider",
+                                    "appointment_datetime": booking.appointment_datetime
+                                    or "your scheduled time",
+                                    "appointment_service": booking.service or "",
+                                },
+                            )
     except Exception as exc:
         await _finish(
             "FAILED", institution_id=str(institution.id), error=safe_error_summary(exc)

@@ -73,6 +73,20 @@ TEMPLATE_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"key": "appointment_provider", "label": "Appointment Provider", "sample": "Dr. Smith"},
         {"key": "appointment_service", "label": "Appointment Service", "sample": "Routine Cleaning"},
     ],
+    # No-PMS staff notification — PHI-FREE. No patient name or DOB; only
+    # non-identifying triage info plus a redacted caller phone and dashboard
+    # link. Keep this list free of any patient-identifying variable.
+    EmailTemplateType.APPOINTMENT_REQUEST.value: [
+        {"key": "location_name", "label": "Location Name", "sample": "Downtown Dental"},
+        {"key": "caller_phone", "label": "Caller Phone (redacted)", "sample": "******4321"},
+        {"key": "duration", "label": "Call Duration", "sample": "2m 43s"},
+        {"key": "call_status", "label": "Call Status", "sample": "Needs booking"},
+        {"key": "all_tags", "label": "All Tags", "sample": "needs_booking"},
+        {"key": "availability", "label": "Requested Availability", "sample": "Tomorrow after 3 PM; Fri after 12 PM"},
+        {"key": "new_patient", "label": "New Patient?", "sample": "Yes"},
+        {"key": "is_emergency", "label": "Emergency?", "sample": "No"},
+        {"key": "dashboard_link", "label": "Dashboard Link", "sample": "https://app.example.com/calls?detail=abc123"},
+    ],
 }
 
 
@@ -188,6 +202,32 @@ def _urgent_banner() -> str:
         'border-radius:8px;font-size:13px;text-align:center;">'
         "URGENT: Emergency or complaint call requires immediate attention.</div>"
         "</td></tr></table>"
+    )
+
+
+def _appointment_request_section() -> str:
+    """PHI-FREE triage section for the no-PMS appointment-request email.
+
+    Deliberately contains NO patient-identifying variables (no name, no DOB) —
+    only the non-identifying request details the office needs to book manually.
+    Full patient details stay behind the RBAC-protected dashboard link.
+    """
+    return (
+        f'<div style="margin-top:24px;padding:20px;background:{_STYLES["body_bg"]};border:1px solid {_STYLES["border"]};'
+        'border-radius:8px;">'
+        f'<div style="font-size:14px;font-weight:600;color:{_STYLES["text_primary"]};margin-bottom:14px;">'
+        "Request Details</div>"
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+        ' style="border-collapse:collapse;">'
+        f'<tr><td style="{_LABEL_STYLE}">Availability</td>'
+        f'<td style="{_VALUE_STYLE}">{{{{ availability }}}}</td></tr>'
+        f'<tr><td style="{_LABEL_STYLE}">New Patient</td>'
+        f'<td style="{_VALUE_STYLE}">{{{{ new_patient }}}}</td></tr>'
+        f'<tr><td style="{_LABEL_STYLE}">Emergency</td>'
+        f'<td style="{_VALUE_STYLE}">{{{{ is_emergency }}}}</td></tr>'
+        f'<tr><td style="{_LABEL_STYLE}border-bottom:none;">Call Status</td>'
+        f'<td style="{_VALUE_STYLE}border-bottom:none;">{{{{ call_status }}}}</td></tr>'
+        "</table></div>"
     )
 
 
@@ -335,50 +375,56 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             "happy to help.\n"
         ),
     },
+    # No-PMS staff notification — PHI-FREE (no patient name/DOB). Selected at
+    # send time when pms_type == 'none'; integrated templates above untouched.
+    EmailTemplateType.APPOINTMENT_REQUEST.value: {
+        "name": "Appointment Request",
+        "subject_template": "{{ location_name }} — Appointment request ({{ call_status }})",
+        "html_body": _wrap_email(
+            "Appointment Request",
+            "A patient requested an appointment by phone. It is not booked yet — "
+            "please confirm availability and book it manually. Open the dashboard "
+            "for the caller's details.",
+            _appointment_request_section()
+            + (
+                f'<div style="margin-top:20px;">'
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
+                ' style="border-collapse:collapse;">'
+                f'<tr><td style="{_LABEL_STYLE}">Caller</td>'
+                f'<td style="{_VALUE_STYLE}font-family:monospace;">{{{{ caller_phone }}}}</td></tr>'
+                f'<tr><td style="{_LABEL_STYLE}">Duration</td>'
+                f'<td style="{_VALUE_STYLE}">{{{{ duration }}}}</td></tr>'
+                f'<tr><td style="{_LABEL_STYLE}border-bottom:none;">All Tags</td>'
+                f'<td style="{_VALUE_STYLE}border-bottom:none;">{{{{ all_tags }}}}</td></tr>'
+                "</table></div>"
+            )
+            + _dashboard_button(),
+        ),
+        "text_body": (
+            "Appointment Request (pending manual booking)\n\n"
+            "A patient requested an appointment by phone. It is not booked yet —\n"
+            "please confirm availability and book it manually.\n\n"
+            "Availability: {{ availability }}\n"
+            "New Patient: {{ new_patient }}\n"
+            "Emergency: {{ is_emergency }}\n"
+            "Call Status: {{ call_status }}\n\n"
+            "Call Details\n"
+            "Caller Phone: {{ caller_phone }}\n"
+            "Duration: {{ duration }}\n"
+            "All Tags: {{ all_tags }}\n"
+            "{% if dashboard_link %}\nView caller details: {{ dashboard_link }}\n{% endif %}"
+        ),
+    },
 }
 
-# Default wording for no-PMS institutions. The AI cannot truly book without a
-# PMS, so an "appointment_booked" call is really a *request* staff must enter
-# manually. Used only as the fallback (DB-customized templates still win) and
-# selected at send time when ``pms_type == 'none'``. Reuses the same
-# ``appointment_confirmation`` template_type so preferences / external
-# recipients / custom templates are unaffected.
-APPOINTMENT_REQUEST_DEFAULT: dict[str, str] = {
-    "name": "Appointment Request",
-    "subject_template": "{{ location_name }} — Appointment request ({{ appointment_service }})",
-    "html_body": _wrap_email(
-        "Appointment Request",
-        "A patient requested an appointment by phone. It is not booked yet — "
-        "please confirm availability and book it manually.",
-        _appointment_section()
-        + (
-            f'<div style="margin-top:20px;">'
-            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"'
-            ' style="border-collapse:collapse;">'
-            f'<tr><td style="{_LABEL_STYLE}">Caller</td>'
-            f'<td style="{_VALUE_STYLE}font-family:monospace;">{{{{ caller_phone }}}}</td></tr>'
-            f'<tr><td style="{_LABEL_STYLE}">Duration</td>'
-            f'<td style="{_VALUE_STYLE}">{{{{ duration }}}}</td></tr>'
-            f'<tr><td style="{_LABEL_STYLE}">Status</td>'
-            f'<td style="{_VALUE_STYLE}">Pending — manual booking required</td></tr>'
-            "</table></div>"
-        )
-        + _dashboard_button(),
-    ),
-    "text_body": (
-        "Appointment Request (pending manual booking)\n\n"
-        "A patient requested an appointment by phone. It is not booked yet —\n"
-        "please confirm availability and book it manually.\n\n"
-        "Patient: {{ patient_name }}\n"
-        "Requested Date/Time: {{ appointment_datetime }}\n"
-        "Provider: {{ appointment_provider }}\n"
-        "Service: {{ appointment_service }}\n\n"
-        "Call Details\n"
-        "Caller Phone: {{ caller_phone }}\n"
-        "Duration: {{ duration }}\n"
-        "{% if dashboard_link %}\nView full details: {{ dashboard_link }}\n{% endif %}"
-    ),
-}
+# Default wording for no-PMS institutions, selected at send time when
+# ``pms_type == 'none'``. Now a PHI-free template under its own
+# ``appointment_request`` type (see DEFAULT_TEMPLATES above); this alias is
+# retained for the send path that imports it as the built-in fallback when the
+# institution has no DB-customized row yet.
+APPOINTMENT_REQUEST_DEFAULT: dict[str, str] = DEFAULT_TEMPLATES[
+    EmailTemplateType.APPOINTMENT_REQUEST.value
+]
 
 
 # Template types seeded inactive — a clinic must opt in before they are used.

@@ -9,6 +9,7 @@ import {
     Save,
     AlertTriangle,
     CalendarCheck,
+    CalendarClock,
     Phone,
     Copy,
     Check,
@@ -26,6 +27,7 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Separator } from "@/components/ui/separator"
 import { CardsSkeleton } from "@/components/ui/skeletons"
+import { useInstitution } from "@/context/InstitutionContext"
 import {
     Dialog,
     DialogContent,
@@ -62,6 +64,13 @@ const TEMPLATE_META: Record<string, { label: string; description: string; icon: 
         icon: CalendarCheck,
         color: "bg-green-500/10 text-green-500",
     },
+    appointment_request: {
+        label: "Appointment Request",
+        description:
+            "Sent to staff when a caller requests an appointment that must be booked manually (no PMS). PHI-free — no patient name or DOB.",
+        icon: CalendarClock,
+        color: "bg-amber-500/10 text-amber-500",
+    },
     patient_appointment_confirmation: {
         label: "Patient Appointment Confirmation",
         description: "Sent to the patient's email when AI books their appointment. Disabled by default — enable to start sending.",
@@ -74,10 +83,16 @@ const TEMPLATE_ORDER = [
     "call_summary",
     "urgent_alert",
     "appointment_confirmation",
+    "appointment_request",
     "patient_appointment_confirmation",
 ]
 
 export default function EmailTemplates() {
+    // No-PMS institutions can't truly book, so they configure the PHI-free
+    // "Appointment Request" template instead of "Appointment Confirmation".
+    // Show exactly one of the two per institution.
+    const { hasPms } = useInstitution()
+    const hiddenType = hasPms ? "appointment_request" : "appointment_confirmation"
     const [templates, setTemplates] = useState<EmailTemplate[]>([])
     const [loading, setLoading] = useState(true)
     const [selectedType, setSelectedType] = useState<string | null>(null)
@@ -226,9 +241,11 @@ export default function EmailTemplates() {
 
     // Template list view
     if (!selectedType) {
-        const sorted = [...templates].sort(
-            (a, b) => TEMPLATE_ORDER.indexOf(a.template_type) - TEMPLATE_ORDER.indexOf(b.template_type),
-        )
+        const sorted = [...templates]
+            .filter((t) => t.template_type !== hiddenType)
+            .sort(
+                (a, b) => TEMPLATE_ORDER.indexOf(a.template_type) - TEMPLATE_ORDER.indexOf(b.template_type),
+            )
 
         return (
             <div className="space-y-6">

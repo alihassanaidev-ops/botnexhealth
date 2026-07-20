@@ -23,6 +23,14 @@ class EmailTemplateType(str, Enum):
     CALL_SUMMARY = "call_summary"
     URGENT_ALERT = "urgent_alert"
     APPOINTMENT_CONFIRMATION = "appointment_confirmation"
+    # No-PMS ("none") staff notification. These institutions can't truly book,
+    # so an "appointment" call is really a REQUEST staff must enter manually.
+    # This template is PHI-free (no patient name/DOB) — it carries only
+    # non-identifying triage info (availability, new-patient flag, emergency
+    # flag, call status) plus a redacted caller phone and a dashboard deep link.
+    # Kept separate from APPOINTMENT_CONFIRMATION so integrated templates are
+    # untouched.
+    APPOINTMENT_REQUEST = "appointment_request"
     # Patient-facing confirmation sent to the patient's own email. Unlike the
     # staff templates above, this one carries unredacted appointment details
     # because it goes only to the patient. Seeded inactive — a clinic must

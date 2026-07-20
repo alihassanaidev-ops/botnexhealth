@@ -39,6 +39,15 @@ TEMPLATE_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"key": "appointment_provider", "label": "Provider", "sample": "Dr. Smith"},
         {"key": "appointment_service", "label": "Service / Type", "sample": "Routine Cleaning"},
     ],
+    # No-PMS: the AI can't book, so the patient is texted a request-received
+    # acknowledgement. No booked date/provider/service (nothing is booked). The
+    # message goes only to the patient's own phone, so addressing them by name
+    # is fine; availability is the window they requested (non-identifying).
+    SmsTemplateType.APPOINTMENT_REQUEST.value: [
+        {"key": "patient_name", "label": "Patient Name", "sample": "Jane Doe"},
+        {"key": "location_name", "label": "Clinic / Location Name", "sample": "Downtown Dental"},
+        {"key": "availability", "label": "Requested Availability", "sample": "Tomorrow after 3 PM"},
+    ],
 }
 
 
@@ -63,6 +72,18 @@ SMS_DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             "{% if appointment_service and appointment_service != 'Not provided' %}"
             " for {{ appointment_service }}{% endif %}. "
             "Please call us if you need to reschedule."
+        ),
+    },
+    SmsTemplateType.APPOINTMENT_REQUEST.value: {
+        "name": "Appointment Request Received",
+        # No-PMS acknowledgement — nothing is booked yet; our team confirms.
+        "body": (
+            "Hi {{ patient_name }}, thanks for contacting {{ location_name }}. "
+            "We've received your appointment request"
+            "{% if availability and availability != 'Not provided' %}"
+            " for {{ availability }}{% endif %}"
+            " and our team will call you back shortly to confirm. "
+            "Please call us if you have any questions."
         ),
     },
 }
