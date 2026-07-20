@@ -3,8 +3,10 @@
 We consume Retell's raw (unscrubbed) variants — transcript, recording URL,
 and analysis — and persist them. Raw PHI therefore lives in our datastore;
 it is protected by column-level encryption at rest plus RBAC/tenant-scoped
-access rather than by scrubbing at the webhook boundary. The ``scrubbed_*``
-variants are still accepted as a fallback for when the raw fields are absent.
+access rather than by scrubbing at the webhook boundary. Retell's ``scrubbed_*``
+variants are also persisted (plaintext, non-PHI) and shown inline by default;
+for the single raw fields the scrubbed value additionally serves as a fallback
+when Retell omits the raw one.
 """
 
 from __future__ import annotations

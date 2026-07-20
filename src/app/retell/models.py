@@ -48,9 +48,11 @@ class FunctionError(BaseModel):
 class RetellCallData(BaseModel):
     """Call data included in webhook events.
 
-    Carries Retell's raw (unscrubbed) outputs. The handler selects the raw
-    sources at the webhook boundary, falling back to the scrubbed variants only
-    when the raw fields are absent.
+    Carries both Retell variants: the raw (unscrubbed) transcript/recording —
+    persisted encrypted and served only via the audited reveal endpoints — and
+    the PII-scrubbed variants, persisted alongside them and shown inline by
+    default. (For the single raw fields, the scrubbed value is still used as a
+    fallback when Retell omits the raw one.)
     """
     call_id: str
     call_type: str | None = None

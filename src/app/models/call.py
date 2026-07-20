@@ -6,7 +6,9 @@ HIPAA Compliance:
   layer (defense in depth on top of RDS at-rest encryption).
 - We persist Retell's raw (unscrubbed) transcript, recording, and analysis;
   the encryption above plus RBAC/tenant-scoped access are what protect this
-  PHI at rest, not scrubbing at the webhook boundary.
+  PHI at rest, not scrubbing at the webhook boundary. Retell's PII-scrubbed
+  variants are also persisted (plaintext, non-PHI) in the scrubbed_* columns
+  and shown inline by default while the raw stays behind audited reveal.
 - retell_call_id UNIQUE constraint ensures webhook idempotency.
 """
 

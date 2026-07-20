@@ -344,12 +344,11 @@ export interface TranscriptTurn {
 }
 
 export interface CallDetail extends CallRecord {
-    // The detail response intentionally carries no PHI bodies — only flags
-    // indicating whether a reveal is possible. Transcripts and recordings
-    // come back from explicit, audited reveal endpoints below. The backend
-    // stores Retell's raw (unscrubbed) structured transcript, protected by
-    // encryption at rest and RBAC/tenant scope rather than webhook-boundary
-    // scrubbing (scrubbed_* variants are kept only as a fallback).
+    // The detail response carries no *raw* PHI bodies — the raw (unscrubbed)
+    // transcript/recording stay encrypted at rest and come back only from the
+    // explicit, audited reveal endpoints below (transcript_available /
+    // recording_available flag whether a reveal is possible). Retell's
+    // PII-scrubbed variants ARE served inline (see below) as the default view.
     transcript_available: boolean;
     recording_available: boolean;
     /** Retell's PII-scrubbed transcript/recording (non-PHI). Served inline with
