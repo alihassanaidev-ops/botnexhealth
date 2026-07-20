@@ -45,6 +45,7 @@ from src.app.services.audit_decorator import audit
 from src.app.services.slot_filter import (
     apply_buffer,
     apply_time_restriction,
+    filter_slots,
     get_local_date_string,
     merge_buffer_minutes,
 )
@@ -715,31 +716,70 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         )
         provider_cutoff = None
 
-        if normalized_provider_id and ctx.location:
+        if ctx.location:
             async with get_system_db_session(
                 "retell",
                 institution_id=str(ctx.institution.id),
                 location_id=str(ctx.location.id),
             ) as session:
-                prov = (
-                    await session.execute(
-                        select(
-                            InstitutionProvider.buffer_minutes,
-                            InstitutionProvider.same_day_cutoff_time,
-                        ).where(
-                            InstitutionProvider.source_id == provider_source_id,
-                            InstitutionProvider.location_id == str(ctx.location.id),
+                if normalized_provider_id:
+                    prov = (
+                        await session.execute(
+                            select(
+                                InstitutionProvider.buffer_minutes,
+                                InstitutionProvider.same_day_cutoff_time,
+                            ).where(
+                                InstitutionProvider.source_id == provider_source_id,
+                                InstitutionProvider.location_id == str(ctx.location.id),
+                            )
+                        )
+                    ).one_or_none()
+                    if prov:
+                        provider_buffer = max(0, int(prov.buffer_minutes or 0))
+                        buffer_minutes = merge_buffer_minutes(
+                            buffer_minutes, provider_buffer
+                        )
+                        provider_cutoff = prov.same_day_cutoff_time
+
+                # Per-location operating hours + breaks (lunch / blackout
+                # windows). Loaded regardless of provider so the voice agent
+                # honors closed days/hours and breaks.
+                operating_hours = (
+                    (
+                        await session.execute(
+                            select(LocationOperatingHours).where(
+                                LocationOperatingHours.location_id
+                                == str(ctx.location.id)
+                            )
                         )
                     )
-                ).one_or_none()
-                if prov:
-                    provider_buffer = max(0, int(prov.buffer_minutes or 0))
-                    buffer_minutes = merge_buffer_minutes(
-                        buffer_minutes, provider_buffer
+                    .scalars()
+                    .all()
+                )
+                breaks = (
+                    (
+                        await session.execute(
+                            select(LocationBreak).where(
+                                LocationBreak.location_id == str(ctx.location.id)
+                            )
+                        )
                     )
-                    provider_cutoff = prov.same_day_cutoff_time
+                    .scalars()
+                    .all()
+                )
 
-        if buffer_minutes > 0:
+            # Apply operating hours + breaks + buffer in one pass — parity with
+            # the dashboard ``GET /slots`` route (slots.py). Without this the
+            # agent would offer slots during lunch/closed hours that the
+            # dashboard already hides.
+            slots = filter_slots(
+                slots=slots,
+                operating_hours=operating_hours,
+                breaks=breaks,
+                timezone=ctx.location.timezone or "UTC",
+                buffer_minutes=buffer_minutes,
+            )
+        elif buffer_minutes > 0:
             slots = apply_buffer(slots, buffer_minutes)
 
         # Apply same-day cutoff time restriction
