@@ -1393,12 +1393,36 @@ async def _confirm_appointments_for_runs(
     from src.app.models.institution_location import InstitutionLocation
     from src.app.pms.base import SupportsAppointmentConfirmation
     from src.app.pms.nexhealth.adapter import NexHealthAdapter
+    from src.app.services.automation.pms_capability_service import PmsCapabilityService
     from src.app.services.audit import log_audit
     from src.app.services.sms_privacy import safe_error_summary
 
     institution = await session.get(Institution, institution_id)
     location = await session.get(InstitutionLocation, location_id)
     if institution is None or location is None:
+        return
+
+    capability = await PmsCapabilityService(session).evaluate_location(
+        institution=institution,
+        location=location,
+        requirements=["confirmation_writeback"],
+    )
+    if not capability.supported:
+        for run in runs:
+            await log_audit(
+                actor=AuditActor.SYSTEM,
+                action=AuditAction.CONFIRM_APPOINTMENT,
+                target_resource=f"appointment:{run.trigger_ref_id or 'unknown'}",
+                outcome=AuditOutcome.FAILURE_VALIDATION,
+                metadata={
+                    "source": "automation_sms_confirmation",
+                    "reason": "unsupported_pms_capability",
+                    "workflow_run_id": str(run.id),
+                    "pms_capability_evaluation": capability.as_dict(),
+                },
+                institution_id=institution_id,
+                location_id=location_id,
+            )
         return
 
     adapter = None

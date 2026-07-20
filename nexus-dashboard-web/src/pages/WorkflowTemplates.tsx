@@ -48,6 +48,24 @@ function requiresVoiceAgent(template: CampaignTemplate) {
     return template.metadata.setup_fields.some((field) => field.id === "voice_agent_id" && field.required)
 }
 
+function pmsCapabilityStatus(template: CampaignTemplate) {
+    return template.metadata.pms_capability_evaluation
+}
+
+function isPmsUnsupported(template: CampaignTemplate) {
+    const evaluation = pmsCapabilityStatus(template)
+    return evaluation ? !evaluation.supported : false
+}
+
+function pmsBadgeLabel(template: CampaignTemplate) {
+    const requirements = template.metadata.pms_capability_requirements
+    if (requirements.length === 0) return null
+    const evaluation = pmsCapabilityStatus(template)
+    if (!evaluation) return "PMS gated"
+    if (evaluation.supported) return "PMS ready"
+    return "Unsupported"
+}
+
 export default function WorkflowTemplates() {
     const navigate = useNavigate()
     const [templates, setTemplates] = useState<CampaignTemplate[]>([])
@@ -67,23 +85,42 @@ export default function WorkflowTemplates() {
     useEffect(() => {
         ;(async () => {
             setLoading(true)
+            let waitsForLocationTemplates = false
             try {
-                const [templateRows, locationRows] = await Promise.all([
-                    listTemplates(),
-                    listLocations().catch(() => []),
-                ])
-                setTemplates(templateRows)
+                const locationRows = await listLocations().catch(() => [])
                 setLocations(locationRows)
                 if (locationRows.length > 0) {
+                    waitsForLocationTemplates = true
                     setSelectedLocationId((current) => current || locationRows[0].id)
+                } else {
+                    setTemplates(await listTemplates())
                 }
             } catch {
                 toast.error("Failed to load templates")
             } finally {
-                setLoading(false)
+                if (!waitsForLocationTemplates) setLoading(false)
             }
         })()
     }, [])
+
+    useEffect(() => {
+        if (!selectedLocationId) return
+        let active = true
+        ;(async () => {
+            setLoading(true)
+            try {
+                const templateRows = await listTemplates(selectedLocationId)
+                if (active) setTemplates(templateRows)
+            } catch {
+                if (active) toast.error("Failed to load templates")
+            } finally {
+                if (active) setLoading(false)
+            }
+        })()
+        return () => {
+            active = false
+        }
+    }, [selectedLocationId])
 
     const categories = useMemo(() => {
         const present = Array.from(new Set(templates.map((t) => t.category)))
@@ -100,6 +137,7 @@ export default function WorkflowTemplates() {
             : templates.filter((template) => template.category === activeCategory)
 
     function openPicker(t: CampaignTemplate) {
+        if (isPmsUnsupported(t)) return
         setPicked(t)
         setName(t.name)
         setAudienceSource(t.metadata.default_audience)
@@ -134,8 +172,13 @@ export default function WorkflowTemplates() {
     }
 
     const voiceRequired = picked ? requiresVoiceAgent(picked) : false
+    const pickedCapability = picked ? pmsCapabilityStatus(picked) : null
     const createDisabled =
-        creating || !name.trim() || !selectedLocationId || (voiceRequired && !voiceAgentId.trim())
+        creating ||
+        !name.trim() ||
+        !selectedLocationId ||
+        (voiceRequired && !voiceAgentId.trim()) ||
+        pickedCapability?.supported === false
 
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
@@ -193,15 +236,20 @@ export default function WorkflowTemplates() {
                         ))}
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        {visibleTemplates.map((t) => (
+                        {visibleTemplates.map((t) => {
+                            const badgeLabel = pmsBadgeLabel(t)
+                            const unsupported = isPmsUnsupported(t)
+                            return (
                             <Card key={t.id} className="flex min-h-[260px] flex-col">
                                 <CardHeader className="pb-2">
                                     <div className="mb-2 flex items-center justify-between gap-2">
                                         <Badge variant="secondary" className="capitalize">
                                             {label(t.category)}
                                         </Badge>
-                                        {t.metadata.pms_capability_requirements.length > 0 && (
-                                            <Badge variant="outline">PMS gated</Badge>
+                                        {badgeLabel && (
+                                            <Badge variant={unsupported ? "destructive" : "outline"}>
+                                                {badgeLabel}
+                                            </Badge>
                                         )}
                                     </div>
                                     <CardTitle className="text-base font-semibold">{t.name}</CardTitle>
@@ -236,12 +284,23 @@ export default function WorkflowTemplates() {
                                             ))}
                                         </div>
                                     )}
-                                    <Button size="sm" className="gap-1.5" onClick={() => openPicker(t)}>
+                                    {unsupported && t.metadata.pms_capability_evaluation?.message && (
+                                        <p className="text-xs text-destructive">
+                                            {t.metadata.pms_capability_evaluation.message}
+                                        </p>
+                                    )}
+                                    <Button
+                                        size="sm"
+                                        className="gap-1.5"
+                                        disabled={unsupported}
+                                        onClick={() => openPicker(t)}
+                                    >
                                         <Sparkles className="h-3.5 w-3.5" /> Use template
                                     </Button>
                                 </CardContent>
                             </Card>
-                        ))}
+                            )
+                        })}
                     </div>
                 </div>
             )}
@@ -364,8 +423,15 @@ export default function WorkflowTemplates() {
                                     {" "}{picked.metadata.default_frequency_cap.max_per_rolling_7_days}/7 days
                                 </div>
                                 {picked.metadata.pms_capability_requirements.length > 0 && (
-                                    <div className="text-xs text-muted-foreground">
-                                        PMS capability: {picked.metadata.pms_capability_requirements.join(", ")}
+                                    <div className="space-y-1 text-xs text-muted-foreground">
+                                        <div>
+                                            PMS capability: {picked.metadata.pms_capability_requirements.join(", ")}
+                                        </div>
+                                        {pickedCapability?.message && (
+                                            <div className={pickedCapability.supported ? "text-emerald-600" : "text-destructive"}>
+                                                {pickedCapability.message}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>

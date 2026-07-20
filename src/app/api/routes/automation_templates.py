@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from src.app.api.deps import (
     get_current_institution_or_location_admin,
@@ -14,7 +15,9 @@ from src.app.api.deps import (
 )
 from src.app.api.routes.automation_workflows import WorkflowResponse
 from src.app.database import get_db_session
-from src.app.models.user import User
+from src.app.models.institution import Institution
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.user import User, UserRole
 from src.app.services.automation.campaign_templates import (
     CampaignTemplate,
     get_template,
@@ -22,6 +25,10 @@ from src.app.services.automation.campaign_templates import (
     list_templates,
 )
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
+from src.app.services.automation.pms_capability_service import (
+    PmsCapabilityEvaluation,
+    PmsCapabilityService,
+)
 
 router = APIRouter(prefix="/automation/templates", tags=["Automation Templates"])
 
@@ -45,7 +52,15 @@ class CampaignTemplateResponse(BaseModel):
     metadata: dict[str, Any]
 
     @classmethod
-    def from_template(cls, t: CampaignTemplate) -> "CampaignTemplateResponse":
+    def from_template(
+        cls,
+        t: CampaignTemplate,
+        *,
+        pms_capability_evaluation: PmsCapabilityEvaluation | None = None,
+    ) -> "CampaignTemplateResponse":
+        metadata = asdict(t.metadata)
+        if pms_capability_evaluation is not None:
+            metadata["pms_capability_evaluation"] = pms_capability_evaluation.as_dict()
         return cls(
             id=t.id,
             name=t.name,
@@ -54,7 +69,7 @@ class CampaignTemplateResponse(BaseModel):
             definition=t.definition,
             tags=t.tags,
             category=t.category,
-            metadata=asdict(t.metadata),
+            metadata=metadata,
         )
 
 
@@ -73,21 +88,71 @@ class CampaignTemplateInstantiateRequest(BaseModel):
 @router.get("", response_model=list[CampaignTemplateResponse])
 async def list_campaign_templates(
     current_user: _InstitutionOrLocationAdmin,
+    location_id: Annotated[str | None, Query()] = None,
 ) -> list[CampaignTemplateResponse]:
     """List all available campaign templates."""
-    return [CampaignTemplateResponse.from_template(t) for t in list_templates()]
+    templates = list_templates()
+    if not location_id:
+        return [CampaignTemplateResponse.from_template(t) for t in templates]
+
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(
+            current_user,
+            session,
+            location_id,
+        )
+        evaluator = PmsCapabilityService(session)
+        responses: list[CampaignTemplateResponse] = []
+        for template in templates:
+            requirements = template.metadata.pms_capability_requirements
+            evaluation = (
+                await evaluator.evaluate_location(
+                    institution=institution,
+                    location=location,
+                    requirements=requirements,
+                )
+                if requirements
+                else None
+            )
+            responses.append(
+                CampaignTemplateResponse.from_template(
+                    template,
+                    pms_capability_evaluation=evaluation,
+                )
+            )
+        return responses
 
 
 @router.get("/{template_id}", response_model=CampaignTemplateResponse)
 async def get_campaign_template(
     template_id: str,
     current_user: _InstitutionOrLocationAdmin,
+    location_id: Annotated[str | None, Query()] = None,
 ) -> CampaignTemplateResponse:
     """Get a single campaign template by ID."""
     template = get_template(template_id)
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
-    return CampaignTemplateResponse.from_template(template)
+    if not location_id:
+        return CampaignTemplateResponse.from_template(template)
+
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(
+            current_user,
+            session,
+            location_id,
+        )
+        evaluation = None
+        if template.metadata.pms_capability_requirements:
+            evaluation = await PmsCapabilityService(session).evaluate_location(
+                institution=institution,
+                location=location,
+                requirements=template.metadata.pms_capability_requirements,
+            )
+        return CampaignTemplateResponse.from_template(
+            template,
+            pms_capability_evaluation=evaluation,
+        )
 
 
 @router.post(
@@ -125,8 +190,34 @@ async def instantiate_template(
             detail=str(exc),
         ) from exc
 
-    user_id = str(current_user.id) if getattr(current_user, "id", None) else None
     async with get_db_session() as session:
+        if template.metadata.pms_capability_requirements:
+            if not data.location_id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="location_id is required to verify PMS capability for this template",
+                )
+            institution, location = await _resolve_institution_location(
+                current_user,
+                session,
+                data.location_id,
+            )
+            evaluation = await PmsCapabilityService(session).evaluate_location(
+                institution=institution,
+                location=location,
+                requirements=template.metadata.pms_capability_requirements,
+            )
+            if not evaluation.supported:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "unsupported_pms_capability",
+                        "message": evaluation.message,
+                        "pms_capability_evaluation": evaluation.as_dict(),
+                    },
+                )
+
+        user_id = str(current_user.id) if getattr(current_user, "id", None) else None
         svc = AutomationWorkflowDefinitionService(session)
         wf = await svc.create_draft(
             institution_id=str(current_user.institution_id),
@@ -143,3 +234,52 @@ async def instantiate_template(
             published_by_user_id=user_id,
         )
         return WorkflowResponse.from_model(wf)
+
+
+async def _resolve_institution_location(
+    user: User,
+    session,
+    location_id: str,
+) -> tuple[Institution, InstitutionLocation]:
+    if not user.institution_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No institution context")
+
+    if user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+        if not user.location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Location-scoped user missing location assignment",
+            )
+        if str(location_id) != str(user.location_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot access another location",
+            )
+
+    institution = (
+        await session.execute(
+            select(Institution).where(
+                Institution.id == str(user.institution_id),
+                Institution.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if institution is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found")
+
+    location = (
+        await session.execute(
+            select(InstitutionLocation).where(
+                InstitutionLocation.id == str(location_id),
+                InstitutionLocation.institution_id == str(institution.id),
+                InstitutionLocation.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if location is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active location found for institution",
+        )
+
+    return institution, location

@@ -77,6 +77,12 @@ describe("workflow-api", () => {
         expect(get).toHaveBeenCalledWith("/automation/templates")
     })
 
+    it("listTemplates forwards location_id when supplied", async () => {
+        get.mockResolvedValue({ data: [] })
+        await listTemplates("loc-1")
+        expect(get).toHaveBeenCalledWith("/automation/templates?location_id=loc-1")
+    })
+
     it("createWorkflowFromTemplate posts to the guided instantiate endpoint", async () => {
         post.mockResolvedValue({ data: { id: "w3", name: "Reminder" } })
         const wf = await createWorkflowFromTemplate("tpl-1")

@@ -17,6 +17,10 @@ from src.app.services.automation.campaign_templates import (
 )
 from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG
 from src.app.services.automation.definition_schema import WorkflowDefinition
+from src.app.services.automation.pms_capability_service import (
+    CapabilityDetail,
+    PmsCapabilityEvaluation,
+)
 from src.app.api.routes.automation_templates import (
     CampaignTemplateInstantiateRequest,
     CampaignTemplateResponse,
@@ -314,6 +318,71 @@ def test_instantiate_voice_template_without_agent_raises_422() -> None:
         asyncio.run(instantiate_template("callback-automation", user))
 
     assert exc_info.value.status_code == 422
+
+
+def test_instantiate_blocks_unsupported_pms_capability() -> None:
+    from fastapi import HTTPException
+    import unittest.mock as mock
+
+    user = MagicMock()
+    user.institution_id = "inst-1"
+    user.id = "user-1"
+
+    institution = MagicMock()
+    location = MagicMock()
+    evaluation = PmsCapabilityEvaluation(
+        requirements=["treatment_plans"],
+        supported=False,
+        status="unsupported",
+        pms_name="Dentrix Ascend",
+        missing=["treatment_plans"],
+        partial=[],
+        unknown=[],
+        details={
+            "treatment_plans": CapabilityDetail(
+                capability="treatment_plans",
+                status="unsupported",
+                label="treatment plans",
+                matched_api="View treatment plans",
+                raw_value="no",
+            )
+        },
+        message="Dentrix Ascend does not support: treatment_plans.",
+    )
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        mock.patch(
+            "src.app.api.routes.automation_templates.get_db_session",
+            return_value=mock_session,
+        ),
+        mock.patch(
+            "src.app.api.routes.automation_templates._resolve_institution_location",
+            new=AsyncMock(return_value=(institution, location)),
+        ),
+        mock.patch(
+            "src.app.services.automation.pms_capability_service.PmsCapabilityService.evaluate_location",
+            new=AsyncMock(return_value=evaluation),
+        ),
+        mock.patch(
+            "src.app.api.routes.automation_templates.AutomationWorkflowDefinitionService"
+        ) as service_cls,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                instantiate_template(
+                    "unscheduled-treatment-followup",
+                    user,
+                    data=CampaignTemplateInstantiateRequest(location_id="loc-1"),
+                )
+            )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "unsupported_pms_capability"
+    service_cls.assert_not_called()
 
 
 def test_instantiate_unknown_template_raises_404() -> None:

@@ -48,6 +48,26 @@ export interface CampaignTemplateMetadata {
     setup_fields: CampaignTemplateSetupField[]
     copy_variants: { id: string; label: string }[]
     pms_capability_requirements: string[]
+    pms_capability_evaluation?: {
+        requirements: string[]
+        supported: boolean
+        status: "supported" | "partial" | "unsupported" | "unknown"
+        pms_name: string | null
+        missing: string[]
+        partial: string[]
+        unknown: string[]
+        details: Record<
+            string,
+            {
+                capability: string
+                status: "supported" | "partial" | "unsupported" | "unknown"
+                label: string
+                matched_api: string | null
+                raw_value: string | null
+            }
+        >
+        message: string
+    }
 }
 
 export interface CampaignTemplate {
@@ -216,8 +236,13 @@ export async function listMergeFields(opts?: {
 }
 
 // ---- Templates ----
-export async function listTemplates(): Promise<CampaignTemplate[]> {
-    const { data } = await api.get<CampaignTemplate[]>("/automation/templates")
+export async function listTemplates(locationId?: string | null): Promise<CampaignTemplate[]> {
+    const params = new URLSearchParams()
+    if (locationId) params.set("location_id", locationId)
+    const query = params.toString()
+    const { data } = await api.get<CampaignTemplate[]>(
+        `/automation/templates${query ? `?${query}` : ""}`,
+    )
     return data
 }
 

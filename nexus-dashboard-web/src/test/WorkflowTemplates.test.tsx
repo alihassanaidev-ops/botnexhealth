@@ -48,6 +48,29 @@ const TEMPLATES = [
         },
     },
 ]
+const UNSUPPORTED_TEMPLATE = {
+    ...TEMPLATES[0],
+    id: "unscheduled-treatment-followup",
+    name: "Unscheduled Treatment Follow-Up",
+    description: "Follow up on unscheduled treatment.",
+    category: "treatment",
+    metadata: {
+        ...TEMPLATES[0].metadata,
+        category: "treatment",
+        pms_capability_requirements: ["treatment_plans"],
+        pms_capability_evaluation: {
+            requirements: ["treatment_plans"],
+            supported: false,
+            status: "unsupported",
+            pms_name: "Dentrix Ascend",
+            missing: ["treatment_plans"],
+            partial: [],
+            unknown: [],
+            details: {},
+            message: "Dentrix Ascend does not support: treatment_plans.",
+        },
+    },
+}
 const LOCATIONS = [{ id: "loc-1", name: "Downtown", slug: "downtown" }]
 
 beforeEach(() => {
@@ -70,6 +93,7 @@ describe("WorkflowTemplates page", () => {
         expect(screen.getByText("reminder")).toBeInTheDocument()
         expect(screen.getAllByText("Appointment ops").length).toBeGreaterThan(0)
         expect(screen.getByText(/Reduce missed appointments/i)).toBeInTheDocument()
+        expect(list).toHaveBeenCalledWith("loc-1")
     })
 
     it("clones the selected template with the entered name", async () => {
@@ -110,5 +134,18 @@ describe("WorkflowTemplates page", () => {
             </MemoryRouter>,
         )
         expect(await screen.findByText("No templates available")).toBeInTheDocument()
+    })
+
+    it("disables templates when the selected location PMS does not support them", async () => {
+        list.mockResolvedValue([UNSUPPORTED_TEMPLATE])
+        render(
+            <MemoryRouter>
+                <WorkflowTemplates />
+            </MemoryRouter>,
+        )
+
+        expect(await screen.findByText("Unsupported")).toBeInTheDocument()
+        expect(screen.getByText("Dentrix Ascend does not support: treatment_plans.")).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: /use template/i })).toBeDisabled()
     })
 })

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.models.appointment_working_set import AppointmentWorkingSet
 from src.app.models.automation_workflow import AutomationWorkflow
 from src.app.models.campaign_audience import CampaignAudiencePreview
+from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.nexhealth_webhook_subscription import (
     NexHealthWebhookSubscription,
@@ -35,6 +36,7 @@ from src.app.services.automation.definition_schema import (
     WorkflowDefinition,
 )
 from src.app.services.automation.nexhealth_sync_status_service import assess_sync_status
+from src.app.services.automation.pms_capability_service import PmsCapabilityService
 from src.app.services.automation.validation_service import WorkflowValidationService
 
 ChecklistStatus = Literal["pass", "warning", "blocked", "unknown"]
@@ -147,6 +149,12 @@ class CampaignLaunchChecklistService:
         items += self._compliance_items(definition, send_nodes, errors, warnings)
         items += self._quiet_hours_item(send_nodes)
         items += self._callback_items(definition)
+        items += await self._pms_capability_items(
+            workflow,
+            definition,
+            institution_id=institution_id,
+            location_id=location_id_text,
+        )
         items += await self._nexhealth_items(
             definition,
             institution_id=institution_id,
@@ -464,6 +472,71 @@ class CampaignLaunchChecklistService:
             )
         ]
 
+    async def _pms_capability_items(
+        self,
+        workflow: AutomationWorkflow,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location_id: str | None,
+    ) -> list[CampaignLaunchChecklistItem]:
+        requirements = _pms_capability_requirements(workflow, definition)
+        if not requirements:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_capability",
+                    section="data",
+                    label="PMS feature support",
+                    status="pass",
+                    message="This workflow does not require a PMS-specific optional resource.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+        if not location_id:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_capability",
+                    section="data",
+                    label="PMS feature support",
+                    status="blocked",
+                    message="Select a location to verify PMS support for this campaign.",
+                    fix_href="/institution-admin/settings",
+                    metadata={"requirements": requirements},
+                )
+            ]
+
+        institution = await self.session.get(Institution, institution_id)
+        location = await self.session.get(InstitutionLocation, location_id)
+        if institution is None or location is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_capability",
+                    section="data",
+                    label="PMS feature support",
+                    status="blocked",
+                    message="Institution or location could not be found for PMS capability checks.",
+                    fix_href="/institution-admin/settings",
+                    metadata={"requirements": requirements},
+                )
+            ]
+
+        evaluation = await PmsCapabilityService(self.session).evaluate_location(
+            institution=institution,
+            location=location,
+            requirements=requirements,
+        )
+        return [
+            CampaignLaunchChecklistItem(
+                id="pms_capability",
+                section="data",
+                label="PMS feature support",
+                status="pass" if evaluation.supported else "blocked",
+                message=evaluation.message,
+                fix_href="/institution-admin/settings",
+                metadata=evaluation.as_dict(),
+            )
+        ]
+
     async def _nexhealth_items(
         self,
         definition: WorkflowDefinition,
@@ -504,18 +577,6 @@ class CampaignLaunchChecklistService:
                     status="blocked",
                     message="Location is missing NexHealth subdomain or location id.",
                     fix_href="/institution-admin/settings",
-                )
-            ]
-
-        if definition.trigger.type == "recall_scan":
-            return [
-                CampaignLaunchChecklistItem(
-                    id="nexhealth_readiness",
-                    section="data",
-                    label="NexHealth recall capability",
-                    status="blocked",
-                    message="Recall audience generation is not available until the audience/segmentation adapter lands.",
-                    fix_href="/institution-admin/campaigns/audience",
                 )
             ]
 
@@ -890,6 +951,18 @@ def _has_staff_handoff_exit(definition: WorkflowDefinition) -> bool:
             if target and target.outcome in handoff_outcomes:
                 return True
     return False
+
+
+def _pms_capability_requirements(
+    workflow: AutomationWorkflow,
+    definition: WorkflowDefinition,
+) -> list[str]:
+    requirements: list[str] = []
+    if definition.trigger.type == "recall_scan":
+        requirements.append("patient_recalls")
+    if getattr(workflow, "category", None) == "treatment":
+        requirements.append("treatment_plans")
+    return list(dict.fromkeys(requirements))
 
 
 def _planned_sends_per_contact(send_nodes: list[Any]) -> dict[str, int]:

@@ -1,6 +1,6 @@
 # Essential Campaign Implementation Status
 
-Last updated: 2026-07-21 02:04 PKT
+Last updated: 2026-07-21 02:21 PKT
 
 ## Rules
 
@@ -37,7 +37,7 @@ Plan 09: Backend DB And NexHealth Data Flow prod-readiness slices
 | Patient webhook support | complete | Subscribes to `patient_created`/`patient_updated`, refreshes contact identity, stores `patient_working_set`, and accepts patient events on the existing NexHealth receiver URL. |
 | Sync-status support | complete | Subscribes to `sync_status_read_change`/`sync_status_write_change`, polls `GET /sync_status`, stores per-location PMS health, and surfaces read/write health in launch/runtime readiness. |
 | Backfill/reconciliation jobs | complete | Appointment repair already existed; added patient/contact backfill and reconciliation via `GET /patients`, patient watermarks, and scheduled repair. Basic recall polling exists; recall working-set/capability gating remains in the PMS capability slice. |
-| PMS capability gating | pending | Capability model/service for recall, treatment plan, procedure, writeback, and unsupported feature UX. |
+| PMS capability gating | complete | Added PMS capability evaluation from NexHealth supported-API matrices, gated recall/treatment templates by selected location, surfaced checklist blockers, and gated confirmation writeback. |
 | Webhook durability/ops hardening | pending | Raw encrypted payload retention, dead-letter/retry processing, stronger endpoint inactive monitoring. |
 
 ## Verification Log
@@ -55,3 +55,4 @@ Plan 09: Backend DB And NexHealth Data Flow prod-readiness slices
 | 09 patient webhook slice | NexHealth webhook/projection/subscription pytest, touched-file backend ruff | passed |
 | 09 sync-status slice | NexHealth subscription/sync-status/webhook/checklist/revalidation/RBAC pytest, touched-file backend ruff, Alembic heads | passed with noted warnings |
 | 09 backfill/reconciliation slice | NexHealth patient/appointment sync pytest, adapter pytest, Plan 09 recall pytest, touched-file backend ruff, Alembic heads | passed with noted warning |
+| 09 PMS capability gating slice | Capability/template/checklist pytest, frontend workflow API/template picker vitest, touched-file backend ruff, frontend eslint | passed with noted warnings |

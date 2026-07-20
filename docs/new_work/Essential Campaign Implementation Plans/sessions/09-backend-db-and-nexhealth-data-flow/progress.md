@@ -56,3 +56,25 @@
 | Focused pytest | `tests/unit/test_nexhealth_backfill_reconciliation.py tests/unit/test_nexhealth_adapter_appointments.py tests/unit/test_nexhealth_projection.py tests/unit/test_nexhealth_subscription_lifecycle.py tests/unit/test_automation_plan09.py` | Appointment/patient sync, adapter pagination, projection, subscription, and recall scanner tests pass | 51 passed, 1 existing warning | passed |
 | Ruff | touched backend migration/model/adapter/service/task/test files | no lint issues | all checks passed | passed |
 | Alembic heads | `APP_ENV=local uv run alembic heads` | one current head | `20260719_patient_backfill_watermarks (head)` | passed |
+
+## Session: PMS capability gating slice
+
+- **Status:** PMS capability gating slice complete; broader Plan 09 remains in progress
+- Actions taken:
+  - Added `PmsCapabilityService` that reads the checked-in NexHealth supported-API-per-PMS matrices.
+  - Resolves a clinic's PMS identity from latest `nexhealth_sync_statuses` data.
+  - Maps campaign/runtime requirements such as `patient_recalls`, `treatment_plans`, `procedures`, and `confirmation_writeback` to NexHealth API capabilities.
+  - Adds per-location capability evaluation to `GET /automation/templates` and `GET /automation/templates/{id}` when `location_id` is provided.
+  - Blocks template instantiation for unsupported/partial/unknown PMS capabilities.
+  - Shows PMS feature support in the launch checklist for recall and treatment campaigns.
+  - Gates appointment confirmation writeback before calling NexHealth if the selected PMS cannot edit appointments.
+  - Updates the template picker to request location-aware template metadata, show `PMS ready`/`Unsupported`, and disable unsupported templates.
+
+## Test Results: PMS capability gating slice
+
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Focused pytest | `tests/unit/test_pms_capability_service.py tests/unit/test_automation_campaign_templates.py tests/unit/test_campaign_launch_checklist_service.py` | PMS capability evaluation, template gating, and checklist blockers pass | 38 passed, 3 existing warnings | passed |
+| Ruff | touched backend service/route/task/test files | no lint issues | all checks passed | passed |
+| Frontend vitest | `src/test/workflow-api.test.ts src/test/WorkflowTemplates.test.tsx` | API query params and unsupported template UI pass | 22 passed | passed |
+| Frontend eslint | touched frontend API/page/test files | no lint issues | passed | passed |

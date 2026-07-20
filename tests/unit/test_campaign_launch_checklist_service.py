@@ -145,6 +145,35 @@ def test_appointment_campaign_blocks_when_pms_read_sync_is_unhealthy() -> None:
     assert _item(checklist, "nexhealth_sync_status").status == "blocked"
 
 
+def test_treatment_campaign_blocks_when_pms_lacks_treatment_plans() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "x1",
+        "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
+    }
+    workflow = _workflow(definition, location_id="loc-1")
+    workflow.category = "treatment"
+    institution = MagicMock()
+    institution.id = "inst-1"
+    institution.pms_type = "nexhealth"
+    location = MagicMock(spec=InstitutionLocation)
+    location.id = "loc-1"
+    sync_status = MagicMock()
+    sync_status.sync_source_name = "Dentrix Ascend"
+    sync_status.sync_source_type = None
+    sync_status.emr_payload = {"display_name": "Dentrix Ascend"}
+    session = AsyncMock()
+    session.get = AsyncMock(side_effect=[institution, location])
+    session.execute = AsyncMock(side_effect=[_result(sync_status), _result(None)])
+
+    checklist = _run(CampaignLaunchChecklistService(session), workflow)
+
+    assert checklist.overall_status == "blocked"
+    item = _item(checklist, "pms_capability")
+    assert item.status == "blocked"
+    assert item.metadata["missing"] == ["treatment_plans"]
+
+
 def test_callback_campaign_surfaces_voice_outcome_and_handoff_readiness() -> None:
     definition = {
         "trigger": {"type": "callback_requested"},

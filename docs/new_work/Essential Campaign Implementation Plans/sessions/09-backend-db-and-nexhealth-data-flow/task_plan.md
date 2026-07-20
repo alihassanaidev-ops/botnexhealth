@@ -6,14 +6,14 @@ Implement the Backend DB And NexHealth Data Flow plan after earlier plans are co
 
 ## Current Phase
 
-Prod-readiness slice 3 complete: backfill/reconciliation jobs.
+Prod-readiness slice 4 complete: PMS capability gating.
 
 ## Phases
 
 - **Patient webhook support:** complete
 - **Sync-status support:** complete
 - **Backfill/reconciliation jobs:** complete
-- **PMS capability gating:** pending
+- **PMS capability gating:** complete
 - **Webhook durability/ops hardening:** pending
 
 ## Key Questions
@@ -32,3 +32,5 @@ Prod-readiness slice 3 complete: backfill/reconciliation jobs.
 | Patient backfill/reconciliation refreshes contact projections only. | Patient rows maintain identity/contact freshness; they do not directly enroll campaigns. |
 | Patient watermarks are separate from appointment watermarks. | Appointment repair and contact freshness have different API endpoints, rates, and update cadence. |
 | Keep existing basic recall scanner in this slice. | Recall polling already exists; durable recall working-set and unsupported-PMS UX belong with PMS capability gating. |
+| PMS capability support is read from NexHealth supported-API matrices and latest sync-status PMS identity. | Avoids hard-coding one PMS assumption per clinic and lets template/checklist/runtime gates use the same source of truth. |
+| Partial or unknown PMS support blocks gated campaign templates. | Recall/treatment/writeback flows should fail closed unless the selected clinic's PMS support is known. |
