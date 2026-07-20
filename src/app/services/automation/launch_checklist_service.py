@@ -23,6 +23,7 @@ from src.app.models.nexhealth_webhook_subscription import (
     NexHealthWebhookSubscription,
     NexHealthWebhookSubscriptionStatus,
 )
+from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.content_compliance_validator import ContentComplianceValidator
 from src.app.services.automation.definition_schema import (
@@ -33,6 +34,7 @@ from src.app.services.automation.definition_schema import (
     SendVoiceNode,
     WorkflowDefinition,
 )
+from src.app.services.automation.nexhealth_sync_status_service import assess_sync_status
 from src.app.services.automation.validation_service import WorkflowValidationService
 
 ChecklistStatus = Literal["pass", "warning", "blocked", "unknown"]
@@ -520,6 +522,7 @@ class CampaignLaunchChecklistService:
         subscription = await self._subscription(institution_id, location_id)
         if subscription is None:
             return [
+                await self._sync_status_item(institution_id, location_id),
                 CampaignLaunchChecklistItem(
                     id="nexhealth_readiness",
                     section="data",
@@ -531,6 +534,7 @@ class CampaignLaunchChecklistService:
             ]
         if subscription.status != NexHealthWebhookSubscriptionStatus.ACTIVE.value:
             return [
+                await self._sync_status_item(institution_id, location_id),
                 CampaignLaunchChecklistItem(
                     id="nexhealth_readiness",
                     section="data",
@@ -545,6 +549,7 @@ class CampaignLaunchChecklistService:
         newest = await self._newest_projection_sync(institution_id, location_id)
         if newest is None:
             return [
+                await self._sync_status_item(institution_id, location_id),
                 CampaignLaunchChecklistItem(
                     id="nexhealth_readiness",
                     section="data",
@@ -558,6 +563,7 @@ class CampaignLaunchChecklistService:
         newest = _as_utc(newest)
         age = datetime.now(timezone.utc) - newest
         return [
+            await self._sync_status_item(institution_id, location_id),
             CampaignLaunchChecklistItem(
                 id="nexhealth_readiness",
                 section="data",
@@ -576,6 +582,81 @@ class CampaignLaunchChecklistService:
                 },
             )
         ]
+
+    async def _sync_status_item(
+        self, institution_id: str, location_id: str
+    ) -> CampaignLaunchChecklistItem:
+        sync_status = await self._sync_status(institution_id, location_id)
+        assessment = assess_sync_status(sync_status)
+        metadata = {
+            "last_checked_at": (
+                _as_utc(sync_status.last_checked_at).isoformat()
+                if sync_status and sync_status.last_checked_at
+                else None
+            ),
+            "read_status": sync_status.read_status if sync_status else None,
+            "write_status": sync_status.write_status if sync_status else None,
+            "stale_after_hours": 24,
+        }
+        if sync_status is None:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="warning",
+                message="PMS sync status has not been checked yet.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        if assessment.read_healthy is False:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="blocked",
+                message="PMS read sync is unhealthy; appointment data may be stale.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        if assessment.stale:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="warning",
+                message="PMS sync status is stale; wait for the sync poller or check NexHealth.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        if assessment.write_healthy is False:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="warning",
+                message="PMS write sync is unhealthy; read-only outreach can continue, write-back actions should stay gated.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        if assessment.read_healthy is None or assessment.write_healthy is None:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="warning",
+                message="PMS sync status is present but not recognized as healthy.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        return CampaignLaunchChecklistItem(
+            id="nexhealth_sync_status",
+            section="data",
+            label="NexHealth PMS sync health",
+            status="pass",
+            message="PMS read/write sync health is current.",
+            fix_href="/institution-admin/settings",
+            metadata=metadata,
+        )
 
     def _handoff_items(self, definition: WorkflowDefinition) -> list[CampaignLaunchChecklistItem]:
         voice_nodes = [n for n in definition.nodes if isinstance(n, SendVoiceNode)]
@@ -739,6 +820,19 @@ class CampaignLaunchChecklistService:
             .where(
                 NexHealthWebhookSubscription.institution_id == institution_id,
                 NexHealthWebhookSubscription.location_id == location_id,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _sync_status(
+        self, institution_id: str, location_id: str
+    ) -> NexHealthSyncStatus | None:
+        result = await self.session.execute(
+            select(NexHealthSyncStatus)
+            .where(
+                NexHealthSyncStatus.institution_id == institution_id,
+                NexHealthSyncStatus.location_id == location_id,
             )
             .limit(1)
         )

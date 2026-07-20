@@ -1,6 +1,6 @@
 # Essential Campaign Implementation Status
 
-Last updated: 2026-07-21 00:35 PKT
+Last updated: 2026-07-21 01:53 PKT
 
 ## Rules
 
@@ -35,7 +35,7 @@ Plan 09: Backend DB And NexHealth Data Flow prod-readiness slices
 | Slice | Status | Notes |
 |-------|--------|-------|
 | Patient webhook support | complete | Subscribes to `patient_created`/`patient_updated`, refreshes contact identity, stores `patient_working_set`, and accepts patient events on the existing NexHealth receiver URL. |
-| Sync-status support | pending | Subscribe to read/write status events, poll `GET /sync_status`, and surface PMS health in checklist/runtime readiness. |
+| Sync-status support | complete | Subscribes to `sync_status_read_change`/`sync_status_write_change`, polls `GET /sync_status`, stores per-location PMS health, and surfaces read/write health in launch/runtime readiness. |
 | Backfill/reconciliation jobs | pending | Appointment/patient reconciliation, missed-webhook repair, recall polling if recall campaigns remain in scope. |
 | PMS capability gating | pending | Capability model/service for recall, treatment plan, procedure, writeback, and unsupported feature UX. |
 | Webhook durability/ops hardening | pending | Raw encrypted payload retention, dead-letter/retry processing, stronger endpoint inactive monitoring. |
@@ -53,3 +53,4 @@ Plan 09: Backend DB And NexHealth Data Flow prod-readiness slices
 | 07 | Audience service/checklist/projection/RBAC pytest, backend ruff, frontend CampaignDetail vitest, frontend eslint, frontend build | passed with noted warnings |
 | 08 | Callback/voice focused backend pytest, backend ruff, frontend workflow vitest, touched-file eslint, frontend build | passed with noted warnings |
 | 09 patient webhook slice | NexHealth webhook/projection/subscription pytest, touched-file backend ruff | passed |
+| 09 sync-status slice | NexHealth subscription/sync-status/webhook/checklist/revalidation/RBAC pytest, touched-file backend ruff, Alembic heads | passed with noted warnings |

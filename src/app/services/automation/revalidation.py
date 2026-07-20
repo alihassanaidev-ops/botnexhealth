@@ -128,6 +128,14 @@ class PmsLiveRevalidationService:
         if decided:
             return outcome
 
+        if await self._pms_read_unhealthy(run):
+            logger.warning(
+                "revalidate: PMS read sync unhealthy run=%s appt=%s — skipping send",
+                getattr(run, "id", None),
+                appointment_id,
+            )
+            return "skipped_pms_read_unhealthy"
+
         if not run.location_id:
             return None
         location = await self._session.get(InstitutionLocation, run.location_id)
@@ -194,3 +202,28 @@ class PmsLiveRevalidationService:
         if expected_at and row.start_time and not _same_instant(expected_at, row.start_time.isoformat()):
             return True, "skipped_rescheduled"
         return True, None
+
+    async def _pms_read_unhealthy(self, run: "AutomationWorkflowRun") -> bool:
+        """True when latest sync-status says PMS reads are known unhealthy."""
+        if not run.location_id:
+            return False
+        from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
+        from src.app.services.automation.nexhealth_sync_status_service import assess_sync_status
+
+        try:
+            row = (
+                await self._session.execute(
+                    select(NexHealthSyncStatus).where(
+                        NexHealthSyncStatus.institution_id == run.institution_id,
+                        NexHealthSyncStatus.location_id == run.location_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            return assess_sync_status(row).read_healthy is False
+        except Exception as exc:  # noqa: BLE001 — fail-open on malformed health state
+            logger.warning(
+                "revalidate: PMS sync-status lookup failed run=%s: %s",
+                getattr(run, "id", None),
+                exc,
+            )
+            return False

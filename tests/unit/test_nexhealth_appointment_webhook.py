@@ -14,6 +14,7 @@ from src.app.api.routes.nexhealth_webhooks import (
     _verify_signature,
     nexhealth_appointment_webhook,
     nexhealth_patient_webhook,
+    nexhealth_sync_status_webhook,
 )
 
 
@@ -105,6 +106,16 @@ def _patch_subscription_lifecycle():
     inst.record_event_seen = AsyncMock()
     return patch(
         "src.app.services.automation.nexhealth_subscription_service.NexHealthSubscriptionLifecycleService",
+        return_value=inst,
+    )
+
+
+def _patch_sync_status_service(location, updated=1):
+    inst = MagicMock()
+    inst.resolve_locations_for_payload = AsyncMock(return_value=[location])
+    inst.upsert_for_locations = AsyncMock(return_value=updated)
+    return patch(
+        "src.app.services.automation.nexhealth_sync_status_service.NexHealthSyncStatusService",
         return_value=inst,
     )
 
@@ -379,6 +390,58 @@ async def test_patient_webhook_route_ignores_appointment_event():
         result = await nexhealth_patient_webhook(request)
 
     assert result == {"status": "ignored", "event": "appointment_insertion.complete"}
+
+
+@pytest.mark.asyncio
+async def test_sync_status_event_processes_on_existing_appointment_url():
+    """Current NexHealth endpoint target can send sync-status events to the same receiver URL."""
+    location = _make_location()
+    lookup_session = _make_cm_session()
+    webhook_session = _make_cm_session()
+    payload = {
+        "event_name": "sync_status_read_change",
+        "subdomain": "silora-demo-practice",
+        "event_time": "2026-07-21T10:00:00Z",
+        "data": {
+            "read_status": "green",
+            "read_status_at": "2026-07-21T10:00:00Z",
+            "write_status": "green",
+            "write_status_at": "2026-07-21T10:00:00Z",
+            "locations": [{"id": "nexloc-1"}],
+        },
+    }
+    request = _make_request(payload)
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+        side_effect=[lookup_session, webhook_session],
+    ), _patch_sync_status_service(location), _patch_projection(), _patch_subscription_lifecycle():
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
+        result = await nexhealth_appointment_webhook(request)
+
+    assert result["status"] == "processed"
+    assert result["event"] == "sync_status_read_change"
+    assert result["processed"] == 1
+    assert result["location_ids"] == ["loc-1"]
+    webhook_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_sync_status_route_ignores_patient_event():
+    payload = {
+        "event_name": "patient_updated",
+        "subdomain": "silora-demo-practice",
+        "data": {"patient": {"id": "pat-1"}},
+    }
+    request = _make_request(payload)
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
+        result = await nexhealth_sync_status_webhook(request)
+
+    assert result == {"status": "ignored", "event": "patient_updated"}
 
 
 @pytest.mark.asyncio

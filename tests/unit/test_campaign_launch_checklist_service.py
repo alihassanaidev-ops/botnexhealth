@@ -89,9 +89,15 @@ def test_appointment_campaign_passes_fresh_nexhealth_check() -> None:
     subscription = MagicMock(spec=NexHealthWebhookSubscription)
     subscription.id = "sub-1"
     subscription.status = NexHealthWebhookSubscriptionStatus.ACTIVE.value
+    sync_status = MagicMock()
+    sync_status.read_status = "green"
+    sync_status.write_status = "green"
+    sync_status.last_checked_at = datetime.now(timezone.utc)
     session = AsyncMock()
     session.get = AsyncMock(return_value=location)
-    session.execute = AsyncMock(side_effect=[_result(subscription), _result(_NOW)])
+    session.execute = AsyncMock(
+        side_effect=[_result(subscription), _result(_NOW), _result(sync_status)]
+    )
 
     with patch("src.app.services.automation.launch_checklist_service.datetime") as dt:
         dt.now.return_value = _NOW
@@ -102,6 +108,41 @@ def test_appointment_campaign_passes_fresh_nexhealth_check() -> None:
         )
 
     assert _item(checklist, "nexhealth_readiness").status == "pass"
+    assert _item(checklist, "nexhealth_sync_status").status == "pass"
+
+
+def test_appointment_campaign_blocks_when_pms_read_sync_is_unhealthy() -> None:
+    definition = {
+        "trigger": {"type": "appointment_offset", "offset_hours": -24},
+        "entry_node_id": "x1",
+        "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
+    }
+    location = MagicMock(spec=InstitutionLocation)
+    location.nexhealth_subdomain = "clinic"
+    location.nexhealth_location_id = "loc-ext"
+    subscription = MagicMock(spec=NexHealthWebhookSubscription)
+    subscription.id = "sub-1"
+    subscription.status = NexHealthWebhookSubscriptionStatus.ACTIVE.value
+    sync_status = MagicMock()
+    sync_status.read_status = "red"
+    sync_status.write_status = "green"
+    sync_status.last_checked_at = datetime.now(timezone.utc)
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=location)
+    session.execute = AsyncMock(
+        side_effect=[_result(subscription), _result(_NOW), _result(sync_status)]
+    )
+
+    with patch("src.app.services.automation.launch_checklist_service.datetime") as dt:
+        dt.now.return_value = _NOW
+        dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        checklist = _run(
+            CampaignLaunchChecklistService(session),
+            _workflow(definition, location_id="loc-1"),
+        )
+
+    assert checklist.overall_status == "blocked"
+    assert _item(checklist, "nexhealth_sync_status").status == "blocked"
 
 
 def test_callback_campaign_surfaces_voice_outcome_and_handoff_readiness() -> None:

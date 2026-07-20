@@ -73,6 +73,12 @@ def _build_celery_app() -> Celery:
                 # after subscription setup or manually by operators.
                 "schedule": 6 * 3600.0,
             },
+            "poll-nexhealth-sync-statuses": {
+                "task": "src.app.tasks.automation_workflow.poll_nexhealth_sync_statuses",
+                # Sync-status webhooks mainly signal recovery; polling catches
+                # PMS read/write failures that do not emit a webhook.
+                "schedule": 15 * 60.0,
+            },
             "recover-stale-workflow-timers": {
                 "task": "src.app.tasks.automation_workflow.recover_stale_workflow_timers",
                 # Faster than the 120 s claim TTL so a crashed-worker timer is

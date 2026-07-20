@@ -39,6 +39,9 @@ from src.app.models.nexhealth_webhook_event import (  # noqa: F401 — model reg
 from src.app.models.patient_working_set import (  # noqa: F401 — model registration
     PatientWorkingSet,
 )
+from src.app.models.nexhealth_sync_status import (  # noqa: F401 — model registration
+    NexHealthSyncStatus,
+)
 from src.app.models.nexhealth_webhook_subscription import (  # noqa: F401 — model registration
     NexHealthWebhookSubscription,
     NexHealthWebhookSubscriptionStatus,
@@ -177,6 +180,7 @@ __all__ = [
     "NexHealthWebhookEvent",
     "NexHealthWebhookStatus",
     "PatientWorkingSet",
+    "NexHealthSyncStatus",
     "NexHealthWebhookSubscription",
     "NexHealthWebhookSubscriptionStatus",
     "UsageCostRollup",

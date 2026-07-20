@@ -38,11 +38,18 @@ DEFAULT_PATIENT_EVENTS = [
     "patient_created",
     "patient_updated",
 ]
-DEFAULT_WEBHOOK_EVENTS = DEFAULT_APPOINTMENT_EVENTS + DEFAULT_PATIENT_EVENTS
+DEFAULT_SYNC_STATUS_EVENTS = [
+    "sync_status_read_change",
+    "sync_status_write_change",
+]
+DEFAULT_WEBHOOK_EVENTS = (
+    DEFAULT_APPOINTMENT_EVENTS + DEFAULT_PATIENT_EVENTS + DEFAULT_SYNC_STATUS_EVENTS
+)
 
 _EVENT_RESOURCE_TYPES = {
     **{event: "Appointment" for event in DEFAULT_APPOINTMENT_EVENTS},
     **{event: "Patient" for event in DEFAULT_PATIENT_EVENTS},
+    **{event: "SyncStatus" for event in DEFAULT_SYNC_STATUS_EVENTS},
 }
 
 

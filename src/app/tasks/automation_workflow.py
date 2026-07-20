@@ -37,6 +37,9 @@ from src.app.services.automation.nexhealth_backfill_service import (
 from src.app.services.automation.nexhealth_subscription_service import (
     NexHealthSubscriptionLifecycleService,
 )
+from src.app.services.automation.nexhealth_sync_status_service import (
+    NexHealthSyncStatusService,
+)
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.step_dispatcher import build_dispatcher
@@ -666,6 +669,42 @@ def reconcile_nexhealth_appointments(self) -> dict:
     except Exception as exc:
         logger.exception("reconcile_nexhealth_appointments failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.poll_nexhealth_sync_statuses",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def poll_nexhealth_sync_statuses(self) -> dict:
+    """Poll NexHealth PMS read/write sync health for configured locations."""
+    _ensure_db()
+    try:
+        return asyncio.run(_poll_nexhealth_sync_statuses_async())
+    except Exception as exc:
+        logger.exception("poll_nexhealth_sync_statuses failed: %s", exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _poll_nexhealth_sync_statuses_async() -> dict:
+    async with get_system_db_session(
+        "celery", external_id="nexhealth_sync_status_poll"
+    ) as session:
+        summary = await NexHealthSyncStatusService(session).poll_all_configured_locations()
+        await session.commit()
+
+    logger.info(
+        "poll_nexhealth_sync_statuses: locations=%d updated=%d failed=%d",
+        summary.locations_checked,
+        summary.updated,
+        summary.failed_locations,
+    )
+    return {
+        "locations_checked": summary.locations_checked,
+        "updated": summary.updated,
+        "failed_locations": summary.failed_locations,
+    }
 
 
 async def _sync_nexhealth_appointments_async(*, mode: str) -> dict:

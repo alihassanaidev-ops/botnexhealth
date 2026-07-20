@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -70,6 +72,12 @@ def _patch_adapter(appt):
         "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
         AsyncMock(return_value=adapter),
     ), adapter
+
+
+def _result(value):
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = value
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +202,27 @@ async def test_stale_projection_falls_through_to_live_read():
         result = await svc.revalidate(run)
     assert result == "skipped_cancelled"  # came from the live read
     adapter.get_appointment.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_revalidate_skips_when_projection_stale_and_pms_read_unhealthy():
+    run = _make_run()
+    sync_status = SimpleNamespace(
+        read_status="red",
+        write_status="green",
+        last_checked_at=datetime.now(timezone.utc),
+    )
+    session = _make_session(projection=None)
+    session.execute = AsyncMock(side_effect=[_result(None), _result(sync_status)])
+    svc = PmsLiveRevalidationService(session)
+
+    with patch(
+        "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+        AsyncMock(side_effect=AssertionError("live call must not happen when PMS read is red")),
+    ):
+        result = await svc.revalidate(run)
+
+    assert result == "skipped_pms_read_unhealthy"
 
 
 @pytest.mark.asyncio
