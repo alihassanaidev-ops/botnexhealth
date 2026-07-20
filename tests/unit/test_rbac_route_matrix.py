@@ -165,6 +165,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/admin/users",
         "DELETE /api/admin/users/{user_id}",
         "POST /api/admin/users/{user_id}/reinvite",
+        "POST /api/admin/users/invite",
         "GET /api/admin/twilio/phone-numbers",
         "POST /api/admin/twilio/send-sms",
         "GET /api/admin/sms/locations",
