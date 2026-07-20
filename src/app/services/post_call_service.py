@@ -413,6 +413,13 @@ class PostCallService:
             ),
             # Treat the string "None" (from Retell when no detail exists) as NULL
             next_action=_nonempty(custom.get("Appointment Detail")),
+            # Retell PII-scrubbed variants (non-PHI, plaintext). NULL when the
+            # account has redaction disabled; the UI then falls back to reveal.
+            scrubbed_transcript_with_tool_calls=(
+                webhook_call.scrubbed_transcript_with_tool_calls
+            ),
+            scrubbed_summary=webhook_call.scrubbed_summary,
+            scrubbed_recording_url=webhook_call.scrubbed_recording_url,
         )
         # Encrypted setters — write after construction so JSON serialization
         # happens through the property and never raw onto the column.

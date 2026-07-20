@@ -66,6 +66,12 @@ class RetellCallData(BaseModel):
     disconnection_reason: str | None = None
     recording_url: str | None = None  # raw recording URL (scrubbed only as fallback)
     transcript_with_tool_calls: list[dict] | None = None  # raw structured transcript
+    # Retell's PII-scrubbed variants, persisted alongside the raw ones so the
+    # dashboard can show a non-PII view by default. May be None when Retell
+    # redaction is disabled on the account.
+    scrubbed_recording_url: str | None = None
+    scrubbed_transcript_with_tool_calls: list[dict] | None = None
+    scrubbed_summary: str | None = None
 
 
 class WebhookEvent(BaseModel):

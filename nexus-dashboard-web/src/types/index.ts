@@ -281,6 +281,9 @@ export interface CallRecord {
     workflow_status?: WorkflowStatusRef | null;  // human-assigned (distinct from call_tags)
     patient_status: string | null;
     summary: string | null;
+    /** Retell's PII-scrubbed summary (bracket placeholders masked to *****).
+     *  Non-PHI, shown inline; null when Retell redaction is off. */
+    scrubbed_summary?: string | null;
     patient_sentiment: string | null;
     next_action: string | null;
     /** Appointment type booked during the call, if any. */
@@ -349,6 +352,11 @@ export interface CallDetail extends CallRecord {
     // scrubbing (scrubbed_* variants are kept only as a fallback).
     transcript_available: boolean;
     recording_available: boolean;
+    /** Retell's PII-scrubbed transcript/recording (non-PHI). Served inline with
+     *  bracket placeholders masked to *****; the raw variants come from the
+     *  audited reveal endpoints. Null/absent when Retell redaction is off. */
+    scrubbed_transcript?: TranscriptTurn[] | null;
+    scrubbed_recording_url?: string | null;
     custom_fields: CustomFieldValue[];
 }
 

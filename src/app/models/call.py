@@ -30,7 +30,7 @@ from sqlalchemy import (
     text,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.app.database import Base
@@ -163,6 +163,17 @@ class Call(Base):
     transcript_with_tool_calls_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Retell's PII-scrubbed variants. These are already redacted by Retell
+    # (bracketed placeholder tokens in place of PII), so they are NOT PHI and
+    # are stored in plaintext. Shown by default in the dashboard (with the
+    # bracket tokens masked to ***** at display time — see services.pii_masking)
+    # while the raw variants above stay encrypted and behind audited reveal.
+    # Populated only when Retell PII redaction is enabled on the account;
+    # otherwise they remain NULL and the UI falls back to reveal-only.
+    scrubbed_transcript_with_tool_calls: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    scrubbed_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scrubbed_recording_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Retention controls. Clinical call records default to a 10-year
     # retention clock; recordings have a shorter independent clock unless

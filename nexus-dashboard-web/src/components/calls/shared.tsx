@@ -268,7 +268,13 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
         setRevealing(false)
     }, [detail.id])
 
-    if (!detail.transcript_available) {
+    // Retell's PII-scrubbed transcript (placeholders already masked to *****
+    // by the backend). Shown by default so staff can read the call without a
+    // reveal; the raw transcript is fetched only via the audited endpoint.
+    const scrubbed = detail.scrubbed_transcript ?? null
+    const hasScrubbed = !!scrubbed && scrubbed.length > 0
+
+    if (!detail.transcript_available && !hasScrubbed) {
         if (!fill) return null
         return (
             <div className="flex flex-1 items-center justify-center p-6 text-center">
@@ -294,28 +300,52 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
         }
     }
 
+    // The full-reveal control. Shown as a standalone gate when there is no
+    // scrubbed preview, and as a compact bar above the scrubbed preview when
+    // there is one.
+    const revealButton = (
+        <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5"
+            onClick={handleReveal}
+            disabled={revealing || !detail.transcript_available}
+        >
+            {revealing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
+            Reveal full transcript
+        </Button>
+    )
+
     const gate = (
         <div className="flex min-h-24 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
             <p className="text-xs text-muted-foreground max-w-xs">
                 This transcript may contain PHI. It is encrypted at rest and every reveal is audit-logged.
             </p>
-            <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1.5"
-                onClick={handleReveal}
-                disabled={revealing}
-            >
-                {revealing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
-                Reveal transcript
-            </Button>
+            {revealButton}
         </div>
     )
 
+    // Body: revealed raw wins; otherwise the scrubbed preview; otherwise the gate.
+    const preview = hasScrubbed ? (
+        <div className="flex flex-col">
+            {!turns && detail.transcript_available && (
+                <div className="flex items-center justify-between gap-2 border-b bg-muted/60 px-3 py-1.5">
+                    <span className="text-[10px] text-muted-foreground">
+                        Redacted view — PHI shown as *****
+                    </span>
+                    {revealButton}
+                </div>
+            )}
+            <TranscriptChatBubbles turns={turns ?? scrubbed!} />
+        </div>
+    ) : null
+
+    const body = turns ? <TranscriptChatBubbles turns={turns} /> : preview ?? gate
+
     if (fill) {
         // Bubble area fills the conversation center pane; parent owns the scroll.
-        return turns ? <TranscriptChatBubbles turns={turns} /> : gate
+        return body
     }
 
     return (
@@ -326,9 +356,7 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
                     HIPAA ✓ encrypted + audited
                 </span>
             </p>
-            <div className="rounded-lg border bg-muted max-h-64 overflow-y-auto">
-                {turns ? <TranscriptChatBubbles turns={turns} /> : gate}
-            </div>
+            <div className="rounded-lg border bg-muted max-h-64 overflow-y-auto">{body}</div>
         </div>
     )
 }

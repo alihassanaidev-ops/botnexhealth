@@ -554,6 +554,13 @@ async def process_retell_call_analyzed_event(
                     event.call.call_analysis or event.call.scrubbed_call_analysis
                 )
                 analysis_dict = _analysis.model_dump() if _analysis else {}
+                # Capture the scrubbed summary separately (non-PII) so it can be
+                # stored alongside the raw summary and shown inline by default.
+                _scrubbed_summary = (
+                    event.call.scrubbed_call_analysis.call_summary
+                    if event.call.scrubbed_call_analysis
+                    else None
+                )
                 # Merge top-level collected_dynamic_variables so the service can use them
                 # as a source for name/email when custom_analysis_data fields are missing.
                 analysis_dict["collected_dynamic_variables"] = (
@@ -580,6 +587,14 @@ async def process_retell_call_analyzed_event(
                         event.call.transcript_with_tool_calls
                         or event.call.scrubbed_transcript_with_tool_calls
                     ),
+                    # Scrubbed variants stored as-is (no raw fallback): if Retell
+                    # didn't send them, they stay NULL and the UI falls back to
+                    # reveal-only rather than showing raw PHI unmasked.
+                    scrubbed_recording_url=event.call.scrubbed_recording_url,
+                    scrubbed_transcript_with_tool_calls=(
+                        event.call.scrubbed_transcript_with_tool_calls
+                    ),
+                    scrubbed_summary=_scrubbed_summary,
                 )
 
                 # Call service to save to DB (analysis_dict is always a dict now)
