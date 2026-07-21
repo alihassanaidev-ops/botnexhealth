@@ -159,6 +159,16 @@ def test_sms_not_ready_without_any_credentials():
     assert issues[0].code == "channel_not_ready"
 
 
+def test_sms_not_ready_with_placeholder_platform_credentials():
+    session = _make_session(location=_make_location(from_number="+16475550001"))
+    with patch("src.app.services.messaging_credentials.settings") as s:
+        s.twillio_sid = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        s.twillio_api_secret = "your-twilio-auth-token"
+        issues = _check(_sms_def(), session)
+    assert len(issues) == 1
+    assert issues[0].code == "channel_not_ready"
+
+
 def test_sms_ready_with_institution_subaccount_no_platform():
     inst = _make_institution(sid="AC_sub", token="tok_sub")
     session = _make_session(location=_make_location(), institution=inst)
@@ -207,6 +217,18 @@ def test_email_not_ready_without_api_key():
         cs.resend_api_key = None
         issues = _check(_email_def(), session)
     assert len(issues) == 1
+
+
+def test_email_not_ready_with_placeholder_platform_credentials():
+    session = _make_session(location=_make_location(), institution=_make_institution())
+    with patch("src.app.services.messaging_credentials.settings") as ms, patch(
+        "src.app.services.automation.channel_readiness.settings"
+    ) as cs:
+        ms.resend_from_email = "alerts@yourdomain.com"
+        cs.resend_api_key = "re_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        issues = _check(_email_def(), session)
+    assert len(issues) == 1
+    assert issues[0].code == "channel_not_ready"
 
 
 # ---------------------------------------------------------------------------

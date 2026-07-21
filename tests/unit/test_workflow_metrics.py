@@ -76,3 +76,36 @@ async def test_publish_workflow_metrics_emits_all_signals(monkeypatch) -> None:
         {"MetricName": "WorkflowFailedRuns", "Unit": "Count", "Value": 3},
         {"MetricName": "WorkflowFailedSteps", "Unit": "Count", "Value": 4},
     ]
+
+
+@pytest.mark.asyncio
+async def test_publish_workflow_metrics_skips_cloudwatch_in_local_env(
+    monkeypatch,
+) -> None:
+    fake_session = _FakeSession([1, 0, 2, 0, 0])
+
+    @contextlib.asynccontextmanager
+    async def fake_get_system_db_session(context_type: str, **kwargs):
+        assert context_type == "celery"
+        yield fake_session
+
+    def fake_client(*_args, **_kwargs):
+        raise AssertionError("CloudWatch client should not be created in local env")
+
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.setattr(publish_workflow_metrics, "is_database_initialized", lambda: True)
+    monkeypatch.setattr(
+        publish_workflow_metrics, "get_system_db_session", fake_get_system_db_session
+    )
+    monkeypatch.setattr(publish_workflow_metrics.boto3, "client", fake_client)
+
+    counts = await publish_workflow_metrics.publish_workflow_metrics()
+
+    assert fake_session.execute_calls == 5
+    assert counts == {
+        "due_timer_backlog": 1,
+        "stale_timers": 0,
+        "active_runs": 2,
+        "failed_runs": 0,
+        "failed_steps": 0,
+    }

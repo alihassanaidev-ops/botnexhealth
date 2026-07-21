@@ -130,6 +130,10 @@ async def publish_workflow_metrics() -> dict[str, int]:
 
     app_name = os.getenv("APP_NAME", "nex-health")
     app_env = os.getenv("APP_ENV", "production")
+    if app_env.lower() in {"local", "dev", "test"}:
+        logger.info("Collected workflow metrics without CloudWatch publish: %s", counts)
+        return counts
+
     namespace = f"{app_name}/{app_env}"
 
     metric_data = [

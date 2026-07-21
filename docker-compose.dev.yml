@@ -65,6 +65,46 @@ services:
       redis:
         condition: service_healthy
 
+  worker:
+    build:
+      context: .
+      target: production
+    container_name: botnexhealth-worker
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: local
+      JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-local-dev-encryption-secret}
+      DEV_ALLOW_SUPER_ADMIN_TOTP: "true"
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/nexhealth
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      AUTH_FRONTEND_BASE_URL: http://localhost:3000
+      CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      COOKIE_SECURE: "false"
+      COOKIE_SAMESITE: lax
+      WEBAUTHN_RP_ID: localhost
+      WEBAUTHN_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+    command: celery -A src.app.worker worker --loglevel=info --beat --schedule=/tmp/celerybeat-schedule
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A src.app.worker inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+      - ./pyproject.toml:/app/pyproject.toml
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   web:
     image: node:22-bookworm-slim
     container_name: botnexhealth-web

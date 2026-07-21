@@ -5,7 +5,7 @@ COMPOSE := docker compose -f docker-compose.dev.yml
 # BotNexHealth - Development Commands
 # =============================================================================
 
-.PHONY: help setup dev up up-deps up-app down logs api-logs web-logs db-logs redis-logs migrate test lint clean build run cdk-synth-staging cdk-deploy-staging cdk-run-migrations-staging cdk-publish-frontend-staging health
+.PHONY: help setup dev up up-deps up-app down logs api-logs worker-logs web-logs db-logs redis-logs migrate test lint clean build run cdk-synth-staging cdk-deploy-staging cdk-run-migrations-staging cdk-publish-frontend-staging health
 
 help:
 	@echo "BotNexHealth Development Commands"
@@ -17,6 +17,7 @@ help:
 	@echo "  make up        - Start local Docker stack without tailing logs"
 	@echo "  make down      - Stop local Docker stack"
 	@echo "  make logs      - Tail all Docker logs"
+	@echo "  make worker-logs - Tail Celery worker logs"
 	@echo "  make migrate   - Run Alembic migrations inside the API container"
 	@echo "  make test      - Run tests"
 	@echo "  make lint      - Run linter (ruff)"
@@ -51,7 +52,7 @@ up-deps:
 	$(COMPOSE) up --build -d postgres redis
 
 up-app:
-	$(COMPOSE) up --build -d api web
+	$(COMPOSE) up --build -d api worker web
 
 down:
 	$(COMPOSE) down
@@ -64,6 +65,9 @@ api-logs:
 
 web-logs:
 	$(COMPOSE) logs -f web
+
+worker-logs:
+	$(COMPOSE) logs -f worker
 
 db-logs:
 	$(COMPOSE) logs -f postgres

@@ -32,6 +32,28 @@ from src.app.services.automation.validation_service import ValidationIssue
 from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
 
 _READINESS_CODE = "channel_not_ready"
+_PLACEHOLDER_VALUES = {
+    "acxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "your-twilio-auth-token",
+    "re_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "alerts@yourdomain.com",
+    "support@yourdomain.com",
+}
+
+
+def _has_real_value(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.strip().lower()
+    if not normalized:
+        return False
+    if normalized in _PLACEHOLDER_VALUES:
+        return False
+    if normalized.startswith("your-") or "yourdomain.com" in normalized:
+        return False
+    if "xxxxxxxx" in normalized:
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -193,11 +215,18 @@ class ChannelReadinessService:
         """SMS is ready when the location has a sender number and Twilio creds
         (institution sub-account or platform fallback) exist to send with."""
         creds = TenantTwilioCredentialResolver.resolve_sms(institution, location)
-        return bool(creds.from_number and creds.account_sid and creds.auth_token)
+        return bool(
+            _has_real_value(creds.from_number)
+            and _has_real_value(creds.account_sid)
+            and _has_real_value(creds.auth_token)
+        )
 
     @staticmethod
     def _email_ready(institution: Institution | None) -> bool:
         """Email is ready when a from-address (institution or platform) resolves
         and the Resend API key is configured to send with."""
         email_from = TenantTwilioCredentialResolver.resolve_email_from(institution)
-        return bool(email_from.from_address and settings.resend_api_key)
+        return bool(
+            _has_real_value(email_from.from_address)
+            and _has_real_value(settings.resend_api_key)
+        )
