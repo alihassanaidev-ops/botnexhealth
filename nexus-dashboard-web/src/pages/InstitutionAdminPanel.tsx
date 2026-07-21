@@ -193,7 +193,7 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
 
     return (
         <Dialog open={!!location} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-2xl border-border bg-card">
+            <DialogContent className="max-w-2xl border-border bg-card max-h-[85vh] overflow-y-auto">
                 <DialogHeader>
                     <DialogTitle>Operating Hours: {location.name}</DialogTitle>
                 </DialogHeader>

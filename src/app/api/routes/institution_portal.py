@@ -231,9 +231,13 @@ def _sanitize_audit_item(item: AuditLog) -> AuditLogResponse:
 
 def _validate_invite_role(role: str) -> str:
     normalized = role.strip().upper()
+    # STAFF is a valid institution role — the /users/invite endpoint already
+    # requires + resolves a location for LOCATION_ADMIN and STAFF alike, and the
+    # UI offers all three. (SUPER_ADMIN is intentionally excluded.)
     allowed = {
         UserRole.INSTITUTION_ADMIN.value,
         UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
     }
     if normalized not in allowed:
         raise HTTPException(
