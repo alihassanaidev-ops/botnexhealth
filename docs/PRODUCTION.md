@@ -79,6 +79,33 @@ AWS_PROFILE=deployer CDK_STACK_NAME=nex-health-production bash scripts/publish_f
 
 > **Deferred hardening (before high-traffic onboarding):** migrate-before-traffic gating (tag-pinned ECR image) and prod-specific Makefile targets. (`minHealthyPercent: 100` and the env-namespaced RDS Proxy name are already done.) The first deploy used the safe `deploy → migrate → verify` flow because there was no live traffic yet.
 
+## Run a one-off admin task in prod (e.g. create a super admin)
+
+Admin scripts (super-admin invite, retention, partitions, etc.) run as the **migration task definition** with a command override. On prod they **must** use the **Migration** security group — NOT the App SG. (The `scripts/*_aws.sh` helpers default to the App SG, which only reaches the RDS Proxy; a direct-RDS admin task then times out and logs a useless empty `Failed to generate invite:` error. Staging has no proxy so its App SG works — prod differs.)
+
+```bash
+R=ca-central-1; P=deployer; STACK=nex-health-production
+out() { aws cloudformation describe-stacks --stack-name $STACK --region $R --profile $P \
+  --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue|[0]" --output text; }
+TD=$(out MigrationTaskDefinitionArn); MSG=$(out MigrationSecurityGroupId); SUB=$(out PrivateSubnetIds)
+SUBJSON=$(echo "$SUB" | awk -F, '{for(i=1;i<=NF;i++) printf "%s\"%s\"",(i>1?",":""),$i}')
+
+# Example: create a SUPER_ADMIN invite (emails the set-password link via Resend)
+TASK=$(aws ecs run-task --cluster $STACK --launch-type FARGATE --task-definition "$TD" \
+  --overrides '{"containerOverrides":[{"name":"MigrationContainer","command":[
+     "python","-m","src.app.scripts.invite_super_admin","<email>","https://app.scalenexus.ai"]}]}' \
+  --network-configuration "awsvpcConfiguration={subnets=[$SUBJSON],securityGroups=[$MSG],assignPublicIp=DISABLED}" \
+  --region $R --profile $P --query 'tasks[0].taskArn' --output text)
+aws ecs wait tasks-stopped --cluster $STACK --tasks "$TASK" --region $R --profile $P
+
+# Result + one-time invite link:
+aws logs get-log-events --log-group-name /nex-health/production/migrations \
+  --log-stream-name "migrations/MigrationContainer/$(echo $TASK | sed 's#.*/##')" \
+  --region $R --profile $P --query 'events[].message' --output text | tail -20
+```
+
+Swap the `command` array to run any admin script. The invite link is single-use and time-limited; the user also receives it by email.
+
 ## Load test results & scaling playbook
 
 Validated on a throwaway prod-sized stack (`infra/config/loadtest.json`, proxy off, dummy third-party secrets) with k6 from a cloud EC2 (`scripts/loadtest/k6_ceiling.js`). Two endpoints: `/readyz` (DB+Redis ping → raw throughput) and `POST /api/auth/login` (Argon2id → CPU/auth ceiling).

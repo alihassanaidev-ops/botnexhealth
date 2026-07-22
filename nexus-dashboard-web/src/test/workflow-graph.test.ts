@@ -76,11 +76,20 @@ describe("workflow graph — derivation", () => {
         expect(edges.some((e) => e.source === "wait-1" && e.target === "exit-1")).toBe(true)
     })
 
-    it("uses smoothstep smart edge routing for derived edges", () => {
+    it("uses compact smoothstep routing for linear and branch edges", () => {
         const { edges } = definitionToFlow(LINEAR)
         expect(edges.every((e) => e.type === "smoothstep")).toBe(true)
         expect(edges.every((e) => e.pathOptions && typeof e.pathOptions === "object")).toBe(true)
+        expect(edges.every((e) => e.pathOptions?.borderRadius === 8)).toBe(true)
+        expect(edges.every((e) => e.pathOptions?.offset === 14)).toBe(true)
         expect(edges.every((e) => e.interactionWidth === 18)).toBe(true)
+
+        const branched = definitionToFlow(BRANCHED).edges.filter((e) => e.source === "cond-1")
+        expect(branched.every((e) => e.type === "smoothstep")).toBe(true)
+        expect(branched.every((e) => e.pathOptions && typeof e.pathOptions === "object")).toBe(true)
+        expect(branched.every((e) => e.pathOptions?.borderRadius === 8)).toBe(true)
+        expect(branched.some((e) => e.sourceHandle === "true" && e.pathOptions?.offset === 22)).toBe(true)
+        expect(branched.some((e) => e.sourceHandle === "false" && e.pathOptions?.offset === 30)).toBe(true)
     })
 
     it("condition nodes emit two handled edges (true/false)", () => {

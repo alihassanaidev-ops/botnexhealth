@@ -28,6 +28,7 @@ from src.app.models.custom_field import EntityType
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.custom_field_service import CustomFieldService
+from src.app.services.pii_masking import mask_brackets, mask_transcript
 from src.app.services.workflow_status_service import WorkflowStatusService
 from src.app.services.event_bus import publish_event
 from src.app.services.sms_privacy import hash_for_logging, mask_phone, safe_error_summary
@@ -62,11 +63,16 @@ class CallRecord(BaseModel):
     call_tags: list[str]  # all normalized tags for this call
     patient_status: str | None
     summary: str | None
+    # Retell's PII-scrubbed summary with placeholder tokens masked to *****.
+    # Non-PHI; shown inline. NULL when Retell redaction is off for the account.
+    scrubbed_summary: str | None = None
     patient_sentiment: str | None
     next_action: str | None
     is_new_patient: bool
     is_complaint: bool
     is_insurance_billing: bool
+    # Appointment type booked during the call (if any). Not PHI — clinic config.
+    booked_appointment_type_name: str | None = None
     call_date: date | None
     call_time: str | None
     call_duration_seconds: int | None
@@ -102,6 +108,11 @@ class CallDetail(CallRecord):
 
     transcript_available: bool = False
     recording_available: bool = False
+    # Retell's PII-scrubbed transcript/recording (non-PHI). Served inline with
+    # bracket placeholders masked to *****; the raw variants stay behind the
+    # audited reveal endpoints. NULL/absent when Retell redaction is off.
+    scrubbed_transcript: list[dict] | None = None
+    scrubbed_recording_url: str | None = None
     custom_fields: list[CustomFieldValueOut] = []
 
 
@@ -216,11 +227,13 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         call_tags=_tags_from_db(call.call_tags),
         patient_status=call.patient_status,
         summary=call.summary,
+        scrubbed_summary=mask_brackets(getattr(call, "scrubbed_summary", None)),
         patient_sentiment=call.patient_sentiment,
         next_action=call.next_action,
         is_new_patient=call.is_new_patient,
         is_complaint=call.is_complaint,
         is_insurance_billing=call.is_insurance_billing,
+        booked_appointment_type_name=call.booked_appointment_type_name,
         call_date=call.call_date,
         call_time=str(call.call_time) if call.call_time else None,
         call_duration_seconds=call.call_duration_seconds,
@@ -572,9 +585,9 @@ async def get_call(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> CallDetail:
     """
-    Get scrubbed detail for a single call.
+    Get the PHI-minimized detail for a single call.
 
-    PHI note: full transcript, raw transcript, recording URL, and PHI custom
+    PHI note: the (now raw/unscrubbed) transcript, recording URL, and PHI custom
     fields are not returned here. They are available through explicit audited
     reveal endpoints for clinic users in the circle of care.
     """
@@ -604,6 +617,10 @@ async def get_call(
             **base.model_dump(),
             transcript_available=bool(call.transcript_with_tool_calls_encrypted),
             recording_available=bool(call.recording_url),
+            scrubbed_transcript=mask_transcript(
+                getattr(call, "scrubbed_transcript_with_tool_calls", None)
+            ),
+            scrubbed_recording_url=getattr(call, "scrubbed_recording_url", None),
             custom_fields=custom_fields,
         )
         log_audit_background(
@@ -630,10 +647,10 @@ async def reveal_transcript(
     call_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> TranscriptRevealResponse:
-    """Reveal the (scrubbed) structured transcript and audit the access.
+    """Reveal the structured transcript and audit the access.
 
-    Only Retell's PII-scrubbed transcript is stored, so this single endpoint
-    replaces the legacy raw/full split.
+    Retell's raw (unscrubbed) transcript is stored and revealed here behind the
+    PHI-reveal authorization + audit trail below.
     """
     _ensure_phi_reveal_allowed(
         current_user,

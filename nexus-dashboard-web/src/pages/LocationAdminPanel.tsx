@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
-import { Loader2, MailPlus, RefreshCcw, Users } from "lucide-react"
+import { Loader2, MailPlus, RefreshCcw, Users, Building2 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -112,18 +113,17 @@ export default function LocationAdminPanel() {
     return (
         <div className="relative space-y-6 bg-background">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Location Admin</h1>
-                    <p className="mt-1 text-muted-foreground">
-                        Manage staff and settings for your assigned location.
-                    </p>
-                </div>
-                <Button variant="outline" onClick={loadData} disabled={loading}>
-                    {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-                    Refresh
-                </Button>
-            </div>
+            <PageHeader
+                icon={Building2}
+                title="Location Admin"
+                description="Manage staff and settings for your assigned location."
+                actions={
+                    <Button variant="outline" onClick={loadData} disabled={loading}>
+                        {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                        Refresh
+                    </Button>
+                }
+            />
 
             <Card>
                 <CardHeader>

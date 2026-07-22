@@ -113,9 +113,16 @@ def _call():
         callback_resolved=False,
         created_at=datetime(2026, 4, 30, 13, 45, tzinfo=timezone.utc),
         agent_used="agent_1",
+        booked_appointment_type_name=None,
+        workflow_status=None,
         transcript_with_tool_calls=transcript_payload,
         transcript_with_tool_calls_encrypted="ciphertext-stub",
         recording_url="s3://bucket/scrubbed-recording.wav",
+        scrubbed_summary="Summary for [person 1] re [medical condition]",
+        scrubbed_transcript_with_tool_calls=[
+            {"role": "agent", "content": "Hi [person 1], how can I help?"},
+        ],
+        scrubbed_recording_url="s3://bucket/redacted-recording.wav",
     )
 
 
@@ -177,6 +184,14 @@ async def test_call_detail_hides_full_phi_until_audited_reveal(monkeypatch):
     assert not hasattr(response, "transcript")
     assert not hasattr(response, "transcript_with_tool_calls")
     assert not hasattr(response, "recording_url") or response.recording_url is None
+
+    # The non-PHI scrubbed variants ARE served inline, with Retell's bracket
+    # placeholders masked to ***** (never the raw PII).
+    assert response.scrubbed_summary == "Summary for ***** re *****"
+    assert response.scrubbed_transcript == [
+        {"role": "agent", "content": "Hi *****, how can I help?"}
+    ]
+    assert response.scrubbed_recording_url == "s3://bucket/redacted-recording.wav"
 
     protected = next(f for f in response.custom_fields if f.field_key == "diagnosis_note")
     assert protected.value is None

@@ -10,8 +10,10 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { RefreshCw, ChevronLeft, ChevronRight, ShieldCheck } from "lucide-react";
+import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
+import { TableSkeleton } from "@/components/ui/skeletons";
 import { toast } from "sonner";
 
 import { listAuditLogs, AuditLog } from "@/lib/tenant-api";
@@ -75,18 +77,17 @@ export default function AuditLogs() {
     return (
         <div className="relative space-y-6 bg-background">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex justify-between items-center">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Audit Logs</h1>
-                    <p className="text-muted-foreground mt-2">
-                        View compliance and system activity for your allowed scope.
-                    </p>
-                </div>
-                <Button variant="outline" onClick={() => fetchLogs(page)} disabled={loading}>
-                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                    Refresh Logs
-                </Button>
-            </div>
+            <PageHeader
+                icon={ShieldCheck}
+                title="Audit Logs"
+                description="View compliance and system activity for your allowed scope."
+                actions={
+                    <Button variant="outline" onClick={() => fetchLogs(page)} disabled={loading}>
+                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                        Refresh Logs
+                    </Button>
+                }
+            />
 
             <Card>
                 <CardHeader>
@@ -95,9 +96,7 @@ export default function AuditLogs() {
                 </CardHeader>
                 <CardContent>
                     {loading && logs.length === 0 ? (
-                        <div className="flex justify-center p-8">
-                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                        </div>
+                        <TableSkeleton rows={8} cols={4} />
                     ) : logs.length === 0 ? (
                         <div className="text-center p-8 text-muted-foreground">
                             No audit logs found.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from string import Template
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -11,6 +12,50 @@ import httpx
 from src.app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# Branded HTML wrapper for transactional auth emails. Mirrors the web app's
+# dark-mode-first look: near-black page, #0d0d0d card with a subtle border,
+# the purple->blue primary gradient on the action button, and the
+# "ScaleNexus.AI" wordmark. Uses table layout + inline styles for email-client
+# compatibility, with a solid-purple bgcolor fallback for clients (Outlook)
+# that ignore CSS gradients. string.Template ($-substitution) is used instead
+# of an f-string/.format so the CSS braces don't need escaping.
+_BRANDED_EMAIL_TEMPLATE = Template(
+    """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+</head>
+<body style="margin:0;padding:0;background-color:#050505;">
+<span style="display:none;max-height:0;overflow:hidden;opacity:0;color:#050505;">$preheader</span>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#050505;">
+<tr><td align="center" style="padding:32px 16px;">
+<table role="presentation" width="480" cellpadding="0" cellspacing="0" border="0" style="width:480px;max-width:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<tr><td style="padding:0 4px 20px;">
+<span style="font-size:18px;font-weight:600;letter-spacing:-0.02em;color:#fafafa;">ScaleNexus<span style="color:#a78bfa;">.AI</span></span>
+</td></tr>
+<tr><td style="background-color:#0d0d0d;border:1px solid #1f2937;border-radius:12px;padding:32px;">
+<h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.02em;color:#eef2ff;">$heading</h1>
+<p style="margin:0 0 24px;font-size:14px;line-height:22px;color:#94a3b8;">$intro</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+<td align="center" bgcolor="#8338ec" style="border-radius:8px;background-color:#8338ec;background-image:linear-gradient(90deg,#8338ec,#3b82f6);">
+<a href="$link" style="display:inline-block;padding:12px 28px;font-size:14px;font-weight:600;line-height:20px;color:#ffffff;text-decoration:none;border-radius:8px;">$button_label</a>
+</td></tr></table>
+<p style="margin:24px 0 0;font-size:12px;line-height:18px;color:#6b7280;">Or paste this link into your browser:<br><a href="$link" style="color:#a78bfa;text-decoration:none;word-break:break-all;">$link</a></p>
+</td></tr>
+<tr><td style="padding:20px 4px 0;">
+<p style="margin:0;font-size:12px;line-height:18px;color:#6b7280;">$footer</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+)
 
 
 class AuthEmailService:
@@ -32,9 +77,19 @@ class AuthEmailService:
         await self._send_email(
             to=email,
             subject="Set up your ScaleNexus account",
-            html=(
-                "<p>You were invited to ScaleNexus.</p>"
-                f"<p><a href=\"{link}\">Set your password</a></p>"
+            html=self._render_branded_html(
+                preheader="Set your password to activate your ScaleNexus account.",
+                heading="Set up your account",
+                intro=(
+                    "You've been invited to ScaleNexus. Click the button below to "
+                    "set your password and get started."
+                ),
+                button_label="Set your password",
+                link=link,
+                footer=(
+                    "If you weren't expecting this invitation, you can safely "
+                    "ignore this email."
+                ),
             ),
             text=(
                 "You were invited to ScaleNexus.\n\n"
@@ -58,9 +113,19 @@ class AuthEmailService:
         await self._send_email(
             to=email,
             subject="Reset your ScaleNexus password",
-            html=(
-                "<p>You requested a password reset.</p>"
-                f"<p><a href=\"{link}\">Reset your password</a></p>"
+            html=self._render_branded_html(
+                preheader="Reset your ScaleNexus password.",
+                heading="Reset your password",
+                intro=(
+                    "We received a request to reset your ScaleNexus password. "
+                    "Click the button below to choose a new one."
+                ),
+                button_label="Reset password",
+                link=link,
+                footer=(
+                    "If you didn't request this, you can safely ignore this email "
+                    "— your password won't change."
+                ),
             ),
             text=(
                 "You requested a password reset.\n\n"
@@ -144,6 +209,26 @@ class AuthEmailService:
 
         return urlunsplit(
             (parsed.scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment)
+        )
+
+    def _render_branded_html(
+        self,
+        *,
+        preheader: str,
+        heading: str,
+        intro: str,
+        button_label: str,
+        link: str,
+        footer: str,
+    ) -> str:
+        """Render the branded auth-email HTML matching the web app's look."""
+        return _BRANDED_EMAIL_TEMPLATE.substitute(
+            preheader=preheader,
+            heading=heading,
+            intro=intro,
+            button_label=button_label,
+            link=link,
+            footer=footer,
         )
 
     async def _send_email(

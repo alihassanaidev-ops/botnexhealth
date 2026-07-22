@@ -73,6 +73,7 @@ class CallbackQueueItem(BaseModel):
     call_duration_seconds: int | None
     summary: str | None
     next_action: str | None
+    booked_appointment_type_name: str | None = None
     # Masked callback number; full value via POST /institution/calls/{id}/reveal/phone.
     phone_masked: str | None = None
     phone_reveal_available: bool = False
@@ -1345,6 +1346,7 @@ async def get_dashboard_summary(
                 call_duration_seconds=call.call_duration_seconds,
                 summary=call.summary,
                 next_action=call.next_action,
+                booked_appointment_type_name=call.booked_appointment_type_name,
                 phone_masked=(
                     mask_phone(contact.phone)
                     if contact and contact.phone_encrypted is not None

@@ -7,6 +7,7 @@ import RoleGuard from "./components/RoleGuard";
 import PmsGuard from "./components/PmsGuard";
 import AppLayout from "./components/AppLayout";
 import RouteError from "./components/RouteError";
+import BrandLoader from "@/components/BrandLoader";
 
 // Auth pages — eagerly loaded (small, needed immediately)
 import Login from "./pages/Login";
@@ -47,11 +48,7 @@ const WorkflowBuilder = lazy(() => import("./pages/WorkflowBuilder"));
 const WorkflowVersions = lazy(() => import("./pages/WorkflowVersions"));
 
 function LazyFallback() {
-    return (
-        <div className="flex items-center justify-center h-64">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-zinc-600 dark:border-zinc-400" />
-        </div>
-    );
+    return <BrandLoader />;
 }
 
 function S({ children }: { children: React.ReactNode }) {

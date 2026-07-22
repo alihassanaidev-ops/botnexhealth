@@ -10,6 +10,7 @@ import {
     Stethoscope,
     TimerReset,
 } from "lucide-react";
+import { PageHeader } from "@/components/PageHeader";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -161,39 +162,35 @@ export default function SetupOverview() {
 
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            {/* Header */}
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <ClipboardList className="h-4 w-4" />
-                        Practice setup
-                    </div>
-                    <h1 className="mt-1 text-2xl font-bold tracking-tight">Setup overview</h1>
-                    <p className="text-sm text-muted-foreground">Track what's synced and finish setup in order.</p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Select
-                        value={selectedLocationId}
-                        onValueChange={setSelectedLocationId}
-                        disabled={loadingLocations || locations.length === 0}
-                    >
-                        <SelectTrigger className="h-9 w-[200px]">
-                            <SelectValue placeholder="Select a location" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {locations.map((location) => (
-                                <SelectItem key={location.id} value={location.id}>
-                                    {location.name}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                    <Button onClick={() => void handleSync()} disabled={!canSync || syncing || !selectedLocationId}>
-                        <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                        {syncing ? "Syncing..." : "Run sync"}
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                icon={ClipboardList}
+                title="Setup overview"
+                description="Track what's synced and finish setup in order."
+                actions={
+                    <>
+                        <Select
+                            value={selectedLocationId}
+                            onValueChange={setSelectedLocationId}
+                            disabled={loadingLocations || locations.length === 0}
+                        >
+                            <SelectTrigger className="h-9 w-[200px]">
+                                <SelectValue placeholder="Select a location" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {locations.map((location) => (
+                                    <SelectItem key={location.id} value={location.id}>
+                                        {location.name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <Button onClick={() => void handleSync()} disabled={!canSync || syncing || !selectedLocationId}>
+                            <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                            {syncing ? "Syncing..." : "Run sync"}
+                        </Button>
+                    </>
+                }
+            />
 
             {/* Progress — single bar; capability + status notes tucked behind the info icon */}
             <Card>

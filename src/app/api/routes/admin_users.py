@@ -27,7 +27,7 @@ from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
-from src.app.models.user import User, UserRole
+from src.app.models.user import InviteStatus, User, UserRole
 from src.app.services.audit import log_audit
 from src.app.services.sms_privacy import safe_error_summary
 from src.app.services.user_invite_service import UserInviteService
@@ -67,6 +67,36 @@ class AdminUserListResponse(BaseModel):
 class UserActionResponse(BaseModel):
     message: str
     user_id: str
+
+
+# Institution-scoped roles a SUPER_ADMIN may seat via this surface. SUPER_ADMIN
+# is intentionally excluded — those are provisioned through the separate
+# super-admin invite flow, never against an institution.
+_INVITABLE_ROLES: frozenset[str] = frozenset(
+    {
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
+    }
+)
+
+
+class InviteInstitutionUserRequest(BaseModel):
+    email: str
+    institution_id: str
+    # Defaults to institution admin — the common case (seating a second admin
+    # when the clinic's own admin is unavailable). LOCATION_ADMIN/STAFF allowed.
+    role: str = UserRole.INSTITUTION_ADMIN.value
+    location_id: str | None = None
+
+
+class InviteInstitutionUserResponse(BaseModel):
+    message: str
+    user_id: str
+    email: str
+    role: str
+    institution_id: str
+    invite_status: str
 
 
 @router.get("", response_model=AdminUserListResponse)
@@ -281,3 +311,121 @@ async def reinvite_user(
         location_id=str(target_location_id) if target_location_id else None,
     )
     return UserActionResponse(message="Invite re-sent", user_id=user_id)
+
+
+@router.post("/invite", response_model=InviteInstitutionUserResponse)
+async def invite_institution_user(
+    body: InviteInstitutionUserRequest,
+    current_admin: Annotated[User, Depends(get_current_admin)],
+):
+    """Invite an institution-scoped user (default: institution admin).
+
+    SUPER_ADMIN-only. Lets a platform admin seat an admin for any institution
+    from the dashboard — e.g. a second institution admin when the clinic's own
+    admin can't send the invite themselves. Never provisions a SUPER_ADMIN.
+    """
+    email = UserInviteService.normalize_email(body.email)
+    role = body.role.strip().upper()
+
+    if role not in _INVITABLE_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "role must be one of: "
+                + ", ".join(sorted(_INVITABLE_ROLES))
+            ),
+        )
+    # A location-scoped role needs a location; an institution admin must not be
+    # pinned to a single location.
+    if role in {UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value} and not body.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"location_id is required for role {role}",
+        )
+    if role == UserRole.INSTITUTION_ADMIN.value and body.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="location_id must not be set for an institution admin",
+        )
+
+    async with get_db_session() as session:
+        institution = (
+            await session.execute(
+                select(Institution).where(Institution.id == body.institution_id)
+            )
+        ).scalar_one_or_none()
+        if institution is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Institution not found",
+            )
+
+        # The partial unique index excludes soft-deleted rows, so only an active
+        # user with this email is a real conflict.
+        existing = (
+            await session.execute(
+                select(User).where(User.email == email, User.deleted_at.is_(None))
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A user with this email already exists",
+            )
+
+        if body.location_id is not None:
+            loc = (
+                await session.execute(
+                    select(InstitutionLocation).where(
+                        InstitutionLocation.id == body.location_id,
+                        InstitutionLocation.institution_id == body.institution_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if loc is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="location_id does not belong to this institution",
+                )
+
+        invite_service = UserInviteService(session)
+        try:
+            user = await invite_service.create_invited_user(
+                email=email,
+                role=role,
+                institution_id=body.institution_id,
+                location_id=body.location_id,
+            )
+        except Exception as e:
+            logger.error("Admin institution invite failed: %s", safe_error_summary(e))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create invite",
+            )
+        user_id = str(user.id)
+
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.USER_INVITED,
+        target_resource=f"user:{user_id}:invite",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_admin.role,
+            "admin_id": str(current_admin.id),
+            "target_user_id": user_id,
+            "target_role": role,
+            "institution_id": body.institution_id,
+            "location_id": body.location_id,
+        },
+        institution_id=body.institution_id,
+        user_id=str(current_admin.id),
+        location_id=body.location_id,
+    )
+    return InviteInstitutionUserResponse(
+        message="Invite sent",
+        user_id=user_id,
+        email=email,
+        role=role,
+        institution_id=body.institution_id,
+        invite_status=InviteStatus.PENDING.value,
+    )

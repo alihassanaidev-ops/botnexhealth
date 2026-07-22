@@ -25,6 +25,7 @@ from src.app.database import get_db_session
 from src.app.models.user import User, UserRole
 from src.app.models.audit_log import AuditLog
 from src.app.models.insurance_plan import InsurancePlan
+from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
 from src.app.services.institution_service import InstitutionService
 from src.app.services.invite_cooldown import apply_invite_cooldown, ensure_invite_cooldown
@@ -77,6 +78,35 @@ class OperatingHoursResponse(BaseModel):
 
 class BulkOperatingHoursRequest(BaseModel):
     hours: list[OperatingHoursEntry] = Field(..., min_length=1, max_length=7)
+
+
+class BreakCreateRequest(BaseModel):
+    """A recurring break window (e.g. lunch) to hide from bookable slots."""
+
+    name: str = Field(..., min_length=1, max_length=100)
+    day_of_week: int | None = Field(None, ge=0, le=6, description="NULL = every day")
+    start_time: str = Field(..., description="HH:MM")
+    end_time: str = Field(..., description="HH:MM")
+
+
+class BreakResponse(BaseModel):
+    id: str
+    location_id: str
+    name: str
+    day_of_week: int | None = None
+    start_time: str
+    end_time: str
+
+    @classmethod
+    def from_model(cls, m: Any) -> "BreakResponse":
+        return cls(
+            id=str(m.id),
+            location_id=str(m.location_id),
+            name=m.name,
+            day_of_week=m.day_of_week,
+            start_time=m.start_time.strftime("%H:%M"),
+            end_time=m.end_time.strftime("%H:%M"),
+        )
 
 
 class LocationTimezoneUpdateRequest(BaseModel):
@@ -201,9 +231,13 @@ def _sanitize_audit_item(item: AuditLog) -> AuditLogResponse:
 
 def _validate_invite_role(role: str) -> str:
     normalized = role.strip().upper()
+    # STAFF is a valid institution role — the /users/invite endpoint already
+    # requires + resolves a location for LOCATION_ADMIN and STAFF alike, and the
+    # UI offers all three. (SUPER_ADMIN is intentionally excluded.)
     allowed = {
         UserRole.INSTITUTION_ADMIN.value,
         UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
     }
     if normalized not in allowed:
         raise HTTPException(
@@ -241,8 +275,8 @@ async def get_my_institution_config(
         role=current_user.role,
         institution_id=current_user.institution_id,
         location_id=current_user.location_id,
-        pms_type=institution.pms_type,
-        has_pms=institution.has_pms,
+        pms_type=getattr(institution, "pms_type", "nexhealth") or "nexhealth",
+        has_pms=getattr(institution, "has_pms", True),
     )
 
 
@@ -383,6 +417,115 @@ async def set_location_operating_hours(
             new_rows.append(row)
         await session.flush()
         return [OperatingHoursResponse.from_model(r) for r in new_rows]
+
+
+# =============================================================================
+# Breaks (recurring blackout windows, e.g. lunch) — institution/location admin
+# =============================================================================
+
+
+async def _resolve_scoped_location(session, current_user: User, loc_slug: str):
+    """Resolve a location by slug within the caller's institution, or 404."""
+    if not current_user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
+    location = await InstitutionService(session).get_location_by_slug(
+        loc_slug, current_user.institution_id
+    )
+    if not location:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+        )
+    return location
+
+
+@router.get(
+    "/locations/{loc_slug}/breaks",
+    response_model=list[BreakResponse],
+    dependencies=[Depends(require_location_scope())],
+)
+async def get_location_breaks(
+    loc_slug: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+):
+    async with get_db_session() as session:
+        location = await _resolve_scoped_location(session, current_user, loc_slug)
+        result = await session.execute(
+            select(LocationBreak)
+            .where(LocationBreak.location_id == location.id)
+            .order_by(LocationBreak.day_of_week.nulls_first(), LocationBreak.start_time)
+        )
+        return [BreakResponse.from_model(b) for b in result.scalars().all()]
+
+
+@router.post(
+    "/locations/{loc_slug}/breaks",
+    response_model=BreakResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_location_scope())],
+)
+async def create_location_break(
+    loc_slug: str,
+    data: BreakCreateRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+):
+    """Add a recurring break (e.g. lunch). Staff cannot edit."""
+    if current_user.role == UserRole.STAFF.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Staff cannot edit breaks"
+        )
+    start = dt_time.fromisoformat(data.start_time)
+    end = dt_time.fromisoformat(data.end_time)
+    if end <= start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="end_time must be after start_time",
+        )
+    async with get_db_session() as session:
+        location = await _resolve_scoped_location(session, current_user, loc_slug)
+        brk = LocationBreak(
+            location_id=location.id,
+            name=data.name,
+            day_of_week=data.day_of_week,
+            start_time=start,
+            end_time=end,
+        )
+        session.add(brk)
+        await session.flush()
+        return BreakResponse.from_model(brk)
+
+
+@router.delete(
+    "/locations/{loc_slug}/breaks/{break_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_location_scope())],
+)
+async def delete_location_break(
+    loc_slug: str,
+    break_id: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+):
+    """Remove a break. Staff cannot edit."""
+    if current_user.role == UserRole.STAFF.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Staff cannot edit breaks"
+        )
+    async with get_db_session() as session:
+        location = await _resolve_scoped_location(session, current_user, loc_slug)
+        # Scope the delete to this location so a caller can't remove another
+        # location's break by guessing an id.
+        result = await session.execute(
+            delete(LocationBreak).where(
+                LocationBreak.id == break_id,
+                LocationBreak.location_id == location.id,
+            )
+        )
+        if result.rowcount == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Break not found"
+            )
+    return None
 
 
 @router.patch(

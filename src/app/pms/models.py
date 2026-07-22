@@ -7,7 +7,7 @@ Each adapter translates PMS-specific responses into these models.
 from __future__ import annotations
 
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UniversalPatient(BaseModel):
@@ -61,6 +61,22 @@ class UniversalSlot(BaseModel):
     location_id: str | None = None
 
 
+class SlotSearchResult(BaseModel):
+    """Slots plus the PMS "next available date" hint.
+
+    When the requested window has no bookable slots, some PMSes (e.g. NexHealth)
+    return the next date that *does* have slots, so callers don't have to probe
+    day-by-day. ``next_available_date`` is the earliest such date across all
+    queried providers; ``next_available_by_provider`` keeps the per-provider
+    breakdown. Both are ``None``/empty when slots were found or when there is no
+    availability within the PMS lookahead window.
+    """
+
+    slots: list[UniversalSlot] = Field(default_factory=list)
+    next_available_date: str | None = None  # YYYY-MM-DD, earliest across providers
+    next_available_by_provider: dict[str, str] = Field(default_factory=dict)
+
+
 class UniversalLocation(BaseModel):
     id: str
     source: str
@@ -93,6 +109,7 @@ class BookingResult(BaseModel):
     end: str | None = None
     patient_id: str | None = None
     provider_id: str | None = None
+    appointment_type_id: str | None = None
     message: str = ""
     error: str | None = None
 

@@ -48,8 +48,11 @@ class FunctionError(BaseModel):
 class RetellCallData(BaseModel):
     """Call data included in webhook events.
 
-    Only PII-scrubbed Retell outputs are surfaced. The handler is responsible
-    for selecting the scrubbed sources at the webhook boundary.
+    Carries both Retell variants: the raw (unscrubbed) transcript/recording —
+    persisted encrypted and served only via the audited reveal endpoints — and
+    the PII-scrubbed variants, persisted alongside them and shown inline by
+    default. (For the single raw fields, the scrubbed value is still used as a
+    fallback when Retell omits the raw one.)
     """
     call_id: str
     call_type: str | None = None
@@ -63,8 +66,14 @@ class RetellCallData(BaseModel):
     start_timestamp: int | None = None
     end_timestamp: int | None = None
     disconnection_reason: str | None = None
-    recording_url: str | None = None  # mapped from scrubbed_recording_url at the webhook boundary
-    transcript_with_tool_calls: list[dict] | None = None  # PII-scrubbed structured transcript
+    recording_url: str | None = None  # raw recording URL (scrubbed only as fallback)
+    transcript_with_tool_calls: list[dict] | None = None  # raw structured transcript
+    # Retell's PII-scrubbed variants, persisted alongside the raw ones so the
+    # dashboard can show a non-PII view by default. May be None when Retell
+    # redaction is disabled on the account.
+    scrubbed_recording_url: str | None = None
+    scrubbed_transcript_with_tool_calls: list[dict] | None = None
+    scrubbed_summary: str | None = None
 
 
 class WebhookEvent(BaseModel):

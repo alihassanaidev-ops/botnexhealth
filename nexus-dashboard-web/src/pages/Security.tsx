@@ -15,8 +15,9 @@ import { toast } from "sonner"
 import axios from "axios"
 import { QRCodeSVG } from "qrcode.react"
 import { startRegistration, browserSupportsWebAuthn } from "@simplewebauthn/browser"
-import { KeyRound, Smartphone, ShieldCheck, Trash2, RefreshCw, Plus } from "lucide-react"
+import { KeyRound, Smartphone, ShieldCheck, Trash2, RefreshCw, Plus, Lock } from "lucide-react"
 
+import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -257,12 +258,11 @@ export default function Security() {
 
     return (
         <div className="space-y-6 p-6">
-            <div>
-                <h1 className="text-2xl font-bold tracking-tight">Security</h1>
-                <p className="text-muted-foreground mt-1">
-                    Manage the multi-factor methods on your account.
-                </p>
-            </div>
+            <PageHeader
+                icon={Lock}
+                title="Security"
+                description="Manage the multi-factor methods on your account."
+            />
 
             {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
 

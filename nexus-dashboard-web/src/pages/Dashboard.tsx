@@ -15,8 +15,10 @@ import {
     Timer,
     MapPin,
     Activity,
+    Home,
 } from "lucide-react"
 
+import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -32,6 +34,7 @@ import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import { useSSE } from "@/hooks/useSSE"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
+import { getInitials } from "@/components/calls/format"
 import { getDashboardSummary, getAggregateDashboard } from "@/lib/dashboard-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
@@ -266,7 +269,13 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
         <div className="rounded-xl border border-border/40 bg-card/50 hover:bg-accent/30 transition-all duration-200 p-4 space-y-2">
             <div className="flex items-start justify-between gap-2">
                 <div className="flex items-start gap-2.5 min-w-0">
-                    <span className="mt-1.5 h-2 w-2 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 shrink-0 shadow-sm shadow-amber-500/50" />
+                    {item.contact_name ? (
+                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-purple-600 text-[11px] font-semibold text-white">
+                            {getInitials(item.contact_name)}
+                        </div>
+                    ) : (
+                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">?</div>
+                    )}
                     <div className="min-w-0">
                         <p className="font-medium text-sm truncate text-foreground">
                             {item.contact_name ?? <span className="text-muted-foreground italic">Unknown caller</span>}
@@ -275,6 +284,11 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                             {formatDate(item.call_date)} · {formatTime(item.call_time)}
                             {item.call_duration_seconds ? ` · ${formatDuration(item.call_duration_seconds)}` : ""}
                         </p>
+                        {item.booked_appointment_type_name && (
+                            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                Booked: {item.booked_appointment_type_name}
+                            </span>
+                        )}
                         {item.phone_reveal_available && (
                             <RevealablePhone
                                 callId={item.call_id}
@@ -458,44 +472,42 @@ export default function Dashboard() {
             </div>
 
             <div className="relative z-10 p-8 pt-6 space-y-6">
-                {/* Header */}
-                <div className="flex items-center justify-between">
-                    <div>
-                        <h2 className="text-2xl font-bold tracking-tight">Dashboard</h2>
-                        <p className="text-sm text-muted-foreground/70 mt-0.5">
-                            {todayStr} · Call activity overview.
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        {user?.role === "INSTITUTION_ADMIN" && (
-                            <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
-                                <SelectTrigger className="w-[180px] h-8 text-xs">
-                                    <MapPin className="mr-2 h-3.5 w-3.5" />
-                                    <SelectValue placeholder="Select location" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Locations</SelectItem>
-                                    {locations.map((loc) => (
-                                        <SelectItem key={loc.slug} value={loc.slug}>
-                                            {loc.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        )}
-                        <DateRangePicker value={range} onChange={setRange} />
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={fetchSummary}
-                            disabled={loading}
-                            className="gap-2 h-8 text-xs"
-                        >
-                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                            Refresh
-                        </Button>
-                    </div>
-                </div>
+                <PageHeader
+                    icon={Home}
+                    title="Dashboard"
+                    description={<>{todayStr} · Call activity overview.</>}
+                    actions={
+                        <>
+                            {user?.role === "INSTITUTION_ADMIN" && (
+                                <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
+                                    <SelectTrigger className="w-[180px] h-8 text-xs">
+                                        <MapPin className="mr-2 h-3.5 w-3.5" />
+                                        <SelectValue placeholder="Select location" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Locations</SelectItem>
+                                        {locations.map((loc) => (
+                                            <SelectItem key={loc.slug} value={loc.slug}>
+                                                {loc.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
+                            <DateRangePicker value={range} onChange={setRange} />
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={fetchSummary}
+                                disabled={loading}
+                                className="gap-2 h-8 text-xs"
+                            >
+                                <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                                Refresh
+                            </Button>
+                        </>
+                    }
+                />
 
                 {/* Range-scoped cards (driven by the date-range picker) */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -603,12 +615,7 @@ export default function Dashboard() {
                     </div>
 
                     {/* Callback queue */}
-                    <div className={`relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border shadow-sm transition-all duration-300
-                        ${hasCallbacks ? "border-amber-500/20" : "border-border/60"}`}
-                    >
-                        {hasCallbacks && (
-                            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(245,158,11,0.05),transparent_60%)]" />
-                        )}
+                    <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm transition-all duration-300">
                         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
                         <div className="relative">
                             <div className="p-6 pb-4">

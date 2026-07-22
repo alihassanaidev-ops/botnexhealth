@@ -13,7 +13,8 @@ import {
     type NotificationPreference,
     type ExternalRecipient,
 } from "@/lib/notification-settings-api"
-import { Phone, AlertTriangle, CalendarCheck, Loader2, Plus, Trash2, Bell } from "lucide-react"
+import { Phone, AlertTriangle, CalendarCheck, Loader2, Plus, Trash2, Bell, MailCheck } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
 import { Input } from "@/components/ui/input"
@@ -28,6 +29,7 @@ import {
     TableRow,
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
+import { FormSkeleton } from "@/components/ui/skeletons"
 
 const TEMPLATE_META: Record<string, { label: string; description: string; icon: React.ElementType }> = {
     call_summary: {
@@ -180,21 +182,16 @@ export default function NotificationPreferences() {
     }
 
     if (loading) {
-        return (
-            <div className="flex items-center justify-center h-64">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-        )
+        return <FormSkeleton rows={5} />
     }
 
     return (
         <div className="p-6 max-w-4xl mx-auto space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold tracking-tight">Email Preferences</h1>
-                <p className="text-muted-foreground text-sm mt-1">
-                    Manage how you and others receive email notifications.
-                </p>
-            </div>
+            <PageHeader
+                icon={MailCheck}
+                title="Email Preferences"
+                description="Manage how you and others receive email notifications."
+            />
 
             <div className="grid gap-6 md:grid-cols-2">
                 {/* Personal Preferences */}
@@ -318,9 +315,7 @@ export default function NotificationPreferences() {
 
                             {/* List */}
                             {extRecipientsLoading ? (
-                                <div className="flex justify-center py-4">
-                                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                                </div>
+                                <FormSkeleton rows={3} />
                             ) : extRecipients.length === 0 ? (
                                 <p className="text-[11px] text-muted-foreground text-center py-4">
                                     No external recipients configured.

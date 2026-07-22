@@ -1,8 +1,12 @@
 """Retell webhook handlers for call events (call_analyzed, call_ended).
 
-We accept only the PII-scrubbed variants from Retell — raw transcripts,
-raw analysis, and the unscrubbed recording URL are intentionally ignored
-at the webhook boundary. PHI never enters our datastore in raw form.
+We consume Retell's raw (unscrubbed) variants — transcript, recording URL,
+and analysis — and persist them. Raw PHI therefore lives in our datastore;
+it is protected by column-level encryption at rest plus RBAC/tenant-scoped
+access rather than by scrubbing at the webhook boundary. Retell's ``scrubbed_*``
+variants are also persisted (plaintext, non-PHI) and shown inline by default;
+for the single raw fields the scrubbed value additionally serves as a fallback
+when Retell omits the raw one.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ verify_webhook_signature = get_signature_dependency(get_retell_secret)
 
 
 class CallAnalysisData(BaseModel):
-    """Scrubbed analysis data extracted by Retell."""
+    """Analysis data extracted by Retell (raw; scrubbed variant used only as fallback)."""
 
     call_summary: str | None = Field(None, alias="call_summary")
     in_voicemail: bool | None = None
@@ -50,8 +54,9 @@ class CallAnalysisData(BaseModel):
 class RetellCallWebhook(BaseModel):
     """Call data from Retell webhook.
 
-    Only the scrubbed variants of recording, transcript, and analysis are
-    consumed. Raw fields received in the payload are ignored.
+    The raw (unscrubbed) variants of recording, transcript, and analysis are
+    consumed and persisted; the ``scrubbed_*`` variants are retained only as a
+    fallback for when Retell omits the raw fields.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -67,6 +72,9 @@ class RetellCallWebhook(BaseModel):
     duration_ms: int | None = None
     start_timestamp: int | None = None
     end_timestamp: int | None = None
+    recording_url: str | None = None
+    transcript_with_tool_calls: list[dict] | None = None
+    call_analysis: CallAnalysisData | None = None
     scrubbed_recording_url: str | None = None
     scrubbed_transcript_with_tool_calls: list[dict] | None = None
     disconnection_reason: str | None = None
@@ -229,6 +237,231 @@ async def _finish_webhook_processing(
         await session.commit()
 
 
+async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, Any]:
+    """Send the patient the appointment-confirmation SMS at call end.
+
+    Approach B: the body is rendered from the institution's editable
+    ``appointment_booked`` SMS template, populated with the authoritative PMS
+    booking (real provider name + slot time) resolved from the ``book_appointment``
+    invocation — not Retell's free-text message. Only fires when an appointment
+    was actually booked during the call. Consent, suppression, clinic identity,
+    and the CASL/TCPA footer are enforced downstream by the SMS pipeline.
+    """
+    event = RetellWebhookEvent.model_validate(payload)
+    call = event.call
+    call_id = call.call_id
+
+    async def _finish(
+        status: str, institution_id: str | None = None, error: str | None = None
+    ) -> None:
+        try:
+            await _finish_webhook_processing(
+                call_id,
+                "call_ended",
+                status=status,
+                institution_id=institution_id,
+                error=error,
+            )
+        except Exception as exc:  # never mask the real outcome on a finalize hiccup
+            logger.warning(
+                "Failed to finalize call_ended idempotency: call_hash=%s error=%s",
+                hash_for_logging(call_id),
+                safe_error_summary(exc),
+            )
+
+    # Agent-lookup infra failures must stay retryable (raise); a missing mapping
+    # is a terminal no-op.
+    location, institution = await _resolve_institution_location_from_agent(
+        call.agent_id
+    )
+    if not location or not institution:
+        await _finish("COMPLETED")
+        return {"status": "ignored", "reason": "no_agent_mapping"}
+
+    from src.app.database import get_system_db_session
+    from src.app.models.sms_template import SmsTemplateType
+    from src.app.services.appointment_context import resolve_booking_context
+    from src.app.services.sms_template_service import SmsTemplateService
+
+    body: str | None = None
+    patient_phone: str | None = None
+    skip_reason: str | None = None
+
+    try:
+        async with get_system_db_session(
+            "retell",
+            institution_id=institution.id,
+            location_id=str(location.id),
+            external_id=call_id,
+        ) as session:
+            if not institution.has_pms:
+                # No-PMS: nothing is ever booked, so send a "request received"
+                # acknowledgement instead of a confirmation — but only for calls
+                # the agent classified as a booking request (needs_booking),
+                # never every caller. Requires the call_analyzed classification
+                # to have landed (it writes call.call_status); if it hasn't yet,
+                # we skip rather than risk texting the wrong caller.
+                from src.app.models.call import Call, CallStatus
+
+                db_call = (
+                    await session.execute(
+                        select(Call).where(
+                            Call.retell_call_id == call_id,
+                            Call.institution_id == institution.id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if (
+                    db_call is None
+                    or (db_call.call_status or "") != CallStatus.NEEDS_BOOKING.value
+                ):
+                    skip_reason = "not_booking_request"
+                elif not location.twilio_from_number:
+                    skip_reason = "no_twilio_number"
+                else:
+                    patient_phone = (
+                        call.to_number
+                        if call.direction == "outbound"
+                        else (call.from_number or call.to_number)
+                    )
+                    if not patient_phone:
+                        skip_reason = "no_patient_phone"
+                    else:
+                        template = await SmsTemplateService(session).get_template_by_type(
+                            institution.id, SmsTemplateType.APPOINTMENT_REQUEST.value
+                        )
+                        if not template or not template.is_active:
+                            skip_reason = "template_inactive"
+                        else:
+                            dyn = call.collected_dynamic_variables or {}
+                            # Patient's own phone → addressing them by name is
+                            # fine; fall back to a neutral greeting when absent.
+                            patient_name = (
+                                dyn.get("patient_name") or dyn.get("name") or "there"
+                            )
+                            body = SmsTemplateService.render(
+                                template.body,
+                                {
+                                    "patient_name": patient_name,
+                                    "location_name": location.name,
+                                    "availability": "",
+                                },
+                            )
+                # No PMS booking path for these tenants — fall through to the
+                # shared send/skip logic below with whatever was resolved above.
+                booking = None
+            else:
+                booking = await resolve_booking_context(
+                    session,
+                    institution_id=institution.id,
+                    retell_call_id=call_id,
+                    timezone=location.timezone or "UTC",
+                )
+                if not booking or not booking.booked:
+                    skip_reason = "no_booking"
+                elif not location.twilio_from_number:
+                    skip_reason = "no_twilio_number"
+                else:
+                    if call.direction == "outbound":
+                        patient_phone = call.to_number
+                    else:
+                        patient_phone = call.from_number or call.to_number
+
+                    if not patient_phone:
+                        skip_reason = "no_patient_phone"
+                    else:
+                        template = await SmsTemplateService(session).get_template_by_type(
+                            institution.id, SmsTemplateType.APPOINTMENT_BOOKED.value
+                        )
+                        if not template or not template.is_active:
+                            skip_reason = "template_inactive"
+                        else:
+                            dyn = call.collected_dynamic_variables or {}
+                            patient_name = dyn.get("patient_name") or dyn.get("name")
+                            if not patient_name and booking.patient_id:
+                                # Retell's collected_dynamic_variables are unreliable
+                                # in webhook payloads (often omitted), so fall back to
+                                # the PMS patient name — authoritative, collected at
+                                # intake — the same source the confirmation email uses.
+                                try:
+                                    from src.app.pms.nexhealth.adapter import (
+                                        NexHealthAdapter,
+                                    )
+
+                                    _adapter = await NexHealthAdapter.create(
+                                        institution, location
+                                    )
+                                    _patient = await _adapter.get_patient(
+                                        booking.patient_id
+                                    )
+                                    if _patient:
+                                        patient_name = _patient.name or " ".join(
+                                            p
+                                            for p in (
+                                                _patient.first_name,
+                                                _patient.last_name,
+                                            )
+                                            if p
+                                        ).strip()
+                                except Exception as _name_err:
+                                    logger.warning(
+                                        "PMS patient-name lookup failed: call_hash=%s error=%s",
+                                        hash_for_logging(call_id),
+                                        safe_error_summary(_name_err),
+                                    )
+                            patient_name = patient_name or "there"
+                            body = SmsTemplateService.render(
+                                template.body,
+                                {
+                                    "patient_name": patient_name,
+                                    "location_name": location.name,
+                                    "appointment_provider": booking.provider_name
+                                    or "your provider",
+                                    "appointment_datetime": booking.appointment_datetime
+                                    or "your scheduled time",
+                                    "appointment_service": booking.service or "",
+                                },
+                            )
+    except Exception as exc:
+        await _finish(
+            "FAILED", institution_id=str(institution.id), error=safe_error_summary(exc)
+        )
+        raise
+
+    if skip_reason or not body or not patient_phone:
+        await _finish("COMPLETED", institution_id=str(institution.id))
+        logger.info(
+            "call_ended confirmation SMS skipped: call_hash=%s reason=%s",
+            hash_for_logging(call_id),
+            skip_reason or "no_body",
+        )
+        return {"status": "skipped", "reason": skip_reason or "no_body"}
+
+    try:
+        from src.app.tasks.sms import enqueue_auto_sms
+
+        enqueue_auto_sms(
+            from_number=location.twilio_from_number,  # type: ignore[arg-type]
+            to_number=patient_phone,
+            body=body,
+            institution_location_id=str(location.id),
+        )
+    except Exception as exc:
+        await _finish(
+            "FAILED", institution_id=str(institution.id), error=safe_error_summary(exc)
+        )
+        raise
+
+    await _finish("COMPLETED", institution_id=str(institution.id))
+    logger.info(
+        "call_ended confirmation SMS enqueued: call_hash=%s to_hash=%s location_hash=%s",
+        hash_for_logging(call_id),
+        hash_for_logging(patient_phone),
+        hash_for_logging(str(location.id)),
+    )
+    return {"status": "queued", "call_id": hash_for_logging(call_id)}
+
+
 # ============================================================================
 # Webhook Endpoint
 # ============================================================================
@@ -272,7 +505,7 @@ async def handle_retell_webhook(
     )
 
     # Drop event types we don't process before they take a queue slot.
-    if event.event != "call_analyzed":
+    if event.event not in ("call_analyzed", "call_ended"):
         logger.info("Ignoring event type: %s", event.event)
         return {
             "status": "ignored",
@@ -299,9 +532,15 @@ async def handle_retell_webhook(
     # Hand off to the worker. The task runs on the dedicated ``webhooks``
     # queue so a backlog of call-analyzed events doesn't starve the
     # notifications/SMS queues for worker capacity.
-    from src.app.tasks.webhooks import process_retell_call_analyzed
+    from src.app.tasks.webhooks import (
+        process_retell_call_analyzed,
+        process_retell_call_ended,
+    )
 
-    process_retell_call_analyzed.delay(payload)
+    if event.event == "call_analyzed":
+        process_retell_call_analyzed.delay(payload)
+    else:
+        process_retell_call_ended.delay(payload)
 
     return {
         "status": "queued",
@@ -372,11 +611,18 @@ async def process_retell_call_analyzed_event(
             ) as session:
                 post_call_service = PostCallService(session)
 
-                # Only the scrubbed analysis is used. Raw analysis is never persisted.
-                analysis_dict = (
-                    event.call.scrubbed_call_analysis.model_dump()
+                # Prefer Retell's raw (unscrubbed) analysis; fall back to the
+                # scrubbed variant only when the raw field is absent.
+                _analysis = (
+                    event.call.call_analysis or event.call.scrubbed_call_analysis
+                )
+                analysis_dict = _analysis.model_dump() if _analysis else {}
+                # Capture the scrubbed summary separately (non-PII) so it can be
+                # stored alongside the raw summary and shown inline by default.
+                _scrubbed_summary = (
+                    event.call.scrubbed_call_analysis.call_summary
                     if event.call.scrubbed_call_analysis
-                    else {}
+                    else None
                 )
                 # Merge top-level collected_dynamic_variables so the service can use them
                 # as a source for name/email when custom_analysis_data fields are missing.
@@ -397,8 +643,21 @@ async def process_retell_call_analyzed_event(
                     disconnection_reason=event.call.disconnection_reason,
                     start_timestamp=event.call.start_timestamp,
                     end_timestamp=event.call.end_timestamp,
-                    recording_url=event.call.scrubbed_recording_url,
-                    transcript_with_tool_calls=event.call.scrubbed_transcript_with_tool_calls,
+                    recording_url=(
+                        event.call.recording_url or event.call.scrubbed_recording_url
+                    ),
+                    transcript_with_tool_calls=(
+                        event.call.transcript_with_tool_calls
+                        or event.call.scrubbed_transcript_with_tool_calls
+                    ),
+                    # Scrubbed variants stored as-is (no raw fallback): if Retell
+                    # didn't send them, they stay NULL and the UI falls back to
+                    # reveal-only rather than showing raw PHI unmasked.
+                    scrubbed_recording_url=event.call.scrubbed_recording_url,
+                    scrubbed_transcript_with_tool_calls=(
+                        event.call.scrubbed_transcript_with_tool_calls
+                    ),
+                    scrubbed_summary=_scrubbed_summary,
                 )
 
                 # Call service to save to DB (analysis_dict is always a dict now)
@@ -446,7 +705,7 @@ async def process_retell_call_analyzed_event(
                 )
 
             # ── Recording upload: enqueue S3 upload after DB commit ──
-            _rec_url = event.call.scrubbed_recording_url
+            _rec_url = event.call.recording_url or event.call.scrubbed_recording_url
             if _rec_url:
                 try:
                     from src.app.tasks.recordings import enqueue_recording_upload
@@ -578,16 +837,10 @@ async def process_retell_call_analyzed_event(
                     safe_error_summary(voice_outcome_err),
                 )
 
-            # ── Auto-SMS: enqueue after commit (durable via Celery) ────────
-            # The AI generates the SMS body as part of custom_analysis_data;
-            # Retell preserves agent-generated outbound text through scrubbing
-            # because it was synthesized for transmission, not extracted from
-            # the patient's speech.
             _scrubbed_analysis = event.call.scrubbed_call_analysis
             _custom_analysis = (
                 _scrubbed_analysis.custom_analysis_data if _scrubbed_analysis else {}
             )
-            _sms_body: str | None = (_custom_analysis or {}).get("send_sms")
             _fallback_from = (
                 _custom_analysis.get("from_number")
                 or _custom_analysis.get("phone_number")
@@ -604,66 +857,13 @@ async def process_retell_call_analyzed_event(
                     or _fallback_from
                 )
 
-            sms_body_present = bool(_sms_body)
-            sms_body_len = len(_sms_body) if _sms_body else 0
-            patient_phone_hash = (
-                hash_for_logging(_patient_phone) if _patient_phone else None
-            )
             location_id_hash = hash_for_logging(str(location.id)) if location else None
-            missing_reasons: list[str] = []
-            if not _sms_body:
-                missing_reasons.append("missing_send_sms")
-            if not _patient_phone:
-                missing_reasons.append("missing_patient_phone")
-            if not location:
-                missing_reasons.append("missing_location")
-            elif not location.twilio_from_number:
-                missing_reasons.append("missing_twilio_from_number")
 
-            if (
-                _sms_body
-                and _patient_phone
-                and location
-                and location.twilio_from_number
-            ):
-                try:
-                    from src.app.tasks.sms import enqueue_auto_sms
-
-                    enqueue_auto_sms(
-                        from_number=location.twilio_from_number,  # type: ignore[arg-type]
-                        to_number=_patient_phone,
-                        body=_sms_body,
-                        institution_location_id=location.id,
-                        patient_contact_id=saved_call.contact_id,
-                        call_id=saved_call.id,
-                    )
-                    logger.info(
-                        "Auto-SMS enqueued: call_hash=%s to_hash=%s from_hash=%s location_hash=%s sms_len=%s",
-                        hash_for_logging(event.call.call_id),
-                        patient_phone_hash or "none",
-                        hash_for_logging(location.twilio_from_number),
-                        location_id_hash or "none",
-                        sms_body_len,
-                    )
-                except Exception as sms_enqueue_err:
-                    logger.error(
-                        "Failed to enqueue auto-SMS: call_hash=%s error=%s",
-                        hash_for_logging(event.call.call_id),
-                        safe_error_summary(sms_enqueue_err),
-                    )
-
-            else:
-                logger.info(
-                    "Auto-SMS skipped: call_hash=%s reasons=%s sms_body=%s sms_len=%s patient_phone_hash=%s location_hash=%s twilio_from_configured=%s direction=%s",
-                    hash_for_logging(event.call.call_id),
-                    ",".join(missing_reasons) if missing_reasons else "unknown",
-                    sms_body_present,
-                    sms_body_len,
-                    patient_phone_hash or "none",
-                    location_id_hash or "none",
-                    bool(location and location.twilio_from_number),
-                    mapped_call_data.direction,
-                )
+            # Patient appointment-confirmation SMS is now sent on ``call_ended``
+            # (Approach B — our own editable template populated from the
+            # authoritative PMS booking), see ``process_retell_call_ended_event``.
+            # The old Retell ``send_sms`` auto-SMS on call_analyzed was retired so
+            # the patient isn't texted twice.
 
             # ── Spoken opt-out → location DNC (V-2) ────────────────────────
             # Detection is config-gated (do-not-guess): off until the real Retell

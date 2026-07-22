@@ -71,7 +71,7 @@ export type FlowEdge = Edge & {
 }
 
 const EDGE_STYLE = {
-    strokeWidth: 1.8,
+    strokeWidth: 2,
 }
 
 const EDGE_LABEL_STYLE = {
@@ -88,11 +88,12 @@ function smartEdge(edge: Omit<FlowEdge, "type"> & { type?: FlowEdge["type"] }): 
     const handle = edge.sourceHandle
     const isFalse = handle === "false"
     const isTrue = handle === "true"
+    const isBranch = isFalse || isTrue
     return {
         type: "smoothstep",
         pathOptions: {
-            borderRadius: 14,
-            offset: isFalse ? 34 : isTrue ? 22 : 26,
+            borderRadius: 8,
+            offset: isBranch ? (isFalse ? 30 : 22) : 14,
         },
         interactionWidth: 18,
         style: EDGE_STYLE,

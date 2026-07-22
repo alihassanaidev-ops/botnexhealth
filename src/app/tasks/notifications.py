@@ -31,7 +31,6 @@ from src.app.services.dead_letter import capture_dead_letter, should_retry_vendo
 from src.app.services.email_notification_service import (
     EmailNotificationService,
     mask_phone,
-    redact_patient_name,
     resolve_template_type,
 )
 from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
@@ -145,6 +144,52 @@ def _extract_appointment_data(
         "appointment_datetime": appt_datetime,
         "appointment_provider": provider,
         "appointment_service": service,
+    }
+
+
+def _yes_no(value: Any) -> str | None:
+    """Coerce a boolean-ish custom-analysis value to 'Yes'/'No', or None."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    text = str(value).strip().lower()
+    if text in {"true", "yes", "1", "y"}:
+        return "Yes"
+    if text in {"false", "no", "0", "n"}:
+        return "No"
+    return None
+
+
+def _extract_nopms_request_fields(
+    *, custom: dict[str, Any], dynamic: dict[str, Any]
+) -> dict[str, str | None]:
+    """PHI-FREE triage fields from a no-PMS agent's custom_analysis_data.
+
+    Reads the no-PMS agent's own keys (``Availability``, ``New Patient?``,
+    ``Emergency``, ``Call Status``) via the same normalization used elsewhere,
+    so trailing spaces / casing / punctuation don't matter. Deliberately does
+    NOT read name or date of birth — those never belong in the staff email.
+    """
+    availability = _pick_any(
+        custom, ["Availability", "availability", "preferred_time", "preferred_times"]
+    ) or _pick_any(dynamic, ["availability", "preferred_time"])
+    new_patient = _yes_no(
+        _pick_any(custom, ["New Patient?", "New Patient", "new_patient", "is_new_patient"])
+        or _pick_any(dynamic, ["new_patient", "is_new_patient"])
+    )
+    is_emergency = _yes_no(
+        _pick_any(custom, ["Emergency", "emergency", "is_emergency"])
+        or _pick_any(dynamic, ["emergency", "is_emergency"])
+    )
+    call_status = _pick_any(
+        custom, ["Call Status", "call_status", "status"]
+    ) or _pick_any(dynamic, ["call_status"])
+    return {
+        "availability": availability,
+        "new_patient": new_patient,
+        "is_emergency": is_emergency,
+        "call_status": call_status,
     }
 
 
@@ -362,13 +407,10 @@ async def _send_call_notification_async(
         # PMS agents emit "appointment_booked"; no-PMS agents emit "needs_booking"
         # (a request to book manually). Both drive the appointment notification.
         is_appointment = primary_tag in ("appointment_booked", "needs_booking")
-        template_type = resolve_template_type(
-            is_urgent=urgent, is_appointment_booked=is_appointment
-        )
 
         # For no-PMS institutions the appointment is a *request* to be booked
-        # manually — drives the request-worded email default. needs_booking only
-        # ever comes from no-PMS agents, but we also gate on pms_type for safety.
+        # manually. needs_booking only ever comes from no-PMS agents, but we also
+        # gate on pms_type for safety.
         appointment_pending = False
         if is_appointment:
             pms_type = (
@@ -377,6 +419,16 @@ async def _send_call_notification_async(
                 )
             ).scalar_one_or_none()
             appointment_pending = (pms_type or "nexhealth") == "none" or primary_tag == "needs_booking"
+
+        # Route no-PMS requests to the dedicated PHI-free ``appointment_request``
+        # type (both recipient resolution and rendering). Urgent still wins so an
+        # emergency call is never downgraded to a routine request.
+        if appointment_pending and not urgent:
+            template_type = EmailTemplateType.APPOINTMENT_REQUEST.value
+        else:
+            template_type = resolve_template_type(
+                is_urgent=urgent, is_appointment_booked=is_appointment
+            )
 
         recipients = await _resolve_recipients(
             session, institution_id, location_id, template_type
@@ -397,23 +449,72 @@ async def _send_call_notification_async(
             fallback_contact_name=call.contact.full_name if call.contact else None,
         )
 
+        # Approach B: for a real PMS booking, override the transcript-derived
+        # provider/time/service with the authoritative values from the
+        # ``book_appointment`` result (resolved to display names). This is what
+        # stops the staff email from showing "Provider: Not provided".
+        if is_appointment and call.retell_call_id:
+            try:
+                from src.app.services.appointment_context import (
+                    resolve_booking_context,
+                )
+
+                booking = await resolve_booking_context(
+                    session,
+                    institution_id=institution_id,
+                    retell_call_id=call.retell_call_id,
+                    timezone=(location.timezone if location else "UTC") or "UTC",
+                )
+                if booking and booking.booked:
+                    if booking.provider_name:
+                        appt["appointment_provider"] = booking.provider_name
+                    if booking.appointment_datetime:
+                        appt["appointment_datetime"] = booking.appointment_datetime
+                    if booking.service:
+                        appt["appointment_service"] = booking.service
+            except Exception as exc:
+                logger.warning(
+                    "Booking-context resolve failed for email: call_hash=%s error=%s",
+                    hash_for_logging(call.id),
+                    safe_error_summary(exc),
+                )
+
+        contact_phone = call.contact.phone if call.contact else None
+        # No-PMS request emails are PHI-free: never send patient name, and show
+        # an explicit "No phone number captured" instead of "Unknown".
+        caller_phone_masked = (
+            mask_phone(contact_phone)
+            if contact_phone
+            else ("No phone number captured" if appointment_pending else "Unknown")
+        )
+        nopms = (
+            _extract_nopms_request_fields(custom=custom, dynamic=dynamic)
+            if appointment_pending
+            else {}
+        )
+
         payload = {
             "call_id": call.id,
             "institution_id": institution_id,
             "location_name": location_name,
-            "caller_phone_masked": mask_phone(
-                call.contact.phone if call.contact else None
-            ),
+            "caller_phone_masked": caller_phone_masked,
             "duration_seconds": call.call_duration_seconds,
             "primary_tag": call.call_status,
             "tags": tags,
             "is_urgent": urgent,
-            "appointment_patient_redacted": redact_patient_name(
-                appt.get("patient_name")
+            # PHI-free for no-PMS: suppress patient name entirely on the request
+            # path (the appointment_request template never references it anyway).
+            "appointment_patient_name": (
+                None if appointment_pending else appt.get("patient_name")
             ),
             "appointment_datetime": appt.get("appointment_datetime"),
             "appointment_provider": appt.get("appointment_provider"),
             "appointment_service": appt.get("appointment_service"),
+            # No-PMS PHI-free triage fields (empty dict for integrated tenants).
+            "availability": nopms.get("availability"),
+            "new_patient": nopms.get("new_patient"),
+            "is_emergency": nopms.get("is_emergency"),
+            "call_status_label": nopms.get("call_status"),
             "dashboard_link": _build_dashboard_link(call.id),
         }
 
@@ -575,7 +676,7 @@ def send_test_call_notification(
             "primary_tag": normalized_tag,
             "tags": [normalized_tag],
             "is_urgent": urgent,
-            "appointment_patient_redacted": "J*** D***",
+            "appointment_patient_name": "John Doe",
             "appointment_datetime": "2026-03-10 2:30 PM",
             "appointment_provider": "Dr. Test Provider",
             "appointment_service": "Consultation",

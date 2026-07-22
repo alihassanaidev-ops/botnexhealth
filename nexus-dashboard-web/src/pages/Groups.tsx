@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
 import { Layers, Plus, RefreshCw, Settings2, X, Building2 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -190,18 +191,19 @@ export default function Groups() {
 
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2"><Layers className="h-7 w-7" /> Groups</h2>
-                    <p className="text-muted-foreground mt-1">DSO / practice-group umbrellas with read-only cross-practice oversight.</p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={fetchAll} disabled={loading} className="gap-1.5">
-                        <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
-                    </Button>
-                    <Button size="sm" onClick={() => setCreating(true)} className="gap-1.5"><Plus className="h-3.5 w-3.5" /> New Group</Button>
-                </div>
-            </div>
+            <PageHeader
+                icon={Layers}
+                title="Groups"
+                description="DSO / practice-group umbrellas with read-only cross-practice oversight."
+                actions={
+                    <>
+                        <Button variant="outline" size="sm" onClick={fetchAll} disabled={loading} className="gap-1.5">
+                            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
+                        </Button>
+                        <Button size="sm" onClick={() => setCreating(true)} className="gap-1.5"><Plus className="h-3.5 w-3.5" /> New Group</Button>
+                    </>
+                }
+            />
 
             <Card>
                 <CardContent className="p-0">

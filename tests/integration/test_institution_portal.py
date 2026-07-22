@@ -155,8 +155,8 @@ async def test_list_institution_users_success(async_client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_invite_institution_user_rejects_staff_role(async_client: AsyncClient):
-    """Institution admins can invite INSTITUTION_ADMIN and LOCATION_ADMIN only."""
+async def test_invite_institution_user_staff_requires_location(async_client: AsyncClient):
+    """Institution admins can invite STAFF only with an explicit location."""
     mock_user = User(
         id="11111111-1111-1111-1111-111111111111",
         email="admin@clinic.com",
@@ -183,7 +183,7 @@ async def test_invite_institution_user_rejects_staff_role(async_client: AsyncCli
             app.dependency_overrides = {}
 
     assert response.status_code == 422
-    assert "Invalid role 'STAFF'" in response.json()["detail"]
+    assert "location_slug is required for STAFF" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

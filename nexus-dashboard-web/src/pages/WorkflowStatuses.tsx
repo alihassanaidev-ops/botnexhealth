@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react"
 import { Tag, Plus, Pencil, Loader2, Archive, ArchiveRestore, RefreshCcw } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -113,28 +114,23 @@ export default function WorkflowStatuses() {
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
 
             {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-                        <Tag className="h-7 w-7" />
-                        Call Statuses
-                    </h2>
-                    <p className="text-muted-foreground mt-1">
-                        Workflow states your team assigns to calls (e.g. Pending, Completed). Distinct
-                        from the AI tags applied automatically.
-                    </p>
-                </div>
-                <div className="flex items-center gap-3">
-                    <Button variant="outline" size="sm" onClick={refresh} disabled={loading} className="gap-1.5">
-                        <RefreshCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-                        Refresh
-                    </Button>
-                    <Button size="sm" className="gap-1.5" onClick={openCreate} disabled={atCap}>
-                        <Plus className="h-4 w-4" />
-                        New status
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                icon={Tag}
+                title="Call Statuses"
+                description="Workflow states your team assigns to calls (e.g. Pending, Completed). Distinct from the AI tags applied automatically."
+                actions={
+                    <>
+                        <Button variant="outline" size="sm" onClick={refresh} disabled={loading} className="gap-1.5">
+                            <RefreshCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+                            Refresh
+                        </Button>
+                        <Button size="sm" className="gap-1.5" onClick={openCreate} disabled={atCap}>
+                            <Plus className="h-4 w-4" />
+                            New status
+                        </Button>
+                    </>
+                }
+            />
 
             <Card>
                 <CardContent className="p-0">

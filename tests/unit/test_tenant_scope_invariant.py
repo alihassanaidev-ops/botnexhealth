@@ -47,8 +47,8 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # share the same Retell call_id, which Retell guarantees never happens.
     ("src/app/retell/idempotency.py", 96, "RetellFunctionInvocation"),
     ("src/app/retell/idempotency.py", 182, "RetellFunctionInvocation"),
-    ("src/app/retell/webhooks.py", 154, "RetellWebhookEvent"),
-    ("src/app/retell/webhooks.py", 216, "RetellWebhookEvent"),
+    ("src/app/retell/webhooks.py", 162, "RetellWebhookEvent"),
+    ("src/app/retell/webhooks.py", 224, "RetellWebhookEvent"),
 
     # Twilio status callback identifies our row by message_sid (Twilio's
     # globally unique message id). Twilio doesn't know our institution_id.
@@ -60,9 +60,9 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # with DATABASE_ADMIN_URL and intentionally scans expired records across
     # tenants. It only clears PHI whose retention deadline has passed and
     # skips rows under legal hold.
-    ("src/app/services/retention_policy.py", 282, "Call"),    # expired recordings
-    ("src/app/services/retention_policy.py", 331, "Call"),    # purged-call CFV cleanup
-    ("src/app/services/retention_policy.py", 356, "Call"),    # retained-call EXISTS
+    ("src/app/services/retention_policy.py", 305, "Call"),    # expired recordings
+    ("src/app/services/retention_policy.py", 354, "Call"),    # purged-call CFV cleanup
+    ("src/app/services/retention_policy.py", 379, "Call"),    # retained-call EXISTS
     ("src/app/services/retention_policy.py", 390, "Contact"), # anonymized-contact CFV
 
     # Contact-detail (Patients page) loads a primary contact's aliases and the

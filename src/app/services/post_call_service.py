@@ -4,6 +4,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+import json
+
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,6 +93,21 @@ def _parse_dob(raw: str | None) -> str | None:
         hash_for_logging(raw),
         len(raw),
     )
+    return None
+
+
+def _booked_appt_type_id_from_results(result_rows: list[str | None]) -> str | None:
+    """Pick the appointment_type_id from book_appointment ``result_json`` rows,
+    preferring the most recent successful booking. Pure + null-safe (testable)."""
+    for rj in result_rows:
+        if not rj:
+            continue
+        try:
+            data = json.loads(rj)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict) and data.get("success") and data.get("appointment_type_id"):
+            return str(data["appointment_type_id"])
     return None
 
 
@@ -373,7 +390,7 @@ class PostCallService:
             retell_call_id=webhook_call.call_id,
             call_direction=webhook_call.direction,
             agent_used=webhook_call.agent_id,
-            recording_url=webhook_call.recording_url,  # scrubbed URL set in webhooks.py
+            recording_url=webhook_call.recording_url,  # raw recording URL set in webhooks.py
             patient_sentiment=analysis_dict.get("user_sentiment"),
             call_status=primary_status,
             call_tags=all_tags,
@@ -396,6 +413,13 @@ class PostCallService:
             ),
             # Treat the string "None" (from Retell when no detail exists) as NULL
             next_action=_nonempty(custom.get("Appointment Detail")),
+            # Retell PII-scrubbed variants (non-PHI, plaintext). NULL when the
+            # account has redaction disabled; the UI then falls back to reveal.
+            scrubbed_transcript_with_tool_calls=(
+                webhook_call.scrubbed_transcript_with_tool_calls
+            ),
+            scrubbed_summary=webhook_call.scrubbed_summary,
+            scrubbed_recording_url=webhook_call.scrubbed_recording_url,
         )
         # Encrypted setters — write after construction so JSON serialization
         # happens through the property and never raw onto the column.
@@ -440,6 +464,17 @@ class PostCallService:
         self.session.add(call)
         await self.session.flush()  # ensure call.id is assigned
 
+        # Best-effort: record which appointment type (if any) this call booked,
+        # resolved from the persisted book_appointment invocation. Post-call only;
+        # it never raises, so it cannot affect the call record or the booking flow.
+        try:
+            await self._capture_booked_appointment_type(call, institution_id)
+        except Exception as e:  # noqa: BLE001 — strictly best-effort
+            logger.warning(
+                "Booked appointment type capture skipped for call_hash=%s: %s",
+                hash_for_logging(webhook_call.call_id), type(e).__name__,
+            )
+
         # ── 4. Extract institution-defined custom fields from webhook data ─────
         cf_service = CustomFieldService(self.session)
         cf_count = await cf_service.extract_and_save_from_webhook(
@@ -461,3 +496,53 @@ class PostCallService:
 
         # Caller (webhooks.py) is responsible for session.commit()
         return call
+
+    async def _capture_booked_appointment_type(self, call: Call, institution_id: str) -> None:
+        """Populate ``call.booked_appointment_type_{id,name}`` from the
+        book_appointment invocation persisted during the call.
+
+        Best-effort and post-call: the live booking has already completed and been
+        cached in ``retell_function_invocations`` by the time this runs, so reading
+        it here cannot slow or break booking.
+        """
+        from src.app.models.institution_appointment_type import InstitutionAppointmentType
+        from src.app.models.retell_function_invocation import (
+            RetellFunctionInvocation,
+            RetellFunctionStatus,
+        )
+
+        if not call.retell_call_id:
+            return
+
+        result_rows = (
+            await self.session.execute(
+                select(RetellFunctionInvocation.result_json)
+                .where(
+                    RetellFunctionInvocation.call_id == call.retell_call_id,
+                    RetellFunctionInvocation.function_name == "book_appointment",
+                    RetellFunctionInvocation.status == RetellFunctionStatus.COMPLETED.value,
+                )
+                .order_by(RetellFunctionInvocation.updated_at.desc())
+            )
+        ).scalars().all()
+
+        appt_type_id = _booked_appt_type_id_from_results(list(result_rows))
+        if not appt_type_id:
+            return
+        call.booked_appointment_type_id = appt_type_id
+
+        # Resolve a human-readable name from the cached types. source_id may or may
+        # not carry the ``nh-`` prefix depending on the write path, so match both.
+        normalized = appt_type_id.removeprefix("nh-")
+        call.booked_appointment_type_name = (
+            await self.session.execute(
+                select(InstitutionAppointmentType.name)
+                .where(
+                    InstitutionAppointmentType.institution_id == institution_id,
+                    InstitutionAppointmentType.source_id.in_(
+                        [appt_type_id, normalized, f"nh-{normalized}"]
+                    ),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()

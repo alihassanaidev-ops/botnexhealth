@@ -129,6 +129,7 @@ export interface LocationInfo {
     id: string;
     name: string;
     slug: string;
+    timezone?: string | null;
 }
 
 export interface SetupOverview {
@@ -295,8 +296,13 @@ export interface CallRecord {
     workflow_status?: WorkflowStatusRef | null;  // human-assigned (distinct from call_tags)
     patient_status: string | null;
     summary: string | null;
+    /** Retell's PII-scrubbed summary (bracket placeholders masked to *****).
+     *  Non-PHI, shown inline; null when Retell redaction is off. */
+    scrubbed_summary?: string | null;
     patient_sentiment: string | null;
     next_action: string | null;
+    /** Appointment type booked during the call, if any. */
+    booked_appointment_type_name?: string | null;
     is_new_patient: boolean;
     is_complaint: boolean;
     is_insurance_billing: boolean;
@@ -353,13 +359,18 @@ export interface TranscriptTurn {
 }
 
 export interface CallDetail extends CallRecord {
-    // The detail response intentionally carries no PHI bodies — only flags
-    // indicating whether a reveal is possible. Transcripts and recordings
-    // come back from explicit, audited reveal endpoints below. The backend
-    // stores only the PII-scrubbed structured transcript (raw / unscrubbed
-    // variants were dropped in migration 20260505_encrypt_call_transcript).
+    // The detail response carries no *raw* PHI bodies — the raw (unscrubbed)
+    // transcript/recording stay encrypted at rest and come back only from the
+    // explicit, audited reveal endpoints below (transcript_available /
+    // recording_available flag whether a reveal is possible). Retell's
+    // PII-scrubbed variants ARE served inline (see below) as the default view.
     transcript_available: boolean;
     recording_available: boolean;
+    /** Retell's PII-scrubbed transcript/recording (non-PHI). Served inline with
+     *  bracket placeholders masked to *****; the raw variants come from the
+     *  audited reveal endpoints. Null/absent when Retell redaction is off. */
+    scrubbed_transcript?: TranscriptTurn[] | null;
+    scrubbed_recording_url?: string | null;
     custom_fields: CustomFieldValue[];
 }
 
@@ -505,6 +516,7 @@ export interface CallbackQueueItem {
     call_duration_seconds: number | null;
     summary: string | null;
     next_action: string | null;
+    booked_appointment_type_name?: string | null;
     phone_masked: string | null;
     phone_reveal_available: boolean;
 }
@@ -542,6 +554,7 @@ export interface CallbackListItem {
     call_duration_seconds: number | null;
     summary: string | null;
     next_action: string | null;
+    booked_appointment_type_name?: string | null;
     callback_resolved: boolean;
     callback_resolved_at: string | null;
     callback_note: string | null;

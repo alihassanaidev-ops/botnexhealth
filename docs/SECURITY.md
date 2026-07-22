@@ -92,9 +92,13 @@ Application-layer encryption on top of RDS volume encryption:
   `JWT_SECRET` (`src/app/config.py:203-211`) — rotating JWTs must never be an
   accidental PHI-key rotation.
 
-Call recordings: only Retell's *scrubbed* recording/transcript artifacts are
-ever stored (raw ones are never fetched); audio goes to a private S3 bucket
-under `recordings/{institution_id}/{call_id}` with retention tagging.
+Call recordings & transcripts: Retell's *raw (unscrubbed)* recording,
+transcript, and analysis are stored (scrubbed variants are used only as a
+fallback when raw is absent). This is PHI at rest — protected by
+application-layer AES-256-GCM encryption on transcript/summary, RDS at-rest
+encryption, and RBAC/tenant-scoped access with audited reveal endpoints,
+rather than by scrubbing at the webhook boundary. Audio goes to a private S3
+bucket under `recordings/{institution_id}/{call_id}` with retention tagging.
 
 Logging: structured JSON, request-scoped IDs, and a hard rule of no
 bodies/PHI in logs — upstream error bodies are logged as status + byte count

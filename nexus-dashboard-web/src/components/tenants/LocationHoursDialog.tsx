@@ -20,6 +20,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import { FormSkeleton } from "@/components/ui/skeletons";
 import type { Location, OperatingHoursResponse, OperatingHoursEntry, BreakResponse, BreakCreateRequest } from "@/types";
 
 interface LocationHoursDialogProps {
@@ -191,9 +192,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                             <h3 className="text-lg font-medium">Weekly Hours</h3>
                         </div>
                         {isLoadingHours ? (
-                            <div className="flex justify-center p-8">
-                                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-                            </div>
+                            <FormSkeleton rows={4} />
                         ) : (
                             <div className="space-y-3 rounded-lg border border-border bg-card p-4">
                                 {hours.map((hour) => (
@@ -244,9 +243,7 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
                         </div>
                         <div className="space-y-4 rounded-lg border border-border bg-card p-4">
                             {isLoadingBreaks ? (
-                                <div className="flex justify-center p-4">
-                                    <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-                                </div>
+                                <FormSkeleton rows={4} />
                             ) : breaks.length === 0 ? (
                                 <p className="text-sm text-muted-foreground py-2">No breaks configured.</p>
                             ) : (

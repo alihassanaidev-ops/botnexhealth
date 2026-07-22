@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react"
 import {
     ArrowDown,
     ArrowUp,
+    Building2,
     CalendarCheck,
     Clock,
     CreditCard,
@@ -11,9 +12,11 @@ import {
     Phone,
     RefreshCcw,
     Settings2,
+    Trash2,
     TrendingUp,
     UserPlus,
 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
 import { ComparisonChart } from "@/components/dashboard/ComparisonChart"
 import { lastNDaysRange, type DateRangeValue } from "@/lib/date-range"
@@ -27,9 +30,13 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { FormSkeleton } from "@/components/ui/skeletons"
 import {
     calculateROI,
+    createLocationBreak,
+    deleteLocationBreak,
     getAggregateDashboard,
+    getLocationBreaks,
     getLocationOperatingHours,
     getROIConfig,
     listInstitutionPortalLocations,
@@ -42,7 +49,7 @@ import {
     type ROIConfig,
 } from "@/lib/institution-portal-api"
 import { SUPPORTED_TIMEZONES } from "@/lib/timezones"
-import type { OperatingHoursEntry } from "@/types"
+import type { BreakResponse, OperatingHoursEntry } from "@/types"
 
 const DAYS = [
     { value: 0, label: "Monday" },
@@ -72,6 +79,54 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
     const [loading, setLoading] = useState(false)
     const [saving, setSaving] = useState(false)
     const [hours, setHours] = useState<OperatingHoursEntry[]>(defaultHours)
+    // Recurring breaks (e.g. lunch) — hidden from bookable slots on both the
+    // dashboard and the voice agent once saved.
+    const [breaks, setBreaks] = useState<BreakResponse[]>([])
+    const [breakName, setBreakName] = useState("Lunch")
+    const [breakDay, setBreakDay] = useState<string>("all")
+    const [breakStart, setBreakStart] = useState("12:00")
+    const [breakEnd, setBreakEnd] = useState("13:00")
+    const [savingBreak, setSavingBreak] = useState(false)
+
+    useEffect(() => {
+        if (!location) return
+        getLocationBreaks(location.slug)
+            .then(setBreaks)
+            .catch((error) => {
+                toast.error(error?.response?.data?.detail || "Failed to load breaks")
+            })
+    }, [location])
+
+    async function addBreak() {
+        if (!location) return
+        setSavingBreak(true)
+        try {
+            const created = await createLocationBreak(location.slug, {
+                name: breakName.trim() || "Break",
+                day_of_week: breakDay === "all" ? null : Number(breakDay),
+                start_time: breakStart,
+                end_time: breakEnd,
+            })
+            setBreaks((prev) => [...prev, created])
+            toast.success("Break added")
+        } catch (error) {
+            const e = error as { response?: { data?: { detail?: string } } }
+            toast.error(e?.response?.data?.detail || "Failed to add break")
+        } finally {
+            setSavingBreak(false)
+        }
+    }
+
+    async function removeBreak(breakId: string) {
+        if (!location) return
+        try {
+            await deleteLocationBreak(location.slug, breakId)
+            setBreaks((prev) => prev.filter((b) => b.id !== breakId))
+        } catch (error) {
+            const e = error as { response?: { data?: { detail?: string } } }
+            toast.error(e?.response?.data?.detail || "Failed to remove break")
+        }
+    }
 
     useEffect(() => {
         if (!location) return
@@ -138,14 +193,12 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
 
     return (
         <Dialog open={!!location} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-2xl border-border bg-card">
+            <DialogContent className="max-w-2xl border-border bg-card max-h-[85vh] overflow-y-auto">
                 <DialogHeader>
                     <DialogTitle>Operating Hours: {location.name}</DialogTitle>
                 </DialogHeader>
                 {loading ? (
-                    <div className="flex items-center justify-center py-12">
-                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                    </div>
+                    <FormSkeleton rows={5} />
                 ) : (
                     <div className="space-y-3">
                         {hours.map((hour) => (
@@ -182,6 +235,97 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
                                 {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                 Save Hours
                             </Button>
+                        </div>
+
+                        {/* Breaks (e.g. lunch) — hidden from bookable slots */}
+                        <div className="space-y-3 border-t border-border pt-4">
+                            <div>
+                                <h4 className="text-sm font-semibold text-foreground">Breaks</h4>
+                                <p className="text-xs text-muted-foreground">
+                                    Block out recurring windows (e.g. lunch). These slots won't be
+                                    offered on the dashboard or by the phone agent.
+                                </p>
+                            </div>
+
+                            {breaks.length > 0 && (
+                                <div className="space-y-2">
+                                    {breaks.map((b) => (
+                                        <div
+                                            key={b.id}
+                                            className="flex items-center justify-between rounded-lg border border-border bg-muted p-2.5 text-sm"
+                                        >
+                                            <span>
+                                                <span className="font-medium">{b.name}</span>
+                                                <span className="text-muted-foreground">
+                                                    {" — "}
+                                                    {b.day_of_week === null
+                                                        ? "Every day"
+                                                        : DAYS.find((d) => d.value === b.day_of_week)?.label}
+                                                    {`, ${b.start_time}–${b.end_time}`}
+                                                </span>
+                                            </span>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                                onClick={() => removeBreak(b.id)}
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                                <span className="sr-only">Remove break</span>
+                                            </Button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-border p-3">
+                                <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground">Name</label>
+                                    <Input
+                                        className="w-32"
+                                        value={breakName}
+                                        onChange={(e) => setBreakName(e.target.value)}
+                                        placeholder="Lunch"
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground">Day</label>
+                                    <select
+                                        className="h-9 w-32 rounded-md border border-input bg-background px-2 text-sm"
+                                        value={breakDay}
+                                        onChange={(e) => setBreakDay(e.target.value)}
+                                    >
+                                        <option value="all">Every day</option>
+                                        {DAYS.map((d) => (
+                                            <option key={d.value} value={String(d.value)}>
+                                                {d.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground">From</label>
+                                    <Input
+                                        type="time"
+                                        className="w-28"
+                                        value={breakStart}
+                                        onChange={(e) => setBreakStart(e.target.value)}
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground">To</label>
+                                    <Input
+                                        type="time"
+                                        className="w-28"
+                                        value={breakEnd}
+                                        onChange={(e) => setBreakEnd(e.target.value)}
+                                    />
+                                </div>
+                                <Button variant="outline" onClick={addBreak} disabled={savingBreak}>
+                                    {savingBreak && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    Add Break
+                                </Button>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -322,21 +466,20 @@ export default function InstitutionAdminPanel() {
     return (
         <div className="relative space-y-6 bg-background">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Institution Admin Panel</h1>
-                    <p className="mt-1 text-muted-foreground">
-                        Aggregate performance across all locations with location-level operations controls.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <DateRangePicker value={range} onChange={setRange} />
-                    <Button onClick={loadData} disabled={loading}>
-                        {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                icon={Building2}
+                title="Institution Admin Panel"
+                description="Aggregate performance across all locations with location-level operations controls."
+                actions={
+                    <>
+                        <DateRangePicker value={range} onChange={setRange} />
+                        <Button onClick={loadData} disabled={loading}>
+                            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                            Refresh
+                        </Button>
+                    </>
+                }
+            />
 
 
             {/* Chart + ROI side by side (chart goes full-width when ROI has no data) */}
@@ -356,9 +499,7 @@ export default function InstitutionAdminPanel() {
                         </CardHeader>
                         <CardContent>
                             {roiLoading ? (
-                                <div className="flex items-center justify-center py-8">
-                                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                                </div>
+                                <FormSkeleton rows={3} />
                             ) : roiCalculation ? (
                                 <div className="space-y-4">
                                     {/* ROI hero */}

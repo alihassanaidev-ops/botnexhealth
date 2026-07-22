@@ -337,6 +337,14 @@ function DetailsContent({
                     </div>
                 </DetailField>
 
+                {detail.booked_appointment_type_name && (
+                    <DetailField label="Booked">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                            {detail.booked_appointment_type_name}
+                        </span>
+                    </DetailField>
+                )}
+
                 {detail.next_action && (
                     <DetailField label="Next Action">
                         <p className="rounded-lg border bg-muted p-2.5 text-xs leading-relaxed">{detail.next_action}</p>

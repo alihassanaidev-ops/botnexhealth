@@ -1070,19 +1070,9 @@ async def invite_location_user(
                 detail=f"User with email '{email}' already exists",
             )
 
-        # Check if location already has a user
-        existing_loc_user = await session.execute(
-            select(User).where(
-                User.location_id == location.id,
-                User.role == UserRole.LOCATION_ADMIN.value,
-                User.deleted_at.is_(None),
-            )
-        )
-        if existing_loc_user.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Location '{loc_slug}' already has an assigned user",
-            )
+        # A location may have multiple LOCATION_ADMINs — we intentionally do not
+        # cap it at one. (Email uniqueness is still enforced above, so the same
+        # person can't be invited twice.)
 
         # Create local user and send invite email
         try:

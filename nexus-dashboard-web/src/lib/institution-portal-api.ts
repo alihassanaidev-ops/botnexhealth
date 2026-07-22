@@ -1,5 +1,10 @@
 import api from "@/lib/api"
-import type { OperatingHoursEntry, OperatingHoursResponse } from "@/types"
+import type {
+    BreakCreateRequest,
+    BreakResponse,
+    OperatingHoursEntry,
+    OperatingHoursResponse,
+} from "@/types"
 
 export interface InstitutionPortalMe {
     id: string
@@ -164,6 +169,26 @@ export async function updateLocationOperatingHours(
         { hours },
     )
     return data
+}
+
+export async function getLocationBreaks(locSlug: string): Promise<BreakResponse[]> {
+    const { data } = await api.get<BreakResponse[]>(`/institution/locations/${locSlug}/breaks`)
+    return data
+}
+
+export async function createLocationBreak(
+    locSlug: string,
+    body: BreakCreateRequest,
+): Promise<BreakResponse> {
+    const { data } = await api.post<BreakResponse>(
+        `/institution/locations/${locSlug}/breaks`,
+        body,
+    )
+    return data
+}
+
+export async function deleteLocationBreak(locSlug: string, breakId: string): Promise<void> {
+    await api.delete(`/institution/locations/${locSlug}/breaks/${breakId}`)
 }
 
 export async function inviteInstitutionAdmin(email: string): Promise<void> {

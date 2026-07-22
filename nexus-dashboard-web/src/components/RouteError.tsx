@@ -1,6 +1,12 @@
+import { useEffect } from "react"
 import { useRouteError, useNavigate, isRouteErrorResponse } from "react-router-dom"
 import { AlertTriangle, RefreshCcw, Home } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { recoverFromChunkError } from "@/lib/chunk-reload"
+
+// A failed lazy-chunk import after a deploy surfaces here; these are the messages
+// browsers use for it. Reloading fetches the fresh build.
+const CHUNK_ERROR = /dynamically imported module|module script failed|ChunkLoadError|Failed to fetch/i
 
 /**
  * Friendly fallback shown by React Router's `errorElement` when a route (or any
@@ -16,6 +22,13 @@ export default function RouteError() {
         : error instanceof Error
             ? error.message
             : "Unknown error"
+
+    // If this is a stale-chunk failure after a deploy, recover automatically
+    // instead of making the user reload by hand.
+    const isChunkError = error instanceof Error && CHUNK_ERROR.test(error.message)
+    useEffect(() => {
+        if (isChunkError) recoverFromChunkError()
+    }, [isChunkError])
 
     return (
         <div className="flex min-h-[70vh] flex-col items-center justify-center gap-5 p-8 text-center">

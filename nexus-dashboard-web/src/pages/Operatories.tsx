@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
-import { RefreshCcw } from "lucide-react"
+import { RefreshCcw, Armchair } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import type { CachedOperatory } from "@/types"
 import { listOperatories, triggerSync } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
@@ -57,21 +58,16 @@ export default function Operatories() {
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <div className="flex items-center justify-between space-y-2">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight">Operatories</h2>
-                    <p className="text-muted-foreground">
-                        Rooms and chairs synced from your PMS. Read-only — manage operatories in your practice management system.
-                    </p>
-                </div>
-                <div className="flex items-center space-x-2">
-                    {canManage && (
-                        <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
-                            <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                        </Button>
-                    )}
-                </div>
-            </div>
+            <PageHeader
+                icon={Armchair}
+                title="Operatories"
+                description="Rooms and chairs synced from your PMS. Read-only — manage operatories in your practice management system."
+                actions={canManage && (
+                    <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
+                        <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                    </Button>
+                )}
+            />
 
             <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm mt-4">
                 <Table>

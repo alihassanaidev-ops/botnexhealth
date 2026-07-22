@@ -29,6 +29,14 @@ import {
     FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { TenantCredentialsForm } from "@/components/tenants/TenantCredentialsForm";
 import { LocationList } from "@/components/tenants/LocationList";
@@ -58,6 +66,9 @@ export default function InstitutionDetailPage() {
     const [testUrgent, setTestUrgent] = useState(false);
     const [sendingTestEmail, setSendingTestEmail] = useState(false);
     const reinviteCooldown = useCooldown(INVITE_COOLDOWN_SECONDS);
+    const [inviteOpen, setInviteOpen] = useState(false);
+    const [inviteEmail, setInviteEmail] = useState("");
+    const [inviting, setInviting] = useState(false);
 
     const fetchInstitution = useCallback(async () => {
         setIsLoading(true);
@@ -125,6 +136,34 @@ export default function InstitutionDetailPage() {
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to update institution");
+        }
+    }
+
+    async function handleInviteAdmin() {
+        if (!institution) return;
+        const email = inviteEmail.trim();
+        if (!email) {
+            toast.error("Enter an email address");
+            return;
+        }
+        setInviting(true);
+        try {
+            // Super-admin invite for ANY institution — seats an additional
+            // institution admin without needing the clinic's own admin.
+            await api.post(`/admin/users/invite`, {
+                email,
+                institution_id: institution.id,
+                role: "INSTITUTION_ADMIN",
+            });
+            toast.success(`Invite sent to ${email}`);
+            setInviteOpen(false);
+            setInviteEmail("");
+            await fetchInstitution();
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to send invite");
+        } finally {
+            setInviting(false);
         }
     }
 
@@ -324,19 +363,29 @@ export default function InstitutionDetailPage() {
                                         <CardTitle>Admin User</CardTitle>
                                         <CardDescription>The primary admin user for this institution</CardDescription>
                                     </div>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={handleReinvite}
-                                        disabled={reinviting || reinviteCooldown.isActive}
-                                    >
-                                        {reinviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
-                                        {reinviting
-                                            ? "Reinviting..."
-                                            : reinviteCooldown.isActive
-                                                ? `Reinvite (${reinviteCooldown.remaining}s)`
-                                                : "Reinvite"}
-                                    </Button>
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            variant="default"
+                                            size="sm"
+                                            onClick={() => setInviteOpen(true)}
+                                        >
+                                            <MailPlus className="mr-2 h-4 w-4" />
+                                            Invite Admin
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={handleReinvite}
+                                            disabled={reinviting || reinviteCooldown.isActive}
+                                        >
+                                            {reinviting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
+                                            {reinviting
+                                                ? "Reinviting..."
+                                                : reinviteCooldown.isActive
+                                                    ? `Reinvite (${reinviteCooldown.remaining}s)`
+                                                    : "Reinvite"}
+                                        </Button>
+                                    </div>
                                 </CardHeader>
                                 <CardContent>
                                     <dl className="grid grid-cols-2 gap-4 text-sm">
@@ -382,6 +431,54 @@ export default function InstitutionDetailPage() {
                                 </CardContent>
                             </Card>
                         )}
+
+                        <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+                            <DialogContent>
+                                <DialogHeader>
+                                    <DialogTitle>Invite Institution Admin</DialogTitle>
+                                    <DialogDescription>
+                                        Send an institution-admin invite for{" "}
+                                        <span className="font-medium">{institution.name}</span>.
+                                        They'll get a set-password email and gain full admin
+                                        access to this institution. This does not affect any
+                                        existing admin.
+                                    </DialogDescription>
+                                </DialogHeader>
+                                <div className="space-y-2">
+                                    <label htmlFor="invite-email" className="text-sm font-medium">
+                                        Email address
+                                    </label>
+                                    <Input
+                                        id="invite-email"
+                                        type="email"
+                                        placeholder="admin@example.com"
+                                        value={inviteEmail}
+                                        onChange={(e) => setInviteEmail(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" && !inviting) handleInviteAdmin();
+                                        }}
+                                        autoFocus
+                                    />
+                                </div>
+                                <DialogFooter>
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => setInviteOpen(false)}
+                                        disabled={inviting}
+                                    >
+                                        Cancel
+                                    </Button>
+                                    <Button onClick={handleInviteAdmin} disabled={inviting}>
+                                        {inviting ? (
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <MailPlus className="mr-2 h-4 w-4" />
+                                        )}
+                                        {inviting ? "Sending..." : "Send Invite"}
+                                    </Button>
+                                </DialogFooter>
+                            </DialogContent>
+                        </Dialog>
 
                         <Card className="border-border bg-gradient-to-br from-card to-accent/25 shadow-sm">
                             <CardHeader>

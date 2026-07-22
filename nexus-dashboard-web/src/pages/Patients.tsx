@@ -11,6 +11,7 @@ import {
     Link2Off,
     Sparkles,
 } from "lucide-react"
+import { PageHeader } from "@/components/PageHeader"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -397,29 +398,25 @@ export default function Patients() {
 
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-                        <Users className="h-7 w-7" />
-                        Patients
-                    </h2>
-                    <p className="text-muted-foreground mt-1">
-                        Everyone who has called, with their call history and callback number.
-                    </p>
-                </div>
-                <div className="flex items-center gap-3">
-                    {!loading && data && (
-                        <div className="text-right">
-                            <p className="text-2xl font-bold tabular-nums">{total.toLocaleString()}</p>
-                            <p className="text-xs text-muted-foreground">patients</p>
-                        </div>
-                    )}
-                    <Button variant="outline" size="sm" onClick={fetchContacts} disabled={loading} className="gap-1.5">
-                        <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                icon={Users}
+                title="Patients"
+                description="Everyone who has called, with their call history and callback number."
+                actions={
+                    <>
+                        {!loading && data && (
+                            <div className="text-right">
+                                <p className="text-2xl font-bold tabular-nums">{total.toLocaleString()}</p>
+                                <p className="text-xs text-muted-foreground">patients</p>
+                            </div>
+                        )}
+                        <Button variant="outline" size="sm" onClick={fetchContacts} disabled={loading} className="gap-1.5">
+                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </>
+                }
+            />
 
             <div className="flex items-center gap-2">
                 <div className="relative">

@@ -6,6 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useNotifications } from "@/context/NotificationContext";
 import { getNotificationIcon, getNotificationLabel, isUrgent } from "@/lib/notifications-api";
+import { FormSkeleton } from "@/components/ui/skeletons";
 import type { Notification, NotificationType } from "@/types";
 
 const NOTIFICATION_ORDER: NotificationType[] = [
@@ -150,10 +151,7 @@ export function NotificationDialog() {
                     <div className="p-2">
                         {/* Loading State */}
                         {isLoading && notifications.length === 0 && (
-                            <div className="flex flex-col items-center justify-center py-12 text-zinc-500">
-                                <Loader2 className="h-8 w-8 mb-3 animate-spin text-zinc-400" />
-                                <p className="text-sm">Loading notifications...</p>
-                            </div>
+                            <FormSkeleton rows={3} />
                         )}
 
                         {!isLoading && NOTIFICATION_ORDER.map((type) => {

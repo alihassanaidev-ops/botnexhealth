@@ -13,7 +13,6 @@ import httpx
 from src.app.config import settings
 from src.app.models.email_template import EmailTemplateType
 from src.app.services.email_template_service import (
-    APPOINTMENT_REQUEST_DEFAULT,
     DEFAULT_TEMPLATES,
     EmailTemplateService,
 )
@@ -76,15 +75,17 @@ def _build_template_variables(
 ) -> dict[str, str]:
     """Convert raw call payload into template variables.
 
-    When ``patient_facing`` is True the email is addressed to the patient
-    themselves, so the patient name is rendered in full rather than redacted.
-    Staff emails keep the redacted name and masked phone.
+    Both staff and patient emails render the full collected patient name now
+    that unscrubbed call data flows end-to-end. ``appointment_patient_redacted``
+    is still read as a fallback for any legacy caller that supplies only that
+    key. (``patient_facing`` is retained for callers/other rendering logic.)
     """
     tags = payload.get("tags") or []
-    if patient_facing:
-        patient_name = payload.get("appointment_patient_name") or "Not provided"
-    else:
-        patient_name = payload.get("appointment_patient_redacted") or "Not provided"
+    patient_name = (
+        payload.get("appointment_patient_name")
+        or payload.get("appointment_patient_redacted")
+        or "Not provided"
+    )
     return {
         "location_name": payload.get("location_name") or "Clinic",
         "caller_phone": payload.get("caller_phone_masked") or "Unknown",
@@ -99,6 +100,12 @@ def _build_template_variables(
         "appointment_datetime": payload.get("appointment_datetime") or "Not provided",
         "appointment_provider": payload.get("appointment_provider") or "Not provided",
         "appointment_service": payload.get("appointment_service") or "Not provided",
+        # No-PMS PHI-free triage variables (blank/"Not provided" for integrated
+        # tenants, which don't populate them).
+        "availability": payload.get("availability") or "Not provided",
+        "new_patient": payload.get("new_patient") or "Not provided",
+        "is_emergency": payload.get("is_emergency") or "No",
+        "call_status": payload.get("call_status_label") or _tag_label(payload.get("primary_tag")),
         # Deep link to the RBAC-protected call detail; empty string when the
         # frontend base URL is not configured (template hides the CTA).
         "dashboard_link": payload.get("dashboard_link") or "",
@@ -175,19 +182,10 @@ class EmailNotificationService:
             html_tpl = defaults["html_body"]
             text_tpl = defaults["text_body"]
 
-        # No-PMS: an appointment is a *request* staff must book manually, not a
-        # confirmation. If the resolved template is the untouched confirmation
-        # default — whether the in-code default above or a seeded-but-unedited
-        # DB row — swap to request wording. A clinic that customized its
-        # appointment template (different subject) keeps it.
-        if appointment_pending:
-            conf_default = DEFAULT_TEMPLATES.get(
-                EmailTemplateType.APPOINTMENT_CONFIRMATION.value
-            )
-            if conf_default and subject_tpl == conf_default["subject_template"]:
-                subject_tpl = APPOINTMENT_REQUEST_DEFAULT["subject_template"]
-                html_tpl = APPOINTMENT_REQUEST_DEFAULT["html_body"]
-                text_tpl = APPOINTMENT_REQUEST_DEFAULT["text_body"]
+        # No-PMS requests now route to the dedicated ``appointment_request``
+        # template type upstream (see tasks.notifications), so the DB lookup and
+        # in-code fallback above already resolve the PHI-free request template —
+        # no post-hoc swap needed.
 
         # Render templates
         render = EmailTemplateService.render
