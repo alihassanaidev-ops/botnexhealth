@@ -144,11 +144,11 @@ class InstitutionCreate(BaseModel):
     # Initial Institution User (Mandatory)
     email: str = Field(..., description="Email for the initial institution user invite")
 
-    # PMS integration mode: "nexhealth" (synced PMS) or "none"
-    # (call-intelligence-only — no booking/sync/providers).
-    pms_type: Literal["nexhealth", "none"] = Field(
+    # PMS integration mode: "nexhealth" and "gotracker" use adapter-backed
+    # scheduling. "none" is call-intelligence-only — no booking/sync/providers.
+    pms_type: Literal["nexhealth", "gotracker", "none"] = Field(
         default="nexhealth",
-        description="PMS integration: 'nexhealth' or 'none' (call-intelligence-only)",
+        description="PMS integration: 'nexhealth', 'gotracker', or 'none'",
     )
 
     # NexHealth
@@ -291,15 +291,25 @@ async def list_institutions(
             )
             retell_institution_ids = set(retell_result.scalars().all())
 
+            gotracker_result = await session.execute(
+                select(InstitutionLocation.institution_id)
+                .where(InstitutionLocation.institution_id.in_(institution_ids))
+                .where(InstitutionLocation.gotracker_product_key_encrypted.is_not(None))
+                .distinct()
+            )
+            gotracker_institution_ids = set(gotracker_result.scalars().all())
+
         else:
             users_by_institution = {}
             retell_institution_ids = set()
+            gotracker_institution_ids = set()
 
         return [
             InstitutionResponse.from_institution(
                 t,
                 user=users_by_institution.get(t.id),
                 has_retell_secret=(t.id in retell_institution_ids),
+                has_gotracker_key=(t.id in gotracker_institution_ids),
             )
             for t in institutions
         ]
@@ -417,8 +427,19 @@ async def get_institution(
         )
         has_retell = retell_result.scalar_one_or_none() is not None
 
+        gotracker_result = await session.execute(
+            select(InstitutionLocation.institution_id)
+            .where(InstitutionLocation.institution_id == institution.id)
+            .where(InstitutionLocation.gotracker_product_key_encrypted.is_not(None))
+            .limit(1)
+        )
+        has_gotracker_key = gotracker_result.scalar_one_or_none() is not None
+
         return InstitutionResponse.from_institution(
-            institution, user=institution_user, has_retell_secret=has_retell
+            institution,
+            user=institution_user,
+            has_retell_secret=has_retell,
+            has_gotracker_key=has_gotracker_key,
         )
 
 
@@ -462,8 +483,18 @@ async def update_institution(
         )
         has_retell = retell_result.scalar_one_or_none() is not None
 
+        gotracker_result = await session.execute(
+            select(InstitutionLocation.institution_id)
+            .where(InstitutionLocation.institution_id == institution.id)
+            .where(InstitutionLocation.gotracker_product_key_encrypted.is_not(None))
+            .limit(1)
+        )
+        has_gotracker_key = gotracker_result.scalar_one_or_none() is not None
+
         return InstitutionResponse.from_institution(
-            institution, has_retell_secret=has_retell
+            institution,
+            has_retell_secret=has_retell,
+            has_gotracker_key=has_gotracker_key,
         )
 
 
@@ -651,6 +682,8 @@ class LocationCreate(BaseModel):
 
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
+    gotracker_base_url: str | None = None
+    gotracker_product_key: str | None = None
     retell_agent_id: str | None = None
     twilio_from_number: str | None = None
 
@@ -669,6 +702,8 @@ class LocationUpdate(BaseModel):
 
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
+    gotracker_base_url: str | None = None
+    gotracker_product_key: str | None = None
     retell_agent_id: str | None = None
     twilio_from_number: str | None = None
 
@@ -699,6 +734,8 @@ class LocationResponse(BaseModel):
 
     nexhealth_subdomain: str | None
     nexhealth_location_id: str | None
+    gotracker_base_url: str | None
+    has_gotracker_product_key: bool
     retell_agent_id: str | None
     twilio_from_number: str | None
 
@@ -730,6 +767,8 @@ class LocationResponse(BaseModel):
             is_active=loc.is_active,
             nexhealth_subdomain=loc.nexhealth_subdomain,
             nexhealth_location_id=loc.nexhealth_location_id,
+            gotracker_base_url=loc.gotracker_base_url,
+            has_gotracker_product_key=loc.gotracker_product_key_encrypted is not None,
             retell_agent_id=loc.retell_agent_id,
             twilio_from_number=loc.twilio_from_number,
             address=loc.address,
@@ -1579,7 +1618,6 @@ async def get_provisioning(
 ):
     """Return the provisioning status for an institution. Auth tokens are never returned."""
     async with get_db_session() as session:
-        from src.app.models.institution import Institution
         institution_service = InstitutionService(session)
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:

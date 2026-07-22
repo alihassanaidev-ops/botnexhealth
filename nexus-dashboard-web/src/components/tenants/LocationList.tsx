@@ -31,11 +31,12 @@ import { useCooldown, useCooldownMap } from "@/hooks/use-cooldown";
 
 interface LocationListProps {
     institutionSlug: string;
-    /** False for call-intelligence-only tenants — hides PMS sync + NexHealth fields. */
+    /** False for call-intelligence-only tenants — hides PMS sync + integration fields. */
     hasPms?: boolean;
+    pmsType?: string | null;
 }
 
-export function LocationList({ institutionSlug, hasPms = true }: LocationListProps) {
+export function LocationList({ institutionSlug, hasPms = true, pmsType = "nexhealth" }: LocationListProps) {
     const INVITE_COOLDOWN_SECONDS = 30;
     const [locations, setLocations] = useState<Location[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -226,7 +227,11 @@ export function LocationList({ institutionSlug, hasPms = true }: LocationListPro
                             <TableRow>
                                 <TableHead>Name</TableHead>
                                 <TableHead>Slug</TableHead>
-                                {hasPms && <TableHead>NexHealth Loc ID</TableHead>}
+                                {hasPms && (
+                                    <TableHead>
+                                        {pmsType === "gotracker" ? "GoTracker" : "NexHealth Loc ID"}
+                                    </TableHead>
+                                )}
                                 <TableHead>Retell Agent</TableHead>
                                 <TableHead>SMS Number</TableHead>
                                 <TableHead>User</TableHead>
@@ -250,7 +255,13 @@ export function LocationList({ institutionSlug, hasPms = true }: LocationListPro
                                     <TableCell className="font-mono text-sm">{loc.slug}</TableCell>
                                     {hasPms && (
                                         <TableCell className="font-mono text-sm">
-                                            {loc.nexhealth_location_id || <span className="text-muted-foreground">-</span>}
+                                            {pmsType === "gotracker"
+                                                ? (
+                                                    loc.has_gotracker_product_key
+                                                        ? <span className="text-green-600 dark:text-green-400">Configured</span>
+                                                        : <span className="text-muted-foreground">Missing key</span>
+                                                )
+                                                : (loc.nexhealth_location_id || <span className="text-muted-foreground">-</span>)}
                                         </TableCell>
                                     )}
                                     <TableCell className="font-mono text-sm">
@@ -392,6 +403,7 @@ export function LocationList({ institutionSlug, hasPms = true }: LocationListPro
                         institutionSlug={institutionSlug}
                         location={editingLocation}
                         hasPms={hasPms}
+                        pmsType={pmsType}
                         onSuccess={handleFormSuccess}
                         onCancel={() => setViewMode("list")}
                     />

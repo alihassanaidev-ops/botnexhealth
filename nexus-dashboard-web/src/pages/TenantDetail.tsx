@@ -525,11 +525,19 @@ export default function InstitutionDetailPage() {
                         </div>
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-2">
                             <IntegrationCard
-                                name="NexHealth"
+                                name={institution.pms_type === "gotracker" ? "GoTracker" : "NexHealth"}
                                 description="Patient management system integration."
-                                isConfigured={institution.has_nexhealth_key}
-                                hasSystemKey={institution.has_system_nexhealth_key}
-                                onConfigure={() => setActiveTab("credentials")}
+                                isConfigured={
+                                    institution.pms_type === "gotracker"
+                                        ? institution.has_gotracker_key
+                                        : institution.has_nexhealth_key
+                                }
+                                hasSystemKey={
+                                    institution.pms_type === "gotracker"
+                                        ? false
+                                        : institution.has_system_nexhealth_key
+                                }
+                                onConfigure={() => setActiveTab(institution.pms_type === "gotracker" ? "locations" : "credentials")}
                             />
                             <IntegrationCard
                                 name="Retell AI"
@@ -548,7 +556,11 @@ export default function InstitutionDetailPage() {
 
                 {/* Locations Tab */}
                 <TabsContent value="locations" className="space-y-4">
-                    <LocationList institutionSlug={institution.slug} hasPms={institution.pms_type !== "none"} />
+                    <LocationList
+                        institutionSlug={institution.slug}
+                        hasPms={institution.pms_type !== "none"}
+                        pmsType={institution.pms_type}
+                    />
                 </TabsContent>
             </Tabs>
 

@@ -67,6 +67,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/v1/nexhealth/webhooks/appointments",
         "POST /api/v1/nexhealth/webhooks/patients",
         "POST /api/v1/nexhealth/webhooks/sync-status",
+        "POST /api/v1/gotracker/webhooks/{location_id}",
         "POST /api/email/webhooks/resend",
     ),
     TICKET_AUTH: (
@@ -563,7 +564,10 @@ def test_internal_admin_surfaces_remain_super_admin_only():
             "/api/admin/",
             "/api/auth/admin/",
             "/api/v1/nexhealth/",
+            "/api/v1/gotracker/",
         )) and not path.startswith("/api/v1/nexhealth/webhooks/"):
+            if path.startswith("/api/v1/gotracker/webhooks/"):
+                continue
             # Webhook endpoints are externally called with signature verification,
             # not admin surfaces — they use SIGNED_WEBHOOK boundary instead.
             assert boundary in {SUPER_ADMIN, SUPER_ADMIN_STRICT}

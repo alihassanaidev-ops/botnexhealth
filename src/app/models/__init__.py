@@ -36,6 +36,14 @@ from src.app.models.nexhealth_webhook_event import (  # noqa: F401 — model reg
     NexHealthWebhookEvent,
     NexHealthWebhookStatus,
 )
+from src.app.models.gotracker_webhook_event import (  # noqa: F401 — model registration
+    GoTrackerWebhookEvent,
+    GoTrackerWebhookStatus,
+)
+from src.app.models.gotracker_webhook_subscription import (  # noqa: F401 — model registration
+    GoTrackerWebhookSubscription,
+    GoTrackerWebhookSubscriptionStatus,
+)
 from src.app.models.patient_working_set import (  # noqa: F401 — model registration
     PatientWorkingSet,
 )
@@ -182,6 +190,10 @@ __all__ = [
     "InboundSmsMessage",
     "NexHealthWebhookEvent",
     "NexHealthWebhookStatus",
+    "GoTrackerWebhookEvent",
+    "GoTrackerWebhookStatus",
+    "GoTrackerWebhookSubscription",
+    "GoTrackerWebhookSubscriptionStatus",
     "PatientWorkingSet",
     "NexHealthSyncStatus",
     "NexHealthWebhookSubscription",

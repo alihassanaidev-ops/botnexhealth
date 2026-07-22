@@ -606,7 +606,7 @@ class InstitutionResponse(BaseModel):
     location_limit: int = 1
     jurisdiction: str
 
-    # PMS integration mode: "nexhealth" or "none" (call-intelligence-only).
+    # PMS integration mode: "nexhealth", "gotracker", or "none".
     pms_type: str = "nexhealth"
 
     # Optional DSO/group umbrella this institution belongs to.
@@ -617,6 +617,8 @@ class InstitutionResponse(BaseModel):
 
     has_system_nexhealth_key: bool
 
+    has_gotracker_key: bool = False
+
     has_retell_secret: bool
 
     # Optional: Created user
@@ -626,7 +628,13 @@ class InstitutionResponse(BaseModel):
         from_attributes = True
 
     @classmethod
-    def from_institution(cls, institution: Any, user: Any = None, has_retell_secret: bool = False) -> "InstitutionResponse":
+    def from_institution(
+        cls,
+        institution: Any,
+        user: Any = None,
+        has_retell_secret: bool = False,
+        has_gotracker_key: bool = False,
+    ) -> "InstitutionResponse":
         """Convert Institution model to response (no secrets exposed)."""
         from src.app.config import settings
         from src.app.models.institution import DEFAULT_JURISDICTION
@@ -652,6 +660,7 @@ class InstitutionResponse(BaseModel):
             group_id=getattr(institution, "group_id", None),
             has_nexhealth_key=institution.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
+            has_gotracker_key=has_gotracker_key,
             has_retell_secret=has_retell_secret,
             user=user_resp
         )

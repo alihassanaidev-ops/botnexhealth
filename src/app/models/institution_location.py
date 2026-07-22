@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
+from src.app.models.institution import decrypt_value, encrypt_value
 
 
 class InstitutionLocation(Base):
@@ -52,6 +53,11 @@ class InstitutionLocation(Base):
         String(100), nullable=True
     )
 
+    # GoTracker Synchronizer — location-scoped. The product key is issued per
+    # Location in the synchronizer admin panel and authenticates all data routes.
+    gotracker_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gotracker_product_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Retell — per-location agent
     retell_agent_id: Mapped[str | None] = mapped_column(
         String(100), nullable=True, index=True
@@ -88,6 +94,14 @@ class InstitutionLocation(Base):
     # =========================================================================
     # Methods
     # =========================================================================
+
+    @property
+    def gotracker_product_key(self) -> str | None:
+        return decrypt_value(self.gotracker_product_key_encrypted)
+
+    @gotracker_product_key.setter
+    def gotracker_product_key(self, value: str | None) -> None:
+        self.gotracker_product_key_encrypted = encrypt_value(value)
 
     def __repr__(self) -> str:
         return f"<InstitutionLocation(id={self.id}, institution_id={self.institution_id}, name='{self.name}')>"

@@ -1,6 +1,6 @@
 # Essential Campaign Implementation Status
 
-Last updated: 2026-07-21 02:42 PKT
+Last updated: 2026-07-22 23:35 PKT
 
 ## Rules
 
@@ -30,6 +30,12 @@ Last updated: 2026-07-21 02:42 PKT
 
 Plan 09: Backend DB And NexHealth Data Flow complete
 
+## Add-On Work
+
+| Work | Status | Session |
+|------|--------|---------|
+| GoTracker Synchronizer PMS adapter | adapter/config/UI/webhook receiver/subscription automation complete; live Synchronizer acceptance pending staging product-key test | sessions/gotracker-synchronizer-pms-adapter |
+
 ## Prod-Readiness Slices
 
 | Slice | Status | Notes |
@@ -57,3 +63,4 @@ Plan 09: Backend DB And NexHealth Data Flow complete
 | 09 backfill/reconciliation slice | NexHealth patient/appointment sync pytest, adapter pytest, Plan 09 recall pytest, touched-file backend ruff, Alembic heads | passed with noted warning |
 | 09 PMS capability gating slice | Capability/template/checklist pytest, frontend workflow API/template picker vitest, touched-file backend ruff, frontend eslint | passed with noted warnings |
 | 09 webhook durability/ops hardening slice | NexHealth projection/webhook/subscription/retention pytest, touched-file backend ruff, Alembic heads | passed with noted warning |
+| GoTracker Synchronizer PMS adapter | GoTracker adapter/factory/webhook/RBAC pytest, retention pytest, backend compile smoke, ruff, Alembic heads, frontend production build | passed with noted warnings |

@@ -206,10 +206,11 @@ class Institution(Base):
     # Billing email for invoices
     billing_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    # PMS integration mode. "nexhealth" = backed by the NexHealth PMS (sync,
-    # booking, providers, etc.). "none" = call-intelligence-only tenant that
-    # lives solely on our platform — no PMS sync, no booking/availability; the
-    # Retell agent only collects call data. See has_pms / the PMS adapter guard.
+    # PMS integration mode. "nexhealth" and "gotracker" are adapter-backed
+    # PMS modes (sync, booking, providers, etc.). "none" is a call-
+    # intelligence-only tenant that lives solely on our platform — no PMS sync,
+    # no booking/availability; the Retell agent only collects call data. See
+    # has_pms / the PMS adapter guard.
     pms_type: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

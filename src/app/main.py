@@ -42,6 +42,7 @@ from src.app.api.routes.automation_templates import router as automation_templat
 from src.app.api.routes.campaign_analytics import router as campaign_analytics_router
 from src.app.api.routes.outbound_voice import router as outbound_voice_router
 from src.app.api.routes.nexhealth_webhooks import router as nexhealth_webhooks_router
+from src.app.api.routes.gotracker_webhooks import router as gotracker_webhooks_router
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -248,6 +249,7 @@ def create_app() -> FastAPI:
     app.include_router(retell_webhook_router, prefix="/api/v1")
     app.include_router(twilio_webhooks_router, prefix="/api/v1")
     app.include_router(nexhealth_webhooks_router, prefix="/api/v1")
+    app.include_router(gotracker_webhooks_router, prefix="/api/v1")
 
     # Admin routes
     app.include_router(auth_router, prefix="/api")

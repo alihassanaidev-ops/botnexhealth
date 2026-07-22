@@ -69,6 +69,8 @@ const locationSchema = z.object({
     slug: z.string().optional(),
     nexhealth_subdomain: z.string().optional(),
     nexhealth_location_id: z.string().optional(),
+    gotracker_base_url: z.string().optional(),
+    gotracker_product_key: z.string().optional(),
     retell_agent_id: z.string().optional(),
     twilio_from_number: z.string().optional(),
     address: z.string().optional(),
@@ -83,8 +85,9 @@ type LocationFormValues = z.infer<typeof locationSchema>;
 interface LocationFormProps {
     institutionSlug: string;
     location?: Location;
-    /** False for call-intelligence-only tenants — hides the NexHealth fields. */
+    /** False for call-intelligence-only tenants — hides PMS fields. */
     hasPms?: boolean;
+    pmsType?: string | null;
     onSuccess: () => void;
     onCancel: () => void;
 }
@@ -121,8 +124,10 @@ function FieldHint({ text }: { text: string }) {
     );
 }
 
-export function LocationForm({ institutionSlug, location, hasPms = true, onSuccess, onCancel }: LocationFormProps) {
+export function LocationForm({ institutionSlug, location, hasPms = true, pmsType = "nexhealth", onSuccess, onCancel }: LocationFormProps) {
     const isEditing = !!location;
+    const isNexHealth = hasPms && (pmsType ?? "nexhealth") === "nexhealth";
+    const isGoTracker = hasPms && pmsType === "gotracker";
     const [nexHealthInstitutions, setNexHealthInstitutions] = useState<InstitutionBasic[]>([]);
     const [isLoadingNH, setIsLoadingNH] = useState(false);
     const [isVerifyingAgent, setIsVerifyingAgent] = useState(false);
@@ -137,6 +142,8 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
             slug: location?.slug || "",
             nexhealth_subdomain: location?.nexhealth_subdomain || "",
             nexhealth_location_id: location?.nexhealth_location_id || "",
+            gotracker_base_url: location?.gotracker_base_url || "",
+            gotracker_product_key: "",
             retell_agent_id: location?.retell_agent_id || "",
             twilio_from_number: location?.twilio_from_number || "",
             address: location?.address || "",
@@ -151,6 +158,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
 
     // Fetch NexHealth institutions + locations on mount
     useEffect(() => {
+        if (!isNexHealth) return;
         async function fetchNHLocations() {
             setIsLoadingNH(true);
             try {
@@ -163,7 +171,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
             }
         }
         fetchNHLocations();
-    }, []);
+    }, [isNexHealth]);
 
     // Fetch Twilio phone numbers on mount
     useEffect(() => {
@@ -257,7 +265,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5 pb-24">
 
                     {/* NexHealth Autofill Picker */}
-                    {hasPms && (
+                    {isNexHealth && (
                     <FormField
                         control={form.control}
                         name="nexhealth_location_id"
@@ -334,7 +342,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
                     </SectionCard>
 
                     {/* Section: NexHealth Integration */}
-                    {hasPms && (
+                    {isNexHealth && (
                     <SectionCard title="NexHealth Integration" description="Connect this location to your NexHealth PMS account.">
                         <FormField
                             control={form.control}
@@ -352,6 +360,52 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
                                 </FormItem>
                             )}
                         />
+                    </SectionCard>
+                    )}
+
+                    {/* Section: GoTracker Integration */}
+                    {isGoTracker && (
+                    <SectionCard title="GoTracker Integration" description="Connect this location to the ScaleNexus GoTracker Synchronizer.">
+                        <FormField
+                            control={form.control}
+                            name="gotracker_base_url"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>
+                                        Synchronizer Base URL
+                                        <FieldHint text="Defaults to https://synchronizer.scalenexus.ai when left blank." />
+                                    </FormLabel>
+                                    <FormControl>
+                                        <Input placeholder="https://synchronizer.scalenexus.ai" {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <FormField
+                            control={form.control}
+                            name="gotracker_product_key"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>
+                                        Product Key
+                                        <FieldHint text="Location-scoped x-api-key from the GoTracker Synchronizer admin panel. Stored encrypted and never shown again." />
+                                    </FormLabel>
+                                    <FormControl>
+                                        <Input
+                                            type="password"
+                                            placeholder={location?.has_gotracker_product_key ? "Configured — enter a new key to replace" : "Paste product key"}
+                                            autoComplete="off"
+                                            {...field}
+                                        />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            Webhooks use the global GoTracker signing secret and a location-scoped callback URL.
+                        </p>
                     </SectionCard>
                     )}
 

@@ -30,6 +30,9 @@ from src.app.services.automation.callback_trigger_service import (
 )
 from src.app.services.automation.definition_schema import ConditionNode, WaitNode, WorkflowDefinition
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+from src.app.services.automation.gotracker_subscription_service import (
+    GoTrackerSubscriptionLifecycleService,
+)
 from src.app.services.automation.nexhealth_backfill_service import (
     AppointmentSyncSummary,
     NexHealthAppointmentSyncService,
@@ -633,6 +636,46 @@ async def _ensure_nexhealth_webhook_subscriptions_async() -> dict:
         svc = NexHealthSubscriptionLifecycleService(session)
         ensure_summary = await svc.ensure_for_configured_locations(
             callback_url=settings.nexhealth_webhook_callback_url,
+        )
+        health = await svc.health_check()
+        await session.commit()
+
+    return {
+        **ensure_summary,
+        "health_total": health.total,
+        "health_active": health.active,
+        "health_pending": health.pending,
+        "health_disabled": health.disabled,
+        "health_failed": health.failed,
+        "stale_marked": health.stale_marked,
+    }
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.ensure_gotracker_webhook_subscriptions",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def ensure_gotracker_webhook_subscriptions(self) -> dict:
+    """Ensure GoTracker Synchronizer webhook subscriptions and refresh health."""
+    _ensure_db()
+    try:
+        return asyncio.run(_ensure_gotracker_webhook_subscriptions_async())
+    except Exception as exc:
+        logger.exception("ensure_gotracker_webhook_subscriptions failed: %s", exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _ensure_gotracker_webhook_subscriptions_async() -> dict:
+    from src.app.config import settings
+
+    async with get_system_db_session(
+        "celery", external_id="gotracker_subscription_lifecycle"
+    ) as session:
+        svc = GoTrackerSubscriptionLifecycleService(session)
+        ensure_summary = await svc.ensure_for_configured_locations(
+            callback_base_url=settings.gotracker_webhook_callback_base_url,
         )
         health = await svc.health_check()
         await session.commit()

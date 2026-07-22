@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     nexhealth_location_id: str | None = None
     nexhealth_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound webhook signatures
     nexhealth_webhook_callback_url: str | None = None
+    gotracker_base_url: str = "https://synchronizer.scalenexus.ai"
+    gotracker_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound GoTracker webhooks
+    gotracker_webhook_callback_base_url: str | None = None
 
     # Retell AI settings
     retell_api_secret: str | None = None

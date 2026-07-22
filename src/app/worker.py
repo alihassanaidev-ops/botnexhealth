@@ -67,6 +67,12 @@ def _build_celery_app() -> Celery:
                 # Lifecycle/health is cheap and keeps setup state current.
                 "schedule": 3600.0,
             },
+            "ensure-gotracker-webhook-subscriptions": {
+                "task": "src.app.tasks.automation_workflow.ensure_gotracker_webhook_subscriptions",
+                # Mirrors NexHealth: create missing provider subscriptions and
+                # mark stale GoTracker event delivery as unhealthy.
+                "schedule": 3600.0,
+            },
             "reconcile-nexhealth-appointments": {
                 "task": "src.app.tasks.automation_workflow.reconcile_nexhealth_appointments",
                 # Low-frequency repair sweep; initial backfill is task-triggered

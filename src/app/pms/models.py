@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 class UniversalPatient(BaseModel):
     id: str
-    source: str  # "nexhealth"
+    source: str  # "nexhealth", "gotracker", etc.
     first_name: str
     last_name: str
     email: str | None = None

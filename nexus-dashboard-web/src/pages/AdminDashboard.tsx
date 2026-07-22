@@ -44,12 +44,17 @@ export default function AdminDashboard() {
     const fullyConfigured = institutions.filter(
         (t) =>
             t.is_active &&
-            (t.has_nexhealth_key || t.has_system_nexhealth_key) &&
+            (
+                t.pms_type === "gotracker"
+                    ? t.has_gotracker_key
+                    : (t.has_nexhealth_key || t.has_system_nexhealth_key)
+            ) &&
             t.has_retell_secret
     )
 
     const integrationCounts = {
         nexhealth: institutions.filter((t) => t.has_nexhealth_key || t.has_system_nexhealth_key).length,
+        gotracker: institutions.filter((t) => t.has_gotracker_key).length,
         retell: institutions.filter((t) => t.has_retell_secret).length,
     }
 
@@ -57,7 +62,7 @@ export default function AdminDashboard() {
         { label: "Total Institutions", value: institutions.length, icon: Building2, glowRgb: "139,92,246", description: "All registered practices" },
         { label: "Active", value: activeInstitutions.length, icon: CheckCircle2, glowRgb: "16,185,129", description: "Currently active" },
         { label: "Inactive", value: inactiveInstitutions.length, icon: XCircle, glowRgb: "239,68,68", description: "Disabled or paused" },
-        { label: "Fully Configured", value: fullyConfigured.length, icon: Settings, glowRgb: "59,130,246", description: "NexHealth + Retell ready" },
+        { label: "Fully Configured", value: fullyConfigured.length, icon: Settings, glowRgb: "59,130,246", description: "PMS + Retell ready" },
     ]
 
     return (
@@ -124,6 +129,9 @@ export default function AdminDashboard() {
                             <Badge variant="secondary" className="text-sm px-3 py-1 border border-border bg-primary/10 text-primary">
                                 NexHealth: {integrationCounts.nexhealth}
                             </Badge>
+                            <Badge variant="secondary" className="text-sm px-3 py-1 border border-border bg-primary2/10 text-primary2">
+                                GoTracker: {integrationCounts.gotracker}
+                            </Badge>
                             <Badge variant="secondary" className="text-sm px-3 py-1 border border-accent-foreground/20 bg-accent text-accent-foreground">
                                 Retell AI: {integrationCounts.retell}
                             </Badge>
@@ -170,7 +178,7 @@ export default function AdminDashboard() {
                                         <th className="pb-3 font-medium">Name</th>
                                         <th className="pb-3 font-medium">Contact</th>
                                         <th className="pb-3 font-medium">Status</th>
-                                        <th className="pb-3 font-medium">NexHealth</th>
+                                        <th className="pb-3 font-medium">PMS</th>
                                         <th className="pb-3 font-medium">Retell</th>
                                         <th className="pb-3 font-medium sr-only">Actions</th>
                                     </tr>
@@ -193,7 +201,11 @@ export default function AdminDashboard() {
                                                 </Badge>
                                             </td>
                                             <td className="py-3">
-                                                <span className={`inline-block h-2.5 w-2.5 rounded-full ${inst.has_nexhealth_key || inst.has_system_nexhealth_key ? "bg-green-500" : "bg-gray-300"}`} />
+                                                <span className={`inline-block h-2.5 w-2.5 rounded-full ${
+                                                    inst.pms_type === "gotracker"
+                                                        ? inst.has_gotracker_key ? "bg-green-500" : "bg-gray-300"
+                                                        : inst.has_nexhealth_key || inst.has_system_nexhealth_key ? "bg-green-500" : "bg-gray-300"
+                                                }`} />
                                             </td>
                                             <td className="py-3">
                                                 <span className={`inline-block h-2.5 w-2.5 rounded-full ${inst.has_retell_secret ? "bg-green-500" : "bg-gray-300"}`} />

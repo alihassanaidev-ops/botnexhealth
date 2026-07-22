@@ -36,7 +36,7 @@ export interface InstitutionDetail {
     slug: string;
     is_active: boolean;
 
-    // "nexhealth" | "none" (call-intelligence-only). Absent on older payloads.
+    // "nexhealth" | "gotracker" | "none". Absent on older payloads.
     pms_type?: string;
 
     // DSO/group umbrella this institution belongs to (null if standalone).
@@ -44,6 +44,7 @@ export interface InstitutionDetail {
 
     has_nexhealth_key: boolean;
     has_system_nexhealth_key: boolean;
+    has_gotracker_key: boolean;
     has_retell_secret: boolean;
 
     user: InstitutionUser | null;
@@ -66,6 +67,8 @@ export interface Location {
 
     nexhealth_subdomain: string | null;
     nexhealth_location_id: string | null;
+    gotracker_base_url: string | null;
+    has_gotracker_product_key: boolean;
     retell_agent_id: string | null;
     twilio_from_number: string | null;
     has_retell_secret: boolean;
