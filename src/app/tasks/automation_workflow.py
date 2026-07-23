@@ -22,6 +22,7 @@ from src.app.services.automation.appointment_trigger_service import (
     compute_enrollment_eta,
     make_appointment_idempotency_key,
     make_recall_idempotency_key,
+    workflow_matches_appointment,
 )
 from src.app.services.automation.callback_trigger_service import (
     CallbackTriggerService,
@@ -559,11 +560,39 @@ async def _trigger_appointment_async(
     ) as session:
         svc = AppointmentTriggerService(session)
         workflows = await svc.find_active_appointment_workflows(institution_id)
+        appointment_context = await svc.get_appointment_context(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            fallback_location_id=location_id,
+        )
 
     scheduled = 0
     skipped = 0
+    skipped_type = 0
+    enriched_metadata = {
+        **trigger_metadata,
+        **{k: v for k, v in appointment_context.items() if v is not None},
+        "appointment_id": appointment_id,
+        "appointment_at": appointment_at_iso,
+    }
+    effective_contact_id = contact_id or appointment_context.get("contact_id")
+    effective_location_id = location_id or appointment_context.get("location_id")
     for wf in workflows:
         if not wf.current_version_id:
+            continue
+        if not workflow_matches_appointment(
+            wf,
+            appointment_type_id=enriched_metadata.get("appointment_type_id"),
+            appointment_type_name=enriched_metadata.get("appointment_type_name")
+            or enriched_metadata.get("appointment_type"),
+        ):
+            skipped_type += 1
+            logger.info(
+                "trigger_appointment: skipping type mismatch appt=%s workflow=%s appointment_type_id=%s",
+                appointment_id,
+                wf.id,
+                enriched_metadata.get("appointment_type_id"),
+            )
             continue
         eta = compute_enrollment_eta(wf, appointment_at)
         if eta is None:
@@ -582,17 +611,13 @@ async def _trigger_appointment_async(
                 "institution_id": institution_id,
                 "workflow_id": str(wf.id),
                 "workflow_version_id": str(wf.current_version_id),
-                "contact_id": contact_id,
-                "location_id": location_id,
+                "contact_id": effective_contact_id,
+                "location_id": effective_location_id,
                 "trigger_type": "appointment_offset",
                 "trigger_ref_type": "appointment",
                 "trigger_ref_id": appointment_id,
                 "idempotency_key": idempotency_key,
-                "trigger_metadata": {
-                    **trigger_metadata,
-                    "appointment_id": appointment_id,
-                    "appointment_at": appointment_at_iso,
-                },
+                "trigger_metadata": enriched_metadata,
             },
             eta=eta,
             queue="workflow",
@@ -600,10 +625,15 @@ async def _trigger_appointment_async(
         scheduled += 1
 
     logger.info(
-        "trigger_appointment: institution=%s appt=%s scheduled=%d skipped=%d",
-        institution_id, appointment_id, scheduled, skipped,
+        "trigger_appointment: institution=%s appt=%s scheduled=%d skipped=%d skipped_type=%d",
+        institution_id, appointment_id, scheduled, skipped, skipped_type,
     )
-    return {"appointment_id": appointment_id, "scheduled": scheduled, "skipped": skipped}
+    return {
+        "appointment_id": appointment_id,
+        "scheduled": scheduled,
+        "skipped": skipped,
+        "skipped_type": skipped_type,
+    }
 
 
 # ---------------------------------------------------------------------------

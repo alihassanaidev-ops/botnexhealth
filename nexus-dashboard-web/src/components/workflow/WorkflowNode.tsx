@@ -23,15 +23,20 @@ function truncate(text: string, max = 44): string {
 function stepSummary(node: WfNode): string {
     switch (node.type) {
         case "wait":
-            return node.delay.delay_type === "duration"
-                ? humanizeSeconds(node.delay.duration_seconds)
-                : `${node.delay.offset_days} day(s) @ ${node.delay.time_of_day}`
+            if (node.delay.delay_type === "duration") return humanizeSeconds(node.delay.duration_seconds)
+            if (node.delay.delay_type === "appointment_relative") {
+                const direction = node.delay.offset_seconds < 0 ? "before" : "after"
+                return `${humanizeSeconds(Math.abs(node.delay.offset_seconds))} ${direction} appointment`
+            }
+            return `${node.delay.offset_days} day(s) @ ${node.delay.time_of_day}`
         case "send_sms":
             return truncate(node.body_template) || "No message yet"
         case "send_email":
             return truncate(node.subject_template) || "No subject yet"
         case "send_voice":
             return node.retell_agent_id ? `Agent ${truncate(node.retell_agent_id, 20)}` : "No agent selected"
+        case "update_patient_status":
+            return `Status: ${truncate(node.status, 30)}`
         case "condition":
             return `${node.rules.length} rule(s) · ${node.logic ?? "AND"}`
         case "exit":

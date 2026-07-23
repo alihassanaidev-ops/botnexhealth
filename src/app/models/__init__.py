@@ -47,6 +47,9 @@ from src.app.models.gotracker_webhook_subscription import (  # noqa: F401 — mo
 from src.app.models.patient_working_set import (  # noqa: F401 — model registration
     PatientWorkingSet,
 )
+from src.app.models.patient_workflow_status import (  # noqa: F401 — model registration
+    PatientWorkflowStatusEvent,
+)
 from src.app.models.nexhealth_sync_status import (  # noqa: F401 — model registration
     NexHealthSyncStatus,
 )
@@ -127,6 +130,7 @@ __all__ = [
     "AutomationWorkflowStepExecution",
     "AutomationWorkflowTimer",
     "AutomationWorkflowEvent",
+    "PatientWorkflowStatusEvent",
     "AutomationWorkflowStatus",
     "AutomationRunStatus",
     "AutomationStepStatus",

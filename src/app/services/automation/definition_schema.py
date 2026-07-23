@@ -2,7 +2,7 @@
 
 Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, recall_scan, manual, bulk_import, callback_requested
-  Nodes:    wait, send_sms, send_voice, send_email, condition, exit
+  Nodes:    wait, send_sms, send_voice, send_email, update_patient_status, condition, exit
 """
 
 from __future__ import annotations
@@ -86,8 +86,16 @@ class CalendarDelay(BaseModel):
     time_of_day: str = Field(pattern=r"^\d{2}:\d{2}$", description="HH:MM in location timezone")
 
 
+class AppointmentRelativeDelay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    delay_type: Literal["appointment_relative"] = "appointment_relative"
+    offset_seconds: int
+    anchor_field: str = "appointment_at"
+
+
 WaitDelay = Annotated[
-    Union[DurationDelay, CalendarDelay],
+    Union[DurationDelay, CalendarDelay, AppointmentRelativeDelay],
     Field(discriminator="delay_type"),
 ]
 
@@ -102,7 +110,16 @@ class ConditionRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     field: str = Field(min_length=1)
-    op: Literal["eq", "neq", "in", "not_in", "is_null", "is_not_null"]
+    op: Literal[
+        "eq",
+        "neq",
+        "in",
+        "not_in",
+        "is_null",
+        "is_not_null",
+        "contains",
+        "not_contains",
+    ]
     value: _RULE_VALUE = None
 
     @field_validator("value", mode="before")
@@ -167,6 +184,16 @@ class SendEmailNode(BaseModel):
     max_attempts: int = Field(default=1, ge=1, le=3)
 
 
+class UpdatePatientStatusNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["update_patient_status"] = "update_patient_status"
+    status: str = Field(min_length=1, max_length=80)
+    next_node_id: str
+    note_template: str | None = None
+
+
 class ConditionNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -187,7 +214,15 @@ class ExitNode(BaseModel):
 
 
 WorkflowNode = Annotated[
-    Union[WaitNode, SendSmsNode, SendVoiceNode, SendEmailNode, ConditionNode, ExitNode],
+    Union[
+        WaitNode,
+        SendSmsNode,
+        SendVoiceNode,
+        SendEmailNode,
+        UpdatePatientStatusNode,
+        ConditionNode,
+        ExitNode,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -248,7 +283,16 @@ class WorkflowDefinition(BaseModel):
             )
 
         for node in self.nodes:
-            if isinstance(node, (WaitNode, SendSmsNode, SendVoiceNode, SendEmailNode)):
+            if isinstance(
+                node,
+                (
+                    WaitNode,
+                    SendSmsNode,
+                    SendVoiceNode,
+                    SendEmailNode,
+                    UpdatePatientStatusNode,
+                ),
+            ):
                 if node.next_node_id not in node_ids:
                     raise ValueError(
                         f"node '{node.id}' next_node_id '{node.next_node_id}' not found in nodes"

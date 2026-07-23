@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import (
+    AppointmentRelativeDelay,
     CalendarDelay,
     ConditionNode,
     ConditionRule,
@@ -31,6 +32,7 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
 )
@@ -114,7 +116,7 @@ class WorkflowStepDispatcher:
             steps_advanced += 1
 
             if isinstance(node, WaitNode):
-                due_at = _compute_due_at(node.delay, location_timezone, now)
+                due_at = _compute_due_at(node.delay, location_timezone, now, context=context)
                 # Smooth calendar (fixed local-time) sends to avoid vendor stampedes.
                 if self.calendar_jitter_seconds and isinstance(node.delay, CalendarDelay):
                     due_at += timedelta(
@@ -230,6 +232,9 @@ class WorkflowStepDispatcher:
                             status="waiting", timer_id=timer.id, steps_advanced=steps_advanced
                         )
                     current_node_id = dispatch_result
+
+            elif isinstance(node, UpdatePatientStatusNode):
+                current_node_id = await self._record_patient_status(run, node, context)
 
             elif isinstance(node, ConditionNode):
                 branch = _evaluate_condition(node, context)
@@ -347,6 +352,53 @@ class WorkflowStepDispatcher:
         await self.runtime.complete_step(step, result_code="stub_dispatched")
         return node.next_node_id
 
+    async def _record_patient_status(
+        self,
+        run: AutomationWorkflowRun,
+        node: UpdatePatientStatusNode,
+        context: dict,
+    ) -> str:
+        """Record a local campaign/patient status event for workflow branching.
+
+        This intentionally does not write back to PMS. It gives the workflow engine
+        a durable patient-journey/status trail that can later drive dashboards,
+        follow-up workflows, or staff queues.
+        """
+        from src.app.models.patient_workflow_status import PatientWorkflowStatusEvent
+        from src.app.services.automation.template_renderer import render_sms_body
+
+        step = await self.runtime.begin_step(
+            run, step_id=node.id, step_type=node.type
+        )
+        note = None
+        if node.note_template:
+            note = render_sms_body(node.note_template, None, None, context)
+
+        self.session.add(
+            PatientWorkflowStatusEvent(
+                institution_id=run.institution_id,
+                location_id=run.location_id,
+                contact_id=run.contact_id,
+                workflow_id=run.workflow_id,
+                workflow_version_id=run.workflow_version_id,
+                workflow_run_id=run.id,
+                step_id=node.id,
+                trigger_ref_type=run.trigger_ref_type,
+                trigger_ref_id=run.trigger_ref_id,
+                status=node.status,
+                note=note,
+            )
+        )
+        context["patient_workflow_status"] = node.status
+        context["patient_status"] = node.status
+        await self.runtime.complete_step(
+            step,
+            result_code="status_updated",
+            result_metadata={"status": node.status},
+        )
+        await self.session.flush()
+        return node.next_node_id
+
 
 def _evaluate_condition(node: ConditionNode, context: dict) -> bool:
     results = [_evaluate_rule(rule, context) for rule in node.rules]
@@ -367,16 +419,41 @@ def _evaluate_rule(rule: ConditionRule, context: dict) -> bool:
         return value is None
     if rule.op == "is_not_null":
         return value is not None
+    if rule.op == "contains":
+        return _contains(value, rule.value)
+    if rule.op == "not_contains":
+        return not _contains(value, rule.value)
     return False
 
 
+def _contains(value: object, expected: object) -> bool:
+    if value is None or expected is None:
+        return False
+    value_text = str(value).casefold()
+    if isinstance(expected, list):
+        return any(str(item).casefold() in value_text for item in expected)
+    return str(expected).casefold() in value_text
+
+
 def _compute_due_at(
-    delay: DurationDelay | CalendarDelay,
+    delay: DurationDelay | CalendarDelay | AppointmentRelativeDelay,
     location_timezone: str,
     now: datetime,
+    context: dict | None = None,
 ) -> datetime:
     if isinstance(delay, DurationDelay):
         return now + timedelta(seconds=delay.duration_seconds)
+    if isinstance(delay, AppointmentRelativeDelay):
+        raw_anchor = (context or {}).get(delay.anchor_field)
+        anchor = _parse_context_datetime(raw_anchor)
+        if anchor is None:
+            logger.warning(
+                "appointment-relative wait missing/invalid anchor '%s'",
+                delay.anchor_field,
+            )
+            return now
+        target = anchor + timedelta(seconds=delay.offset_seconds)
+        return target if target > now else now
 
     try:
         tz = ZoneInfo(location_timezone)
@@ -391,6 +468,21 @@ def _compute_due_at(
     if local_target <= now:
         local_target += timedelta(days=1)
     return local_target.astimezone(timezone.utc)
+
+
+def _parse_context_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str) and value:
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 async def build_dispatcher(

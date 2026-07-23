@@ -51,7 +51,7 @@ export type WorkflowTrigger =
 // ---------------------------------------------------------------------------
 // Wait delay (discriminated on `delay_type`)
 // ---------------------------------------------------------------------------
-export type DelayType = "duration" | "calendar"
+export type DelayType = "duration" | "calendar" | "appointment_relative"
 
 export interface DurationDelay {
     delay_type: "duration"
@@ -63,12 +63,18 @@ export interface CalendarDelay {
     /** HH:MM in the location timezone. */
     time_of_day: string
 }
-export type WaitDelay = DurationDelay | CalendarDelay
+export interface AppointmentRelativeDelay {
+    delay_type: "appointment_relative"
+    /** Seconds relative to appointment_at. Negative = before, positive = after. */
+    offset_seconds: number
+    anchor_field?: string
+}
+export type WaitDelay = DurationDelay | CalendarDelay | AppointmentRelativeDelay
 
 // ---------------------------------------------------------------------------
 // Condition rule
 // ---------------------------------------------------------------------------
-export type ConditionOp = "eq" | "neq" | "in" | "not_in" | "is_null" | "is_not_null"
+export type ConditionOp = "eq" | "neq" | "in" | "not_in" | "is_null" | "is_not_null" | "contains" | "not_contains"
 
 export interface ConditionRule {
     field: string
@@ -84,6 +90,7 @@ export type NodeType =
     | "send_sms"
     | "send_voice"
     | "send_email"
+    | "update_patient_status"
     | "condition"
     | "exit"
 
@@ -120,6 +127,13 @@ export interface SendEmailNode {
     respect_quiet_hours?: boolean
     max_attempts?: number
 }
+export interface UpdatePatientStatusNode {
+    type: "update_patient_status"
+    id: string
+    status: string
+    next_node_id: string
+    note_template?: string | null
+}
 export interface ConditionNode {
     type: "condition"
     id: string
@@ -139,6 +153,7 @@ export type WorkflowNode =
     | SendSmsNode
     | SendVoiceNode
     | SendEmailNode
+    | UpdatePatientStatusNode
     | ConditionNode
     | ExitNode
 
@@ -177,7 +192,7 @@ export interface WorkflowDefinition {
 }
 
 /** Node types that carry exactly one forward pointer (`next_node_id`). */
-export type LinearNode = WaitNode | SendSmsNode | SendVoiceNode | SendEmailNode
+export type LinearNode = WaitNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode
 /** Node types that place a message/call on a channel. */
 export type SendNode = SendSmsNode | SendVoiceNode | SendEmailNode
 

@@ -112,11 +112,20 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                             message: "Wait duration is zero — the step will not pause.",
                         })
                     }
-                } else if (!HHMM_RE.test(node.delay.time_of_day)) {
+                } else if (node.delay.delay_type === "calendar" && !HHMM_RE.test(node.delay.time_of_day)) {
                     issues.push({
                         node_id: node.id,
                         severity: "error",
                         message: `Send time "${node.delay.time_of_day}" is not a valid HH:MM time.`,
+                    })
+                } else if (
+                    node.delay.delay_type === "appointment_relative" &&
+                    !Number.isFinite(node.delay.offset_seconds)
+                ) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Appointment-relative wait needs a valid offset.",
                     })
                 }
                 break
@@ -167,6 +176,17 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                     })
                 }
                 checkAttempts(node.max_attempts, node.id, issues)
+                break
+            }
+            case "update_patient_status": {
+                refError(node, node.next_node_id, "Status update step")
+                if (!node.status.trim()) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Status update step has no status.",
+                    })
+                }
                 break
             }
             case "condition": {

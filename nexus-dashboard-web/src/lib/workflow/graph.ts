@@ -122,6 +122,7 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
         case "send_sms":
         case "send_voice":
         case "send_email":
+        case "update_patient_status":
             return [{ targetId: node.next_node_id }]
         case "condition":
             return [
@@ -163,7 +164,8 @@ function singleNext(node: WorkflowNode): string | undefined {
         node.type === "wait" ||
         node.type === "send_sms" ||
         node.type === "send_voice" ||
-        node.type === "send_email"
+        node.type === "send_email" ||
+        node.type === "update_patient_status"
     ) {
         return node.next_node_id
     }
@@ -437,6 +439,14 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 respect_quiet_hours: true,
                 max_attempts: 1,
             }
+        case "update_patient_status":
+            return {
+                type,
+                id,
+                status: "appointment_confirmed",
+                note_template: "",
+                next_node_id: "",
+            }
         case "condition":
             return {
                 type,
@@ -554,6 +564,7 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
                 case "send_sms":
                 case "send_voice":
                 case "send_email":
+                case "update_patient_status":
                     return { ...n, next_node_id: repoint(n.next_node_id) }
                 case "condition":
                     return {
@@ -599,6 +610,7 @@ export function connectNodes(
         case "send_sms":
         case "send_voice":
         case "send_email":
+        case "update_patient_status":
             return updateNode(def, sourceId, { ...node, next_node_id: targetId })
         case "condition":
             return updateNode(

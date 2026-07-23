@@ -12,7 +12,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.app.models.appointment_working_set import AppointmentWorkingSet
 from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowStatus
+from src.app.models.institution_appointment_type import InstitutionAppointmentType
 from src.app.services.automation.definition_schema import (
     AppointmentOffsetTrigger,
     WorkflowDefinition,
@@ -38,6 +40,60 @@ class AppointmentTriggerService:
             wf for wf in result.scalars().all()
             if wf.trigger_type == "appointment_offset"
         ]
+
+    async def get_appointment_context(
+        self,
+        *,
+        institution_id: str,
+        appointment_id: str,
+        fallback_location_id: str | None = None,
+    ) -> dict:
+        """Return normalized workflow context for a local appointment projection."""
+        result = await self.session.execute(
+            select(AppointmentWorkingSet).where(
+                AppointmentWorkingSet.institution_id == institution_id,
+                AppointmentWorkingSet.nexhealth_appointment_id == appointment_id,
+            )
+        )
+        appt = result.scalar_one_or_none()
+        if appt is None:
+            return {}
+
+        type_name = None
+        if appt.appointment_type_id:
+            type_result = await self.session.execute(
+                select(InstitutionAppointmentType).where(
+                    InstitutionAppointmentType.institution_id == institution_id,
+                    InstitutionAppointmentType.source_id == appt.appointment_type_id,
+                    InstitutionAppointmentType.location_id
+                    == (appt.location_id or fallback_location_id),
+                )
+            )
+            appt_type = type_result.scalar_one_or_none()
+            if appt_type is not None:
+                type_name = appt_type.name
+
+        return {
+            "appointment_id": appt.nexhealth_appointment_id,
+            "appointment_at": appt.start_time.isoformat() if appt.start_time else None,
+            "appointment_start_time": appt.start_time.isoformat() if appt.start_time else None,
+            "appointment_status": appt.status,
+            "appointment_type_id": appt.appointment_type_id,
+            "appointment_type": type_name or appt.appointment_type_id,
+            "appointment_type_name": type_name,
+            "provider_id": appt.provider_id,
+            "patient_id": appt.nexhealth_patient_id,
+            "contact_id": appt.contact_id,
+            "location_id": appt.location_id or fallback_location_id,
+            "appointment": {
+                "id": appt.nexhealth_appointment_id,
+                "start_time": appt.start_time.isoformat() if appt.start_time else None,
+                "status": appt.status,
+                "appointment_type_id": appt.appointment_type_id,
+                "appointment_type_name": type_name,
+                "provider_id": appt.provider_id,
+            },
+        }
 
     async def find_active_recall_workflows(
         self, institution_id: str
@@ -82,6 +138,32 @@ def compute_enrollment_eta(
         return None
 
     return enrollment_eta
+
+
+def workflow_matches_appointment(
+    workflow: AutomationWorkflow,
+    *,
+    appointment_type_id: str | None = None,
+    appointment_type_name: str | None = None,
+) -> bool:
+    """Return whether an appointment workflow should receive this appointment."""
+    if not workflow.definition:
+        return False
+
+    try:
+        defn = WorkflowDefinition.model_validate(workflow.definition)
+    except Exception:
+        return False
+
+    if not isinstance(defn.trigger, AppointmentOffsetTrigger):
+        return False
+
+    selected_ids = defn.trigger.appointment_type_ids or []
+    if not selected_ids:
+        return True
+
+    candidates = {value for value in (appointment_type_id, appointment_type_name) if value}
+    return any(selected in candidates for selected in selected_ids)
 
 
 def make_appointment_idempotency_key(

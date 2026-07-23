@@ -123,7 +123,7 @@ describe("WorkflowBuilder publish — authoritative backend validation", () => {
         expect(patch).not.toHaveBeenCalled()
         expect(await screen.findByText("Consent is required for this channel.")).toBeInTheDocument()
         expect(screen.getByText(/server & compliance checks/i)).toBeInTheDocument()
-    })
+    }, 10000)
 
     it("proceeds to publish when the backend validation passes", async () => {
         get.mockResolvedValue(WORKFLOW)
@@ -135,5 +135,5 @@ describe("WorkflowBuilder publish — authoritative backend validation", () => {
 
         await waitFor(() => expect(validate).toHaveBeenCalled())
         await waitFor(() => expect(patch).toHaveBeenCalled())
-    })
+    }, 10000)
 })

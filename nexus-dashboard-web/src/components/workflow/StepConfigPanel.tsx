@@ -8,6 +8,7 @@
  * source of truth). Edges are authored via the next-step selectors here — not by
  * dragging on the canvas (Plan 02 architecture decision).
  */
+import { useEffect, useState } from "react"
 import { Trash2, Flag, Plus, GitBranch } from "lucide-react"
 import {
     Sheet,
@@ -21,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
     Select,
     SelectContent,
@@ -31,9 +33,11 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
+import { listAppointmentTypes } from "@/lib/tenant-api"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
 import { addVoiceOutcomeBranch, TRIGGER_NODE_ID, VOICE_OUTCOME_BRANCH_VALUES } from "@/lib/workflow/graph"
+import type { CachedAppointmentType } from "@/types"
 import type {
     ConditionNode,
     ConditionOp,
@@ -42,6 +46,7 @@ import type {
     SendSmsNode,
     SendVoiceNode,
     TriggerType,
+    UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
     WorkflowNode,
@@ -49,7 +54,7 @@ import type {
 } from "@/types/workflow"
 
 const NONE = "__none__"
-const CONDITION_OPS: ConditionOp[] = ["eq", "neq", "in", "not_in", "is_null", "is_not_null"]
+const CONDITION_OPS: ConditionOp[] = ["eq", "neq", "in", "not_in", "is_null", "is_not_null", "contains", "not_contains"]
 
 export interface StepConfigPanelProps {
     open: boolean
@@ -62,6 +67,7 @@ export interface StepConfigPanelProps {
     onTriggerChange: (trigger: WorkflowTrigger) => void
     onDeleteNode: (id: string) => void
     onSetEntry: (id: string) => void
+    locationId?: string | null
     readOnly?: boolean
 }
 
@@ -74,7 +80,12 @@ export default function StepConfigPanel(props: StepConfigPanelProps) {
         <Sheet open={open} onOpenChange={onOpenChange}>
             <SheetContent className="w-full overflow-y-auto sm:max-w-md [background:hsl(var(--background))] shadow-2xl">
                 {isTrigger ? (
-                    <TriggerForm trigger={def.trigger} onChange={props.onTriggerChange} readOnly={props.readOnly} />
+                    <TriggerForm
+                        trigger={def.trigger}
+                        locationId={props.locationId}
+                        onChange={props.onTriggerChange}
+                        readOnly={props.readOnly}
+                    />
                 ) : node ? (
                     <NodeForm {...props} node={node} />
                 ) : (
@@ -92,14 +103,51 @@ export default function StepConfigPanel(props: StepConfigPanelProps) {
 // ---------------------------------------------------------------------------
 function TriggerForm({
     trigger,
+    locationId,
     onChange,
     readOnly,
 }: {
     trigger: WorkflowTrigger
+    locationId?: string | null
     onChange: (t: WorkflowTrigger) => void
     readOnly?: boolean
 }) {
     const meta = TRIGGER_META[trigger.type]
+    const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
+    const [typesLoading, setTypesLoading] = useState(false)
+
+    useEffect(() => {
+        if (trigger.type !== "appointment_offset" || !locationId) {
+            setAppointmentTypes([])
+            return
+        }
+        let cancelled = false
+        setTypesLoading(true)
+        listAppointmentTypes(locationId)
+            .then((types) => {
+                if (!cancelled) setAppointmentTypes(types.filter((type) => type.is_active))
+            })
+            .catch(() => {
+                if (!cancelled) setAppointmentTypes([])
+            })
+            .finally(() => {
+                if (!cancelled) setTypesLoading(false)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [trigger.type, locationId])
+
+    const selectedTypeIds = trigger.type === "appointment_offset"
+        ? trigger.appointment_type_ids ?? []
+        : []
+    const toggleAppointmentType = (sourceId: string, checked: boolean) => {
+        if (trigger.type !== "appointment_offset") return
+        const next = checked
+            ? [...selectedTypeIds, sourceId]
+            : selectedTypeIds.filter((id) => id !== sourceId)
+        onChange({ ...trigger, appointment_type_ids: next.length ? next : null })
+    }
     return (
         <>
             <SheetHeader>
@@ -125,14 +173,41 @@ function TriggerForm({
                 </Field>
 
                 {trigger.type === "appointment_offset" && (
-                    <Field label="Hours relative to appointment" hint="Negative = before (e.g. -24 = 24h before).">
-                        <Input
-                            type="number"
-                            value={trigger.offset_hours}
-                            disabled={readOnly}
-                            onChange={(e) => onChange({ ...trigger, offset_hours: toInt(e.target.value, 0) })}
-                        />
-                    </Field>
+                    <>
+                        <Field label="Hours relative to appointment" hint="Negative = before (e.g. -24 = 24h before).">
+                            <Input
+                                type="number"
+                                value={trigger.offset_hours}
+                                disabled={readOnly}
+                                onChange={(e) => onChange({ ...trigger, offset_hours: toInt(e.target.value, 0) })}
+                            />
+                        </Field>
+                        <Field label="Appointment types" hint="Leave empty to match every appointment type.">
+                            <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border border-border p-2">
+                                {!locationId ? (
+                                    <p className="text-xs text-muted-foreground">Save this campaign to a location before selecting appointment types.</p>
+                                ) : typesLoading ? (
+                                    <p className="text-xs text-muted-foreground">Loading appointment types...</p>
+                                ) : appointmentTypes.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">No appointment types are available for this location yet.</p>
+                                ) : (
+                                    appointmentTypes.map((type) => (
+                                        <label key={type.source_id} className="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
+                                            <Checkbox
+                                                checked={selectedTypeIds.includes(type.source_id)}
+                                                disabled={readOnly}
+                                                onCheckedChange={(checked) => toggleAppointmentType(type.source_id, checked === true)}
+                                            />
+                                            <span className="min-w-0 flex-1 truncate">{type.name}</span>
+                                            {type.duration_minutes && (
+                                                <span className="shrink-0 text-xs text-muted-foreground">{type.duration_minutes}m</span>
+                                            )}
+                                        </label>
+                                    ))
+                                )}
+                            </div>
+                        </Field>
+                    </>
                 )}
                 {trigger.type === "recall_scan" && (
                     <Field label="Recall interval (months)">
@@ -197,6 +272,9 @@ function NodeForm({
                     />
                 )}
                 {node.type === "wait" && <WaitFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
+                {node.type === "update_patient_status" && (
+                    <UpdatePatientStatusFields node={node} onChange={onNodeChange} readOnly={readOnly} />
+                )}
                 {node.type === "condition" && (
                     <ConditionFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
                 )}
@@ -223,7 +301,10 @@ function NodeForm({
                     />
                 )}
 
-                {node.type !== "exit" && (
+                {(node.type === "wait" ||
+                    node.type === "send_sms" ||
+                    node.type === "send_voice" ||
+                    node.type === "send_email") && (
                     <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
                         <div>
                             <Label className="text-sm">Respect quiet hours</Label>
@@ -412,7 +493,9 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                             delay:
                                 v === "duration"
                                     ? { delay_type: "duration", duration_seconds: 3600 }
-                                    : { delay_type: "calendar", offset_days: 0, time_of_day: "09:00" },
+                                    : v === "appointment_relative"
+                                      ? { delay_type: "appointment_relative", offset_seconds: -3600, anchor_field: "appointment_at" }
+                                      : { delay_type: "calendar", offset_days: 0, time_of_day: "09:00" },
                         })
                     }
                 >
@@ -420,6 +503,7 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                     <SelectContent>
                         <SelectItem value="duration">Fixed duration</SelectItem>
                         <SelectItem value="calendar">Calendar day + time</SelectItem>
+                        <SelectItem value="appointment_relative">Relative to appointment</SelectItem>
                     </SelectContent>
                 </Select>
             </Field>
@@ -439,7 +523,7 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                         }
                     />
                 </Field>
-            ) : (
+            ) : delay.delay_type === "calendar" ? (
                 <>
                     <Field label="Day offset" hint="Days relative to the anchor (0 = same day).">
                         <Input
@@ -460,7 +544,101 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                         />
                     </Field>
                 </>
+            ) : (
+                <>
+                    <Field label="Timing" hint="Negative = before appointment. Positive = after appointment.">
+                        <Select
+                            value={relativeWaitPreset(delay.offset_seconds)}
+                            disabled={readOnly}
+                            onValueChange={(v) =>
+                                onChange({
+                                    ...node,
+                                    delay: {
+                                        delay_type: "appointment_relative",
+                                        offset_seconds: Number(v),
+                                        anchor_field: delay.anchor_field ?? "appointment_at",
+                                    },
+                                })
+                            }
+                        >
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="-86400">1 day before appointment</SelectItem>
+                                <SelectItem value="-7200">2 hours before appointment</SelectItem>
+                                <SelectItem value="-3600">1 hour before appointment</SelectItem>
+                                <SelectItem value="3600">1 hour after appointment</SelectItem>
+                                <SelectItem value="86400">1 day after appointment</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </Field>
+                    <Field label="Custom offset (hours)">
+                        <Input
+                            type="number"
+                            step="0.25"
+                            value={round2(delay.offset_seconds / 3600)}
+                            disabled={readOnly}
+                            onChange={(e) =>
+                                onChange({
+                                    ...node,
+                                    delay: {
+                                        delay_type: "appointment_relative",
+                                        offset_seconds: Math.round(toFloat(e.target.value, 0) * 3600),
+                                        anchor_field: delay.anchor_field ?? "appointment_at",
+                                    },
+                                })
+                            }
+                        />
+                    </Field>
+                </>
             )}
+        </>
+    )
+}
+
+function relativeWaitPreset(seconds: number): string {
+    const presets = new Set(["-86400", "-7200", "-3600", "3600", "86400"])
+    const text = String(seconds)
+    return presets.has(text) ? text : text
+}
+
+function UpdatePatientStatusFields({
+    node,
+    onChange,
+    readOnly,
+}: {
+    node: UpdatePatientStatusNode
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    return (
+        <>
+            <Field label="Status">
+                <Select
+                    value={node.status}
+                    disabled={readOnly}
+                    onValueChange={(value) => onChange({ ...node, status: value })}
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="appointment_confirmed">Appointment confirmed</SelectItem>
+                        <SelectItem value="appointment_cancelled">Appointment cancelled</SelectItem>
+                        <SelectItem value="reschedule_requested">Reschedule requested</SelectItem>
+                        <SelectItem value="reschedule_or_followup_needed">Reschedule/follow-up needed</SelectItem>
+                        <SelectItem value="do_not_call_requested">Do not call requested</SelectItem>
+                        <SelectItem value="no_answer">No answer</SelectItem>
+                        <SelectItem value="post_op_followup_needed">Post-op follow-up needed</SelectItem>
+                        <SelectItem value="post_op_complete">Post-op complete</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+            <Field label="Note" hint="Optional internal note stored with the status event.">
+                <Textarea
+                    value={node.note_template ?? ""}
+                    disabled={readOnly}
+                    placeholder="e.g. Confirmation call outcome: {{call_outcome}}"
+                    onChange={(e) => onChange({ ...node, note_template: e.target.value })}
+                />
+            </Field>
         </>
     )
 }

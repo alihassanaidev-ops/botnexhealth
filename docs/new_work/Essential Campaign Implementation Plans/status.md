@@ -1,6 +1,6 @@
 # Essential Campaign Implementation Status
 
-Last updated: 2026-07-22 23:35 PKT
+Last updated: 2026-07-24 02:05 PKT
 
 ## Rules
 
@@ -35,6 +35,7 @@ Plan 09: Backend DB And NexHealth Data Flow complete
 | Work | Status | Session |
 |------|--------|---------|
 | GoTracker Synchronizer PMS adapter | adapter/config/UI/webhook receiver/subscription automation complete; live Synchronizer acceptance pending staging product-key test | sessions/gotracker-synchronizer-pms-adapter |
+| Dental outbound workflow primitives | appointment-type trigger filtering, appointment-relative waits, Retell outcome-ready voice flow, and local patient status recording complete; real phone ringing blocked only by provider international dialing permission during local QA | sessions/dental-outbound-workflow-primitives |
 
 ## Prod-Readiness Slices
 
@@ -64,3 +65,4 @@ Plan 09: Backend DB And NexHealth Data Flow complete
 | 09 PMS capability gating slice | Capability/template/checklist pytest, frontend workflow API/template picker vitest, touched-file backend ruff, frontend eslint | passed with noted warnings |
 | 09 webhook durability/ops hardening slice | NexHealth projection/webhook/subscription/retention pytest, touched-file backend ruff, Alembic heads | passed with noted warning |
 | GoTracker Synchronizer PMS adapter | GoTracker adapter/factory/webhook/RBAC pytest, retention pytest, backend compile smoke, ruff, Alembic heads, frontend production build | passed with noted warnings |
+| Dental outbound workflow primitives | Focused automation pytest, frontend workflow vitest, frontend production build, ruff, Alembic heads, RLS coverage check, local Docker migration smoke, local GoTracker/NexHealth/automation pytest, local Retell ngrok QA through `create-phone-call` and webhook resume | passed except real call connect blocked by Retell/Twilio `No International Permission` for Pakistan destination |

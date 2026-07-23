@@ -5,6 +5,7 @@
  */
 import {
     CalendarClock,
+    ClipboardCheck,
     Clock,
     Flag,
     GitBranch,
@@ -23,7 +24,7 @@ export interface NodeMeta {
     label: string
     description: string
     icon: LucideIcon
-    group: "channel" | "control"
+    group: "channel" | "control" | "action"
     /** Tailwind classes for the node's icon chip (light + dark). */
     accent: string
 }
@@ -49,6 +50,13 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         icon: Mail,
         group: "channel",
         accent: "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
+    },
+    update_patient_status: {
+        label: "Update Status",
+        description: "Record a patient workflow status.",
+        icon: ClipboardCheck,
+        group: "action",
+        accent: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
     },
     wait: {
         label: "Wait",
@@ -110,6 +118,7 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
     { title: "Channels", group: "channel", types: ["send_sms", "send_voice", "send_email"] },
+    { title: "Actions", group: "action", types: ["update_patient_status"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
 ]
 
@@ -123,6 +132,8 @@ export const CONDITION_OP_LABELS: Record<ConditionOp, string> = {
     not_in: "is not one of",
     is_null: "is empty",
     is_not_null: "is not empty",
+    contains: "contains",
+    not_contains: "does not contain",
 }
 
 /** Short human label for a node in lists/validation. */

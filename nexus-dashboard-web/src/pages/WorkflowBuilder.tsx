@@ -489,6 +489,7 @@ export default function WorkflowBuilder() {
                 onTriggerChange={onTriggerChange}
                 onDeleteNode={onDeleteNode}
                 onSetEntry={onSetEntry}
+                locationId={locationId}
                 readOnly={readOnly}
             />
             <TestRunDialog open={testOpen} onOpenChange={setTestOpen} def={def} />

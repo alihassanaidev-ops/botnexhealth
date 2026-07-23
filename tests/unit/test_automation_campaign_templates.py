@@ -51,13 +51,14 @@ def test_priority_dental_templates_present() -> None:
         "reactivation-sms-email-18month",
         "no-show-recovery",
         "cancellation-rebooking",
+        "surgery-confirmation-post-op",
         "callback-automation",
         "unscheduled-treatment-followup",
     }
 
 
 def test_list_templates_returns_all() -> None:
-    assert len(list_templates()) == 8
+    assert len(list_templates()) == 9
 
 
 def test_get_template_known_id() -> None:
@@ -76,9 +77,26 @@ def test_get_template_unknown_id_returns_none() -> None:
 
 
 def test_appointment_templates_use_appointment_offset_trigger() -> None:
-    for tid in ("appointment-reminder-24h", "appointment-confirmation-48h"):
+    for tid in (
+        "appointment-reminder-24h",
+        "appointment-confirmation-48h",
+        "surgery-confirmation-post-op",
+    ):
         t = TEMPLATES[tid]
         assert t.definition["trigger"]["type"] == "appointment_offset"
+
+
+def test_surgery_template_uses_status_action_and_post_op_relative_wait() -> None:
+    t = TEMPLATES["surgery-confirmation-post-op"]
+    nodes = {node["id"]: node for node in t.definition["nodes"]}
+
+    assert nodes["mark-confirmed"]["type"] == "update_patient_status"
+    assert nodes["mark-confirmed"]["status"] == "appointment_confirmed"
+    assert nodes["wait-post-op"]["delay"] == {
+        "delay_type": "appointment_relative",
+        "offset_seconds": 86400,
+        "anchor_field": "appointment_at",
+    }
 
 
 def test_confirmation_template_does_not_advertise_cancel_keyword() -> None:
@@ -204,7 +222,7 @@ def test_campaign_template_response_from_template() -> None:
 def test_list_route_returns_all_templates() -> None:
     user = MagicMock()
     result = asyncio.run(list_campaign_templates(user))
-    assert len(result) == 8
+    assert len(result) == 9
 
 
 # ---------------------------------------------------------------------------

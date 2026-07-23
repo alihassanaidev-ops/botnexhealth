@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -15,19 +15,19 @@ from src.app.models.automation_workflow import (
     AutomationStepStatus,
 )
 from src.app.services.automation.definition_schema import (
+    AppointmentRelativeDelay,
     AppointmentOffsetTrigger,
     CalendarDelay,
     ConditionNode,
     ConditionRule,
     DurationDelay,
     ExitNode,
-    ManualTrigger,
     SendSmsNode,
+    UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
 )
 from src.app.services.automation.step_dispatcher import (
-    DispatchResult,
     WorkflowStepDispatcher,
     _compute_due_at,
     _evaluate_condition,
@@ -161,6 +161,41 @@ def test_advance_wait_node_returns_waiting() -> None:
     assert result.timer_id == "timer-1"
     sched.create_timer.assert_awaited_once()
     rt.wait_run.assert_awaited_once()
+
+
+def test_advance_appointment_relative_wait_uses_appointment_at_context() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run()
+    appt_at = datetime(2026, 7, 3, 14, 0, 0, tzinfo=timezone.utc)
+    defn = _definition(
+        nodes=[
+            WaitNode(
+                id="wait-1",
+                delay=AppointmentRelativeDelay(offset_seconds=-3600),
+                next_node_id="exit-1",
+            ),
+            ExitNode(id="exit-1"),
+        ],
+        entry="wait-1",
+    )
+
+    result = asyncio.run(
+        dispatcher.advance(
+            run,
+            defn,
+            context={"appointment_at": appt_at.isoformat()},
+            now=_NOW,
+        )
+    )
+
+    assert result.status == "waiting"
+    assert sched.create_timer.await_args.kwargs["due_at"] == datetime(
+        2026, 7, 3, 13, 0, 0, tzinfo=timezone.utc
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +357,44 @@ def test_advance_condition_false_branch() -> None:
     assert result.outcome == "no_response"
 
 
+def test_update_patient_status_node_records_event_and_continues() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run()
+    run.id = "run-1"
+    run.contact_id = "contact-1"
+    defn = _definition(
+        nodes=[
+            UpdatePatientStatusNode(
+                id="status-1",
+                status="appointment_confirmed",
+                note_template="Outcome {{call_outcome}}",
+                next_node_id="exit-1",
+            ),
+            ExitNode(id="exit-1", outcome="done"),
+        ],
+        entry="status-1",
+    )
+
+    result = asyncio.run(
+        dispatcher.advance(run, defn, context={"call_outcome": "confirmed"})
+    )
+
+    assert result.status == "completed"
+    assert result.outcome == "done"
+    added = session.add.call_args_list[0].args[0]
+    assert added.status == "appointment_confirmed"
+    assert added.note == "Outcome confirmed"
+    rt.complete_step.assert_any_await(
+        rt.begin_step.return_value,
+        result_code="status_updated",
+        result_metadata={"status": "appointment_confirmed"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # advance() — missing node fails the run
 # ---------------------------------------------------------------------------
@@ -362,6 +435,9 @@ def test_advance_missing_node_fails_run() -> None:
     ("is_null", "x", None, False),
     ("is_not_null", "x", None, True),
     ("is_not_null", None, None, False),
+    ("contains", "Implant Surgery", "surgery", True),
+    ("contains", "Cleaning", "surgery", False),
+    ("not_contains", "Cleaning", "surgery", True),
 ])
 def test_evaluate_rule(op, field_val, rule_val, expected) -> None:
     rule = ConditionRule(field="f", op=op, value=rule_val)
@@ -436,7 +512,6 @@ def test_compute_due_at_calendar_past_time_advances_day() -> None:
     delay = CalendarDelay(offset_days=0, time_of_day="08:00")
     result = _compute_due_at(delay, "America/Chicago", _NOW)
     # Should advance to next day: 08:00 Chicago next day = 13:00 UTC next day
-    from datetime import date
     assert result.date() > _NOW.date()
 
 
@@ -444,3 +519,14 @@ def test_compute_due_at_unknown_timezone_falls_back_to_utc() -> None:
     delay = CalendarDelay(offset_days=1, time_of_day="09:00")
     result = _compute_due_at(delay, "Fake/Zone", _NOW)
     assert result is not None  # doesn't raise; returns valid datetime
+
+
+def test_compute_due_at_appointment_relative_past_returns_now() -> None:
+    delay = AppointmentRelativeDelay(offset_seconds=-3600)
+    result = _compute_due_at(
+        delay,
+        "UTC",
+        _NOW,
+        context={"appointment_at": "2026-07-02T14:30:00+00:00"},
+    )
+    assert result == _NOW

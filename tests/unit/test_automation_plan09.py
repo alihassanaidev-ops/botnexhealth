@@ -13,6 +13,7 @@ from src.app.services.automation.appointment_trigger_service import (
     compute_enrollment_eta,
     make_appointment_idempotency_key,
     make_recall_idempotency_key,
+    workflow_matches_appointment,
 )
 from src.app.models.automation_workflow import AutomationWorkflowStatus
 from src.app.tasks.automation_workflow import (
@@ -37,15 +38,23 @@ _FUTURE_APPT = datetime(2026, 7, 11, 10, 0, 0, tzinfo=timezone.utc)  # 22h from 
 # ---------------------------------------------------------------------------
 
 
-def _make_workflow(trigger_type="appointment_offset", version_id="ver-1", offset_hours=-24):
+def _make_workflow(
+    trigger_type="appointment_offset",
+    version_id="ver-1",
+    offset_hours=-24,
+    appointment_type_ids=None,
+):
     wf = MagicMock()
     wf.id = "wf-1"
     wf.institution_id = "inst-1"
     wf.status = AutomationWorkflowStatus.ACTIVE.value
     wf.trigger_type = trigger_type
     wf.current_version_id = version_id
+    trigger = {"type": trigger_type, "offset_hours": offset_hours}
+    if appointment_type_ids is not None:
+        trigger["appointment_type_ids"] = appointment_type_ids
     wf.definition = {
-        "trigger": {"type": trigger_type, "offset_hours": offset_hours},
+        "trigger": trigger,
         "entry_node_id": "exit-1",
         "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
     }
@@ -108,6 +117,26 @@ def test_compute_enrollment_eta_wrong_trigger_type():
         "nodes": [{"type": "exit", "id": "e"}],
     }
     assert compute_enrollment_eta(wf, _FUTURE_APPT) is None
+
+
+def test_workflow_matches_all_appointment_types_when_unfiltered():
+    wf = _make_workflow(appointment_type_ids=None)
+    assert workflow_matches_appointment(wf, appointment_type_id="gt-9") is True
+
+
+def test_workflow_matches_selected_appointment_type_id():
+    wf = _make_workflow(appointment_type_ids=["gt-9"])
+    assert workflow_matches_appointment(wf, appointment_type_id="gt-9") is True
+    assert workflow_matches_appointment(wf, appointment_type_id="gt-10") is False
+
+
+def test_workflow_matches_selected_appointment_type_name_fallback():
+    wf = _make_workflow(appointment_type_ids=["Implant Surgery"])
+    assert workflow_matches_appointment(
+        wf,
+        appointment_type_id=None,
+        appointment_type_name="Implant Surgery",
+    ) is True
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +202,7 @@ async def test_trigger_appointment_no_workflows():
     ) as MockSvc:
         instance = AsyncMock()
         instance.find_active_appointment_workflows = AsyncMock(return_value=[])
+        instance.get_appointment_context = AsyncMock(return_value={})
         MockSvc.return_value = instance
 
         result = await _trigger_appointment_async(
