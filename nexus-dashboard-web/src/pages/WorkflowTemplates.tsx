@@ -217,16 +217,19 @@ export default function WorkflowTemplates() {
         if (!picked) return
         setCreating(true)
         try {
+            const setupOptions: Record<string, unknown> = {
+                audience_source: audienceSource,
+                channel_sequence: channelSequence,
+                copy_variant: copyVariant,
+                staff_handoff_behavior: handoffBehavior,
+            }
+            if (requiresAppointmentTypes(picked)) {
+                setupOptions.appointment_type_ids = appointmentTypeIds
+            }
             const wf = await createWorkflowFromTemplate(picked.id, name, {
                 locationId: selectedLocationId || null,
                 voiceAgentId,
-                setupOptions: {
-                    audience_source: audienceSource,
-                    channel_sequence: channelSequence,
-                    copy_variant: copyVariant,
-                    staff_handoff_behavior: handoffBehavior,
-                    appointment_type_ids: appointmentTypeIds,
-                },
+                setupOptions,
             })
             toast.success(`Created paused campaign "${wf.name}"`)
             navigate(`/institution-admin/campaigns/${wf.id}/builder`)

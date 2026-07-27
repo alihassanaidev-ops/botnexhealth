@@ -677,7 +677,7 @@ _POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
 # Registry
 # ---------------------------------------------------------------------------
 
-TEMPLATES: dict[str, CampaignTemplate] = {
+_ALL_TEMPLATES: dict[str, CampaignTemplate] = {
     "appointment-reminder-24h": CampaignTemplate(
         id="appointment-reminder-24h",
         name="Appointment Reminder (24h)",
@@ -1043,6 +1043,18 @@ TEMPLATES: dict[str, CampaignTemplate] = {
         ),
         tags=["treatment", "sms", "email"],
     ),
+}
+
+LAUNCH_TEMPLATE_IDS: tuple[str, ...] = (
+    "surgery-pre-appointment-confirmation",
+    "post-op-followup-after-confirmation",
+)
+
+# Client-facing launch scope: only expose the two workflows requested for the
+# current production rollout. Keep the other template definitions above so they
+# can be re-enabled later without rebuilding them.
+TEMPLATES: dict[str, CampaignTemplate] = {
+    template_id: _ALL_TEMPLATES[template_id] for template_id in LAUNCH_TEMPLATE_IDS
 }
 
 

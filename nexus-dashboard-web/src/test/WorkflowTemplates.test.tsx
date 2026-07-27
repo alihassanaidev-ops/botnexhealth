@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import WorkflowTemplates from "@/pages/WorkflowTemplates"
 import { listTemplates, createWorkflowFromTemplate } from "@/lib/workflow-api"
-import { listLocations } from "@/lib/tenant-api"
+import { listAppointmentTypes, listLocations } from "@/lib/tenant-api"
 
 vi.mock("@/lib/workflow-api", () => ({
     listTemplates: vi.fn(),
@@ -12,12 +12,14 @@ vi.mock("@/lib/workflow-api", () => ({
 }))
 vi.mock("@/lib/tenant-api", () => ({
     listLocations: vi.fn(),
+    listAppointmentTypes: vi.fn(),
 }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
 
 const list = listTemplates as ReturnType<typeof vi.fn>
 const create = createWorkflowFromTemplate as ReturnType<typeof vi.fn>
 const locations = listLocations as ReturnType<typeof vi.fn>
+const appointmentTypes = listAppointmentTypes as ReturnType<typeof vi.fn>
 
 const TEMPLATES = [
     {
@@ -77,7 +79,9 @@ beforeEach(() => {
     list.mockReset()
     create.mockReset()
     locations.mockReset()
+    appointmentTypes.mockReset()
     locations.mockResolvedValue(LOCATIONS)
+    appointmentTypes.mockResolvedValue([])
 })
 
 describe("WorkflowTemplates page", () => {
