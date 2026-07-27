@@ -114,33 +114,37 @@ function TriggerForm({
 }) {
     const meta = TRIGGER_META[trigger.type]
     const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
-    const [typesLoading, setTypesLoading] = useState(false)
+    const [appointmentTypesLocationId, setAppointmentTypesLocationId] = useState<string | null>(null)
+    const shouldLoadAppointmentTypes = trigger.type === "appointment_offset" && Boolean(locationId)
 
     useEffect(() => {
-        if (trigger.type !== "appointment_offset" || !locationId) {
-            setAppointmentTypes([])
-            return
-        }
+        if (!shouldLoadAppointmentTypes || !locationId) return
         let cancelled = false
-        setTypesLoading(true)
         listAppointmentTypes(locationId)
             .then((types) => {
-                if (!cancelled) setAppointmentTypes(types.filter((type) => type.is_active))
+                if (!cancelled) {
+                    setAppointmentTypes(types.filter((type) => type.is_active))
+                    setAppointmentTypesLocationId(locationId)
+                }
             })
             .catch(() => {
-                if (!cancelled) setAppointmentTypes([])
-            })
-            .finally(() => {
-                if (!cancelled) setTypesLoading(false)
+                if (!cancelled) {
+                    setAppointmentTypes([])
+                    setAppointmentTypesLocationId(locationId)
+                }
             })
         return () => {
             cancelled = true
         }
-    }, [trigger.type, locationId])
+    }, [shouldLoadAppointmentTypes, locationId])
 
     const selectedTypeIds = trigger.type === "appointment_offset"
         ? trigger.appointment_type_ids ?? []
         : []
+    const visibleAppointmentTypes = shouldLoadAppointmentTypes && appointmentTypesLocationId === locationId
+        ? appointmentTypes
+        : []
+    const typesLoading = shouldLoadAppointmentTypes && appointmentTypesLocationId !== locationId
     const toggleAppointmentType = (sourceId: string, checked: boolean) => {
         if (trigger.type !== "appointment_offset") return
         const next = checked
@@ -188,10 +192,10 @@ function TriggerForm({
                                     <p className="text-xs text-muted-foreground">Save this campaign to a location before selecting appointment types.</p>
                                 ) : typesLoading ? (
                                     <p className="text-xs text-muted-foreground">Loading appointment types...</p>
-                                ) : appointmentTypes.length === 0 ? (
+                                ) : visibleAppointmentTypes.length === 0 ? (
                                     <p className="text-xs text-muted-foreground">No appointment types are available for this location yet.</p>
                                 ) : (
-                                    appointmentTypes.map((type) => (
+                                    visibleAppointmentTypes.map((type) => (
                                         <label key={type.source_id} className="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
                                             <Checkbox
                                                 checked={selectedTypeIds.includes(type.source_id)}
@@ -229,6 +233,35 @@ function TriggerForm({
                     <p className="text-sm text-muted-foreground">
                         Enrolls when an inbound interaction requests staff follow-up.
                     </p>
+                )}
+                {trigger.type === "patient_status_changed" && (
+                    <>
+                        <Field label="Statuses" hint="Comma or newline separated status labels.">
+                            <Textarea
+                                value={trigger.statuses.join(", ")}
+                                disabled={readOnly}
+                                placeholder="appointment_confirmed"
+                                onChange={(e) => {
+                                    const statuses = e.target.value
+                                        .split(/[,\n]/)
+                                        .map((v) => v.trim())
+                                        .filter(Boolean)
+                                    onChange({ ...trigger, statuses })
+                                }}
+                            />
+                        </Field>
+                        <Field label="Campaign goal">
+                            <Input
+                                value={trigger.campaign_goal ?? ""}
+                                disabled={readOnly}
+                                placeholder="post_op_followup"
+                                onChange={(e) => onChange({
+                                    ...trigger,
+                                    campaign_goal: e.target.value.trim() || null,
+                                })}
+                            />
+                        </Field>
+                    </>
                 )}
             </div>
         </>
@@ -889,6 +922,12 @@ function defaultTrigger(type: TriggerType): WorkflowTrigger {
             return { type }
         case "callback_requested":
             return { type }
+        case "patient_status_changed":
+            return {
+                type,
+                statuses: ["appointment_confirmed"],
+                campaign_goal: "post_op_followup",
+            }
     }
 }
 

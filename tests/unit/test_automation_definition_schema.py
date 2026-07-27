@@ -184,6 +184,21 @@ def test_respect_quiet_hours_defaults_true() -> None:
     assert d.nodes[0].respect_quiet_hours is True
 
 
+def test_patient_status_changed_trigger() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {
+        "type": "patient_status_changed",
+        "statuses": [" appointment_confirmed "],
+        "campaign_goal": " post_op_followup ",
+    }
+
+    d = WorkflowDefinition.model_validate(defn)
+
+    assert d.trigger.type == "patient_status_changed"
+    assert d.trigger.statuses == ["appointment_confirmed"]
+    assert d.trigger.campaign_goal == "post_op_followup"
+
+
 # ---------------------------------------------------------------------------
 # Invalid definitions
 # ---------------------------------------------------------------------------
@@ -277,5 +292,19 @@ def test_empty_condition_rules_raises() -> None:
 def test_recall_interval_must_be_positive() -> None:
     defn = _with_wait()
     defn["trigger"]["recall_interval_months"] = 0
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
+def test_patient_status_changed_requires_statuses() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {"type": "patient_status_changed", "statuses": []}
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
+def test_patient_status_changed_rejects_blank_statuses() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {"type": "patient_status_changed", "statuses": ["  "]}
     with pytest.raises(ValidationError):
         WorkflowDefinition.model_validate(defn)

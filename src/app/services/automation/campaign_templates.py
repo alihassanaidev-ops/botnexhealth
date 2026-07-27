@@ -431,7 +431,7 @@ _UNSCHEDULED_TREATMENT_FOLLOWUP: dict[str, Any] = {
     "compliance": {"content_class": "sales", "consent_required": True},
 }
 
-_SURGERY_CONFIRMATION_AND_POST_OP: dict[str, Any] = {
+_SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
     "schema_version": "1.0",
     "trigger": {
         "type": "appointment_offset",
@@ -463,7 +463,7 @@ _SURGERY_CONFIRMATION_AND_POST_OP: dict[str, Any] = {
             "id": "mark-confirmed",
             "status": "appointment_confirmed",
             "note_template": "Pre-appointment call outcome: {{call_outcome}}",
-            "next_node_id": "wait-post-op",
+            "next_node_id": "exit-confirmed",
         },
         {
             "type": "condition",
@@ -486,6 +486,22 @@ _SURGERY_CONFIRMATION_AND_POST_OP: dict[str, Any] = {
             "note_template": "Pre-appointment call needs staff review. Outcome: {{call_outcome}}",
             "next_node_id": "exit-handoff",
         },
+        {"type": "exit", "id": "exit-confirmed", "outcome": "appointment_confirmed"},
+        {"type": "exit", "id": "exit-handoff", "outcome": "staff_handoff"},
+        {"type": "exit", "id": "exit-dnc", "outcome": "do_not_call"},
+    ],
+    "compliance": {"content_class": "transactional_care", "consent_required": True},
+}
+
+_POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
+    "schema_version": "1.0",
+    "trigger": {
+        "type": "patient_status_changed",
+        "statuses": ["appointment_confirmed"],
+        "campaign_goal": "post_op_followup",
+    },
+    "entry_node_id": "wait-post-op",
+    "nodes": [
         {
             "type": "wait",
             "id": "wait-post-op",
@@ -502,18 +518,58 @@ _SURGERY_CONFIRMATION_AND_POST_OP: dict[str, Any] = {
             "retell_agent_id": VOICE_AGENT_PLACEHOLDER,
             "wait_for_outcome": True,
             "max_attempts": 1,
-            "next_node_id": "mark-post-op",
+            "next_node_id": "check-post-op-dnc",
+        },
+        {
+            "type": "condition",
+            "id": "check-post-op-dnc",
+            "rules": [{"field": "call_outcome", "op": "eq", "value": "do_not_call"}],
+            "true_next_node_id": "mark-post-op-dnc",
+            "false_next_node_id": "check-post-op-needs-review",
+        },
+        {
+            "type": "condition",
+            "id": "check-post-op-needs-review",
+            "logic": "OR",
+            "rules": [
+                {
+                    "field": "call_outcome",
+                    "op": "in",
+                    "value": [
+                        "post_op_concern",
+                        "appointment_requested",
+                        "needs_followup",
+                        "unclear",
+                    ],
+                }
+            ],
+            "true_next_node_id": "mark-post-op-followup",
+            "false_next_node_id": "mark-post-op-complete",
         },
         {
             "type": "update_patient_status",
-            "id": "mark-post-op",
+            "id": "mark-post-op-complete",
             "status": "post_op_complete",
             "note_template": "Post-op call outcome: {{call_outcome}}",
             "next_node_id": "exit-post-op-complete",
         },
+        {
+            "type": "update_patient_status",
+            "id": "mark-post-op-followup",
+            "status": "post_op_followup_needed",
+            "note_template": "Post-op call needs staff review. Outcome: {{call_outcome}}",
+            "next_node_id": "exit-post-op-followup",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-post-op-dnc",
+            "status": "do_not_call_requested",
+            "note_template": "Patient requested no further calls during post-op outreach.",
+            "next_node_id": "exit-post-op-dnc",
+        },
         {"type": "exit", "id": "exit-post-op-complete", "outcome": "post_op_complete"},
-        {"type": "exit", "id": "exit-handoff", "outcome": "staff_handoff"},
-        {"type": "exit", "id": "exit-dnc", "outcome": "do_not_call"},
+        {"type": "exit", "id": "exit-post-op-followup", "outcome": "staff_handoff"},
+        {"type": "exit", "id": "exit-post-op-dnc", "outcome": "do_not_call"},
     ],
     "compliance": {"content_class": "transactional_care", "consent_required": True},
 }
@@ -707,19 +763,19 @@ TEMPLATES: dict[str, CampaignTemplate] = {
         ),
         tags=["appointment", "cancellation", "sms"],
     ),
-    "surgery-confirmation-post-op": CampaignTemplate(
-        id="surgery-confirmation-post-op",
-        name="Surgery Confirmation + Post-Op",
+    "surgery-pre-appointment-confirmation": CampaignTemplate(
+        id="surgery-pre-appointment-confirmation",
+        name="Surgery Pre-Appointment Confirmation",
         description=(
-            "Call patients before major appointments to confirm attendance, then "
-            "call one day after the appointment for post-op follow-up."
+            "Call patients before major appointments to confirm whether they "
+            "still plan to attend."
         ),
         trigger_type="appointment_offset",
-        definition=_SURGERY_CONFIRMATION_AND_POST_OP,
+        definition=_SURGERY_PRE_APPOINTMENT_CONFIRMATION,
         metadata=_metadata(
             category="appointment_ops",
-            goal="Confirm major appointments before the visit and complete next-day post-op follow-up.",
-            outcome_labels=["post_op_complete", "staff_handoff", "do_not_call"],
+            goal="Confirm major appointments before the visit and record the outcome for follow-up workflows.",
+            outcome_labels=["appointment_confirmed", "staff_handoff", "do_not_call"],
             supported_channels=["voice"],
             required_readiness_checks=["location", "nexhealth_appointment_data", "voice", "consent", "quiet_hours"],
             required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time", "appointment_type"],
@@ -733,7 +789,7 @@ TEMPLATES: dict[str, CampaignTemplate] = {
             ],
             handoff_reason="reschedule_or_followup_needed",
             analytics={
-                "post_op_complete": "completed",
+                "appointment_confirmed": "confirmed",
                 "staff_handoff": "handoff",
                 "do_not_call": "opt_out",
             },
@@ -751,6 +807,56 @@ TEMPLATES: dict[str, CampaignTemplate] = {
                     "label": "Major appointment types",
                     "type": "appointment_type_multiselect",
                     "required": True,
+                }
+            ],
+        ),
+        tags=["appointment", "surgery", "voice", "confirmation"],
+    ),
+    "post-op-followup-after-confirmation": CampaignTemplate(
+        id="post-op-followup-after-confirmation",
+        name="Post-Op Follow-Up After Confirmation",
+        description=(
+            "Call patients one day after a confirmed surgical/major appointment "
+            "to check whether staff follow-up is needed."
+        ),
+        trigger_type="patient_status_changed",
+        definition=_POST_OP_FOLLOWUP_AFTER_CONFIRMATION,
+        metadata=_metadata(
+            category="appointment_ops",
+            goal="Complete next-day post-op follow-up for patients who confirmed their appointment.",
+            outcome_labels=["post_op_complete", "staff_handoff", "do_not_call"],
+            supported_channels=["voice"],
+            required_readiness_checks=["location", "voice", "consent", "quiet_hours"],
+            required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time"],
+            content_class="transactional_care",
+            audience="Patients marked appointment_confirmed by a pre-appointment workflow",
+            eligibility=[
+                "patient has an appointment_confirmed workflow status",
+                "source status event includes appointment time",
+                "voice consent exists",
+                "patient is not suppressed",
+            ],
+            handoff_reason="post_op_followup_needed",
+            analytics={
+                "post_op_complete": "completed",
+                "staff_handoff": "handoff",
+                "do_not_call": "opt_out",
+            },
+            sample_context={
+                "patient_first_name": "Jordan",
+                "clinic_name": "Riverside Dental",
+                "appointment_date": "July 22, 2026",
+                "appointment_time": "2:00 PM",
+                "call_outcome": "post_op_ok",
+                "patient_workflow_status": "appointment_confirmed",
+            },
+            setup_fields=[
+                {
+                    "id": "voice_agent_id",
+                    "label": "Post-op voice profile",
+                    "type": "text",
+                    "required": True,
+                    "placeholder": "Retell agent ID",
                 }
             ],
         ),

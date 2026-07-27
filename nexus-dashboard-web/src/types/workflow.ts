@@ -19,6 +19,7 @@ export type TriggerType =
     | "manual"
     | "bulk_import"
     | "callback_requested"
+    | "patient_status_changed"
 
 export interface AppointmentOffsetTrigger {
     type: "appointment_offset"
@@ -40,6 +41,11 @@ export interface BulkImportTrigger {
 export interface CallbackRequestedTrigger {
     type: "callback_requested"
 }
+export interface PatientStatusChangedTrigger {
+    type: "patient_status_changed"
+    statuses: string[]
+    campaign_goal?: string | null
+}
 
 export type WorkflowTrigger =
     | AppointmentOffsetTrigger
@@ -47,6 +53,7 @@ export type WorkflowTrigger =
     | ManualTrigger
     | BulkImportTrigger
     | CallbackRequestedTrigger
+    | PatientStatusChangedTrigger
 
 // ---------------------------------------------------------------------------
 // Wait delay (discriminated on `delay_type`)

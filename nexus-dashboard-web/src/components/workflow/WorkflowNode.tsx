@@ -59,6 +59,8 @@ function triggerSummary(t: WorkflowTrigger): string {
             return "Bulk import"
         case "callback_requested":
             return "Callback request"
+        case "patient_status_changed":
+            return `Patient status: ${t.statuses.join(", ")}`
     }
 }
 

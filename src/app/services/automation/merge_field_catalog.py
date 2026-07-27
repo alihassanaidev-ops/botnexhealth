@@ -22,6 +22,7 @@ WorkflowTriggerType = Literal[
     "manual",
     "bulk_import",
     "callback_requested",
+    "patient_status_changed",
 ]
 MergeChannel = Literal["sms", "email", "voice"]
 MergeAvailability = Literal["required_context", "optional_context", "derived"]
@@ -34,6 +35,7 @@ ALL_TRIGGERS: tuple[WorkflowTriggerType, ...] = (
     "manual",
     "bulk_import",
     "callback_requested",
+    "patient_status_changed",
 )
 ALL_CHANNELS: tuple[MergeChannel, ...] = ("sms", "email", "voice")
 
@@ -376,7 +378,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.start_time",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset",),
+        triggers=("appointment_offset", "patient_status_changed"),
         resolve=_appointment_date,
     ),
     MergeFieldSpec(
@@ -390,7 +392,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.start_time",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset",),
+        triggers=("appointment_offset", "patient_status_changed"),
         resolve=_appointment_time,
     ),
     MergeFieldSpec(
@@ -404,7 +406,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.start_time",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset",),
+        triggers=("appointment_offset", "patient_status_changed"),
         resolve=_appointment_datetime,
     ),
     MergeFieldSpec(
@@ -418,7 +420,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.appointment_type",),
         phi_level="high",
         channels=("email",),
-        triggers=("appointment_offset",),
+        triggers=("appointment_offset", "patient_status_changed"),
         resolve=_context_field("appointment_type"),
     ),
     MergeFieldSpec(
@@ -432,7 +434,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.status",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset",),
+        triggers=("appointment_offset", "patient_status_changed"),
         resolve=_context_field("appointment_status"),
     ),
     MergeFieldSpec(
@@ -446,7 +448,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.provider_name",),
         phi_level="low",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset",),
+        triggers=("appointment_offset", "patient_status_changed"),
         resolve=_context_field("provider_name"),
     ),
     MergeFieldSpec(
@@ -460,7 +462,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.operatory_name",),
         phi_level="medium",
         channels=("email", "voice"),
-        triggers=("appointment_offset",),
+        triggers=("appointment_offset", "patient_status_changed"),
         resolve=_context_field("operatory_name"),
     ),
     MergeFieldSpec(

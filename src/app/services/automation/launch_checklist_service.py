@@ -44,6 +44,7 @@ ChecklistStatus = Literal["pass", "warning", "blocked", "unknown"]
 _SEND_NODE_TYPES = (SendSmsNode, SendEmailNode, SendVoiceNode)
 _BROAD_TRIGGER_TYPES = {"recall_scan"}
 _APPOINTMENT_TRIGGER_TYPES = {"appointment_offset", "recall_scan"}
+_STATUS_EVENT_TRIGGER_TYPES = {"patient_status_changed"}
 _FRESHNESS_WINDOW = timedelta(hours=24)
 _SMS_STOP_HELP_COPY = "SMS bodies are normalized with clinic identity plus STOP/HELP copy at send time."
 
@@ -544,6 +545,20 @@ class CampaignLaunchChecklistService:
         institution_id: str,
         location_id: str | None,
     ) -> list[CampaignLaunchChecklistItem]:
+        if definition.trigger.type in _STATUS_EVENT_TRIGGER_TYPES:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="nexhealth_readiness",
+                    section="data",
+                    label="Source appointment context",
+                    status="pass",
+                    message=(
+                        "This workflow uses appointment context carried from "
+                        "the triggering patient status event."
+                    ),
+                    fix_href="/institution-admin/campaigns",
+                )
+            ]
         if definition.trigger.type not in _APPOINTMENT_TRIGGER_TYPES:
             return [
                 CampaignLaunchChecklistItem(

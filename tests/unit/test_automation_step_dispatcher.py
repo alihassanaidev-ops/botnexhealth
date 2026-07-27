@@ -388,6 +388,7 @@ def test_update_patient_status_node_records_event_and_continues() -> None:
     added = session.add.call_args_list[0].args[0]
     assert added.status == "appointment_confirmed"
     assert added.note == "Outcome confirmed"
+    assert result.patient_status_event_ids == [str(added.id)]
     rt.complete_step.assert_any_await(
         rt.begin_step.return_value,
         result_code="status_updated",

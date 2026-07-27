@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -61,6 +61,7 @@ class DispatchResult:
     timer_id: str | None = None
     outcome: str | None = None
     steps_advanced: int = 0
+    patient_status_event_ids: list[str] = field(default_factory=list)
 
 
 class WorkflowStepDispatcher:
@@ -102,6 +103,7 @@ class WorkflowStepDispatcher:
         node_map = {n.id: n for n in definition.nodes}
         current_node_id = run.current_step_id or definition.entry_node_id
         steps_advanced = 0
+        patient_status_event_ids: list[str] = []
 
         while steps_advanced < _MAX_STEPS:
             node = node_map.get(current_node_id)
@@ -111,7 +113,11 @@ class WorkflowStepDispatcher:
                     run.institution_id, run.id, current_node_id,
                 )
                 await self.runtime.fail_run(run, reason=f"node '{current_node_id}' not found")
-                return DispatchResult(status="failed", steps_advanced=steps_advanced)
+                return DispatchResult(
+                    status="failed",
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
 
             steps_advanced += 1
 
@@ -139,7 +145,10 @@ class WorkflowStepDispatcher:
                 )
                 await self.runtime.wait_run(run, step)
                 return DispatchResult(
-                    status="waiting", timer_id=timer.id, steps_advanced=steps_advanced
+                    status="waiting",
+                    timer_id=timer.id,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
                 )
 
             elif isinstance(node, (SendSmsNode, SendVoiceNode, SendEmailNode)):
@@ -158,7 +167,10 @@ class WorkflowStepDispatcher:
                         run.id, node.id, skip_outcome,
                     )
                     return DispatchResult(
-                        status="completed", outcome=skip_outcome, steps_advanced=steps_advanced
+                        status="completed",
+                        outcome=skip_outcome,
+                        steps_advanced=steps_advanced,
+                        patient_status_event_ids=patient_status_event_ids,
                     )
 
                 content_class = (
@@ -169,7 +181,11 @@ class WorkflowStepDispatcher:
                     step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
                     await self.runtime.fail_step(step, result_code="compliance_blocked")
                     await self.runtime.fail_run(run, reason=gate_result.reason or "compliance_blocked")
-                    return DispatchResult(status="failed", steps_advanced=steps_advanced)
+                    return DispatchResult(
+                        status="failed",
+                        steps_advanced=steps_advanced,
+                        patient_status_event_ids=patient_status_event_ids,
+                    )
                 if gate_result.action == "hold":
                     # Defer the send to the next permitted window instead of
                     # dropping it (scope §8: held, never dropped). Schedule a timer
@@ -197,7 +213,10 @@ class WorkflowStepDispatcher:
                         run.id, node.id, resume_at, gate_result.reason,
                     )
                     return DispatchResult(
-                        status="waiting", timer_id=timer.id, steps_advanced=steps_advanced
+                        status="waiting",
+                        timer_id=timer.id,
+                        steps_advanced=steps_advanced,
+                        patient_status_event_ids=patient_status_event_ids,
                     )
                 # Channel dispatch via the action registry — new channels plug in
                 # by registering an executor (see action_registry). Any unregistered
@@ -229,12 +248,18 @@ class WorkflowStepDispatcher:
                             run.id, node.id, resume_at,
                         )
                         return DispatchResult(
-                            status="waiting", timer_id=timer.id, steps_advanced=steps_advanced
+                            status="waiting",
+                            timer_id=timer.id,
+                            steps_advanced=steps_advanced,
+                            patient_status_event_ids=patient_status_event_ids,
                         )
                     current_node_id = dispatch_result
 
             elif isinstance(node, UpdatePatientStatusNode):
-                current_node_id = await self._record_patient_status(run, node, context)
+                current_node_id, event_id = await self._record_patient_status(
+                    run, node, context
+                )
+                patient_status_event_ids.append(event_id)
 
             elif isinstance(node, ConditionNode):
                 branch = _evaluate_condition(node, context)
@@ -251,14 +276,21 @@ class WorkflowStepDispatcher:
                 await self.runtime.complete_step(step, result_code=node.outcome or "exit")
                 await self.runtime.complete_run(run, outcome=node.outcome)
                 return DispatchResult(
-                    status="completed", outcome=node.outcome, steps_advanced=steps_advanced
+                    status="completed",
+                    outcome=node.outcome,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
                 )
 
         logger.error(
             "dispatch: max step limit institution=%s run=%s", run.institution_id, run.id
         )
         await self.runtime.fail_run(run, reason="max step limit exceeded")
-        return DispatchResult(status="failed", steps_advanced=steps_advanced)
+        return DispatchResult(
+            status="failed",
+            steps_advanced=steps_advanced,
+            patient_status_event_ids=patient_status_event_ids,
+        )
 
     async def resume_after_timer(
         self,
@@ -357,7 +389,7 @@ class WorkflowStepDispatcher:
         run: AutomationWorkflowRun,
         node: UpdatePatientStatusNode,
         context: dict,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Record a local campaign/patient status event for workflow branching.
 
         This intentionally does not write back to PMS. It gives the workflow engine
@@ -374,21 +406,20 @@ class WorkflowStepDispatcher:
         if node.note_template:
             note = render_sms_body(node.note_template, None, None, context)
 
-        self.session.add(
-            PatientWorkflowStatusEvent(
-                institution_id=run.institution_id,
-                location_id=run.location_id,
-                contact_id=run.contact_id,
-                workflow_id=run.workflow_id,
-                workflow_version_id=run.workflow_version_id,
-                workflow_run_id=run.id,
-                step_id=node.id,
-                trigger_ref_type=run.trigger_ref_type,
-                trigger_ref_id=run.trigger_ref_id,
-                status=node.status,
-                note=note,
-            )
+        event = PatientWorkflowStatusEvent(
+            institution_id=run.institution_id,
+            location_id=run.location_id,
+            contact_id=run.contact_id,
+            workflow_id=run.workflow_id,
+            workflow_version_id=run.workflow_version_id,
+            workflow_run_id=run.id,
+            step_id=node.id,
+            trigger_ref_type=run.trigger_ref_type,
+            trigger_ref_id=run.trigger_ref_id,
+            status=node.status,
+            note=note,
         )
+        self.session.add(event)
         context["patient_workflow_status"] = node.status
         context["patient_status"] = node.status
         await self.runtime.complete_step(
@@ -397,7 +428,7 @@ class WorkflowStepDispatcher:
             result_metadata={"status": node.status},
         )
         await self.session.flush()
-        return node.next_node_id
+        return node.next_node_id, str(event.id)
 
 
 def _evaluate_condition(node: ConditionNode, context: dict) -> bool:

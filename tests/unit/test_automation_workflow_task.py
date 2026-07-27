@@ -24,6 +24,7 @@ from src.app.tasks.automation_workflow import (
     _poll_retell_voice_outcomes_async,
     _retell_call_details_outcome,
     _retell_call_details_ready_for_resume,
+    _trigger_patient_status_async,
     _waiting_step_targets_field,
     _retry_countdown,
 )
@@ -150,6 +151,118 @@ def test_retell_call_details_outcome_falls_back_to_disconnect_reason() -> None:
 
     assert _retell_call_details_ready_for_resume(details)
     assert _retell_call_details_outcome(details) == "answered"
+
+
+@pytest.mark.asyncio
+async def test_trigger_patient_status_schedules_matching_independent_workflow() -> None:
+    event = SimpleNamespace(
+        id="status-event-1",
+        institution_id="inst-1",
+        location_id="loc-1",
+        contact_id="contact-1",
+        workflow_id="preop-wf",
+        workflow_run_id="preop-run",
+        step_id="mark-confirmed",
+        status="appointment_confirmed",
+    )
+    source_run = SimpleNamespace(
+        trigger_metadata={
+            "appointment_at": "2026-07-28T10:00:00+00:00",
+            "appointment_date": "July 28, 2026",
+            "appointment_time": "10:00 AM",
+        }
+    )
+    matching_workflow = SimpleNamespace(
+        id="postop-wf",
+        current_version_id="postop-ver",
+        definition={
+            "trigger": {
+                "type": "patient_status_changed",
+                "statuses": ["appointment_confirmed"],
+                "campaign_goal": "post_op_followup",
+            },
+            "entry_node_id": "exit-1",
+            "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
+        },
+    )
+    source_workflow = SimpleNamespace(
+        id="preop-wf",
+        current_version_id="preop-ver",
+        definition=matching_workflow.definition,
+    )
+    nonmatching_workflow = SimpleNamespace(
+        id="other-wf",
+        current_version_id="other-ver",
+        definition={
+            "trigger": {
+                "type": "patient_status_changed",
+                "statuses": ["post_op_complete"],
+            },
+            "entry_node_id": "exit-1",
+            "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
+        },
+    )
+
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+
+    async def _get(_model, pk):
+        if pk == "status-event-1":
+            return event
+        if pk == "preop-run":
+            return source_run
+        return None
+
+    session.get = _get
+    trigger_service = AsyncMock()
+    trigger_service.find_active_status_workflows = AsyncMock(
+        return_value=[matching_workflow, source_workflow, nonmatching_workflow]
+    )
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            return_value=session,
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.PatientStatusTriggerService",
+            return_value=trigger_service,
+        ),
+        patch("src.app.tasks.automation_workflow.enroll_and_start_workflow_run") as mock_enroll,
+    ):
+        result = await _trigger_patient_status_async(
+            institution_id="inst-1",
+            status_event_id="status-event-1",
+        )
+
+    assert result == {
+        "status_event_id": "status-event-1",
+        "status": "appointment_confirmed",
+        "scheduled": 1,
+        "skipped": 2,
+    }
+    mock_enroll.apply_async.assert_called_once()
+    kwargs = mock_enroll.apply_async.call_args.kwargs["kwargs"]
+    assert kwargs["workflow_id"] == "postop-wf"
+    assert kwargs["workflow_version_id"] == "postop-ver"
+    assert kwargs["contact_id"] == "contact-1"
+    assert kwargs["location_id"] == "loc-1"
+    assert kwargs["trigger_type"] == "patient_status_changed"
+    assert kwargs["trigger_ref_id"] == "status-event-1"
+    assert kwargs["idempotency_key"] == "patient-status:postop-ver:status-event-1"
+    assert kwargs["trigger_metadata"] == {
+        "appointment_at": "2026-07-28T10:00:00+00:00",
+        "appointment_date": "July 28, 2026",
+        "appointment_time": "10:00 AM",
+        "patient_workflow_status": "appointment_confirmed",
+        "patient_status": "appointment_confirmed",
+        "source_patient_status_event_id": "status-event-1",
+        "source_workflow_id": "preop-wf",
+        "source_workflow_run_id": "preop-run",
+        "source_workflow_step_id": "mark-confirmed",
+        "campaign_goal": "post_op_followup",
+    }
 
 
 @pytest.mark.asyncio

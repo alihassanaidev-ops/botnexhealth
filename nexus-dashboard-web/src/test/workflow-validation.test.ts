@@ -111,6 +111,13 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.message.includes("Recall interval"))).toBe(true)
     })
 
+    it("flags patient status triggers without statuses", () => {
+        const def = base()
+        def.trigger = { type: "patient_status_changed", statuses: [] }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("Patient status trigger"))).toBe(true)
+    })
+
     it("flags condition branches that are not connected", () => {
         const def: WorkflowDefinition = {
             schema_version: "1.0",

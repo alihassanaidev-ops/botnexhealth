@@ -51,14 +51,15 @@ def test_priority_dental_templates_present() -> None:
         "reactivation-sms-email-18month",
         "no-show-recovery",
         "cancellation-rebooking",
-        "surgery-confirmation-post-op",
+        "surgery-pre-appointment-confirmation",
+        "post-op-followup-after-confirmation",
         "callback-automation",
         "unscheduled-treatment-followup",
     }
 
 
 def test_list_templates_returns_all() -> None:
-    assert len(list_templates()) == 9
+    assert len(list_templates()) == 10
 
 
 def test_get_template_known_id() -> None:
@@ -80,23 +81,37 @@ def test_appointment_templates_use_appointment_offset_trigger() -> None:
     for tid in (
         "appointment-reminder-24h",
         "appointment-confirmation-48h",
-        "surgery-confirmation-post-op",
+        "surgery-pre-appointment-confirmation",
     ):
         t = TEMPLATES[tid]
         assert t.definition["trigger"]["type"] == "appointment_offset"
 
 
-def test_surgery_template_uses_status_action_and_post_op_relative_wait() -> None:
-    t = TEMPLATES["surgery-confirmation-post-op"]
+def test_surgery_confirmation_template_marks_confirmed_status() -> None:
+    t = TEMPLATES["surgery-pre-appointment-confirmation"]
     nodes = {node["id"]: node for node in t.definition["nodes"]}
 
     assert nodes["mark-confirmed"]["type"] == "update_patient_status"
     assert nodes["mark-confirmed"]["status"] == "appointment_confirmed"
+    assert nodes["mark-confirmed"]["next_node_id"] == "exit-confirmed"
+
+
+def test_post_op_template_starts_from_confirmed_status_and_waits_one_day() -> None:
+    t = TEMPLATES["post-op-followup-after-confirmation"]
+    nodes = {node["id"]: node for node in t.definition["nodes"]}
+
+    assert t.definition["trigger"] == {
+        "type": "patient_status_changed",
+        "statuses": ["appointment_confirmed"],
+        "campaign_goal": "post_op_followup",
+    }
     assert nodes["wait-post-op"]["delay"] == {
         "delay_type": "appointment_relative",
         "offset_seconds": 86400,
         "anchor_field": "appointment_at",
     }
+    assert nodes["voice-post-op"]["type"] == "send_voice"
+    assert nodes["voice-post-op"]["wait_for_outcome"] is True
 
 
 def test_confirmation_template_does_not_advertise_cancel_keyword() -> None:
@@ -222,7 +237,7 @@ def test_campaign_template_response_from_template() -> None:
 def test_list_route_returns_all_templates() -> None:
     user = MagicMock()
     result = asyncio.run(list_campaign_templates(user))
-    assert len(result) == 9
+    assert len(result) == 10
 
 
 # ---------------------------------------------------------------------------

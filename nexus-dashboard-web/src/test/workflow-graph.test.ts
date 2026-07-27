@@ -160,6 +160,10 @@ describe("workflow graph — factories", () => {
         expect(createTrigger("manual").type).toBe("manual")
         expect(createTrigger("bulk_import").type).toBe("bulk_import")
         expect(createTrigger("callback_requested").type).toBe("callback_requested")
+        expect(createTrigger("patient_status_changed")).toMatchObject({
+            statuses: ["appointment_confirmed"],
+            campaign_goal: "post_op_followup",
+        })
     })
     it("blankDefinition is a valid minimal graph", () => {
         const def = blankDefinition()

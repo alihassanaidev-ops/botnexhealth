@@ -119,6 +119,7 @@ const TRIGGER_LABELS: Record<string, string> = {
     manual: "Manual",
     bulk_import: "Bulk import",
     callback_requested: "Callback",
+    patient_status_changed: "Patient status",
 }
 
 const CHANNEL_LABELS: Record<string, string> = {

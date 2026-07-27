@@ -47,7 +47,14 @@ describe("merge-field catalog", () => {
                 requires: [],
                 phi_level: "none",
                 channels: ["sms", "email", "voice"],
-                trigger_types: ["appointment_offset", "recall_scan", "manual", "bulk_import", "callback_requested"],
+                trigger_types: [
+                    "appointment_offset",
+                    "recall_scan",
+                    "manual",
+                    "bulk_import",
+                    "callback_requested",
+                    "patient_status_changed",
+                ],
             },
         ])
         expect(sampleMergeData()["{{clinic_name}}"]).toBe("Acme")
@@ -96,6 +103,12 @@ describe("merge-field catalog", () => {
             }),
         ).toEqual(["{{appointment_date}}"])
         expect(
+            unavailableTokens("Hi {{appointment_date}}", {
+                triggerType: "patient_status_changed",
+                channel: "voice",
+            }),
+        ).toEqual([])
+        expect(
             unavailableTokens("Hi {{appointment_type}}", {
                 triggerType: "appointment_offset",
                 channel: "sms",
@@ -122,6 +135,7 @@ function catalogItem(name: string, token: string, label: string, sample: string)
             "manual",
             "bulk_import",
             "callback_requested",
+            "patient_status_changed",
         ],
     }
 }

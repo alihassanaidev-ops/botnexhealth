@@ -190,7 +190,14 @@ describe("workflow-api", () => {
                     requires: [],
                     phi_level: "none",
                     channels: ["sms", "email", "voice"],
-                    trigger_types: ["appointment_offset", "recall_scan", "manual", "bulk_import", "callback_requested"],
+                    trigger_types: [
+                        "appointment_offset",
+                        "recall_scan",
+                        "manual",
+                        "bulk_import",
+                        "callback_requested",
+                        "patient_status_changed",
+                    ],
                 },
             ],
         })

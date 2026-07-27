@@ -17,8 +17,10 @@ const ALL_TRIGGERS: TriggerType[] = [
     "manual",
     "bulk_import",
     "callback_requested",
+    "patient_status_changed",
 ]
 const ALL_CHANNELS: MergeChannel[] = ["sms", "email", "voice"]
+const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = ["appointment_offset", "patient_status_changed"]
 
 export const FALLBACK_MERGE_FIELDS: MergeField[] = [
     field("patient_first_name", "Patient first name", "Jordan", "patient", "derived", "low", ALL_CHANNELS, ALL_TRIGGERS),
@@ -27,13 +29,13 @@ export const FALLBACK_MERGE_FIELDS: MergeField[] = [
     field("patient_preferred_language", "Preferred language", "English", "patient", "optional_context", "none", ALL_CHANNELS, ALL_TRIGGERS),
     field("guardian_first_name", "Guardian first name", "Alex", "patient", "optional_context", "low", ALL_CHANNELS, ALL_TRIGGERS),
     field("guardian_full_name", "Guardian full name", "Alex Rivera", "patient", "optional_context", "low", ALL_CHANNELS, ALL_TRIGGERS),
-    field("appointment_date", "Appointment date", "July 22, 2026", "appointment", "required_context", "medium", ALL_CHANNELS, ["appointment_offset"]),
-    field("appointment_time", "Appointment time", "2:00 PM", "appointment", "required_context", "medium", ALL_CHANNELS, ["appointment_offset"]),
-    field("appointment_datetime", "Appointment date and time", "July 22, 2026 at 2:00 PM", "appointment", "required_context", "medium", ALL_CHANNELS, ["appointment_offset"]),
-    field("appointment_type", "Appointment type", "Cleaning", "appointment", "optional_context", "high", ["email"], ["appointment_offset"]),
-    field("appointment_status", "Appointment status", "scheduled", "appointment", "optional_context", "medium", ALL_CHANNELS, ["appointment_offset"]),
-    field("provider_name", "Provider name", "Dr. Smith", "appointment", "optional_context", "low", ALL_CHANNELS, ["appointment_offset"]),
-    field("operatory_name", "Operatory name", "Operatory 3", "appointment", "optional_context", "medium", ["email", "voice"], ["appointment_offset"]),
+    field("appointment_date", "Appointment date", "July 22, 2026", "appointment", "required_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
+    field("appointment_time", "Appointment time", "2:00 PM", "appointment", "required_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
+    field("appointment_datetime", "Appointment date and time", "July 22, 2026 at 2:00 PM", "appointment", "required_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
+    field("appointment_type", "Appointment type", "Cleaning", "appointment", "optional_context", "high", ["email"], APPOINTMENT_CONTEXT_TRIGGERS),
+    field("appointment_status", "Appointment status", "scheduled", "appointment", "optional_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
+    field("provider_name", "Provider name", "Dr. Smith", "appointment", "optional_context", "low", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
+    field("operatory_name", "Operatory name", "Operatory 3", "appointment", "optional_context", "medium", ["email", "voice"], APPOINTMENT_CONTEXT_TRIGGERS),
     field("clinic_name", "Clinic name", "Riverside Dental", "location", "derived", "none", ALL_CHANNELS, ALL_TRIGGERS),
     field("location_name", "Location name", "Riverside Dental - Downtown", "location", "derived", "none", ALL_CHANNELS, ALL_TRIGGERS),
     field("location_phone", "Location phone", "(555) 010-2211", "location", "derived", "none", ALL_CHANNELS, ALL_TRIGGERS),

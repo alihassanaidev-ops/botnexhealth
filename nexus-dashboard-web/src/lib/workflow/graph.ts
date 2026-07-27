@@ -517,6 +517,12 @@ export function createTrigger(type: TriggerType): WorkflowTrigger {
             return { type }
         case "callback_requested":
             return { type }
+        case "patient_status_changed":
+            return {
+                type,
+                statuses: ["appointment_confirmed"],
+                campaign_goal: "post_op_followup",
+            }
     }
 }
 

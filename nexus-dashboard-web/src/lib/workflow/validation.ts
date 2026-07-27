@@ -63,6 +63,13 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
             message: "Recall interval must be at least 1 month.",
         })
     }
+    if (def.trigger.type === "patient_status_changed" && def.trigger.statuses.length === 0) {
+        issues.push({
+            node_id: TRIGGER_NODE_ID,
+            severity: "error",
+            message: "Patient status trigger needs at least one status.",
+        })
+    }
 
     // ---- Per-node ----
     const refError = (node: WorkflowNode, target: string, label: string) => {

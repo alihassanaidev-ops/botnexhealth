@@ -46,6 +46,10 @@ from src.app.services.automation.nexhealth_subscription_service import (
 from src.app.services.automation.nexhealth_sync_status_service import (
     NexHealthSyncStatusService,
 )
+from src.app.services.automation.patient_status_trigger_service import (
+    PatientStatusTriggerService,
+    patient_status_idempotency_key,
+)
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.step_dispatcher import build_dispatcher
@@ -271,6 +275,10 @@ async def _dispatch_timer_async(
 
         await session.commit()
 
+    _enqueue_patient_status_triggers(
+        institution_id=institution_id,
+        status_event_ids=result.patient_status_event_ids,
+    )
     logger.info(
         "dispatch: timer=%s run=%s status=%s steps=%d",
         timer_id, run_id, result.status, result.steps_advanced,
@@ -481,6 +489,10 @@ async def _enroll_and_start_async(
         )
         await session.commit()
 
+    _enqueue_patient_status_triggers(
+        institution_id=institution_id,
+        status_event_ids=result.patient_status_event_ids,
+    )
     logger.info(
         "enroll_and_start: workflow=%s run=%s status=%s steps=%d",
         workflow_id, run.id, result.status, result.steps_advanced,
@@ -1064,6 +1076,166 @@ async def _trigger_callback_async(
 
 
 # ---------------------------------------------------------------------------
+# Patient status trigger — independent workflow handoff
+# ---------------------------------------------------------------------------
+
+
+def _enqueue_patient_status_triggers(
+    *,
+    institution_id: str,
+    status_event_ids: list[str],
+) -> None:
+    for status_event_id in status_event_ids:
+        trigger_patient_status_workflows.apply_async(
+            kwargs={
+                "institution_id": institution_id,
+                "status_event_id": status_event_id,
+            },
+            queue="workflow",
+        )
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.trigger_patient_status_workflows",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def trigger_patient_status_workflows(
+    self,
+    *,
+    institution_id: str,
+    status_event_id: str,
+) -> dict:
+    """Enroll workflows that listen for a recorded patient workflow status."""
+    _ensure_db()
+    try:
+        return asyncio.run(
+            _trigger_patient_status_async(
+                institution_id=institution_id,
+                status_event_id=status_event_id,
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "trigger_patient_status_workflows failed: institution=%s event=%s: %s",
+            institution_id,
+            status_event_id,
+            exc,
+        )
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _trigger_patient_status_async(
+    *,
+    institution_id: str,
+    status_event_id: str,
+) -> dict:
+    from src.app.models.automation_workflow import AutomationWorkflowRun
+    from src.app.models.patient_workflow_status import PatientWorkflowStatusEvent
+    from src.app.services.automation.definition_schema import PatientStatusChangedTrigger
+
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        external_id=f"patient_status_trigger:{status_event_id}",
+    ) as session:
+        event = await session.get(PatientWorkflowStatusEvent, status_event_id)
+        if event is None or event.institution_id != institution_id:
+            return {"status_event_id": status_event_id, "scheduled": 0, "reason": "event_not_found"}
+
+        source_run = await session.get(AutomationWorkflowRun, event.workflow_run_id)
+        source_metadata = dict(source_run.trigger_metadata or {}) if source_run else {}
+        event_data = {
+            "id": str(event.id),
+            "status": event.status,
+            "contact_id": event.contact_id,
+            "location_id": event.location_id,
+            "workflow_id": str(event.workflow_id),
+            "workflow_run_id": str(event.workflow_run_id),
+            "step_id": event.step_id,
+        }
+
+        svc = PatientStatusTriggerService(session)
+        workflows = [
+            (wf.id, wf.current_version_id, wf.definition)
+            for wf in await svc.find_active_status_workflows(institution_id)
+        ]
+
+    scheduled = 0
+    skipped = 0
+    base_trigger_metadata = {
+        **source_metadata,
+        "patient_workflow_status": event_data["status"],
+        "patient_status": event_data["status"],
+        "source_patient_status_event_id": event_data["id"],
+        "source_workflow_id": event_data["workflow_id"],
+        "source_workflow_run_id": event_data["workflow_run_id"],
+        "source_workflow_step_id": event_data["step_id"],
+    }
+    for workflow_id, workflow_version_id, workflow_definition in workflows:
+        if not workflow_version_id:
+            continue
+        if str(workflow_id) == event_data["workflow_id"]:
+            skipped += 1
+            continue
+        try:
+            definition = WorkflowDefinition.model_validate(workflow_definition)
+        except Exception:
+            skipped += 1
+            continue
+        trigger_metadata = base_trigger_metadata
+        trigger = definition.trigger
+        if not isinstance(trigger, PatientStatusChangedTrigger):
+            skipped += 1
+            continue
+        if event_data["status"] not in trigger.statuses:
+            skipped += 1
+            continue
+        if trigger.campaign_goal:
+            trigger_metadata = {
+                **trigger_metadata,
+                "campaign_goal": trigger.campaign_goal,
+            }
+
+        idempotency_key = patient_status_idempotency_key(
+            str(workflow_version_id),
+            event_data["id"],
+        )
+        enroll_and_start_workflow_run.apply_async(
+            kwargs={
+                "institution_id": institution_id,
+                "workflow_id": str(workflow_id),
+                "workflow_version_id": str(workflow_version_id),
+                "contact_id": event_data["contact_id"],
+                "location_id": event_data["location_id"],
+                "trigger_type": "patient_status_changed",
+                "trigger_ref_type": "patient_workflow_status_event",
+                "trigger_ref_id": event_data["id"],
+                "idempotency_key": idempotency_key,
+                "trigger_metadata": trigger_metadata,
+            },
+            queue="workflow",
+        )
+        scheduled += 1
+
+    logger.info(
+        "trigger_patient_status: institution=%s event=%s status=%s scheduled=%d skipped=%d",
+        institution_id,
+        status_event_id,
+        event_data["status"],
+        scheduled,
+        skipped,
+    )
+    return {
+        "status_event_id": status_event_id,
+        "status": event_data["status"],
+        "scheduled": scheduled,
+        "skipped": skipped,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Voice outcome resume — AI Voice outcome-feedback loop (Plan 03)
 # ---------------------------------------------------------------------------
 
@@ -1334,6 +1506,10 @@ async def _resume_voice_outcome_async(
         )
         await session.commit()
 
+    _enqueue_patient_status_triggers(
+        institution_id=institution_id,
+        status_event_ids=result.patient_status_event_ids,
+    )
     logger.info(
         "resume_voice_outcome: institution=%s call=%s outcome=%s status=%s",
         institution_id, retell_call_id, call_outcome, result.status,

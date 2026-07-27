@@ -63,6 +63,9 @@ function TriggerLabel({ triggerType }: { triggerType: string | null }) {
         appointment_offset: "Appointment reminder",
         recall_scan: "Recall / reactivation",
         manual: "Manual",
+        bulk_import: "Bulk import",
+        callback_requested: "Callback",
+        patient_status_changed: "Patient status",
     }
     return (
         <span className="text-xs text-muted-foreground">

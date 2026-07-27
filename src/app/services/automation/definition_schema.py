@@ -1,7 +1,8 @@
 """Pydantic schema for workflow definition JSON stored in AutomationWorkflowVersion.definition.
 
 Definitions are immutable once published. Schema version "1.0" supports:
-  Triggers: appointment_offset, recall_scan, manual, bulk_import, callback_requested
+  Triggers: appointment_offset, recall_scan, manual, bulk_import, callback_requested,
+            patient_status_changed
   Nodes:    wait, send_sms, send_voice, send_email, update_patient_status, condition, exit
 """
 
@@ -55,6 +56,32 @@ class CallbackRequestedTrigger(BaseModel):
     type: Literal["callback_requested"] = "callback_requested"
 
 
+class PatientStatusChangedTrigger(BaseModel):
+    """Enroll when a workflow records a matching local patient status event."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["patient_status_changed"] = "patient_status_changed"
+    statuses: list[str] = Field(min_length=1)
+    campaign_goal: str | None = None
+
+    @field_validator("statuses")
+    @classmethod
+    def validate_statuses(cls, values: list[str]) -> list[str]:
+        statuses = [status.strip() for status in values if status.strip()]
+        if not statuses:
+            raise ValueError("statuses must include at least one non-empty value")
+        return statuses
+
+    @field_validator("campaign_goal")
+    @classmethod
+    def normalize_campaign_goal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 WorkflowTrigger = Annotated[
     Union[
         AppointmentOffsetTrigger,
@@ -62,6 +89,7 @@ WorkflowTrigger = Annotated[
         ManualTrigger,
         BulkImportTrigger,
         CallbackRequestedTrigger,
+        PatientStatusChangedTrigger,
     ],
     Field(discriminator="type"),
 ]
