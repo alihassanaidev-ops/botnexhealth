@@ -36,6 +36,11 @@ def _build_celery_app() -> Celery:
         timezone="UTC",
         enable_utc=True,
         task_default_queue="notifications_default",
+        # Embedded beat (`celery worker -B`) persists its schedule to this file.
+        # The container's working dir is not writable by the non-root runtime
+        # user, so point it at /tmp (writable on Fargate) to avoid a
+        # "Permission denied: 'celerybeat-schedule'" crash on startup.
+        beat_schedule_filename="/tmp/celerybeat-schedule",
         task_queues=(
             Queue("notifications_default"),
             Queue("notifications_high"),

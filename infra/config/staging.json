@@ -74,7 +74,7 @@
     "memoryMiB": 1024,
     "desiredCount": 1,
     "minCount": 1,
-    "maxCount": 2,
+    "maxCount": 1,
     "queueScaleUpDepth": 25,
     "queueScaleDownDepth": 2,
     "command": [
@@ -82,6 +82,7 @@
       "-A",
       "src.app.worker",
       "worker",
+      "-B",
       "--loglevel=info"
     ]
   },
@@ -97,6 +98,7 @@
     "RESEND_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-api-key-Oa3iKd",
     "RESEND_FROM_EMAIL": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-from-email-Upf1bK",
     "TWILLIO_SID": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-sid-SF6GPp",
-    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-api-secret-Wcvoaw"
+    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-api-secret-Wcvoaw",
+    "GOTRACKER_WEBHOOK_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/gotracker-webhook-secret-To8vZC"
   }
 }

@@ -688,6 +688,22 @@ class NexHealthPlatformStack(Stack):
         recordings_bucket.grant_read_write(worker_task_definition.task_role)
         recordings_bucket.grant_read_write(migration_task_definition.task_role)
 
+        # The embedded beat `publish_workflow_metrics` task publishes workflow
+        # engine metrics to CloudWatch from inside the worker, so the worker
+        # task role needs PutMetricData (scoped to this env's namespace, mirroring
+        # the standalone queue-metrics task role).
+        worker_task_definition.task_role.add_to_principal_policy(
+            iam.PolicyStatement(
+                actions=["cloudwatch:PutMetricData"],
+                resources=["*"],
+                conditions={
+                    "StringEquals": {
+                        "cloudwatch:namespace": f"{config.app_name}/{config.app_env}"
+                    }
+                },
+            )
+        )
+
         # ── Scheduled admin background jobs ─────────────────────────────
         # Periodic ECS RunTask invocations triggered by EventBridge.
         # Each one runs as the database master role (NOT the runtime
@@ -1005,6 +1021,15 @@ class NexHealthPlatformStack(Stack):
             environment["WEBAUTHN_ALLOWED_ORIGINS"] = ",".join(allowed_origins)
         if self.config.webauthn_rp_name:
             environment["WEBAUTHN_RP_NAME"] = self.config.webauthn_rp_name
+        # GoTracker Synchronizer integration (outbound workflow QA). BASE_URL has
+        # a correct app-side default; the webhook callback base is derived from
+        # this environment's API host so auto-created subscription callback URLs
+        # point back here (GOTRACKER_WEBHOOK_SECRET is wired via externalSecrets).
+        environment["GOTRACKER_BASE_URL"] = "https://synchronizer.scalenexus.ai"
+        if self.config.api.domain_name:
+            environment["GOTRACKER_WEBHOOK_CALLBACK_BASE_URL"] = (
+                f"https://{self.config.api.domain_name}"
+            )
         return environment
 
     def _build_app_runtime_secrets(
