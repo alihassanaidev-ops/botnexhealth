@@ -96,6 +96,12 @@ def _build_celery_app() -> Celery:
                 # returned to PENDING and re-dispatched within one TTL window.
                 "schedule": 60.0,
             },
+            "poll-retell-voice-outcomes": {
+                "task": "src.app.tasks.automation_workflow.poll_retell_voice_outcomes",
+                # Fallback repair for missed/delayed Retell final webhooks so
+                # outbound voice workflow runs do not remain WAITING.
+                "schedule": 60.0,
+            },
             "publish-workflow-metrics": {
                 "task": "src.app.tasks.automation_workflow.publish_workflow_metrics",
                 # Emit workflow-engine health metrics (backlog, stale timers,

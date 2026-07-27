@@ -38,6 +38,11 @@ class _FakeAsyncClient:
             raise self._exc
         return self._result
 
+    async def get(self, *args, **kwargs):
+        if self._exc is not None:
+            raise self._exc
+        return self._result
+
 
 def _run(*, result=None, exc=None):
     fake = _FakeAsyncClient(result=result, exc=exc)
@@ -54,6 +59,15 @@ def _run(*, result=None, exc=None):
                 metadata={},
             )
         )
+
+
+def _run_get(*, result=None, exc=None):
+    fake = _FakeAsyncClient(result=result, exc=exc)
+    with patch(
+        "src.app.services.automation.retell_outbound_client.httpx.AsyncClient",
+        MagicMock(return_value=fake),
+    ):
+        return asyncio.run(RetellOutboundClient("re_key").get_phone_call("call_abc"))
 
 
 def _resp(status, body=None):
@@ -87,3 +101,36 @@ def test_200_returns_call_id():
     result = _run(result=_resp(200, {"call_id": "call_abc", "call_status": "registered"}))
     assert result.call_id == "call_abc"
     assert result.call_status == "registered"
+
+
+def test_get_phone_call_maps_completed_call_details():
+    result = _run_get(
+        result=_resp(
+            200,
+            {
+                "call_id": "call_abc",
+                "call_status": "ended",
+                "disconnection_reason": "agent_hangup",
+                "call_analysis": {
+                    "custom_analysis_data": {"call_outcome": "confirmed"}
+                },
+            },
+        )
+    )
+
+    assert result.call_id == "call_abc"
+    assert result.call_status == "ended"
+    assert result.disconnection_reason == "agent_hangup"
+    assert result.call_analysis == {
+        "custom_analysis_data": {"call_outcome": "confirmed"}
+    }
+
+
+def test_get_phone_call_timeout_is_transient():
+    with pytest.raises(RetellTransientError):
+        _run_get(exc=httpx.TimeoutException("timed out"))
+
+
+def test_get_phone_call_4xx_is_permanent():
+    with pytest.raises(RetellPermanentError):
+        _run_get(result=_resp(404))

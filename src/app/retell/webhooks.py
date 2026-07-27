@@ -79,12 +79,28 @@ class RetellCallWebhook(BaseModel):
     scrubbed_transcript_with_tool_calls: list[dict] | None = None
     disconnection_reason: str | None = None
     scrubbed_call_analysis: CallAnalysisData | None = None
+    scrubbed_metadata: dict[str, Any] = Field(default_factory=dict)
+    scrubbed_retell_llm_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
     # Dynamic variables collected during the call (name, email, etc.)
     collected_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
     # Non-PHI call metadata Retell echoes back. Outbound campaign calls stamp
     # workflow_run_id here (VoiceNodeExecutor) so usage metering can attribute
     # the call's minutes to its workflow run (Plan 11 M-1/M-4).
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def effective_metadata(self) -> dict[str, Any]:
+        """Return Retell metadata, supporting PII-scrubbed agent payloads."""
+        return self.metadata or self.scrubbed_metadata or {}
+
+    @property
+    def effective_dynamic_variables(self) -> dict[str, Any]:
+        """Return collected/dynamic variables, supporting PII-scrubbed payloads."""
+        return (
+            self.collected_dynamic_variables
+            or self.scrubbed_retell_llm_dynamic_variables
+            or {}
+        )
 
 
 class RetellWebhookEvent(BaseModel):
@@ -96,6 +112,18 @@ class RetellWebhookEvent(BaseModel):
 
 class RetellAgentLookupError(RuntimeError):
     """Raised when a Retell agent lookup fails for retryable infrastructure reasons."""
+
+
+def _campaign_voice_outcome(call: RetellCallWebhook) -> str:
+    """Return the workflow business outcome from Retell analysis when present."""
+    from src.app.services.automation.voice_outcome import map_disconnection_reason
+
+    analysis = call.call_analysis or call.scrubbed_call_analysis
+    custom = analysis.custom_analysis_data if analysis else {}
+    outcome = custom.get("call_outcome")
+    if isinstance(outcome, str) and outcome:
+        return outcome
+    return map_disconnection_reason(call.disconnection_reason, call.call_status)
 
 
 async def _resolve_institution_location_from_agent(agent_id: str | None):
@@ -627,7 +655,7 @@ async def process_retell_call_analyzed_event(
                 # Merge top-level collected_dynamic_variables so the service can use them
                 # as a source for name/email when custom_analysis_data fields are missing.
                 analysis_dict["collected_dynamic_variables"] = (
-                    event.call.collected_dynamic_variables or {}
+                    event.call.effective_dynamic_variables
                 )
 
                 from src.app.retell.models import RetellCallData
@@ -694,8 +722,8 @@ async def process_retell_call_analyzed_event(
                         dials=1,
                         provider_message_id=event.call.call_id,
                         idempotency_key=f"retell:{event.call.call_id}",
-                        workflow_run_id=event.call.metadata.get("workflow_run_id"),
-                        workflow_id=event.call.metadata.get("workflow_id"),
+                        workflow_run_id=event.call.effective_metadata.get("workflow_run_id"),
+                        workflow_id=event.call.effective_metadata.get("workflow_id"),
                     )
             except Exception as usage_err:
                 logger.error(
@@ -809,16 +837,13 @@ async def process_retell_call_analyzed_event(
             # task no-ops for fire-and-forget / non-campaign outbound calls.
             try:
                 from src.app.models.call import CallDirection
-                from src.app.services.automation.voice_outcome import map_disconnection_reason
                 from src.app.tasks.automation_workflow import resume_voice_outcome
 
                 if (
                     saved_call.call_direction == CallDirection.OUTBOUND.value
                     and saved_call.retell_call_id
                 ):
-                    outcome = map_disconnection_reason(
-                        event.call.disconnection_reason, event.call.call_status
-                    )
+                    outcome = _campaign_voice_outcome(event.call)
                     resume_voice_outcome.apply_async(
                         kwargs={
                             "institution_id": institution.id,

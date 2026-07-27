@@ -15,6 +15,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _CREATE_CALL_URL = "https://api.retellai.com/v2/create-phone-call"
+_GET_CALL_URL_TEMPLATE = "https://api.retellai.com/v2/get-call/{call_id}"
 _TIMEOUT_SECONDS = 15.0
 
 
@@ -43,6 +44,21 @@ class RetellCallResult:
 
     call_id: str | None
     call_status: str | None = None
+
+
+@dataclass(frozen=True)
+class RetellCallDetails:
+    """Result of Retell's get-call endpoint for outcome reconciliation."""
+
+    call_id: str | None
+    call_status: str | None = None
+    disconnection_reason: str | None = None
+    call_analysis: dict | None = None
+    scrubbed_call_analysis: dict | None = None
+    metadata: dict | None = None
+    scrubbed_metadata: dict | None = None
+    retell_llm_dynamic_variables: dict | None = None
+    scrubbed_retell_llm_dynamic_variables: dict | None = None
 
 
 class RetellOutboundClient:
@@ -101,3 +117,48 @@ class RetellOutboundClient:
         except Exception:  # noqa: BLE001 — body may not be JSON; call was still placed
             logger.debug("create-phone-call response body was not JSON")
         return RetellCallResult(call_id=call_id, call_status=call_status)
+
+    async def get_phone_call(self, call_id: str) -> RetellCallDetails:
+        """Fetch a Retell call by id.
+
+        Used as a fallback when Retell's final webhook is delayed or missed. This
+        is read-only, so timeout/network failures are treated as transient and the
+        poller can try again later without risking a second patient call.
+        """
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
+                response = await client.get(
+                    _GET_CALL_URL_TEMPLATE.format(call_id=call_id),
+                    headers=headers,
+                )
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise RetellTransientError(f"retell_get_network_error: {type(exc).__name__}") from exc
+
+        status = response.status_code
+        if status >= 500:
+            raise RetellTransientError(f"retell_get_5xx: {status}")
+        if status >= 400:
+            raise RetellPermanentError(f"retell_get_4xx: {status}")
+
+        try:
+            body = response.json() or {}
+        except Exception:  # noqa: BLE001 — invalid JSON is a provider contract error
+            raise RetellPermanentError("retell_get_invalid_json") from None
+
+        return RetellCallDetails(
+            call_id=body.get("call_id") or call_id,
+            call_status=body.get("call_status"),
+            disconnection_reason=body.get("disconnection_reason"),
+            call_analysis=body.get("call_analysis"),
+            scrubbed_call_analysis=body.get("scrubbed_call_analysis"),
+            metadata=body.get("metadata"),
+            scrubbed_metadata=body.get("scrubbed_metadata"),
+            retell_llm_dynamic_variables=body.get("retell_llm_dynamic_variables"),
+            scrubbed_retell_llm_dynamic_variables=body.get(
+                "scrubbed_retell_llm_dynamic_variables"
+            ),
+        )

@@ -203,9 +203,7 @@ async def _process_appointment_event(
     raw_patient_id = _clean_str(
         _first(appointment, "patient_id", "PatientId", "ContactId", "contact_id")
     )
-    start_time = _clean_str(
-        _first(appointment, "start_time", "StartTime", "time", "appointment_time")
-    )
+    start_time = _appointment_start_time(appointment)
     if not raw_appointment_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -694,6 +692,31 @@ def _appointment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if _first(data, "id", "AppointmentId", "appointment_id") is not None:
         return [data]
     return []
+
+
+def _appointment_start_time(appointment: dict[str, Any]) -> str | None:
+    direct = _clean_str(
+        _first(
+            appointment,
+            "start_time",
+            "StartTime",
+            "time",
+            "appointment_time",
+            "AppointmentTimeStamp",
+            "AppointmentDateTime",
+        )
+    )
+    if direct:
+        return direct
+
+    appointment_date = _clean_str(_first(appointment, "AppointmentDate", "date", "Date"))
+    appointment_time = _clean_str(_first(appointment, "AppointmentTime", "time", "Time"))
+    if not appointment_date or not appointment_time:
+        return None
+
+    date_part = appointment_date.split("T", 1)[0]
+    time_part = appointment_time.split("T", 1)[-1].removesuffix("Z")
+    return f"{date_part}T{time_part}Z"
 
 
 def _patient_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:

@@ -173,6 +173,52 @@ async def test_appointment_created_updates_projection_and_queues_workflow():
 
 
 @pytest.mark.asyncio
+async def test_appointment_created_accepts_tracker_date_and_time_fields():
+    payload = {
+        "event": "appointment.created",
+        "data": {
+            "appointment": {
+                "AppointmentId": 900000004,
+                "ContactId": 900000001,
+                "AppointmentDate": "2026-07-28T00:00:00.000Z",
+                "AppointmentTime": "10:00:00",
+                "ProviderId": 2,
+            }
+        },
+    }
+    request = _make_request(payload)
+    projection, projection_patch = _patch_projection(change="new")
+    lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
+
+    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+        side_effect=[
+            _session_with_scalar(_location()),
+            _session_with_scalar(SimpleNamespace(id="contact-1")),
+            _processing_session(),
+        ],
+    ), patch("src.app.api.routes.gotracker_webhooks._claim_event", new=AsyncMock(return_value=True)), patch(
+        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
+    ), projection_patch, lifecycle_patch, patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+    ) as trigger_task, patch(
+        "src.app.tasks.automation_workflow.resume_reactivation_booking"
+    ) as reactivation_task:
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        trigger_task.delay = MagicMock()
+        reactivation_task.delay = MagicMock()
+        result = await gotracker_webhook("loc-1", request)
+
+    assert result["status"] == "queued"
+    projection.upsert_appointment.assert_awaited_once()
+    upsert_kwargs = projection.upsert_appointment.await_args.kwargs
+    assert upsert_kwargs["appointment_id"] == "gt-900000004"
+    assert upsert_kwargs["start_time"] == "2026-07-28T10:00:00Z"
+    trigger_task.delay.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_appointment_cancelled_cancels_existing_runs():
     payload = {
         "event": "appointment.cancelled",

@@ -67,6 +67,9 @@ _ADVANCEABLE_STATUSES = frozenset({
 })
 
 _APPOINTMENT_SYNC_LOOKAHEAD_DAYS = 90
+_RETELL_OUTCOME_POLL_BATCH = 25
+_RETELL_OUTCOME_MIN_AGE_SECONDS = 30
+_RETELL_TERMINAL_CALL_STATUSES = frozenset({"ended", "not_connected", "error"})
 
 
 def _ensure_db() -> None:
@@ -1066,6 +1069,139 @@ async def _trigger_callback_async(
 
 
 @celery_app.task(
+    name="src.app.tasks.automation_workflow.poll_retell_voice_outcomes",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def poll_retell_voice_outcomes(self) -> dict:
+    """Repair missed/delayed Retell final webhooks for parked voice steps.
+
+    Retell can show a completed call in its dashboard while our app only received
+    ``call_started``. This poller asks Retell for awaiting campaign calls and
+    enqueues the normal ``resume_voice_outcome`` task once a terminal outcome is
+    visible, so the workflow run does not stay elapsed forever.
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(_poll_retell_voice_outcomes_async())
+    except Exception as exc:
+        logger.exception("poll_retell_voice_outcomes failed: %s", exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _poll_retell_voice_outcomes_async() -> dict:
+    from sqlalchemy import select
+
+    from src.app.config import settings
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+    from src.app.retell.security import hash_for_logging
+    from src.app.services.automation.retell_outbound_client import (
+        RetellOutboundClient,
+        RetellPermanentError,
+        RetellTransientError,
+    )
+
+    if not settings.retell_api_secret:
+        return {
+            "scanned": 0,
+            "enqueued": 0,
+            "pending": 0,
+            "failed": 0,
+            "skipped": "missing_api_key",
+        }
+
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=_RETELL_OUTCOME_MIN_AGE_SECONDS)
+    async with get_system_db_session(
+        "celery", external_id="retell_voice_outcome_poll"
+    ) as session:
+        result = await session.execute(
+            select(WorkflowVoiceAttempt)
+            .where(
+                WorkflowVoiceAttempt.status == VoiceAttemptStatus.AWAITING_OUTCOME.value,
+                WorkflowVoiceAttempt.retell_call_id.is_not(None),
+                WorkflowVoiceAttempt.created_at <= cutoff,
+            )
+            .order_by(WorkflowVoiceAttempt.created_at.asc())
+            .limit(_RETELL_OUTCOME_POLL_BATCH)
+        )
+        attempts = [
+            (attempt.institution_id, attempt.retell_call_id)
+            for attempt in result.scalars().all()
+        ]
+
+    client = RetellOutboundClient(settings.retell_api_secret)
+    enqueued = 0
+    pending = 0
+    failed = 0
+    for institution_id, retell_call_id in attempts:
+        if not retell_call_id:
+            pending += 1
+            continue
+        try:
+            details = await client.get_phone_call(retell_call_id)
+        except RetellTransientError as exc:
+            pending += 1
+            logger.info(
+                "retell outcome poll pending: call=%s error=%s",
+                hash_for_logging(retell_call_id),
+                exc,
+            )
+            continue
+        except RetellPermanentError as exc:
+            failed += 1
+            logger.warning(
+                "retell outcome poll failed: call=%s error=%s",
+                hash_for_logging(retell_call_id),
+                exc,
+            )
+            continue
+
+        if not _retell_call_details_ready_for_resume(details):
+            pending += 1
+            continue
+
+        call_outcome = _retell_call_details_outcome(details)
+        resume_voice_outcome.apply_async(
+            kwargs={
+                "institution_id": institution_id,
+                "retell_call_id": retell_call_id,
+                "call_outcome": call_outcome,
+                "disconnection_reason": details.disconnection_reason,
+            },
+            queue="workflow",
+        )
+        enqueued += 1
+
+    return {
+        "scanned": len(attempts),
+        "enqueued": enqueued,
+        "pending": pending,
+        "failed": failed,
+    }
+
+
+def _retell_call_details_ready_for_resume(details) -> bool:
+    status = (details.call_status or "").lower()
+    if status in _RETELL_TERMINAL_CALL_STATUSES:
+        return True
+    return bool(details.call_analysis or details.scrubbed_call_analysis)
+
+
+def _retell_call_details_outcome(details) -> str:
+    """Extract the business outcome from Retell get-call data."""
+    from src.app.services.automation.voice_outcome import map_disconnection_reason
+
+    analysis = details.call_analysis or details.scrubbed_call_analysis or {}
+    if isinstance(analysis, dict):
+        custom = analysis.get("custom_analysis_data") or {}
+        outcome = custom.get("call_outcome") if isinstance(custom, dict) else None
+        if isinstance(outcome, str) and outcome:
+            return outcome
+    return map_disconnection_reason(details.disconnection_reason, details.call_status)
+
+
+@celery_app.task(
     name="src.app.tasks.automation_workflow.resume_voice_outcome",
     bind=True,
     max_retries=3,
@@ -1167,13 +1303,19 @@ async def _resume_voice_outcome_async(
         run.trigger_metadata = md
         await session.flush()
 
-        # Resolve the voice-attempt row (V-4) to COMPLETED with its dial outcome so
-        # the attempt/outcome history reflects how the call went (best-effort).
+        # Resolve the voice-attempt row (V-4) to COMPLETED with a dial-level
+        # outcome. Retell custom analysis may provide business outcomes like
+        # "confirmed"; those belong in run context / response events, not in the
+        # constrained dial_outcome column.
+        dial_outcome = _dial_outcome_for_attempt(
+            call_outcome=call_outcome,
+            disconnection_reason=disconnection_reason,
+        )
         await stamp_attempt_outcome(
             session,
             institution_id=institution_id,
             retell_call_id=retell_call_id,
-            dial_outcome=call_outcome,
+            dial_outcome=dial_outcome,
             disconnection_reason=disconnection_reason,
         )
 
@@ -1197,6 +1339,22 @@ async def _resume_voice_outcome_async(
         institution_id, retell_call_id, call_outcome, result.status,
     )
     return {"resumed": True, "status": result.status, "call_outcome": call_outcome}
+
+
+def _dial_outcome_for_attempt(
+    *, call_outcome: str, disconnection_reason: str | None
+) -> str:
+    """Return a DB-safe dial outcome for ``workflow_voice_attempts``."""
+    from src.app.models.outbound_voice import VOICE_DIAL_OUTCOMES
+    from src.app.services.automation.voice_outcome import map_disconnection_reason
+
+    if call_outcome in VOICE_DIAL_OUTCOMES:
+        return call_outcome
+
+    mapped = map_disconnection_reason(disconnection_reason)
+    if mapped in VOICE_DIAL_OUTCOMES:
+        return mapped
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------

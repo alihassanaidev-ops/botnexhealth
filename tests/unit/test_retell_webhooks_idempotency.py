@@ -133,6 +133,40 @@ async def test_handler_returns_400_on_unparseable_body():
 # ── process_retell_call_analyzed_event helper ───────────────────────
 
 
+def test_retell_call_webhook_uses_scrubbed_metadata_when_raw_metadata_absent():
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-scrubbed",
+            "scrubbed_metadata": {
+                "workflow_run_id": "run-1",
+                "workflow_id": "workflow-1",
+            },
+            "scrubbed_retell_llm_dynamic_variables": {
+                "appointment_id": "gt-900000004",
+            },
+        }
+    )
+
+    assert call.effective_metadata["workflow_run_id"] == "run-1"
+    assert call.effective_dynamic_variables["appointment_id"] == "gt-900000004"
+
+
+def test_campaign_voice_outcome_prefers_scrubbed_custom_call_outcome():
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-confirmed",
+            "call_status": "ended",
+            "disconnection_reason": "agent_hangup",
+            "scrubbed_call_analysis": {
+                "call_summary": "confirmed",
+                "custom_analysis_data": {"call_outcome": "confirmed"},
+            },
+        }
+    )
+
+    assert webhooks._campaign_voice_outcome(call) == "confirmed"
+
+
 @pytest.mark.asyncio
 async def test_helper_returns_success_and_finalizes_completed_when_no_institution():
     """If the agent_id doesn't resolve to an institution, that's a

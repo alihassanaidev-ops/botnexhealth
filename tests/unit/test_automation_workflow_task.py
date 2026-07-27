@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.app.config import settings
 from src.app.models.automation_workflow import (
     AutomationRunStatus,
     AutomationTimerStatus,
@@ -18,6 +20,10 @@ from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.tasks.automation_workflow import (
     _claim_and_enqueue_async,
     _dispatch_timer_async,
+    _dial_outcome_for_attempt,
+    _poll_retell_voice_outcomes_async,
+    _retell_call_details_outcome,
+    _retell_call_details_ready_for_resume,
     _waiting_step_targets_field,
     _retry_countdown,
 )
@@ -100,6 +106,98 @@ def test_waiting_step_targets_context_field_is_field_specific() -> None:
     assert not _waiting_step_targets_field(confirm, "wait-response", "appointment_booked")
     assert _waiting_step_targets_field(booked, "wait-48h", "appointment_booked")
     assert not _waiting_step_targets_field(booked, "wait-48h", "appointment_status")
+
+
+def test_dial_outcome_for_attempt_maps_business_outcome_to_answered() -> None:
+    assert (
+        _dial_outcome_for_attempt(
+            call_outcome="confirmed",
+            disconnection_reason="agent_hangup",
+        )
+        == "answered"
+    )
+
+
+def test_dial_outcome_for_attempt_preserves_low_level_outcome() -> None:
+    assert (
+        _dial_outcome_for_attempt(
+            call_outcome="no_answer",
+            disconnection_reason="agent_hangup",
+        )
+        == "no_answer"
+    )
+
+
+def test_retell_call_details_outcome_prefers_custom_analysis() -> None:
+    details = SimpleNamespace(
+        call_status="ended",
+        disconnection_reason="agent_hangup",
+        call_analysis={"custom_analysis_data": {"call_outcome": "confirmed"}},
+        scrubbed_call_analysis=None,
+    )
+
+    assert _retell_call_details_ready_for_resume(details)
+    assert _retell_call_details_outcome(details) == "confirmed"
+
+
+def test_retell_call_details_outcome_falls_back_to_disconnect_reason() -> None:
+    details = SimpleNamespace(
+        call_status="ended",
+        disconnection_reason="agent_hangup",
+        call_analysis=None,
+        scrubbed_call_analysis=None,
+    )
+
+    assert _retell_call_details_ready_for_resume(details)
+    assert _retell_call_details_outcome(details) == "answered"
+
+
+@pytest.mark.asyncio
+async def test_poll_retell_voice_outcomes_enqueues_resume_for_completed_call() -> None:
+    attempt = SimpleNamespace(
+        institution_id="inst-1",
+        retell_call_id="call_abc",
+    )
+    details = SimpleNamespace(
+        call_status="ended",
+        disconnection_reason="agent_hangup",
+        call_analysis={"custom_analysis_data": {"call_outcome": "confirmed"}},
+        scrubbed_call_analysis=None,
+    )
+
+    result_proxy = MagicMock()
+    result_proxy.scalars.return_value.all.return_value = [attempt]
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute = AsyncMock(return_value=result_proxy)
+    mock_client = AsyncMock()
+    mock_client.get_phone_call = AsyncMock(return_value=details)
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            return_value=mock_session,
+        ),
+        patch(
+            "src.app.services.automation.retell_outbound_client.RetellOutboundClient",
+            return_value=mock_client,
+        ),
+        patch.object(settings, "retell_api_secret", "re_test_key"),
+        patch("src.app.tasks.automation_workflow.resume_voice_outcome") as mock_resume,
+    ):
+        result = await _poll_retell_voice_outcomes_async()
+
+    assert result == {"scanned": 1, "enqueued": 1, "pending": 0, "failed": 0}
+    mock_resume.apply_async.assert_called_once_with(
+        kwargs={
+            "institution_id": "inst-1",
+            "retell_call_id": "call_abc",
+            "call_outcome": "confirmed",
+            "disconnection_reason": "agent_hangup",
+        },
+        queue="workflow",
+    )
 
 
 # ---------------------------------------------------------------------------
