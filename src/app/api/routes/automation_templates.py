@@ -167,12 +167,11 @@ async def instantiate_template(
 ) -> WorkflowResponse:
     """Instantiate a campaign template as a new workflow.
 
-    The template's definition is validated and published as version 1, so the
-    resulting workflow is immediately ``active`` — consistent with
-    ``POST /automation/workflows``. The engine has no draft-with-definition
-    lifecycle (a definition only ever lives inside a published version), so a
-    true "draft from template" is a documented backend follow-up; callers who
-    want to review before it runs can immediately pause it.
+    The template's definition is validated and published as version 1, then the
+    resulting workflow is paused. The engine has no draft-with-definition
+    lifecycle (a definition only ever lives inside a published version), so
+    pausing after publish lets admins review required setup before any event can
+    enroll contacts.
     """
     if not current_user.institution_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No institution context")
@@ -183,7 +182,11 @@ async def instantiate_template(
 
     data = data or CampaignTemplateInstantiateRequest()
     try:
-        definition = instantiate_definition(template, voice_agent_id=data.voice_agent_id)
+        definition = instantiate_definition(
+            template,
+            voice_agent_id=data.voice_agent_id,
+            setup_options=data.setup_options,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -233,6 +236,7 @@ async def instantiate_template(
             content_classification=template.metadata.default_compliance_content_class,
             published_by_user_id=user_id,
         )
+        await svc.pause_workflow(wf)
         return WorkflowResponse.from_model(wf)
 
 

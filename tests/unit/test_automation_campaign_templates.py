@@ -96,6 +96,42 @@ def test_surgery_confirmation_template_marks_confirmed_status() -> None:
     assert nodes["mark-confirmed"]["next_node_id"] == "exit-confirmed"
 
 
+def test_surgery_confirmation_template_requires_major_appointment_types() -> None:
+    template = TEMPLATES["surgery-pre-appointment-confirmation"]
+
+    with pytest.raises(ValueError, match="appointment_type_ids is required"):
+        instantiate_definition(template, voice_agent_id="agent_clinic_1")
+
+    definition = instantiate_definition(
+        template,
+        voice_agent_id="agent_clinic_1",
+        setup_options={"appointment_type_ids": ["surgery", "implant"]},
+    )
+
+    assert definition["trigger"]["appointment_type_ids"] == ["surgery", "implant"]
+
+
+def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() -> None:
+    template = TEMPLATES["surgery-pre-appointment-confirmation"]
+    definition = instantiate_definition(
+        template,
+        voice_agent_id="agent_clinic_1",
+        setup_options={"appointment_type_ids": ["surgery"]},
+    )
+    nodes = {node["id"]: node for node in definition["nodes"]}
+
+    confirmed_rule = nodes["check-preop-outcome"]["rules"][0]
+    assert confirmed_rule == {
+        "field": "call_outcome",
+        "op": "eq",
+        "value": "confirmed",
+    }
+    assert "answered" not in str(nodes["check-preop-outcome"]["rules"])
+    assert nodes["check-cancelled"]["true_next_node_id"] == "mark-cancelled"
+    assert nodes["check-reschedule"]["true_next_node_id"] == "mark-reschedule"
+    assert nodes["check-unreachable"]["true_next_node_id"] == "mark-no-answer"
+
+
 def test_post_op_template_starts_from_confirmed_status_and_waits_one_day() -> None:
     t = TEMPLATES["post-op-followup-after-confirmation"]
     nodes = {node["id"]: node for node in t.definition["nodes"]}
@@ -269,8 +305,8 @@ def _make_wf_mock():
     wf = MagicMock()
     wf.id = "wf-new"
     wf.name = "Appointment Reminder (24h)"
-    # Post-publish state: create_draft + publish_version leaves the workflow active.
-    wf.status = "active"
+    # Post-publish state is paused by the template instantiate route.
+    wf.status = "draft"
     wf.trigger_type = "appointment_offset"
     wf.definition = TEMPLATES["appointment-reminder-24h"].definition
     wf.current_version_id = "ver-1"
@@ -279,13 +315,14 @@ def _make_wf_mock():
     return wf
 
 
-def test_instantiate_creates_and_publishes_workflow() -> None:
-    """instantiate must create the draft AND publish the template definition.
+def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
+    """instantiate must create the draft, publish the template definition, and pause.
 
     Regression guard for the original bug: the route passed ``trigger_type`` and
     ``definition`` kwargs that ``create_draft`` does not accept (TypeError at
     runtime), and never persisted a version. It now mirrors
-    ``POST /automation/workflows`` — create_draft then publish_version.
+    ``POST /automation/workflows`` — create_draft then publish_version, followed
+    by pause so launch events cannot enroll patients before review.
     """
     user = MagicMock()
     user.institution_id = "inst-1"
@@ -295,6 +332,12 @@ def test_instantiate_creates_and_publishes_workflow() -> None:
     mock_svc = AsyncMock()
     mock_svc.create_draft = AsyncMock(return_value=wf)
     mock_svc.publish_version = AsyncMock()
+
+    async def _pause_workflow(workflow):
+        workflow.status = "paused"
+        return workflow
+
+    mock_svc.pause_workflow = AsyncMock(side_effect=_pause_workflow)
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -323,7 +366,7 @@ def test_instantiate_creates_and_publishes_workflow() -> None:
         )
 
     assert result.id == "wf-new"
-    assert result.status == "active"
+    assert result.status == "paused"
     assert result.trigger_type == "appointment_offset"
     # create_draft must NOT receive trigger_type/definition (the original bug).
     mock_svc.create_draft.assert_awaited_once()
@@ -338,6 +381,7 @@ def test_instantiate_creates_and_publishes_workflow() -> None:
     published_def = mock_svc.publish_version.call_args.args[1]
     assert published_def == TEMPLATES["appointment-reminder-24h"].definition
     assert mock_svc.publish_version.call_args.kwargs["content_classification"] == "transactional_care"
+    mock_svc.pause_workflow.assert_awaited_once_with(wf)
 
 
 def test_instantiate_voice_template_without_agent_raises_422() -> None:

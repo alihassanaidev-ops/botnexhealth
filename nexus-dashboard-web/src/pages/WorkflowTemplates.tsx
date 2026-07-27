@@ -5,6 +5,7 @@ import { ArrowLeft, CheckCircle2, LayoutTemplate, Loader2, Sparkles } from "luci
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Label } from "@/components/ui/label"
@@ -26,8 +27,8 @@ import {
 import { toast } from "sonner"
 import { createWorkflowFromTemplate, listTemplates, type CampaignTemplate } from "@/lib/workflow-api"
 import { triggerTypeLabel } from "@/lib/workflow/catalog"
-import { listLocations } from "@/lib/tenant-api"
-import type { LocationInfo } from "@/types"
+import { listAppointmentTypes, listLocations } from "@/lib/tenant-api"
+import type { CachedAppointmentType, LocationInfo } from "@/types"
 import type { TriggerType } from "@/types/workflow"
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -46,6 +47,12 @@ function label(value: string) {
 
 function requiresVoiceAgent(template: CampaignTemplate) {
     return template.metadata.setup_fields.some((field) => field.id === "voice_agent_id" && field.required)
+}
+
+function requiresAppointmentTypes(template: CampaignTemplate) {
+    return template.metadata.setup_fields.some(
+        (field) => field.id === "appointment_type_ids" && field.required,
+    )
 }
 
 function pmsCapabilityStatus(template: CampaignTemplate) {
@@ -81,6 +88,9 @@ export default function WorkflowTemplates() {
     const navigate = useNavigate()
     const [templates, setTemplates] = useState<CampaignTemplate[]>([])
     const [locations, setLocations] = useState<LocationInfo[]>([])
+    const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
+    const [appointmentTypesLocationId, setAppointmentTypesLocationId] = useState<string | null>(null)
+    const [appointmentTypesLoading, setAppointmentTypesLoading] = useState(false)
     const [loading, setLoading] = useState(true)
     const [picked, setPicked] = useState<CampaignTemplate | null>(null)
     const [name, setName] = useState("")
@@ -90,6 +100,7 @@ export default function WorkflowTemplates() {
     const [copyVariant, setCopyVariant] = useState("")
     const [handoffBehavior, setHandoffBehavior] = useState("")
     const [voiceAgentId, setVoiceAgentId] = useState("")
+    const [appointmentTypeIds, setAppointmentTypeIds] = useState<string[]>([])
     const [activeCategory, setActiveCategory] = useState<string>("all")
     const [creating, setCreating] = useState(false)
 
@@ -133,6 +144,35 @@ export default function WorkflowTemplates() {
         }
     }, [selectedLocationId])
 
+    useEffect(() => {
+        if (!picked || !selectedLocationId || !requiresAppointmentTypes(picked)) return
+        let active = true
+        ;(async () => {
+            setAppointmentTypesLoading(true)
+            try {
+                const rows = await listAppointmentTypes(selectedLocationId)
+                if (!active) return
+                const activeRows = rows.filter((row) => row.is_active)
+                setAppointmentTypes(activeRows)
+                setAppointmentTypesLocationId(selectedLocationId)
+                setAppointmentTypeIds((current) =>
+                    current.filter((id) => activeRows.some((row) => row.source_id === id)),
+                )
+            } catch {
+                if (active) {
+                    setAppointmentTypes([])
+                    setAppointmentTypesLocationId(selectedLocationId)
+                    toast.error("Failed to load appointment types")
+                }
+            } finally {
+                if (active) setAppointmentTypesLoading(false)
+            }
+        })()
+        return () => {
+            active = false
+        }
+    }, [picked, selectedLocationId])
+
     const categories = useMemo(() => {
         const present = Array.from(new Set(templates.map((t) => t.category)))
         return present.sort((a, b) => {
@@ -168,6 +208,9 @@ export default function WorkflowTemplates() {
             ),
         )
         setVoiceAgentId("")
+        setAppointmentTypeIds([])
+        setAppointmentTypes([])
+        setAppointmentTypesLocationId(null)
     }
 
     async function handleCreate() {
@@ -182,9 +225,10 @@ export default function WorkflowTemplates() {
                     channel_sequence: channelSequence,
                     copy_variant: copyVariant,
                     staff_handoff_behavior: handoffBehavior,
+                    appointment_type_ids: appointmentTypeIds,
                 },
             })
-            toast.success(`Created "${wf.name}"`)
+            toast.success(`Created paused campaign "${wf.name}"`)
             navigate(`/institution-admin/campaigns/${wf.id}/builder`)
         } catch {
             toast.error("Failed to create campaign from template")
@@ -193,6 +237,7 @@ export default function WorkflowTemplates() {
     }
 
     const voiceRequired = picked ? requiresVoiceAgent(picked) : false
+    const appointmentTypesRequired = picked ? requiresAppointmentTypes(picked) : false
     const pickedCapability = picked ? pmsCapabilityStatus(picked) : null
     const audienceSourceOptions = picked
         ? setupFieldOptions(picked, "audience_source", picked.metadata.default_audience)
@@ -216,11 +261,21 @@ export default function WorkflowTemplates() {
             ? picked.metadata.copy_variants
             : [{ id: "standard", label: "Standard copy" }]
         : []
+    const appointmentTypeRows =
+        appointmentTypesLocationId === selectedLocationId ? appointmentTypes : []
+    function toggleAppointmentType(id: string, checked: boolean) {
+        setAppointmentTypeIds((current) =>
+            checked
+                ? Array.from(new Set([...current, id]))
+                : current.filter((currentId) => currentId !== id),
+        )
+    }
     const createDisabled =
         creating ||
         !name.trim() ||
         !selectedLocationId ||
         (voiceRequired && !voiceAgentId.trim()) ||
+        (appointmentTypesRequired && appointmentTypeIds.length === 0) ||
         pickedCapability?.supported === false
 
     return (
@@ -353,7 +408,7 @@ export default function WorkflowTemplates() {
                     <DialogHeader>
                         <DialogTitle>Set up campaign</DialogTitle>
                         <DialogDescription>
-                            A workflow will be created from "{picked?.name}" with these launch defaults.
+                            A paused workflow will be created from "{picked?.name}" with these launch defaults.
                         </DialogDescription>
                     </DialogHeader>
                     {picked && (
@@ -445,6 +500,45 @@ export default function WorkflowTemplates() {
                                             onChange={(e) => setVoiceAgentId(e.target.value)}
                                             placeholder="Retell agent ID"
                                         />
+                                    </div>
+                                )}
+                                {appointmentTypesRequired && (
+                                    <div className="space-y-2">
+                                        <Label>Major appointment types</Label>
+                                        <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border border-border p-2">
+                                            {appointmentTypesLoading ? (
+                                                <p className="text-xs text-muted-foreground">
+                                                    Loading appointment types...
+                                                </p>
+                                            ) : appointmentTypeRows.length === 0 ? (
+                                                <p className="text-xs text-muted-foreground">
+                                                    No active appointment types are available for this location yet.
+                                                </p>
+                                            ) : (
+                                                appointmentTypeRows.map((type) => (
+                                                    <label
+                                                        key={type.source_id}
+                                                        className="flex items-center gap-2 rounded px-1.5 py-1 text-sm"
+                                                    >
+                                                        <Checkbox
+                                                            checked={appointmentTypeIds.includes(type.source_id)}
+                                                            onCheckedChange={(checked) =>
+                                                                toggleAppointmentType(type.source_id, checked === true)
+                                                            }
+                                                        />
+                                                        <span className="min-w-0 flex-1 truncate">{type.name}</span>
+                                                        {type.duration_minutes && (
+                                                            <span className="shrink-0 text-xs text-muted-foreground">
+                                                                {type.duration_minutes}m
+                                                            </span>
+                                                        )}
+                                                    </label>
+                                                ))
+                                            )}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            Only appointments matching these types will enter this workflow.
+                                        </p>
                                     </div>
                                 )}
                                 <div className="space-y-2">

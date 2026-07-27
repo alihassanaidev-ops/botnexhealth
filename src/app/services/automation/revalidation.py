@@ -100,13 +100,24 @@ class PmsLiveRevalidationService:
         self._session = session
 
     async def revalidate(self, run: "AutomationWorkflowRun") -> str | None:
-        if getattr(run, "trigger_ref_type", None) != "appointment":
-            return None
-        appointment_id = getattr(run, "trigger_ref_id", None)
+        metadata = getattr(run, "trigger_metadata", None) or {}
+        require_occurred = metadata.get("campaign_goal") == "post_op_followup"
+
+        appointment_id = (
+            getattr(run, "trigger_ref_id", None)
+            if getattr(run, "trigger_ref_type", None) == "appointment"
+            else metadata.get("appointment_id")
+        )
         if not appointment_id:
+            if require_occurred:
+                return "skipped_missing_appointment_context"
             return None
         try:
-            return await self._check_appointment(run, str(appointment_id))
+            return await self._check_appointment(
+                run,
+                str(appointment_id),
+                require_occurred=require_occurred,
+            )
         except Exception as exc:  # noqa: BLE001 — fail-open on any error
             logger.warning(
                 "revalidate: lookup failed run=%s appt=%s: %s — proceeding with send",
@@ -115,7 +126,11 @@ class PmsLiveRevalidationService:
             return None
 
     async def _check_appointment(
-        self, run: "AutomationWorkflowRun", appointment_id: str
+        self,
+        run: "AutomationWorkflowRun",
+        appointment_id: str,
+        *,
+        require_occurred: bool = False,
     ) -> str | None:
         from src.app.models.institution import Institution
         from src.app.models.institution_location import InstitutionLocation
@@ -124,7 +139,11 @@ class PmsLiveRevalidationService:
         # Freshness window (D-2): trust a recently-synced projection row instead of
         # a live NexHealth read. Returns (decided, outcome); decided=False → stale
         # or missing, fall through to the live read below.
-        decided, outcome = await self._check_projection(run, appointment_id)
+        decided, outcome = await self._check_projection(
+            run,
+            appointment_id,
+            require_occurred=require_occurred,
+        )
         if decided:
             return outcome
 
@@ -163,10 +182,22 @@ class PmsLiveRevalidationService:
         current_at = appt.get("start_time")
         if expected_at and current_at and not _same_instant(expected_at, current_at):
             return "skipped_rescheduled"
+        if require_occurred:
+            current_dt = _parse_dt(current_at)
+            if current_dt is None:
+                current_dt = _parse_dt(expected_at)
+            if current_dt is None:
+                return "skipped_missing_appointment_context"
+            if current_dt > datetime.now(timezone.utc):
+                return "skipped_appointment_not_occurred"
         return None
 
     async def _check_projection(
-        self, run: "AutomationWorkflowRun", appointment_id: str
+        self,
+        run: "AutomationWorkflowRun",
+        appointment_id: str,
+        *,
+        require_occurred: bool = False,
     ) -> tuple[bool, str | None]:
         """Decide from the working set if a fresh row exists.
 
@@ -201,6 +232,17 @@ class PmsLiveRevalidationService:
         expected_at = (run.trigger_metadata or {}).get("appointment_at")
         if expected_at and row.start_time and not _same_instant(expected_at, row.start_time.isoformat()):
             return True, "skipped_rescheduled"
+        if require_occurred:
+            appointment_at = row.start_time or _parse_dt(expected_at)
+            if appointment_at is None:
+                return True, "skipped_missing_appointment_context"
+            appointment_at = (
+                appointment_at
+                if appointment_at.tzinfo
+                else appointment_at.replace(tzinfo=timezone.utc)
+            )
+            if appointment_at > datetime.now(timezone.utc):
+                return True, "skipped_appointment_not_occurred"
         return True, None
 
     async def _pms_read_unhealthy(self, run: "AutomationWorkflowRun") -> bool:

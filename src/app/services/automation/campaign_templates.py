@@ -73,9 +73,15 @@ def template_tokens(definition: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(tokens))
 
 
-def instantiate_definition(template: CampaignTemplate, *, voice_agent_id: str | None = None) -> dict[str, Any]:
+def instantiate_definition(
+    template: CampaignTemplate,
+    *,
+    voice_agent_id: str | None = None,
+    setup_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return a clone-ready definition with setup-time substitutions applied."""
     definition = copy.deepcopy(template.definition)
+    setup_options = setup_options or {}
     requires_voice = any(
         node.get("type") == "send_voice" and node.get("retell_agent_id") == VOICE_AGENT_PLACEHOLDER
         for node in definition.get("nodes", [])
@@ -87,7 +93,40 @@ def instantiate_definition(template: CampaignTemplate, *, voice_agent_id: str | 
         for node in definition.get("nodes", []):
             if isinstance(node, dict) and node.get("retell_agent_id") == VOICE_AGENT_PLACEHOLDER:
                 node["retell_agent_id"] = voice_agent_id.strip()
+
+    _apply_required_setup_fields(template, definition, setup_options)
     return definition
+
+
+def _apply_required_setup_fields(
+    template: CampaignTemplate,
+    definition: dict[str, Any],
+    setup_options: dict[str, Any],
+) -> None:
+    """Apply setup fields that affect executable workflow behavior."""
+    fields = template.metadata.setup_fields
+    for field in fields:
+        field_id = field.get("id")
+        if field_id == "appointment_type_ids":
+            raw = setup_options.get(field_id)
+            values = _string_list(raw)
+            if field.get("required") and not values:
+                raise ValueError("appointment_type_ids is required for this template")
+            trigger = definition.get("trigger")
+            if isinstance(trigger, dict) and trigger.get("type") == "appointment_offset":
+                trigger["appointment_type_ids"] = values or None
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = value.split(",")
+    elif isinstance(value, list):
+        parts = value
+    else:
+        return []
+    return list(dict.fromkeys(str(part).strip() for part in parts if str(part).strip()))
 
 
 def _metadata(
@@ -451,12 +490,9 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
         {
             "type": "condition",
             "id": "check-preop-outcome",
-            "logic": "OR",
-            "rules": [
-                {"field": "call_outcome", "op": "in", "value": ["confirmed", "answered", "booked"]}
-            ],
+            "rules": [{"field": "call_outcome", "op": "eq", "value": "confirmed"}],
             "true_next_node_id": "mark-confirmed",
-            "false_next_node_id": "check-dnc",
+            "false_next_node_id": "check-cancelled",
         },
         {
             "type": "update_patient_status",
@@ -467,10 +503,48 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
         },
         {
             "type": "condition",
+            "id": "check-cancelled",
+            "logic": "OR",
+            "rules": [
+                {"field": "call_outcome", "op": "in", "value": ["cancelled", "appointment_cancelled"]}
+            ],
+            "true_next_node_id": "mark-cancelled",
+            "false_next_node_id": "check-reschedule",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-cancelled",
+            "status": "appointment_cancelled",
+            "note_template": "Pre-appointment call outcome: {{call_outcome}}",
+            "next_node_id": "exit-cancelled",
+        },
+        {
+            "type": "condition",
+            "id": "check-reschedule",
+            "logic": "OR",
+            "rules": [
+                {
+                    "field": "call_outcome",
+                    "op": "in",
+                    "value": ["reschedule_requested", "reschedule", "appointment_requested"],
+                }
+            ],
+            "true_next_node_id": "mark-reschedule",
+            "false_next_node_id": "check-dnc",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-reschedule",
+            "status": "reschedule_requested",
+            "note_template": "Pre-appointment call outcome: {{call_outcome}}",
+            "next_node_id": "exit-reschedule",
+        },
+        {
+            "type": "condition",
             "id": "check-dnc",
             "rules": [{"field": "call_outcome", "op": "eq", "value": "do_not_call"}],
             "true_next_node_id": "mark-dnc",
-            "false_next_node_id": "mark-followup",
+            "false_next_node_id": "check-unreachable",
         },
         {
             "type": "update_patient_status",
@@ -480,6 +554,27 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
             "next_node_id": "exit-dnc",
         },
         {
+            "type": "condition",
+            "id": "check-unreachable",
+            "logic": "OR",
+            "rules": [
+                {
+                    "field": "call_outcome",
+                    "op": "in",
+                    "value": ["no_answer", "busy", "voicemail", "timeout", "declined"],
+                }
+            ],
+            "true_next_node_id": "mark-no-answer",
+            "false_next_node_id": "mark-followup",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-no-answer",
+            "status": "no_answer",
+            "note_template": "Pre-appointment call could not reach patient. Outcome: {{call_outcome}}",
+            "next_node_id": "exit-no-answer",
+        },
+        {
             "type": "update_patient_status",
             "id": "mark-followup",
             "status": "reschedule_or_followup_needed",
@@ -487,6 +582,9 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
             "next_node_id": "exit-handoff",
         },
         {"type": "exit", "id": "exit-confirmed", "outcome": "appointment_confirmed"},
+        {"type": "exit", "id": "exit-cancelled", "outcome": "appointment_cancelled"},
+        {"type": "exit", "id": "exit-reschedule", "outcome": "reschedule_requested"},
+        {"type": "exit", "id": "exit-no-answer", "outcome": "no_answer"},
         {"type": "exit", "id": "exit-handoff", "outcome": "staff_handoff"},
         {"type": "exit", "id": "exit-dnc", "outcome": "do_not_call"},
     ],
@@ -775,7 +873,14 @@ TEMPLATES: dict[str, CampaignTemplate] = {
         metadata=_metadata(
             category="appointment_ops",
             goal="Confirm major appointments before the visit and record the outcome for follow-up workflows.",
-            outcome_labels=["appointment_confirmed", "staff_handoff", "do_not_call"],
+            outcome_labels=[
+                "appointment_confirmed",
+                "appointment_cancelled",
+                "reschedule_requested",
+                "no_answer",
+                "staff_handoff",
+                "do_not_call",
+            ],
             supported_channels=["voice"],
             required_readiness_checks=["location", "nexhealth_appointment_data", "voice", "consent", "quiet_hours"],
             required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time", "appointment_type"],
@@ -790,6 +895,9 @@ TEMPLATES: dict[str, CampaignTemplate] = {
             handoff_reason="reschedule_or_followup_needed",
             analytics={
                 "appointment_confirmed": "confirmed",
+                "appointment_cancelled": "cancelled",
+                "reschedule_requested": "reschedule",
+                "no_answer": "unreachable",
                 "staff_handoff": "handoff",
                 "do_not_call": "opt_out",
             },

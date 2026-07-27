@@ -427,6 +427,7 @@ class WorkflowStepDispatcher:
             note=note,
         )
         self.session.add(event)
+        await self._apply_status_side_effects(run, node)
         context["patient_workflow_status"] = node.status
         context["patient_status"] = node.status
         await self.runtime.complete_step(
@@ -436,6 +437,39 @@ class WorkflowStepDispatcher:
         )
         await self.session.flush()
         return node.next_node_id, str(event.id)
+
+    async def _apply_status_side_effects(
+        self,
+        run: AutomationWorkflowRun,
+        node: UpdatePatientStatusNode,
+    ) -> None:
+        """Apply durable side effects implied by local workflow statuses."""
+        if node.status != "do_not_call_requested" or not run.contact_id:
+            return
+
+        from src.app.models.contact import Contact
+        from src.app.models.sms_consent import ConsentSource, DncScope
+        from src.app.services.sms_compliance import SmsComplianceService
+
+        contact = await self.session.get(Contact, run.contact_id)
+        phone = contact.phone if contact else None
+        if not phone:
+            logger.warning(
+                "status side effect: do_not_call_requested has no phone run=%s contact=%s",
+                run.id,
+                run.contact_id,
+            )
+            return
+
+        await SmsComplianceService(self.session).set_do_not_contact(
+            institution_id=run.institution_id,
+            phone=phone,
+            scope=DncScope.LOCATION,
+            location_id=run.location_id,
+            contact_id=run.contact_id,
+            source=ConsentSource.SYSTEM,
+            reason="workflow_do_not_call_requested",
+        )
 
 
 def _evaluate_condition(node: ConditionNode, context: dict) -> bool:

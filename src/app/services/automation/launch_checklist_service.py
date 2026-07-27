@@ -20,6 +20,10 @@ from src.app.models.automation_workflow import AutomationWorkflow
 from src.app.models.campaign_audience import CampaignAudiencePreview
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
+from src.app.models.gotracker_webhook_subscription import (
+    GoTrackerWebhookSubscription,
+    GoTrackerWebhookSubscriptionStatus,
+)
 from src.app.models.nexhealth_webhook_subscription import (
     NexHealthWebhookSubscription,
     NexHealthWebhookSubscriptionStatus,
@@ -583,6 +587,12 @@ class CampaignLaunchChecklistService:
             ]
 
         location = await self.session.get(InstitutionLocation, location_id)
+        if location and _is_gotracker_location(location):
+            return await self._gotracker_items(
+                institution_id=institution_id,
+                location_id=location_id,
+                location=location,
+            )
         if not location or not location.nexhealth_subdomain or not location.nexhealth_location_id:
             return [
                 CampaignLaunchChecklistItem(
@@ -654,6 +664,96 @@ class CampaignLaunchChecklistService:
                 metadata={
                     "subscription_id": str(subscription.id),
                     "last_synced_at": newest.isoformat(),
+                    "freshness_window_hours": int(_FRESHNESS_WINDOW.total_seconds() / 3600),
+                },
+            )
+        ]
+
+    async def _gotracker_items(
+        self,
+        *,
+        institution_id: str,
+        location_id: str,
+        location: InstitutionLocation,
+    ) -> list[CampaignLaunchChecklistItem]:
+        if not getattr(location, "gotracker_product_key_encrypted", None):
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_readiness",
+                    section="data",
+                    label="GoTracker webhook readiness",
+                    status="blocked",
+                    message="Location is missing its GoTracker product key.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+
+        subscription = await self._gotracker_subscription(institution_id, location_id)
+        if subscription is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_readiness",
+                    section="data",
+                    label="GoTracker webhook readiness",
+                    status="warning",
+                    message="No local GoTracker webhook subscription row exists for this location.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+        if subscription.status != GoTrackerWebhookSubscriptionStatus.ACTIVE.value:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_readiness",
+                    section="data",
+                    label="GoTracker webhook readiness",
+                    status="warning",
+                    message=f"GoTracker webhook subscription is {subscription.status}.",
+                    fix_href="/institution-admin/settings",
+                    metadata={"subscription_id": str(subscription.id)},
+                )
+            ]
+
+        newest = await self._newest_projection_sync(institution_id, location_id)
+        last_event = (
+            _as_utc(subscription.last_event_at).isoformat()
+            if subscription.last_event_at
+            else None
+        )
+        if newest is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_readiness",
+                    section="data",
+                    label="GoTracker webhook readiness",
+                    status="unknown",
+                    message="GoTracker subscription is active, but no appointment projection rows are available yet.",
+                    fix_href="/institution-admin/settings",
+                    metadata={
+                        "subscription_id": str(subscription.id),
+                        "last_event_at": last_event,
+                        "event_types": subscription.event_types,
+                    },
+                )
+            ]
+        newest = _as_utc(newest)
+        age = datetime.now(timezone.utc) - newest
+        return [
+            CampaignLaunchChecklistItem(
+                id="gotracker_readiness",
+                section="data",
+                label="GoTracker webhook readiness",
+                status="warning" if age > _FRESHNESS_WINDOW else "pass",
+                message=(
+                    "GoTracker appointment projection is stale; dispatch-time revalidation still checks the latest local projection."
+                    if age > _FRESHNESS_WINDOW
+                    else "GoTracker subscription and appointment projection freshness look current."
+                ),
+                fix_href="/institution-admin/settings",
+                metadata={
+                    "subscription_id": str(subscription.id),
+                    "last_event_at": last_event,
+                    "last_synced_at": newest.isoformat(),
+                    "event_types": subscription.event_types,
                     "freshness_window_hours": int(_FRESHNESS_WINDOW.total_seconds() / 3600),
                 },
             )
@@ -901,6 +1001,19 @@ class CampaignLaunchChecklistService:
         )
         return result.scalar_one_or_none()
 
+    async def _gotracker_subscription(
+        self, institution_id: str, location_id: str
+    ) -> GoTrackerWebhookSubscription | None:
+        result = await self.session.execute(
+            select(GoTrackerWebhookSubscription)
+            .where(
+                GoTrackerWebhookSubscription.institution_id == institution_id,
+                GoTrackerWebhookSubscription.location_id == location_id,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def _sync_status(
         self, institution_id: str, location_id: str
     ) -> NexHealthSyncStatus | None:
@@ -966,6 +1079,15 @@ def _has_staff_handoff_exit(definition: WorkflowDefinition) -> bool:
             if target and target.outcome in handoff_outcomes:
                 return True
     return False
+
+
+def _is_gotracker_location(location: InstitutionLocation) -> bool:
+    product_key = getattr(location, "gotracker_product_key_encrypted", None)
+    base_url = getattr(location, "gotracker_base_url", None)
+    return bool(
+        (isinstance(product_key, str) and product_key.strip())
+        or (isinstance(base_url, str) and base_url.strip())
+    )
 
 
 def _pms_capability_requirements(

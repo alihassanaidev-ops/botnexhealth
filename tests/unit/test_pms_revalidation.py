@@ -27,6 +27,7 @@ def _make_run(
     location_id="loc-1",
     institution_id="inst-1",
     appointment_at="2026-08-01T10:00:00Z",
+    trigger_metadata=None,
 ):
     run = MagicMock()
     run.id = "run-1"
@@ -34,7 +35,11 @@ def _make_run(
     run.trigger_ref_id = trigger_ref_id
     run.location_id = location_id
     run.institution_id = institution_id
-    run.trigger_metadata = {"appointment_at": appointment_at} if appointment_at else {}
+    run.trigger_metadata = (
+        dict(trigger_metadata)
+        if trigger_metadata is not None
+        else ({"appointment_at": appointment_at} if appointment_at else {})
+    )
     return run
 
 
@@ -146,11 +151,16 @@ async def test_revalidate_skips_rescheduled_appointment():
 # ---------------------------------------------------------------------------
 
 
-def _fresh_projection(*, status="scheduled", start_time="2026-08-01T10:00:00Z"):
+def _fresh_projection(
+    *,
+    status="scheduled",
+    start_time="2026-08-01T10:00:00Z",
+    last_synced_at=None,
+):
     from datetime import datetime, timezone
     row = MagicMock()
     row.status = status
-    row.last_synced_at = datetime.now(timezone.utc)
+    row.last_synced_at = last_synced_at or datetime.now(timezone.utc)
     row.start_time = (
         datetime.fromisoformat(start_time.replace("Z", "+00:00")) if start_time else None
     )
@@ -277,6 +287,78 @@ async def test_revalidate_returns_none_for_non_appointment_run():
     # No adapter should ever be built; session.get should not be called.
     result = await svc.revalidate(run)
     assert result is None
+    session.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_op_revalidation_uses_status_event_appointment_context():
+    run = _make_run(
+        trigger_ref_type="patient_workflow_status_event",
+        trigger_ref_id="status-event-1",
+        trigger_metadata={
+            "campaign_goal": "post_op_followup",
+            "appointment_id": "appt-1",
+            "appointment_at": "2026-08-01T10:00:00Z",
+        },
+    )
+    now = datetime(2026, 8, 2, 10, 0, tzinfo=timezone.utc)
+    session = _make_session(
+        projection=_fresh_projection(
+            start_time="2026-08-01T10:00:00Z",
+            last_synced_at=now,
+        )
+    )
+    svc = PmsLiveRevalidationService(session)
+
+    with patch("src.app.services.automation.revalidation.datetime") as dt:
+        dt.now.return_value = now
+        dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        result = await svc.revalidate(run)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_post_op_revalidation_skips_future_appointment_from_projection():
+    run = _make_run(
+        trigger_ref_type="patient_workflow_status_event",
+        trigger_ref_id="status-event-1",
+        trigger_metadata={
+            "campaign_goal": "post_op_followup",
+            "appointment_id": "appt-1",
+            "appointment_at": "2026-08-01T10:00:00Z",
+        },
+    )
+    now = datetime(2026, 7, 31, 10, 0, tzinfo=timezone.utc)
+    session = _make_session(
+        projection=_fresh_projection(
+            start_time="2026-08-01T10:00:00Z",
+            last_synced_at=now,
+        )
+    )
+    svc = PmsLiveRevalidationService(session)
+
+    with patch("src.app.services.automation.revalidation.datetime") as dt:
+        dt.now.return_value = now
+        dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        result = await svc.revalidate(run)
+
+    assert result == "skipped_appointment_not_occurred"
+
+
+@pytest.mark.asyncio
+async def test_post_op_revalidation_skips_missing_appointment_context():
+    run = _make_run(
+        trigger_ref_type="patient_workflow_status_event",
+        trigger_ref_id="status-event-1",
+        trigger_metadata={"campaign_goal": "post_op_followup"},
+    )
+    session = _make_session()
+    svc = PmsLiveRevalidationService(session)
+
+    result = await svc.revalidate(run)
+
+    assert result == "skipped_missing_appointment_context"
     session.get.assert_not_called()
 
 

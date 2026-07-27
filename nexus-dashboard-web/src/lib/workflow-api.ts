@@ -24,7 +24,7 @@ export interface CampaignTemplateFrequencyCap {
 export interface CampaignTemplateSetupField {
     id: string
     label: string
-    type: "location" | "select" | "text"
+    type: "location" | "select" | "text" | "appointment_type_multiselect"
     required?: boolean
     default?: string
     placeholder?: string

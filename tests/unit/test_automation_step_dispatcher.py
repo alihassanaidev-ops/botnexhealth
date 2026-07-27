@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -404,6 +405,40 @@ def test_update_patient_status_node_records_event_and_continues() -> None:
         result_code="status_updated",
         result_metadata={"status": "appointment_confirmed"},
     )
+
+
+def test_do_not_call_status_writes_dnc_suppression() -> None:
+    session = _make_session()
+    session.get = AsyncMock(return_value=SimpleNamespace(phone="+15551234567"))
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run()
+    run.id = "run-1"
+    run.location_id = "loc-1"
+    run.contact_id = "contact-1"
+    node = UpdatePatientStatusNode(
+        id="status-dnc",
+        status="do_not_call_requested",
+        next_node_id="exit-1",
+    )
+    compliance = AsyncMock()
+    compliance.set_do_not_contact = AsyncMock()
+
+    with patch(
+        "src.app.services.sms_compliance.SmsComplianceService",
+        return_value=compliance,
+    ):
+        asyncio.run(dispatcher._apply_status_side_effects(run, node))
+
+    compliance.set_do_not_contact.assert_awaited_once()
+    kwargs = compliance.set_do_not_contact.await_args.kwargs
+    assert kwargs["institution_id"] == "inst-1"
+    assert kwargs["phone"] == "+15551234567"
+    assert kwargs["location_id"] == "loc-1"
+    assert kwargs["contact_id"] == "contact-1"
+    assert kwargs["reason"] == "workflow_do_not_call_requested"
 
 
 # ---------------------------------------------------------------------------

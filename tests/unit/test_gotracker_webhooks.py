@@ -173,6 +173,64 @@ async def test_appointment_created_updates_projection_and_queues_workflow():
 
 
 @pytest.mark.asyncio
+async def test_appointment_created_upserts_embedded_patient_when_contact_missing():
+    payload = {
+        "event": "appointment.created",
+        "data": {
+            "appointment": {
+                "AppointmentId": 55,
+                "ContactId": 42,
+                "StartTime": "2026-08-01T10:00:00Z",
+                "ProviderId": 7,
+                "AppointmentTypeId": 9,
+                "Patient": {
+                    "ContactId": 42,
+                    "FirstName": "Ava",
+                    "LastName": "Jones",
+                    "Email": "ava@example.com",
+                    "Phone": "+15551234567",
+                },
+            }
+        },
+    }
+    request = _make_request(payload)
+    projection, projection_patch = _patch_projection(change="new", contact_id="contact-from-patient")
+    lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
+
+    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+        side_effect=[
+            _session_with_scalar(_location()),
+            _session_with_scalar(None),
+            _processing_session(),
+        ],
+    ), patch("src.app.api.routes.gotracker_webhooks._claim_event", new=AsyncMock(return_value=True)), patch(
+        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
+    ), projection_patch, lifecycle_patch, patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+    ) as trigger_task, patch(
+        "src.app.tasks.automation_workflow.resume_reactivation_booking"
+    ) as reactivation_task:
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        trigger_task.delay = MagicMock()
+        reactivation_task.delay = MagicMock()
+        result = await gotracker_webhook("loc-1", request)
+
+    assert result["status"] == "queued"
+    projection.upsert_patient.assert_awaited_once()
+    patient_kwargs = projection.upsert_patient.await_args.kwargs
+    assert patient_kwargs["patient"]["id"] == "gt-42"
+    assert patient_kwargs["patient"]["first_name"] == "Ava"
+    projection.upsert_appointment.assert_awaited_once()
+    appointment_kwargs = projection.upsert_appointment.await_args.kwargs
+    assert appointment_kwargs["contact_id"] == "contact-from-patient"
+    trigger_task.delay.assert_called_once()
+    assert trigger_task.delay.call_args.kwargs["contact_id"] == "contact-from-patient"
+    reactivation_task.delay.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_appointment_created_accepts_tracker_date_and_time_fields():
     payload = {
         "event": "appointment.created",

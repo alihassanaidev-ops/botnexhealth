@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.app.models.institution_location import InstitutionLocation
+from src.app.models.gotracker_webhook_subscription import (
+    GoTrackerWebhookSubscription,
+    GoTrackerWebhookSubscriptionStatus,
+)
 from src.app.models.nexhealth_webhook_subscription import (
     NexHealthWebhookSubscription,
     NexHealthWebhookSubscriptionStatus,
@@ -109,6 +113,38 @@ def test_appointment_campaign_passes_fresh_nexhealth_check() -> None:
 
     assert _item(checklist, "nexhealth_readiness").status == "pass"
     assert _item(checklist, "nexhealth_sync_status").status == "pass"
+
+
+def test_appointment_campaign_passes_fresh_gotracker_check() -> None:
+    definition = {
+        "trigger": {"type": "appointment_offset", "offset_hours": -24},
+        "entry_node_id": "x1",
+        "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
+    }
+    location = MagicMock(spec=InstitutionLocation)
+    location.nexhealth_subdomain = None
+    location.nexhealth_location_id = None
+    location.gotracker_product_key_encrypted = "encrypted-key"
+    location.gotracker_base_url = "https://gotracker.example"
+    subscription = MagicMock(spec=GoTrackerWebhookSubscription)
+    subscription.id = "gt-sub-1"
+    subscription.status = GoTrackerWebhookSubscriptionStatus.ACTIVE.value
+    subscription.last_event_at = _NOW
+    subscription.event_types = ["appointment.created", "appointment.updated"]
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=location)
+    session.execute = AsyncMock(side_effect=[_result(subscription), _result(_NOW)])
+
+    with patch("src.app.services.automation.launch_checklist_service.datetime") as dt:
+        dt.now.return_value = _NOW
+        dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        checklist = _run(
+            CampaignLaunchChecklistService(session),
+            _workflow(definition, location_id="loc-1"),
+        )
+
+    assert _item(checklist, "gotracker_readiness").status == "pass"
+    assert all(item.id != "nexhealth_readiness" for item in checklist.items)
 
 
 def test_appointment_campaign_blocks_when_pms_read_sync_is_unhealthy() -> None:

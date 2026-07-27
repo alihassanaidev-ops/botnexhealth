@@ -295,6 +295,21 @@ async def _process_appointment_event(
             location_id=location_id,
         )
         projection = NexHealthProjectionService(session)
+        if contact_id is None and patient_id:
+            patient_payload = _embedded_patient_payload(appointment)
+            if patient_payload is not None:
+                patient_projection = _patient_projection_payload(
+                    patient_payload,
+                    patient_id=patient_id,
+                )
+                patient_upsert = await projection.upsert_patient(
+                    institution_id=institution_id,
+                    patient=patient_projection,
+                    local_location_ids=[location_id],
+                    nexhealth_location_ids=[location_id],
+                    event="appointment_embedded_patient",
+                )
+                contact_id = str(patient_upsert.contact.id)
         try:
             upsert = await projection.upsert_appointment(
                 institution_id=institution_id,
@@ -730,6 +745,27 @@ def _patient_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if _first(data, "id", "ContactId", "contact_id", "patient_id") is not None:
         return [data]
     return []
+
+
+def _embedded_patient_payload(appointment: dict[str, Any]) -> dict[str, Any] | None:
+    patient = appointment.get("patient") or appointment.get("contact") or appointment.get("Patient")
+    if isinstance(patient, dict):
+        return patient
+    patient_keys = {
+        "first_name",
+        "FirstName",
+        "last_name",
+        "LastName",
+        "name",
+        "Name",
+        "phone",
+        "Phone",
+        "PhoneNumber",
+        "CellPhone",
+        "email",
+        "Email",
+    }
+    return appointment if any(key in appointment for key in patient_keys) else None
 
 
 def _patient_projection_payload(patient: dict[str, Any], *, patient_id: str) -> dict[str, Any]:
