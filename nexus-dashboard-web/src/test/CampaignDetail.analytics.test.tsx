@@ -1,15 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import CampaignDetail from "@/pages/CampaignDetail"
 import {
+    deleteCampaign,
     enrollCampaignAudience,
     getCampaign,
     getCampaignAudience,
     getCampaignAnalytics,
     getCampaignOperations,
     getCampaignOverview,
+    getRunTimeline,
     getUsageByCampaign,
     getUsageSummary,
     listCampaignRuns,
@@ -34,6 +36,7 @@ vi.mock("@/lib/automation-api", () => ({
     archiveCampaign: vi.fn(),
     enrollContactInCampaign: vi.fn(),
     cancelCampaignRun: vi.fn(),
+    deleteCampaign: vi.fn(),
     emergencyHaltCampaign: vi.fn(),
     getRunTimeline: vi.fn(),
 }))
@@ -51,6 +54,8 @@ const audience = getCampaignAudience as ReturnType<typeof vi.fn>
 const previewAudience = previewCampaignAudience as ReturnType<typeof vi.fn>
 const saveAudience = saveCampaignAudience as ReturnType<typeof vi.fn>
 const enrollAudience = enrollCampaignAudience as ReturnType<typeof vi.fn>
+const timeline = getRunTimeline as ReturnType<typeof vi.fn>
+const remove = deleteCampaign as ReturnType<typeof vi.fn>
 
 beforeEach(() => {
     campaign.mockReset()
@@ -64,6 +69,8 @@ beforeEach(() => {
     previewAudience.mockReset()
     saveAudience.mockReset()
     enrollAudience.mockReset()
+    timeline.mockReset()
+    remove.mockReset()
 
     campaign.mockResolvedValue({
         id: "wf-1",
@@ -154,6 +161,60 @@ beforeEach(() => {
         rollup_fresh_at: "2026-07-18T00:05:00Z",
     })
     runs.mockResolvedValue({ items: [], limit: 50, next_cursor: null })
+    timeline.mockResolvedValue({
+        run: {
+            id: "run-1",
+            workflow_id: "wf-1",
+            workflow_version_id: "ver-1",
+            status: "completed",
+            current_step_id: "exit-1",
+            current_step_type: "exit",
+            outcome: "confirmed",
+            blocked_reason: null,
+            contact_id: "contact-1",
+            contact_name: "Browser Phone QA",
+            next_due_at: null,
+            latest_event_at: "2026-07-24T17:24:00Z",
+            started_at: "2026-07-24T17:23:00Z",
+            completed_at: "2026-07-24T17:24:00Z",
+            created_at: "2026-07-24T17:23:00Z",
+        },
+        contact: {
+            id: "contact-1",
+            display_name: "Browser Phone QA",
+            phone_masked: "(***) ***-0843",
+        },
+        items: [
+            {
+                id: "step-1",
+                kind: "step",
+                occurred_at: "2026-07-24T17:24:00Z",
+                title: "Voice step",
+                status: "completed",
+                step_id: "voice_test",
+                channel: "voice",
+                summary: "Result: call_placed_awaiting_outcome",
+                metadata: {},
+                input: {
+                    context: {
+                        appointment_time: "10:00 AM",
+                        patient_first_name: "[redacted]",
+                    },
+                },
+                output: {
+                    retell_call_id: "call_123",
+                    call_outcome: "confirmed",
+                },
+                node: {
+                    type: "send_voice",
+                    retell_agent_id: "agent_test",
+                    wait_for_outcome: true,
+                },
+                duration_ms: 43000,
+                error_message: null,
+            },
+        ],
+    })
     operations.mockResolvedValue({
         stuck_waiting_runs: [],
         failed_sends: [],
@@ -226,6 +287,7 @@ beforeEach(() => {
         skipped: 0,
         counts_by_reason: {},
     })
+    remove.mockResolvedValue(undefined)
 })
 
 describe("CampaignDetail analytics tab", () => {
@@ -251,6 +313,29 @@ describe("CampaignDetail analytics tab", () => {
     })
 })
 
+describe("CampaignDetail lifecycle actions", () => {
+    it("deletes a campaign after confirmation and returns to the campaign list", async () => {
+        const user = userEvent.setup()
+        render(
+            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
+                <Routes>
+                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                    <Route path="/institution-admin/campaigns" element={<div>Campaign list</div>} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("button", { name: "Delete" }))
+        await user.click(screen.getByRole("button", { name: "Delete campaign" }))
+
+        await waitFor(() => {
+            expect(remove).toHaveBeenCalledWith("wf-1")
+        })
+        expect(await screen.findByText("Campaign list")).toBeInTheDocument()
+    })
+})
+
 describe("CampaignDetail audience tab", () => {
     it("previews counts, exclusions, and masked samples", async () => {
         const user = userEvent.setup()
@@ -272,5 +357,55 @@ describe("CampaignDetail audience tab", () => {
         expect(screen.getByText("already booked")).toBeInTheDocument()
         expect(screen.getByText("(***) ***-1010")).toBeInTheDocument()
         expect(screen.queryByText("+15550101010")).not.toBeInTheDocument()
+    })
+})
+
+describe("CampaignDetail runs tab", () => {
+    it("expands a run timeline item with input, output, and node details", async () => {
+        const user = userEvent.setup()
+        runs.mockResolvedValue({
+            items: [
+                {
+                    id: "run-1",
+                    workflow_id: "wf-1",
+                    workflow_version_id: "ver-1",
+                    status: "completed",
+                    current_step_id: "exit-1",
+                    current_step_type: "exit",
+                    outcome: "confirmed",
+                    blocked_reason: null,
+                    contact_id: "contact-1",
+                    contact_name: "Browser Phone QA",
+                    next_due_at: null,
+                    latest_event_at: "2026-07-24T17:24:00Z",
+                    started_at: "2026-07-24T17:23:00Z",
+                    completed_at: "2026-07-24T17:24:00Z",
+                    created_at: "2026-07-24T17:23:00Z",
+                },
+            ],
+            limit: 50,
+            next_cursor: null,
+        })
+
+        render(
+            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
+                <Routes>
+                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Runs" }))
+        await user.click(await screen.findByRole("button", { name: "Timeline" }))
+        await user.click(await screen.findByRole("button", { name: /Voice step/i }))
+
+        expect(await screen.findByText(/call_123/)).toBeInTheDocument()
+        expect(screen.getAllByText(/confirmed/).length).toBeGreaterThan(0)
+        await user.click(screen.getByRole("tab", { name: "Node" }))
+        expect(screen.getByText(/agent_test/)).toBeInTheDocument()
+        await user.click(screen.getByRole("tab", { name: "Input" }))
+        expect(screen.getByText(/\[redacted\]/)).toBeInTheDocument()
+        expect(timeline).toHaveBeenCalledWith("wf-1", "run-1")
     })
 })

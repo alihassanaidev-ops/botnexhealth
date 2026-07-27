@@ -110,6 +110,10 @@ describe("WorkflowTemplates page", () => {
 
         // Naming dialog opens, pre-filled with the template name.
         expect(await screen.findByText("Set up campaign")).toBeInTheDocument()
+        expect(screen.getByRole("combobox", { name: "Audience source" })).toBeInTheDocument()
+        expect(screen.getByRole("combobox", { name: "Channel sequence" })).toBeInTheDocument()
+        expect(screen.getByRole("combobox", { name: "Message copy" })).toBeInTheDocument()
+        expect(screen.getByRole("combobox", { name: "Staff handoff behavior" })).toBeInTheDocument()
         await user.click(screen.getByRole("button", { name: /create & open builder/i }))
 
         await waitFor(() => {

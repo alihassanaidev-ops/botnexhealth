@@ -1,4 +1,4 @@
-"""Workflow definition lifecycle: create draft, publish version, pause, archive."""
+"""Workflow definition lifecycle: create draft, publish version, pause, archive, delete."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from fastapi import HTTPException, status as http_status
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,10 +17,18 @@ from src.app.models.automation_workflow import (
     AutomationWorkflow,
     AutomationWorkflowEvent,
     AutomationWorkflowRun,
+    AutomationWorkflowStepExecution,
+    AutomationWorkflowTimer,
     AutomationWorkflowStatus,
     AutomationWorkflowVersion,
 )
-from src.app.services.automation.definition_schema import WorkflowDefinition
+from src.app.models.campaign_analytics import CampaignMetricsDaily
+from src.app.models.campaign_audience import (
+    CampaignAudienceDefinition,
+    CampaignAudiencePreview,
+)
+from src.app.models.outbound_voice import WorkflowVoiceAttempt
+from src.app.models.patient_workflow_status import PatientWorkflowStatusEvent
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.channel_readiness import ChannelReadinessService
@@ -238,6 +246,94 @@ class AutomationWorkflowDefinitionService:
         await self.session.flush()
         await self.session.refresh(workflow, attribute_names=["updated_at"])
         return workflow
+
+    async def delete_workflow(self, workflow: AutomationWorkflow) -> None:
+        """Permanently delete a workflow and its workflow-owned execution records."""
+        await self.session.execute(
+            delete(CampaignAudienceDefinition).where(
+                CampaignAudienceDefinition.workflow_id == workflow.id
+            )
+        )
+        await self.session.execute(
+            delete(CampaignAudiencePreview).where(
+                CampaignAudiencePreview.workflow_id == workflow.id
+            )
+        )
+        await self.session.execute(
+            delete(CampaignMetricsDaily).where(
+                CampaignMetricsDaily.workflow_id == workflow.id
+            )
+        )
+        await self.session.execute(
+            delete(WorkflowVoiceAttempt).where(
+                WorkflowVoiceAttempt.workflow_run_id.in_(
+                    select(AutomationWorkflowRun.id).where(
+                        AutomationWorkflowRun.workflow_id == workflow.id
+                    )
+                )
+            )
+        )
+        await self.session.execute(
+            delete(AutomationWorkflowTimer).where(
+                AutomationWorkflowTimer.workflow_run_id.in_(
+                    select(AutomationWorkflowRun.id).where(
+                        AutomationWorkflowRun.workflow_id == workflow.id
+                    )
+                )
+            )
+        )
+        await self.session.execute(
+            delete(AutomationWorkflowEvent).where(
+                AutomationWorkflowEvent.workflow_run_id.in_(
+                    select(AutomationWorkflowRun.id).where(
+                        AutomationWorkflowRun.workflow_id == workflow.id
+                    )
+                )
+            )
+        )
+        await self.session.execute(
+            delete(PatientWorkflowStatusEvent).where(
+                PatientWorkflowStatusEvent.workflow_run_id.in_(
+                    select(AutomationWorkflowRun.id).where(
+                        AutomationWorkflowRun.workflow_id == workflow.id
+                    )
+                )
+            )
+        )
+        await self.session.execute(
+            delete(AutomationWorkflowStepExecution).where(
+                AutomationWorkflowStepExecution.workflow_run_id.in_(
+                    select(AutomationWorkflowRun.id).where(
+                        AutomationWorkflowRun.workflow_id == workflow.id
+                    )
+                )
+            )
+        )
+        await self.session.execute(
+            delete(AutomationWorkflowRun).where(
+                AutomationWorkflowRun.workflow_id == workflow.id
+            )
+        )
+        await self.session.execute(
+            update(AutomationWorkflowEvent)
+            .where(
+                AutomationWorkflowEvent.workflow_version_id.in_(
+                    select(AutomationWorkflowVersion.id).where(
+                        AutomationWorkflowVersion.workflow_id == workflow.id
+                    )
+                )
+            )
+            .values(workflow_version_id=None)
+        )
+        workflow.current_version_id = None
+        await self.session.flush()
+        await self.session.execute(
+            delete(AutomationWorkflowVersion).where(
+                AutomationWorkflowVersion.workflow_id == workflow.id
+            )
+        )
+        await self.session.delete(workflow)
+        await self.session.flush()
 
     # ------------------------------------------------------------------
     # Emergency halt — terminate in-flight runs (distinct from pause)

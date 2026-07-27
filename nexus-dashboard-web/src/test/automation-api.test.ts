@@ -3,6 +3,7 @@ import api from "@/lib/api"
 import {
     activateOutboundHalt,
     cancelCampaignRun,
+    createDraftCampaign,
     enrollContactInCampaign,
     emergencyHaltCampaign,
     getCampaignAnalytics,
@@ -35,6 +36,15 @@ beforeEach(() => {
 })
 
 describe("automation-api", () => {
+    it("creates a draft campaign from scratch", async () => {
+        post.mockResolvedValue({ data: { id: "wf-1", status: "draft" } })
+        const wf = await createDraftCampaign("Untitled campaign")
+        expect(post).toHaveBeenCalledWith("/automation/workflows/draft", {
+            name: "Untitled campaign",
+        })
+        expect(wf.status).toBe("draft")
+    })
+
     it("lists campaign runs with a bounded limit", async () => {
         get.mockResolvedValue({ data: { items: [], limit: 25, next_cursor: null } })
         await listCampaignRuns("wf-1", { limit: 25 })

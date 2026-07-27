@@ -29,6 +29,11 @@ export async function getCampaign(id: string): Promise<AutomationWorkflow> {
     return data
 }
 
+export async function createDraftCampaign(name: string): Promise<AutomationWorkflow> {
+    const { data } = await api.post<AutomationWorkflow>("/automation/workflows/draft", { name })
+    return data
+}
+
 export async function pauseCampaign(id: string): Promise<AutomationWorkflow> {
     const { data } = await api.post<AutomationWorkflow>(`/automation/workflows/${id}/pause`)
     return data
@@ -42,6 +47,10 @@ export async function resumeCampaign(id: string): Promise<AutomationWorkflow> {
 export async function archiveCampaign(id: string): Promise<AutomationWorkflow> {
     const { data } = await api.post<AutomationWorkflow>(`/automation/workflows/${id}/archive`)
     return data
+}
+
+export async function deleteCampaign(id: string): Promise<void> {
+    await api.delete(`/automation/workflows/${id}`)
 }
 
 export async function listCampaignRuns(

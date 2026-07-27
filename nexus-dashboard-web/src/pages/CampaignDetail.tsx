@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react"
-import { Link, useParams } from "react-router-dom"
+import { Link, useNavigate, useParams } from "react-router-dom"
 import {
     ActivitySquare,
-    Archive,
     ArrowLeft,
     Ban,
     BarChart3,
     CalendarDays,
     CheckCircle2,
+    ChevronRight,
     Clock3,
     DollarSign,
     Filter,
@@ -22,6 +22,7 @@ import {
     Search,
     ShieldAlert,
     TrendingUp,
+    Trash2,
     UserPlus,
     Users,
     XCircle,
@@ -58,8 +59,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
-    archiveCampaign,
     cancelCampaignRun,
+    deleteCampaign,
     enrollCampaignAudience,
     enrollContactInCampaign,
     emergencyHaltCampaign,
@@ -93,6 +94,7 @@ import type {
     CampaignRunListItem,
     CampaignUsage,
     RunTimeline,
+    RunTimelineItem,
     UsageSummary,
 } from "@/types"
 
@@ -207,6 +209,19 @@ function fromCsv(value: string): string[] {
 
 function isCancelable(run: Pick<CampaignRunListItem, "status">): boolean {
     return !["completed", "cancelled", "failed", "blocked"].includes(run.status)
+}
+
+function durationMs(value: number | null | undefined): string {
+    if (value === null || value === undefined) return "-"
+    if (value < 1000) return `${value}ms`
+    const seconds = Math.round(value / 100) / 10
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    return `${minutes}m ${Math.round(seconds % 60)}s`
+}
+
+function hasDetails(data: Record<string, unknown> | null | undefined): boolean {
+    return Boolean(data && Object.keys(data).length > 0)
 }
 
 interface StatProps {
@@ -462,6 +477,70 @@ function InfoRow({ label, value }: { label: string; value: string }) {
         <div>
             <p className="text-xs text-muted-foreground">{label}</p>
             <p className="mt-1 font-medium capitalize">{value}</p>
+        </div>
+    )
+}
+
+function TimelineJsonPanel({
+    data,
+    empty,
+}: {
+    data: Record<string, unknown>
+    empty: string
+}) {
+    if (!hasDetails(data)) {
+        return <p className="rounded-md bg-muted/30 p-3 text-sm text-muted-foreground">{empty}</p>
+    }
+    return (
+        <pre className="max-h-[520px] overflow-auto rounded-md bg-muted/40 p-3 text-[11px] leading-relaxed text-muted-foreground">
+            {JSON.stringify(data, null, 2)}
+        </pre>
+    )
+}
+
+function TimelineItemInspector({ item }: { item: RunTimelineItem }) {
+    return (
+        <div className="rounded-md border border-border bg-background">
+            <div className="border-b border-border p-4">
+                <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <p className="text-sm font-semibold">{item.title}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{fmt(item.occurred_at)}</p>
+                    </div>
+                    {item.status && <Badge variant="outline" className="capitalize">{label(item.status)}</Badge>}
+                </div>
+                {item.summary && <p className="mt-3 text-sm text-muted-foreground">{item.summary}</p>}
+                <div className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+                    <InfoRow label="Kind" value={label(item.kind)} />
+                    <InfoRow label="Duration" value={durationMs(item.duration_ms)} />
+                    <InfoRow label="Step id" value={item.step_id ?? "-"} />
+                </div>
+            </div>
+            {item.error_message && (
+                <div className="m-4 rounded-md border border-red-900/40 bg-red-950/20 p-3 text-xs text-red-200">
+                    {item.error_message}
+                </div>
+            )}
+            <Tabs defaultValue="output" className="p-4 pt-3">
+                <TabsList className="grid w-full grid-cols-4">
+                    <TabsTrigger value="input">Input</TabsTrigger>
+                    <TabsTrigger value="output">Output</TabsTrigger>
+                    <TabsTrigger value="node">Node</TabsTrigger>
+                    <TabsTrigger value="metadata">Metadata</TabsTrigger>
+                </TabsList>
+                <TabsContent value="input" className="mt-3">
+                    <TimelineJsonPanel data={item.input} empty="No input context captured." />
+                </TabsContent>
+                <TabsContent value="output" className="mt-3">
+                    <TimelineJsonPanel data={item.output} empty="No output captured." />
+                </TabsContent>
+                <TabsContent value="node" className="mt-3">
+                    <TimelineJsonPanel data={item.node} empty="No node config snapshot captured." />
+                </TabsContent>
+                <TabsContent value="metadata" className="mt-3">
+                    <TimelineJsonPanel data={item.metadata} empty="No metadata captured." />
+                </TabsContent>
+            </Tabs>
         </div>
     )
 }
@@ -1204,9 +1283,23 @@ function TimelineDrawer({
     loading: boolean
     onClose: () => void
 }) {
+    const [openItemKey, setOpenItemKey] = useState<string | null>(null)
+    const selectedItem =
+        timeline?.items.find((item) => `${item.kind}:${item.id}` === openItemKey) ??
+        timeline?.items.find(
+            (item) =>
+                hasDetails(item.input) ||
+                hasDetails(item.output) ||
+                hasDetails(item.node) ||
+                hasDetails(item.metadata),
+        ) ??
+        timeline?.items[0] ??
+        null
+    const selectedItemKey = selectedItem ? `${selectedItem.kind}:${selectedItem.id}` : null
+
     return (
         <Sheet open={Boolean(timeline) || loading} onOpenChange={(open) => !open && onClose()}>
-            <SheetContent className="w-full overflow-y-auto sm:max-w-2xl">
+            <SheetContent className="w-full overflow-y-auto sm:max-w-5xl">
                 <SheetHeader>
                     <SheetTitle>Run timeline</SheetTitle>
                     <SheetDescription>
@@ -1224,24 +1317,59 @@ function TimelineDrawer({
                             <InfoRow label="Current step" value={label(timeline.run.current_step_type ?? timeline.run.current_step_id)} />
                             <InfoRow label="Outcome" value={label(timeline.run.outcome)} />
                         </div>
-                        <ol className="space-y-3">
-                            {timeline.items.map((item) => (
-                                <li key={`${item.kind}:${item.id}`} className="rounded-md border border-border p-3">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <p className="text-sm font-medium">{item.title}</p>
-                                            <p className="text-xs text-muted-foreground">{fmt(item.occurred_at)}</p>
-                                        </div>
-                                        {item.status && <Badge variant="outline" className="capitalize">{label(item.status)}</Badge>}
-                                    </div>
-                                    {item.summary && <p className="mt-2 text-sm text-muted-foreground">{item.summary}</p>}
-                                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                                        {item.channel && <span>Channel: {CHANNEL_LABELS[item.channel] ?? item.channel}</span>}
-                                        {item.step_id && <span>Step: {item.step_id}</span>}
-                                    </div>
-                                </li>
-                            ))}
-                        </ol>
+                        <div className="grid gap-4 lg:grid-cols-[minmax(280px,0.85fr)_minmax(420px,1.15fr)]">
+                            <ol className="space-y-2">
+                                {timeline.items.map((item) => {
+                                    const itemKey = `${item.kind}:${item.id}`
+                                    const selected = selectedItemKey === itemKey
+                                    return (
+                                        <li key={itemKey}>
+                                            <button
+                                                type="button"
+                                                className={cn(
+                                                    "w-full rounded-md border border-border p-3 text-left transition-colors hover:bg-muted/30",
+                                                    selected && "border-primary/60 bg-muted/30",
+                                                )}
+                                                onClick={() => setOpenItemKey(itemKey)}
+                                            >
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="flex min-w-0 items-start gap-2">
+                                                        <ChevronRight
+                                                            className={cn(
+                                                                "mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                                                                selected && "rotate-90 text-primary",
+                                                            )}
+                                                        />
+                                                        <div className="min-w-0">
+                                                            <p className="truncate text-sm font-medium">{item.title}</p>
+                                                            <p className="text-xs text-muted-foreground">{fmt(item.occurred_at)}</p>
+                                                        </div>
+                                                    </div>
+                                                    {item.status && <Badge variant="outline" className="capitalize">{label(item.status)}</Badge>}
+                                                </div>
+                                                {item.summary && (
+                                                    <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{item.summary}</p>
+                                                )}
+                                                <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                                                    {item.channel && <span>Channel: {CHANNEL_LABELS[item.channel] ?? item.channel}</span>}
+                                                    {item.step_id && <span>Step: {item.step_id}</span>}
+                                                    {item.duration_ms !== null && item.duration_ms !== undefined && (
+                                                        <span>Duration: {durationMs(item.duration_ms)}</span>
+                                                    )}
+                                                </div>
+                                            </button>
+                                        </li>
+                                    )
+                                })}
+                            </ol>
+                            {selectedItem ? (
+                                <TimelineItemInspector item={selectedItem} />
+                            ) : (
+                                <div className="rounded-md border border-border p-4 text-sm text-muted-foreground">
+                                    Select a timeline item to inspect its run data.
+                                </div>
+                            )}
+                        </div>
                     </div>
                 ) : null}
             </SheetContent>
@@ -1251,6 +1379,7 @@ function TimelineDrawer({
 
 export default function CampaignDetail() {
     const { id } = useParams<{ id: string }>()
+    const navigate = useNavigate()
     const [campaign, setCampaign] = useState<AutomationWorkflow | null>(null)
     const [overview, setOverview] = useState<CampaignOverview | null>(null)
     const [analytics, setAnalytics] = useState<CampaignAnalytics | null>(null)
@@ -1266,7 +1395,7 @@ export default function CampaignDetail() {
     const [timelineLoading, setTimelineLoading] = useState(false)
     const [timeline, setTimeline] = useState<RunTimeline | null>(null)
     const [acting, setActing] = useState<string | null>(null)
-    const [archiveOpen, setArchiveOpen] = useState(false)
+    const [deleteOpen, setDeleteOpen] = useState(false)
     const [haltOpen, setHaltOpen] = useState(false)
     const [enrollOpen, setEnrollOpen] = useState(false)
     const [cancelTarget, setCancelTarget] = useState<CampaignRunListItem | null>(null)
@@ -1354,16 +1483,16 @@ export default function CampaignDetail() {
         }
     }
 
-    async function handleArchive() {
+    async function handleDelete() {
         if (!campaign) return
-        setActing("archive")
+        setActing("delete")
         try {
-            setCampaign(await archiveCampaign(campaign.id))
-            toast.success("Campaign archived")
-            setArchiveOpen(false)
-            await refreshAll()
+            await deleteCampaign(campaign.id)
+            toast.success("Campaign deleted")
+            setDeleteOpen(false)
+            navigate("/institution-admin/campaigns")
         } catch {
-            toast.error("Failed to archive campaign")
+            toast.error("Failed to delete campaign")
         } finally {
             setActing(null)
         }
@@ -1489,12 +1618,19 @@ export default function CampaignDetail() {
                                     <ShieldAlert className="h-3.5 w-3.5" />
                                     Halt
                                 </Button>
-                                <Button variant="outline" size="sm" disabled={acting !== null} onClick={() => setArchiveOpen(true)} className="gap-1.5">
-                                    <Archive className="h-3.5 w-3.5" />
-                                    Archive
-                                </Button>
                             </>
                         )}
+                        <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            disabled={acting !== null}
+                            onClick={() => setDeleteOpen(true)}
+                            className="gap-1.5"
+                        >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                        </Button>
                     </div>
                 </div>
             ) : (
@@ -1545,19 +1681,19 @@ export default function CampaignDetail() {
                 </TabsContent>
             </Tabs>
 
-            <Dialog open={archiveOpen} onOpenChange={(open) => !open && setArchiveOpen(false)}>
+            <Dialog open={deleteOpen} onOpenChange={(open) => !open && setDeleteOpen(false)}>
                 <DialogContent className="max-w-md">
                     <DialogHeader>
-                        <DialogTitle>Archive this campaign?</DialogTitle>
+                        <DialogTitle>Delete this campaign?</DialogTitle>
                         <DialogDescription>
-                            It will stop accepting new enrollments. Existing runs are not cancelled by archive.
+                            This permanently removes the campaign, its versions, runs, timers, and campaign-owned history.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setArchiveOpen(false)} disabled={acting !== null}>Cancel</Button>
-                        <Button variant="destructive" onClick={handleArchive} disabled={acting !== null}>
-                            {acting === "archive" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            Archive
+                        <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={acting !== null}>Cancel</Button>
+                        <Button type="button" variant="destructive" onClick={handleDelete} disabled={acting !== null}>
+                            {acting === "delete" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Delete campaign
                         </Button>
                     </DialogFooter>
                 </DialogContent>

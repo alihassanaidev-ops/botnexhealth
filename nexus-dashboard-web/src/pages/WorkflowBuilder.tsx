@@ -8,7 +8,7 @@
  * publishing PATCHes a new active version.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Link, useParams } from "react-router-dom"
+import { Link, useNavigate, useParams } from "react-router-dom"
 import { ArrowLeft, History, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
-    archiveWorkflow,
+    deleteWorkflow,
     getChannelReadiness,
     getWorkflow,
     pauseWorkflow,
@@ -73,6 +73,7 @@ const draftKey = (id: string) => `nex.workflow-draft.${id}`
 
 export default function WorkflowBuilder() {
     const { id } = useParams<{ id: string }>()
+    const navigate = useNavigate()
 
     const [workflow, setWorkflow] = useState<AutomationWorkflow | null>(null)
     const [def, setDef] = useState<WorkflowDefinition | null>(null)
@@ -322,6 +323,21 @@ export default function WorkflowBuilder() {
         }
     }
 
+    async function onDelete() {
+        if (!id) return
+        setBusy(true)
+        try {
+            await deleteWorkflow(id)
+            localStorage.removeItem(draftKey(id))
+            toast.success("Campaign deleted")
+            navigate("/institution-admin/campaigns")
+        } catch {
+            toast.error("Failed to delete campaign")
+        } finally {
+            setBusy(false)
+        }
+    }
+
     async function onPublish() {
         if (!id || !def) return
         // Fast client-side gate first.
@@ -427,7 +443,7 @@ export default function WorkflowBuilder() {
                         onDiscard={onDiscard}
                         onPause={() => runLifecycle(pauseWorkflow, "Campaign paused")}
                         onResume={() => runLifecycle(resumeWorkflow, "Campaign resumed")}
-                        onArchive={() => runLifecycle(archiveWorkflow, "Campaign archived")}
+                        onDelete={onDelete}
                         onTestRun={() => setTestOpen(true)}
                     />
                 </div>

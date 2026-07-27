@@ -131,6 +131,10 @@ export async function archiveWorkflow(id: string): Promise<AutomationWorkflow> {
     return data
 }
 
+export async function deleteWorkflow(id: string): Promise<void> {
+    await api.delete(`/automation/workflows/${id}`)
+}
+
 // ---- Versions / validation / merge-field catalog ----
 
 /** List every published version, newest-first (`GET .../{id}/versions`). */

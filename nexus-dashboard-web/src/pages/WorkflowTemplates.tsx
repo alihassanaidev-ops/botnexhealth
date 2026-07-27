@@ -66,6 +66,17 @@ function pmsBadgeLabel(template: CampaignTemplate) {
     return "Unsupported"
 }
 
+function setupFieldOptions(template: CampaignTemplate, fieldId: string, fallback: string): string[] {
+    const field = template.metadata.setup_fields.find((item) => item.id === fieldId)
+    const values = field?.options?.length ? field.options : [field?.default ?? fallback]
+    return Array.from(new Set(values.map((value) => String(value).trim()).filter(Boolean)))
+}
+
+function setupFieldDefault(template: CampaignTemplate, fieldId: string, fallback: string): string {
+    const field = template.metadata.setup_fields.find((item) => item.id === fieldId)
+    return String(field?.default ?? fallback).trim()
+}
+
 export default function WorkflowTemplates() {
     const navigate = useNavigate()
     const [templates, setTemplates] = useState<CampaignTemplate[]>([])
@@ -140,12 +151,22 @@ export default function WorkflowTemplates() {
         if (isPmsUnsupported(t)) return
         setPicked(t)
         setName(t.name)
-        setAudienceSource(t.metadata.default_audience)
+        setAudienceSource(setupFieldDefault(t, "audience_source", t.metadata.default_audience))
         setChannelSequence(
-            t.metadata.supported_channels.map((ch) => ch.toUpperCase()).join(" -> "),
+            setupFieldDefault(
+                t,
+                "channel_sequence",
+                t.metadata.supported_channels.map((ch) => ch.toUpperCase()).join(" -> "),
+            ),
         )
         setCopyVariant(t.metadata.copy_variants[0]?.id ?? "standard")
-        setHandoffBehavior(t.metadata.default_staff_handoff_reason ?? "Monitor campaign operations")
+        setHandoffBehavior(
+            setupFieldDefault(
+                t,
+                "staff_handoff_behavior",
+                t.metadata.default_staff_handoff_reason ?? "Monitor campaign operations",
+            ),
+        )
         setVoiceAgentId("")
     }
 
@@ -173,6 +194,28 @@ export default function WorkflowTemplates() {
 
     const voiceRequired = picked ? requiresVoiceAgent(picked) : false
     const pickedCapability = picked ? pmsCapabilityStatus(picked) : null
+    const audienceSourceOptions = picked
+        ? setupFieldOptions(picked, "audience_source", picked.metadata.default_audience)
+        : []
+    const channelSequenceOptions = picked
+        ? setupFieldOptions(
+            picked,
+            "channel_sequence",
+            picked.metadata.supported_channels.map((ch) => ch.toUpperCase()).join(" -> "),
+        )
+        : []
+    const handoffBehaviorOptions = picked
+        ? setupFieldOptions(
+            picked,
+            "staff_handoff_behavior",
+            picked.metadata.default_staff_handoff_reason ?? "Monitor campaign operations",
+        )
+        : []
+    const copyVariantOptions = picked
+        ? picked.metadata.copy_variants.length > 0
+            ? picked.metadata.copy_variants
+            : [{ id: "standard", label: "Standard copy" }]
+        : []
     const createDisabled =
         creating ||
         !name.trim() ||
@@ -342,30 +385,49 @@ export default function WorkflowTemplates() {
                                         </Select>
                                     </div>
                                     <div className="space-y-2">
-                                        <Label>Audience source</Label>
-                                        <Input
+                                        <Label htmlFor="audience-source">Audience source</Label>
+                                        <Select
                                             value={audienceSource}
-                                            onChange={(e) => setAudienceSource(e.target.value)}
-                                        />
+                                            onValueChange={setAudienceSource}
+                                        >
+                                            <SelectTrigger id="audience-source">
+                                                <SelectValue placeholder="Select audience source" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {audienceSourceOptions.map((option) => (
+                                                    <SelectItem key={option} value={option}>
+                                                        {option}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
                                     </div>
                                     <div className="space-y-2">
-                                        <Label>Channel sequence</Label>
-                                        <Input
+                                        <Label htmlFor="channel-sequence">Channel sequence</Label>
+                                        <Select
                                             value={channelSequence}
-                                            onChange={(e) => setChannelSequence(e.target.value)}
-                                        />
+                                            onValueChange={setChannelSequence}
+                                        >
+                                            <SelectTrigger id="channel-sequence">
+                                                <SelectValue placeholder="Select channel sequence" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {channelSequenceOptions.map((option) => (
+                                                    <SelectItem key={option} value={option}>
+                                                        {option}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
                                     </div>
                                     <div className="space-y-2">
-                                        <Label>Message copy</Label>
+                                        <Label htmlFor="message-copy">Message copy</Label>
                                         <Select value={copyVariant} onValueChange={setCopyVariant}>
-                                            <SelectTrigger>
+                                            <SelectTrigger id="message-copy">
                                                 <SelectValue />
                                             </SelectTrigger>
                                             <SelectContent>
-                                                {(picked.metadata.copy_variants.length > 0
-                                                    ? picked.metadata.copy_variants
-                                                    : [{ id: "standard", label: "Standard copy" }]
-                                                ).map((variant) => (
+                                                {copyVariantOptions.map((variant) => (
                                                     <SelectItem key={variant.id} value={variant.id}>
                                                         {variant.label}
                                                     </SelectItem>
@@ -386,11 +448,22 @@ export default function WorkflowTemplates() {
                                     </div>
                                 )}
                                 <div className="space-y-2">
-                                    <Label>Staff handoff behavior</Label>
-                                    <Input
+                                    <Label htmlFor="staff-handoff-behavior">Staff handoff behavior</Label>
+                                    <Select
                                         value={handoffBehavior}
-                                        onChange={(e) => setHandoffBehavior(e.target.value)}
-                                    />
+                                        onValueChange={setHandoffBehavior}
+                                    >
+                                        <SelectTrigger id="staff-handoff-behavior">
+                                            <SelectValue placeholder="Select staff handoff behavior" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {handoffBehaviorOptions.map((option) => (
+                                                <SelectItem key={option} value={option}>
+                                                    {option}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
                             </div>
                             <div className="space-y-4 rounded-md border bg-muted/30 p-3">

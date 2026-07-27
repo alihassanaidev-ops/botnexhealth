@@ -35,10 +35,15 @@ from src.app.models.outbound_voice import WorkflowVoiceAttempt
 from src.app.models.sms_history_log import SmsHistoryLog
 from src.app.models.usage_event import UsageEvent
 from src.app.services.automation.definition_schema import (
+    ConditionNode,
+    ExitNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    UpdatePatientStatusNode,
+    WaitNode,
     WorkflowDefinition,
+    WorkflowNode,
 )
 from src.app.services.automation.launch_checklist_service import CampaignLaunchChecklistService
 
@@ -107,6 +112,11 @@ class TimelineItem:
     channel: str | None = None
     summary: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    input: dict[str, Any] = field(default_factory=dict)
+    output: dict[str, Any] = field(default_factory=dict)
+    node: dict[str, Any] = field(default_factory=dict)
+    duration_ms: int | None = None
+    error_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -330,10 +340,12 @@ class CampaignOperationsService:
             return None
         run_item = (await self._run_items([run]))[0]
         contact = await self._contact_context(run)
+        version = await self.session.get(AutomationWorkflowVersion, str(run.workflow_version_id))
+        definition = _definition_or_none(version.definition if version else None)
 
         items: list[TimelineItem] = []
         items.extend(await self._event_items(run))
-        items.extend(await self._step_items(run))
+        items.extend(await self._step_items(run, definition=definition))
         items.extend(await self._timer_items(run))
         items.extend(await self._sms_items(run))
         items.extend(await self._inbound_sms_items(run))
@@ -554,7 +566,12 @@ class CampaignOperationsService:
             for event in events
         ]
 
-    async def _step_items(self, run: AutomationWorkflowRun) -> list[TimelineItem]:
+    async def _step_items(
+        self,
+        run: AutomationWorkflowRun,
+        *,
+        definition: WorkflowDefinition | None = None,
+    ) -> list[TimelineItem]:
         steps = (
             await self.session.execute(
                 select(AutomationWorkflowStepExecution)
@@ -562,6 +579,7 @@ class CampaignOperationsService:
                 .order_by(AutomationWorkflowStepExecution.created_at)
             )
         ).scalars().all()
+        node_by_id = {node.id: node for node in definition.nodes} if definition else {}
         return [
             TimelineItem(
                 id=str(step.id),
@@ -581,6 +599,11 @@ class CampaignOperationsService:
                     "scheduled_timezone": step.scheduled_timezone,
                     "completed_at": step.completed_at,
                 },
+                input=_step_input_snapshot(run, step, node_by_id.get(step.step_id)),
+                output=_step_output_snapshot(step, node_by_id.get(step.step_id), run),
+                node=_node_snapshot(node_by_id.get(step.step_id)),
+                duration_ms=_duration_ms(step.started_at or step.created_at, step.completed_at),
+                error_message=step.error_message,
             )
             for step in steps
         ]
@@ -1021,6 +1044,219 @@ def _step_summary(step: AutomationWorkflowStepExecution) -> str | None:
     if step.status == AutomationStepStatus.SKIPPED.value:
         return "Step skipped"
     return None
+
+
+_TIMELINE_SAFE_CONTEXT_KEYS = {
+    "appointment_at",
+    "appointment_date",
+    "appointment_datetime",
+    "appointment_id",
+    "appointment_location",
+    "appointment_start_time",
+    "appointment_status",
+    "appointment_time",
+    "appointment_type",
+    "appointment_type_id",
+    "appointment_type_name",
+    "booking_link",
+    "call_outcome",
+    "campaign_goal",
+    "confirmation_link",
+    "disconnection_reason",
+    "location_id",
+    "location_name",
+    "operatory_id",
+    "operatory_name",
+    "patient_status",
+    "patient_workflow_status",
+    "provider_id",
+    "provider_name",
+    "qa_reason",
+    "recall_due_date",
+    "recall_type",
+    "reschedule_link",
+    "source",
+    "source_patient_status_event_id",
+    "source_workflow_id",
+    "source_workflow_run_id",
+    "source_workflow_step_id",
+    "trigger_ref_id",
+    "trigger_ref_type",
+    "trigger_type",
+}
+
+_TIMELINE_SAFE_METADATA_KEYS = {
+    *_TIMELINE_SAFE_CONTEXT_KEYS,
+    "attempt_number",
+    "branch",
+    "branch_taken",
+    "call_outcome",
+    "completed_at",
+    "currency",
+    "direction",
+    "due_at",
+    "due_local_at",
+    "duration_ms",
+    "external_ref",
+    "fired_at",
+    "max_attempts",
+    "next_node_id",
+    "outcome",
+    "provider",
+    "provider_message_id",
+    "result_code",
+    "retell_call_id",
+    "scheduled_at",
+    "scheduled_local_at",
+    "scheduled_timezone",
+    "status",
+    "status_written",
+    "timezone",
+}
+
+
+def _step_input_snapshot(
+    run: AutomationWorkflowRun,
+    step: AutomationWorkflowStepExecution,
+    node: WorkflowNode | None,
+) -> dict[str, Any]:
+    context = _timeline_safe_mapping(run.trigger_metadata or {})
+    return {
+        "run": {
+            "trigger_type": run.trigger_type,
+            "trigger_ref_type": run.trigger_ref_type,
+            "trigger_ref_id": run.trigger_ref_id,
+            "current_step_id": step.step_id,
+        },
+        "context": context,
+        "node": _node_snapshot(node),
+    }
+
+
+def _step_output_snapshot(
+    step: AutomationWorkflowStepExecution,
+    node: WorkflowNode | None,
+    run: AutomationWorkflowRun,
+) -> dict[str, Any]:
+    output: dict[str, Any] = {
+        "status": step.status,
+        "result_code": step.result_code,
+        "result_metadata": _timeline_safe_mapping(step.result_metadata or {}),
+    }
+    if isinstance(node, ConditionNode):
+        branch = _branch_from_result_code(step.result_code)
+        output["branch_taken"] = branch
+        output["evaluations"] = [
+            {
+                "field": rule.field,
+                "op": rule.op,
+                "expected": _timeline_safe_value(str(rule.field), rule.value),
+                "actual": _timeline_safe_value(
+                    str(rule.field),
+                    (run.trigger_metadata or {}).get(rule.field),
+                ),
+            }
+            for rule in node.rules
+        ]
+        if branch == "true":
+            output["next_node_id"] = node.true_next_node_id
+        elif branch == "false":
+            output["next_node_id"] = node.false_next_node_id
+    elif isinstance(node, WaitNode):
+        output["scheduled_at"] = step.scheduled_at
+        output["scheduled_local_at"] = step.scheduled_local_at
+        output["scheduled_timezone"] = step.scheduled_timezone
+    elif isinstance(node, SendVoiceNode):
+        output["retell_call_id"] = (step.result_metadata or {}).get("retell_call_id")
+        output["call_outcome"] = (run.trigger_metadata or {}).get("call_outcome")
+        output["disconnection_reason"] = (run.trigger_metadata or {}).get("disconnection_reason")
+    elif isinstance(node, UpdatePatientStatusNode):
+        output["status_written"] = (step.result_metadata or {}).get("status") or node.status
+    elif isinstance(node, ExitNode):
+        output["outcome"] = node.outcome
+    return output
+
+
+def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
+    if node is None:
+        return {}
+    base: dict[str, Any] = {"id": node.id, "type": node.type}
+    if isinstance(node, WaitNode):
+        base["delay"] = node.delay.model_dump(mode="json")
+        base["next_node_id"] = node.next_node_id
+    elif isinstance(node, ConditionNode):
+        base["logic"] = node.logic
+        base["rules"] = [
+            {
+                "field": rule.field,
+                "op": rule.op,
+                "value": _timeline_safe_value(str(rule.field), rule.value),
+            }
+            for rule in node.rules
+        ]
+        base["true_next_node_id"] = node.true_next_node_id
+        base["false_next_node_id"] = node.false_next_node_id
+    elif isinstance(node, SendVoiceNode):
+        base["retell_agent_id"] = node.retell_agent_id
+        base["wait_for_outcome"] = node.wait_for_outcome
+        base["max_attempts"] = node.max_attempts
+        base["next_node_id"] = node.next_node_id
+    elif isinstance(node, (SendSmsNode, SendEmailNode)):
+        base["max_attempts"] = node.max_attempts
+        base["respect_quiet_hours"] = node.respect_quiet_hours
+        base["next_node_id"] = node.next_node_id
+        base["content_redacted"] = True
+    elif isinstance(node, UpdatePatientStatusNode):
+        base["status"] = node.status
+        base["has_note_template"] = bool(node.note_template)
+        base["next_node_id"] = node.next_node_id
+    elif isinstance(node, ExitNode):
+        base["outcome"] = node.outcome
+    return base
+
+
+def _timeline_safe_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): _timeline_safe_value(str(key), value)
+        for key, value in mapping.items()
+        if value is not None
+    }
+
+
+def _timeline_safe_value(key: str, value: Any) -> Any:
+    normalized = key.lower().replace("-", "_")
+    if normalized not in _TIMELINE_SAFE_METADATA_KEYS:
+        return "[redacted]"
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (datetime, Decimal)):
+        return value
+    if isinstance(value, list):
+        return [
+            _timeline_safe_value(key, item)
+            for item in value[:20]
+        ]
+    if isinstance(value, dict):
+        return {
+            str(child_key): _timeline_safe_value(str(child_key), child_value)
+            for child_key, child_value in value.items()
+            if child_value is not None
+        }
+    return str(value)
+
+
+def _branch_from_result_code(result_code: str | None) -> str | None:
+    if result_code == "branch_true":
+        return "true"
+    if result_code == "branch_false":
+        return "false"
+    return None
+
+
+def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
+    if not start or not end:
+        return None
+    return max(0, int((end - start).total_seconds() * 1000))
 
 
 def _voice_summary(row: WorkflowVoiceAttempt) -> str:

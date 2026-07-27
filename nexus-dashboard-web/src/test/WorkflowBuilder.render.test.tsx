@@ -10,7 +10,7 @@ vi.mock("@/lib/workflow-api", () => ({
     updateWorkflow: vi.fn(),
     pauseWorkflow: vi.fn(),
     resumeWorkflow: vi.fn(),
-    archiveWorkflow: vi.fn(),
+    deleteWorkflow: vi.fn(),
     validateDefinition: vi.fn(),
     getChannelReadiness: vi.fn(),
     previewLaunchChecklist: vi.fn(),

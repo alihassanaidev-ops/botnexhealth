@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 import {
     Megaphone,
     RefreshCcw,
     Pause,
     Play,
-    Archive,
-    ChevronRight,
+    Trash2,
     Loader2,
     Plus,
     Workflow,
@@ -28,12 +27,13 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
     activateOutboundHalt,
+    createDraftCampaign,
     listCampaigns,
     getOutboundHaltStatus,
     pauseCampaign,
     releaseOutboundHalt,
     resumeCampaign,
-    archiveCampaign,
+    deleteCampaign,
 } from "@/lib/automation-api"
 import type { AutomationWorkflow, OutboundHaltStatus } from "@/types"
 
@@ -75,11 +75,12 @@ function TriggerLabel({ triggerType }: { triggerType: string | null }) {
 }
 
 export default function Campaigns() {
+    const navigate = useNavigate()
     const [campaigns, setCampaigns] = useState<AutomationWorkflow[]>([])
     const [haltStatus, setHaltStatus] = useState<OutboundHaltStatus | null>(null)
     const [loading, setLoading] = useState(true)
     const [acting, setActing] = useState<string | null>(null)
-    const [archiveTarget, setArchiveTarget] = useState<AutomationWorkflow | null>(null)
+    const [deleteTarget, setDeleteTarget] = useState<AutomationWorkflow | null>(null)
     const [haltDialog, setHaltDialog] = useState<"activate" | "release" | null>(null)
 
     async function refresh() {
@@ -126,15 +127,28 @@ export default function Campaigns() {
         }
     }
 
-    async function handleArchive(wf: AutomationWorkflow) {
+    async function handleDelete(wf: AutomationWorkflow) {
         setActing(wf.id)
         try {
-            const updated = await archiveCampaign(wf.id)
-            setCampaigns((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
-            toast.success(`"${wf.name}" archived`)
-            setArchiveTarget(null)
+            await deleteCampaign(wf.id)
+            setCampaigns((prev) => prev.filter((c) => c.id !== wf.id))
+            toast.success(`"${wf.name}" deleted`)
+            setDeleteTarget(null)
         } catch {
-            toast.error("Failed to archive campaign")
+            toast.error("Failed to delete campaign")
+        } finally {
+            setActing(null)
+        }
+    }
+
+    async function handleCreateFromScratch() {
+        setActing("create-scratch")
+        try {
+            const wf = await createDraftCampaign("Untitled campaign")
+            toast.success("Draft campaign created")
+            navigate(`/institution-admin/campaigns/${wf.id}/builder`)
+        } catch {
+            toast.error("Failed to create campaign")
         } finally {
             setActing(null)
         }
@@ -204,6 +218,20 @@ export default function Campaigns() {
                             <Plus className="h-3.5 w-3.5" />
                             New from template
                         </Link>
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCreateFromScratch}
+                        disabled={loading || acting === "create-scratch"}
+                        className="gap-1.5"
+                    >
+                        {acting === "create-scratch" ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                            <Workflow className="h-3.5 w-3.5" />
+                        )}
+                        Create from scratch
                     </Button>
                     <Button
                         variant="outline"
@@ -321,27 +349,17 @@ export default function Campaigns() {
                                                         </Link>
                                                     </Button>
                                                 )}
-                                                {wf.status !== "archived" && (
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-8 w-8"
-                                                        disabled={busy}
-                                                        onClick={() => setArchiveTarget(wf)}
-                                                        title="Archive"
-                                                    >
-                                                        <Archive className="h-3.5 w-3.5" />
-                                                    </Button>
-                                                )}
                                                 <Button
+                                                    type="button"
                                                     variant="ghost"
                                                     size="icon"
-                                                    className="h-8 w-8"
-                                                    asChild
+                                                    className="h-8 w-8 text-red-600 hover:text-red-700"
+                                                    disabled={busy}
+                                                    onClick={() => setDeleteTarget(wf)}
+                                                    aria-label={`Delete ${wf.name}`}
+                                                    title="Delete"
                                                 >
-                                                    <Link to={`/institution-admin/campaigns/${wf.id}`}>
-                                                        <ChevronRight className="h-3.5 w-3.5" />
-                                                    </Link>
+                                                    <Trash2 className="h-3.5 w-3.5" />
                                                 </Button>
                                             </div>
                                         </li>
@@ -353,25 +371,26 @@ export default function Campaigns() {
                 </CardContent>
             </Card>
 
-            <Dialog open={archiveTarget !== null} onOpenChange={(open) => !open && setArchiveTarget(null)}>
+            <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
                 <DialogContent className="max-w-md">
                     <DialogHeader>
-                        <DialogTitle>Archive this campaign?</DialogTitle>
+                        <DialogTitle>Delete this campaign?</DialogTitle>
                         <DialogDescription>
-                            It will stop accepting new enrollments. Existing runs are not cancelled by archive.
+                            This permanently removes the campaign, its versions, runs, timers, and campaign-owned history.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setArchiveTarget(null)} disabled={acting !== null}>
+                        <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={acting !== null}>
                             Cancel
                         </Button>
                         <Button
+                            type="button"
                             variant="destructive"
-                            onClick={() => archiveTarget && handleArchive(archiveTarget)}
+                            onClick={() => deleteTarget && handleDelete(deleteTarget)}
                             disabled={acting !== null}
                         >
-                            {acting === archiveTarget?.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            Archive
+                            {acting === deleteTarget?.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Delete campaign
                         </Button>
                     </DialogFooter>
                 </DialogContent>

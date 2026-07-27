@@ -265,7 +265,14 @@ class WorkflowStepDispatcher:
                 branch = _evaluate_condition(node, context)
                 step = await self.runtime.begin_step(run, step_id=node.id, step_type="condition")
                 await self.runtime.complete_step(
-                    step, result_code=f"branch_{'true' if branch else 'false'}"
+                    step,
+                    result_code=f"branch_{'true' if branch else 'false'}",
+                    result_metadata={
+                        "branch": "true" if branch else "false",
+                        "next_node_id": node.true_next_node_id
+                        if branch
+                        else node.false_next_node_id,
+                    },
                 )
                 current_node_id = (
                     node.true_next_node_id if branch else node.false_next_node_id

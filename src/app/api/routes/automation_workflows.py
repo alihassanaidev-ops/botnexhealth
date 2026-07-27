@@ -72,6 +72,10 @@ class WorkflowCreateRequest(BaseModel):
     definition: dict[str, Any]
 
 
+class WorkflowDraftCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+
+
 class WorkflowUpdateRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     definition: dict[str, Any] | None = None
@@ -523,6 +527,11 @@ class TimelineItemResponse(BaseModel):
     channel: str | None = None
     summary: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    input: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] = Field(default_factory=dict)
+    node: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: int | None = None
+    error_message: str | None = None
 
 
 class RunTimelineResponse(BaseModel):
@@ -622,6 +631,18 @@ async def create_workflow(
         svc = AutomationWorkflowDefinitionService(session)
         wf = await svc.create_draft(institution_id=inst_id, name=data.name)
         await svc.publish_version(wf, data.definition)
+        return WorkflowResponse.from_model(wf)
+
+
+@router.post("/draft", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
+async def create_draft_workflow(
+    data: WorkflowDraftCreateRequest,
+    current_user: _InstitutionAdmin,
+) -> WorkflowResponse:
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await svc.create_draft(institution_id=inst_id, name=data.name)
         return WorkflowResponse.from_model(wf)
 
 
@@ -1255,6 +1276,18 @@ async def archive_workflow(
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
         await svc.archive_workflow(wf)
         return WorkflowResponse.from_model(wf)
+
+
+@router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_workflow(
+    workflow_id: str,
+    current_user: _InstitutionAdmin,
+) -> None:
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        await svc.delete_workflow(wf)
 
 
 # ---------------------------------------------------------------------------

@@ -210,3 +210,18 @@ def test_archive_workflow_from_active() -> None:
     workflow = _make_workflow(AutomationWorkflowStatus.ACTIVE.value)
     asyncio.run(svc.archive_workflow(workflow))
     assert workflow.status == AutomationWorkflowStatus.ARCHIVED.value
+
+
+def test_delete_workflow_removes_owned_records_and_workflow() -> None:
+    session = _make_session()
+    svc = AutomationWorkflowDefinitionService(session)
+    workflow = _make_workflow(AutomationWorkflowStatus.PAUSED.value)
+    workflow.id = "wf-1"
+    workflow.current_version_id = "ver-1"
+
+    asyncio.run(svc.delete_workflow(workflow))
+
+    assert workflow.current_version_id is None
+    assert session.execute.await_count >= 9
+    session.delete.assert_awaited_once_with(workflow)
+    session.flush.assert_awaited()

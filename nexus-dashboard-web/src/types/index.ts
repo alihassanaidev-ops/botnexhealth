@@ -730,6 +730,11 @@ export interface RunTimelineItem {
     channel: string | null;
     summary: string | null;
     metadata: Record<string, unknown>;
+    input: Record<string, unknown>;
+    output: Record<string, unknown>;
+    node: Record<string, unknown>;
+    duration_ms: number | null;
+    error_message: string | null;
 }
 
 export interface RunTimeline {

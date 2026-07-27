@@ -326,6 +326,11 @@ def test_advance_condition_true_branch() -> None:
 
     assert result.status == "completed"
     assert result.outcome == "confirmed"
+    rt.complete_step.assert_any_await(
+        rt.begin_step.return_value,
+        result_code="branch_true",
+        result_metadata={"branch": "true", "next_node_id": "exit-ok"},
+    )
 
 
 def test_advance_condition_false_branch() -> None:
@@ -355,6 +360,11 @@ def test_advance_condition_false_branch() -> None:
 
     assert result.status == "completed"
     assert result.outcome == "no_response"
+    rt.complete_step.assert_any_await(
+        rt.begin_step.return_value,
+        result_code="branch_false",
+        result_metadata={"branch": "false", "next_node_id": "exit-no"},
+    )
 
 
 def test_update_patient_status_node_records_event_and_continues() -> None:

@@ -7,7 +7,7 @@
  * activation, and disabled while there are validation errors.
  */
 import { useState } from "react"
-import { Loader2, Pause, Play, Archive, UploadCloud, FlaskConical, RotateCcw, AlertTriangle } from "lucide-react"
+import { Loader2, Pause, Play, Trash2, UploadCloud, FlaskConical, RotateCcw, AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
     Dialog,
@@ -36,14 +36,14 @@ export interface WorkflowPublishControlsProps {
     onDiscard: () => void
     onPause: () => void
     onResume: () => void
-    onArchive: () => void
+    onDelete: () => void
     onTestRun: () => void
 }
 
 export default function WorkflowPublishControls(props: WorkflowPublishControlsProps) {
     const { status, dirty, errorCount, busy } = props
     const [confirmPublish, setConfirmPublish] = useState(false)
-    const [confirmArchive, setConfirmArchive] = useState(false)
+    const [confirmDelete, setConfirmDelete] = useState(false)
     const canPublish = dirty && errorCount === 0 && !busy
 
     return (
@@ -68,11 +68,16 @@ export default function WorkflowPublishControls(props: WorkflowPublishControlsPr
                     <Play className="h-3.5 w-3.5" /> Resume
                 </Button>
             )}
-            {status !== "archived" && (
-                <Button variant="outline" size="sm" className="gap-1.5" disabled={busy} onClick={() => setConfirmArchive(true)}>
-                    <Archive className="h-3.5 w-3.5" /> Archive
-                </Button>
-            )}
+            <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                className="gap-1.5"
+                disabled={busy}
+                onClick={() => setConfirmDelete(true)}
+            >
+                <Trash2 className="h-3.5 w-3.5" /> Delete
+            </Button>
 
             <Button
                 size="sm"
@@ -119,24 +124,25 @@ export default function WorkflowPublishControls(props: WorkflowPublishControlsPr
                 </DialogContent>
             </Dialog>
 
-            <Dialog open={confirmArchive} onOpenChange={setConfirmArchive}>
+            <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>Archive this campaign?</DialogTitle>
+                        <DialogTitle>Delete this campaign?</DialogTitle>
                         <DialogDescription>
-                            It will stop accepting new enrollments. In-flight runs are unaffected.
+                            This permanently removes the campaign, its versions, runs, timers, and campaign-owned history.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setConfirmArchive(false)}>Cancel</Button>
+                        <Button variant="outline" onClick={() => setConfirmDelete(false)}>Cancel</Button>
                         <Button
+                            type="button"
                             variant="destructive"
                             onClick={() => {
-                                setConfirmArchive(false)
-                                props.onArchive()
+                                setConfirmDelete(false)
+                                props.onDelete()
                             }}
                         >
-                            Archive
+                            Delete campaign
                         </Button>
                     </DialogFooter>
                 </DialogContent>

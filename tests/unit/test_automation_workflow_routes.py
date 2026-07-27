@@ -15,11 +15,14 @@ from src.app.api.routes.automation_workflows import (
     LaunchChecklistPreviewRequest,
     ValidateDefinitionRequest,
     WorkflowCreateRequest,
+    WorkflowDraftCreateRequest,
     WorkflowResponse,
     WorkflowRunResponse,
     _institution_id,
     cancel_run,
+    create_draft_workflow,
     create_workflow,
+    delete_workflow,
     enroll_in_workflow,
     get_campaign_operations,
     get_campaign_overview,
@@ -230,6 +233,28 @@ def test_create_workflow_returns_201():
     mock_svc.create_draft.assert_awaited_once()
 
 
+def test_create_draft_workflow_does_not_publish():
+    user = _make_user()
+    wf = _make_workflow(status="draft")
+    mock_svc = AsyncMock()
+    mock_svc.create_draft = AsyncMock(return_value=wf)
+    mock_svc.publish_version = AsyncMock()
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(create_draft_workflow(WorkflowDraftCreateRequest(name="Scratch"), user))
+
+    assert result.status == "draft"
+    mock_svc.create_draft.assert_awaited_once_with(institution_id="inst-1", name="Scratch")
+    mock_svc.publish_version.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # list_workflows
 # ---------------------------------------------------------------------------
@@ -320,6 +345,27 @@ def test_publish_workflow_calls_publish_version():
         asyncio.run(publish_workflow("wf-1", user))
 
     mock_svc.publish_version.assert_awaited_once_with(wf)
+
+
+def test_delete_workflow_calls_definition_service_delete():
+    user = _make_user()
+    wf = _make_workflow(status="paused", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    mock_svc.delete_workflow = AsyncMock()
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(delete_workflow("wf-1", user))
+
+    assert result is None
+    mock_svc.delete_workflow.assert_awaited_once_with(wf)
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +554,15 @@ def test_get_run_timeline_returns_phi_light_items():
                     status="confirm",
                     channel="sms",
                     summary="Intent: confirm",
+                    input={
+                        "context": {
+                            "appointment_time": "10:00 AM",
+                            "patient_first_name": "[redacted]",
+                        }
+                    },
+                    output={"result_code": "confirmed"},
+                    node={"type": "send_sms", "content_redacted": True},
+                    duration_ms=1200,
                 )
             ],
         )
@@ -526,6 +581,11 @@ def test_get_run_timeline_returns_phi_light_items():
     assert result.contact["display_name"] == "Jordan Rivera"
     assert result.items[0].kind == "inbound_reply"
     assert "body" not in result.items[0].metadata
+    assert result.items[0].input["context"]["appointment_time"] == "10:00 AM"
+    assert result.items[0].input["context"]["patient_first_name"] == "[redacted]"
+    assert result.items[0].output["result_code"] == "confirmed"
+    assert result.items[0].node["content_redacted"] is True
+    assert result.items[0].duration_ms == 1200
 
 
 def test_get_campaign_operations_returns_sections():
