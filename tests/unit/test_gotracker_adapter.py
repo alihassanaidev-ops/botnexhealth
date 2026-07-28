@@ -67,8 +67,46 @@ def test_gotracker_mappers_prefix_ids_and_preserve_source() -> None:
     assert patient.source == "gotracker"
     assert patient.phone == "5551112222"
     assert provider.id == "gt-2"
+    assert provider.name is None
     assert provider.appointment_types[0]["id"] == "gt-9"
     assert operatory.id == "gt-1"
+
+
+def test_gotracker_provider_mapper_reads_provider_name_shape() -> None:
+    provider = mappers.to_provider(
+        {
+            "ProviderId": 2,
+            "ProviderName": "Dr. M. Smith",
+            "ProviderCode": "061432100",
+            "IsActive": True,
+        }
+    )
+
+    assert provider.id == "gt-2"
+    assert provider.name == "Dr. M. Smith"
+    assert provider.first_name is None
+    assert provider.last_name is None
+
+
+def test_gotracker_appointment_type_metadata_is_prefixed_for_ui() -> None:
+    appointment_type = mappers.to_appointment_type(
+        {
+            "id": 9,
+            "name": "Surgery",
+            "minutes": 90,
+            "provider_ids": [2, 3],
+            "operatory_ids": [4],
+            "bookable_online": True,
+        }
+    )
+
+    assert appointment_type.id == "gt-9"
+    assert appointment_type.source_metadata == {
+        "gotracker_appointment_type_id": 9,
+        "provider_ids": ["gt-2", "gt-3"],
+        "operatory_ids": ["gt-4"],
+        "bookable_online": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -160,6 +198,63 @@ async def test_find_available_slots_uses_documented_params() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_providers_reads_provider_name_payload() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {
+                    "ProviderId": 2,
+                    "ProviderName": "Dr. M. Smith",
+                    "ProviderCode": "061432100",
+                    "IsActive": True,
+                },
+                {
+                    "ProviderId": 1,
+                    "ProviderName": "Dr. J. Jones",
+                    "ProviderCode": "061123400",
+                    "IsActive": True,
+                },
+            ],
+        }
+    )
+    adapter = _adapter(client)
+
+    providers = await adapter.list_providers()
+
+    assert client.calls[0]["path"] == "/api/providers/getAllProviders"
+    assert [p.id for p in providers] == ["gt-2", "gt-1"]
+    assert [p.name for p in providers] == ["Dr. M. Smith", "Dr. J. Jones"]
+
+
+@pytest.mark.asyncio
+async def test_list_providers_reads_nested_provider_payload() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": {
+                "providers": [
+                    {
+                        "ProviderId": 3,
+                        "ProviderName": "Lisa",
+                        "IsActive": True,
+                    }
+                ]
+            },
+        }
+    )
+    adapter = _adapter(client)
+
+    providers = await adapter.list_providers()
+
+    assert len(providers) == 1
+    assert providers[0].id == "gt-3"
+    assert providers[0].name == "Lisa"
+
+
+@pytest.mark.asyncio
 async def test_book_and_cancel_use_documented_endpoints() -> None:
     client = FakeGoTrackerClient()
     client.responses.extend(
@@ -199,3 +294,102 @@ async def test_book_and_cancel_use_documented_endpoints() -> None:
     assert client.calls[1]["path"] == "/api/appointments/900000001/status"
     assert client.calls[1]["json"] == {"cancelled": True}
     assert cancelled.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_create_appointment_type_uses_gotracker_body() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": {
+                "id": 9,
+                "name": "Adult Recall",
+                "minutes": 60,
+                "provider_ids": [2, 3],
+                "operatory_ids": [4],
+                "bookable_online": True,
+            },
+        }
+    )
+    adapter = _adapter(client)
+
+    result = await adapter.create_appointment_type(
+        name="Adult Recall",
+        duration_minutes=60,
+        descriptor_ids=["ignored"],
+        provider_ids=["gt-2", "3"],
+        operatory_ids=["gt-4"],
+    )
+
+    assert client.calls[0] == {
+        "method": "POST",
+        "path": "/api/appointment_types",
+        "params": {},
+        "json": {
+            "name": "Adult Recall",
+            "minutes": 60,
+            "bookable_online": True,
+            "provider_ids": ["2", "3"],
+            "operatory_ids": ["4"],
+        },
+    }
+    assert result.id == "gt-9"
+    assert result.source_metadata["provider_ids"] == ["gt-2", "gt-3"]
+
+
+@pytest.mark.asyncio
+async def test_update_appointment_type_uses_gotracker_body() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": {
+                "id": 9,
+                "name": "Adult Recall",
+                "minutes": 75,
+                "provider_ids": [2],
+                "operatory_ids": [],
+                "bookable_online": False,
+            },
+        }
+    )
+    adapter = _adapter(client)
+
+    result = await adapter.update_appointment_type(
+        "gt-9",
+        duration_minutes=75,
+        provider_ids=["gt-2"],
+        operatory_ids=[],
+        bookable_online=False,
+    )
+
+    assert client.calls[0] == {
+        "method": "PATCH",
+        "path": "/api/appointment_types/9",
+        "params": {},
+        "json": {
+            "minutes": 75,
+            "bookable_online": False,
+            "provider_ids": ["2"],
+            "operatory_ids": [],
+        },
+    }
+    assert result.duration_minutes == 75
+    assert result.source_metadata["bookable_online"] is False
+
+
+@pytest.mark.asyncio
+async def test_delete_appointment_type_uses_gotracker_endpoint() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append({"code": True, "data": {}})
+    adapter = _adapter(client)
+
+    await adapter.delete_appointment_type("gt-9")
+
+    assert client.calls[0] == {
+        "method": "DELETE",
+        "path": "/api/appointment_types/9",
+        "params": {},
+        "json": None,
+    }

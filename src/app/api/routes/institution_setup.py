@@ -299,12 +299,18 @@ class CreateAppointmentTypeRequest(BaseModel):
     name: str
     duration_minutes: int
     descriptor_ids: list[str] = []
+    provider_ids: list[str] = []
+    operatory_ids: list[str] = []
+    bookable_online: bool | None = None
 
 
 class UpdateAppointmentTypeRequest(BaseModel):
     name: str | None = None
     duration_minutes: int | None = None
     descriptor_ids: list[str] | None = None
+    provider_ids: list[str] | None = None
+    operatory_ids: list[str] | None = None
+    bookable_online: bool | None = None
 
 
 class CreateAvailabilityRequest(BaseModel):
@@ -366,7 +372,7 @@ async def get_setup_overview(
 
         return SetupOverviewResponse(
             location=LocationInfoResponse.model_validate(location),
-            pms_source=None,
+            pms_source=adapter.source,
             can_create_appointment_types=isinstance(adapter, SupportsAppointmentTypeCreation),
             can_link_availability=isinstance(adapter, SupportsAvailabilityLinking),
             counts=counts,
@@ -553,11 +559,16 @@ async def create_appointment_type(
 
         if not isinstance(adapter, SupportsAppointmentTypeCreation):
             raise HTTPException(400, "This PMS does not support creating appointment types")
+        if adapter.source == "gotracker" and not req.provider_ids:
+            raise HTTPException(400, "GoTracker appointment types require at least one provider")
 
         result = await adapter.create_appointment_type(
             name=req.name,
             duration_minutes=req.duration_minutes,
             descriptor_ids=req.descriptor_ids,
+            provider_ids=req.provider_ids,
+            operatory_ids=req.operatory_ids,
+            bookable_online=req.bookable_online,
         )
 
         # Cache the newly created appointment type
@@ -618,7 +629,14 @@ async def update_appointment_type(
     location_id: str | None = Query(None),
 ):
     """Update appointment type via PMS and refresh the local cache."""
-    if req.name is None and req.duration_minutes is None and req.descriptor_ids is None:
+    if (
+        req.name is None
+        and req.duration_minutes is None
+        and req.descriptor_ids is None
+        and req.provider_ids is None
+        and req.operatory_ids is None
+        and req.bookable_online is None
+    ):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No fields provided to update")
 
     async with get_db_session() as session:
@@ -627,12 +645,17 @@ async def update_appointment_type(
 
         if not isinstance(adapter, SupportsAppointmentTypeCreation):
             raise HTTPException(400, "This PMS does not support updating appointment types")
+        if adapter.source == "gotracker" and req.provider_ids == []:
+            raise HTTPException(400, "GoTracker appointment types require at least one provider")
 
         result = await adapter.update_appointment_type(
             appointment_type_id=source_id,
             name=req.name,
             duration_minutes=req.duration_minutes,
             descriptor_ids=req.descriptor_ids,
+            provider_ids=req.provider_ids,
+            operatory_ids=req.operatory_ids,
+            bookable_online=req.bookable_online,
         )
 
         # Update cached row with latest values
@@ -693,15 +716,10 @@ async def delete_appointment_type(
         institution, location = await _resolve_institution_location(current_user, session, location_id)
         adapter = await _get_adapter(institution, location)
 
-        # Strip prefix if present (e.g., "nh-123" -> "123")
-        raw_id = source_id.removeprefix("nh-")
+        if not isinstance(adapter, SupportsAppointmentTypeCreation):
+            raise HTTPException(400, "This PMS does not support deleting appointment types")
 
-        from src.app.api.helpers import handle_nexhealth_request
-        if hasattr(adapter, "_client"):
-            params = {"subdomain": adapter._subdomain} if adapter._subdomain else {}
-            await handle_nexhealth_request(
-                adapter._client, "DELETE", f"/appointment_types/{raw_id}", params=params
-            )
+        await adapter.delete_appointment_type(source_id)
 
         # Remove from cache
         stmt = select(InstitutionAppointmentType).where(

@@ -82,7 +82,14 @@ export async function listAppointmentTypes(locationId?: string): Promise<CachedA
 }
 
 export async function createAppointmentType(
-    payload: { name: string; duration_minutes: number; descriptor_ids: string[] },
+    payload: {
+        name: string;
+        duration_minutes: number;
+        descriptor_ids?: string[];
+        provider_ids?: string[];
+        operatory_ids?: string[];
+        bookable_online?: boolean;
+    },
     locationId?: string
 ): Promise<CachedAppointmentType> {
     const { data } = await api.post<CachedAppointmentType>(
@@ -101,7 +108,14 @@ export async function deleteAppointmentType(
 
 export async function updateAppointmentType(
     sourceId: string,
-    payload: { name?: string; duration_minutes?: number; descriptor_ids?: string[] },
+    payload: {
+        name?: string;
+        duration_minutes?: number;
+        descriptor_ids?: string[];
+        provider_ids?: string[];
+        operatory_ids?: string[];
+        bookable_online?: boolean;
+    },
     locationId?: string
 ): Promise<CachedAppointmentType> {
     const { data } = await api.patch<CachedAppointmentType>(

@@ -141,6 +141,7 @@ export interface SetupOverview {
     can_create_appointment_types: boolean;
     can_link_availability: boolean;
     counts: Record<string, number>;
+    has_pms?: boolean;
 }
 
 export interface CachedProvider {
@@ -166,6 +167,10 @@ export interface CachedAppointmentType {
     source_metadata: {
         nh_appt_type_id?: number;
         descriptor_ids?: string[];
+        gotracker_appointment_type_id?: number | string;
+        provider_ids?: string[];
+        operatory_ids?: string[];
+        bookable_online?: boolean;
     } | null;
     is_active: boolean;
     synced_at: string | null;

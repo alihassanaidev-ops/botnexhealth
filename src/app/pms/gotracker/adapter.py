@@ -11,7 +11,11 @@ from typing import Any
 
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
-from src.app.pms.base import PMSAdapter, SupportsAppointmentConfirmation
+from src.app.pms.base import (
+    PMSAdapter,
+    SupportsAppointmentConfirmation,
+    SupportsAppointmentTypeCreation,
+)
 from src.app.pms.gotracker import mappers
 from src.app.pms.gotracker.client import GoTrackerAPIError, GoTrackerClient
 from src.app.pms.models import (
@@ -29,7 +33,11 @@ from src.app.pms.models import (
 )
 
 
-class GoTrackerAdapter(PMSAdapter, SupportsAppointmentConfirmation):
+class GoTrackerAdapter(
+    PMSAdapter,
+    SupportsAppointmentConfirmation,
+    SupportsAppointmentTypeCreation,
+):
     source = "gotracker"
 
     def __init__(
@@ -131,11 +139,70 @@ class GoTrackerAdapter(PMSAdapter, SupportsAppointmentConfirmation):
         data = raw.get("data") if isinstance(raw.get("data"), list) else []
         return [mappers.to_appointment_type(item) for item in data]
 
+    async def list_pms_descriptors(self) -> list[dict]:
+        return []
+
+    async def create_appointment_type(
+        self,
+        name: str,
+        duration_minutes: int,
+        descriptor_ids: list[str],
+        *,
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
+    ) -> UniversalAppointmentType:
+        del descriptor_ids
+        body = {
+            "name": name,
+            "minutes": duration_minutes,
+            "bookable_online": True if bookable_online is None else bookable_online,
+            "provider_ids": _strip_ids(provider_ids),
+            "operatory_ids": _strip_ids(operatory_ids),
+        }
+        raw = await self._client.request("POST", "/api/appointment_types", json=body)
+        return mappers.to_appointment_type(_data_object(raw))
+
+    async def update_appointment_type(
+        self,
+        appointment_type_id: str,
+        name: str | None = None,
+        duration_minutes: int | None = None,
+        descriptor_ids: list[str] | None = None,
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
+    ) -> UniversalAppointmentType:
+        del descriptor_ids
+        body: dict[str, Any] = {}
+        if name is not None:
+            body["name"] = name
+        if duration_minutes is not None:
+            body["minutes"] = duration_minutes
+        if bookable_online is not None:
+            body["bookable_online"] = bookable_online
+        if provider_ids is not None:
+            body["provider_ids"] = _strip_ids(provider_ids)
+        if operatory_ids is not None:
+            body["operatory_ids"] = _strip_ids(operatory_ids)
+
+        raw_id = mappers.strip(appointment_type_id)
+        raw = await self._client.request(
+            "PATCH",
+            f"/api/appointment_types/{raw_id}",
+            json=body,
+        )
+        return mappers.to_appointment_type(_data_object(raw, fallback_id=raw_id))
+
+    async def delete_appointment_type(self, appointment_type_id: str) -> None:
+        raw_id = mappers.strip(appointment_type_id)
+        await self._client.request("DELETE", f"/api/appointment_types/{raw_id}")
+
     # ── Providers ────────────────────────────────────────────────────────
 
     async def list_providers(self) -> list[UniversalProvider]:
         raw = await self._client.request("GET", "/api/providers/getAllProviders")
-        data = raw.get("data") if isinstance(raw.get("data"), list) else []
+        data = _list_data(raw, nested_key="providers")
         return [mappers.to_provider(item) for item in data]
 
     # ── Operatories ──────────────────────────────────────────────────────
@@ -412,3 +479,27 @@ class GoTrackerAdapter(PMSAdapter, SupportsAppointmentConfirmation):
             timezone=self._location.timezone,
             hours=None,
         )
+
+
+def _strip_ids(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    return [stripped for value in values if (stripped := mappers.strip(value))]
+
+
+def _data_object(raw: dict[str, Any], *, fallback_id: str | None = None) -> dict[str, Any]:
+    data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+    if fallback_id is not None and data.get("id") is None:
+        data = {**data, "id": fallback_id}
+    return data
+
+
+def _list_data(raw: dict[str, Any], *, nested_key: str) -> list[dict[str, Any]]:
+    data = raw.get("data")
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict) and isinstance(data.get(nested_key), list):
+        return [item for item in data[nested_key] if isinstance(item, dict)]
+    if isinstance(raw.get(nested_key), list):
+        return [item for item in raw[nested_key] if isinstance(item, dict)]
+    return []

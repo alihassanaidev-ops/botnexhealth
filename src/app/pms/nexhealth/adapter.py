@@ -662,8 +662,16 @@ class NexHealthAdapter(
         return raw.get("data", [])
 
     async def create_appointment_type(
-        self, name: str, duration_minutes: int, descriptor_ids: list[str]
+        self,
+        name: str,
+        duration_minutes: int,
+        descriptor_ids: list[str],
+        *,
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
+        del provider_ids, operatory_ids, bookable_online
         params = self._default_params()
         # NexHealth REST convention: write endpoints expect the resource
         # wrapped under the singular resource name. A flat body returns
@@ -685,7 +693,11 @@ class NexHealthAdapter(
         name: str | None = None,
         duration_minutes: int | None = None,
         descriptor_ids: list[str] | None = None,
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
+        del provider_ids, operatory_ids, bookable_online
         params = self._default_params()
         payload: dict[str, Any] = {}
         if name is not None:
@@ -710,6 +722,15 @@ class NexHealthAdapter(
             json={"appointment_type": payload},
         )
         return mappers.to_appointment_type(raw.get("data", {}))
+
+    async def delete_appointment_type(self, appointment_type_id: str) -> None:
+        params = self._default_params()
+        await handle_nexhealth_request(
+            self._client,
+            "DELETE",
+            f"/appointment_types/{_strip(appointment_type_id)}",
+            params=params,
+        )
 
     async def link_availability(
         self,

@@ -49,7 +49,7 @@ def to_provider(raw: dict[str, Any]) -> UniversalProvider:
     raw_id = _first(raw, "ProviderId", "provider_id", "id")
     first_name = _first(raw, "FirstName", "first_name")
     last_name = _first(raw, "LastName", "last_name")
-    name = _first(raw, "Name", "name")
+    name = _first(raw, "ProviderName", "provider_name", "Name", "name")
     appointment_types = []
     for item in raw.get("appointment_types") or raw.get("AppointmentTypes") or []:
         item_id = _first(item, "id", "AppointmentTypeId", "appointment_type_id")
@@ -92,8 +92,17 @@ def to_appointment_type(raw: dict[str, Any]) -> UniversalAppointmentType:
         source_id=str(raw_id),
         source_metadata={
             "gotracker_appointment_type_id": raw_id,
-            "provider_ids": raw.get("provider_ids") or raw.get("ProviderIds") or [],
-            "operatory_ids": raw.get("operatory_ids") or raw.get("OperatoryIds") or [],
+            "provider_ids": [
+                pid(item)
+                for item in raw.get("provider_ids") or raw.get("ProviderIds") or []
+                if item is not None
+            ],
+            "operatory_ids": [
+                pid(item)
+                for item in raw.get("operatory_ids") or raw.get("OperatoryIds") or []
+                if item is not None
+            ],
+            "bookable_online": _first(raw, "bookable_online", "BookableOnline", default=True),
         },
     )
 

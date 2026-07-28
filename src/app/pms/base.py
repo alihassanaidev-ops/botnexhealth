@@ -154,7 +154,14 @@ class SupportsAppointmentTypeCreation(ABC):
 
     @abstractmethod
     async def create_appointment_type(
-        self, name: str, duration_minutes: int, descriptor_ids: list[str]
+        self,
+        name: str,
+        duration_minutes: int,
+        descriptor_ids: list[str],
+        *,
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
         ...
 
@@ -165,7 +172,14 @@ class SupportsAppointmentTypeCreation(ABC):
         name: str | None = None,
         duration_minutes: int | None = None,
         descriptor_ids: list[str] | None = None,
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
+        ...
+
+    @abstractmethod
+    async def delete_appointment_type(self, appointment_type_id: str) -> None:
         ...
 
 

@@ -109,6 +109,9 @@ class TestCreateAppointmentTypeRequest:
     def test_defaults(self):
         req = CreateAppointmentTypeRequest(name="Exam", duration_minutes=30)
         assert req.descriptor_ids == []
+        assert req.provider_ids == []
+        assert req.operatory_ids == []
+        assert req.bookable_online is None
 
 
 class TestCreateAvailabilityRequest:

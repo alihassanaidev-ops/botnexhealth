@@ -42,10 +42,21 @@ class _FakeSyncService:
 
 
 class _FakeAdapter(SupportsAppointmentTypeCreation):
+    source = "nexhealth"
+
     async def list_pms_descriptors(self):
         return []
 
-    async def create_appointment_type(self, name, duration_minutes, descriptor_ids):
+    async def create_appointment_type(
+        self,
+        name,
+        duration_minutes,
+        descriptor_ids,
+        *,
+        provider_ids=None,
+        operatory_ids=None,
+        bookable_online=None,
+    ):
         raise NotImplementedError
 
     async def update_appointment_type(
@@ -54,6 +65,9 @@ class _FakeAdapter(SupportsAppointmentTypeCreation):
         name=None,
         duration_minutes=None,
         descriptor_ids=None,
+        provider_ids=None,
+        operatory_ids=None,
+        bookable_online=None,
     ):
         return UniversalAppointmentType(
             id=appointment_type_id,
@@ -61,8 +75,20 @@ class _FakeAdapter(SupportsAppointmentTypeCreation):
             name=name or "Updated",
             duration_minutes=duration_minutes,
             source_id=appointment_type_id,
-            source_metadata={"descriptor_ids": descriptor_ids or []},
+            source_metadata={
+                "descriptor_ids": descriptor_ids or [],
+                "provider_ids": provider_ids or [],
+                "operatory_ids": operatory_ids or [],
+                "bookable_online": bookable_online,
+            },
         )
+
+    async def delete_appointment_type(self, appointment_type_id):
+        return None
+
+
+class _FakeGoTrackerAdapter(_FakeAdapter):
+    source = "gotracker"
 
 
 def _monkeypatch_session(monkeypatch, cached):
@@ -127,6 +153,37 @@ async def test_update_appointment_type_requires_fields():
         )
     assert exc.value.status_code == 400
     assert "No fields provided" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_appointment_type_rejects_empty_gotracker_providers(monkeypatch):
+    cached = SimpleNamespace(
+        id="appt-1",
+        source_id="gt-100",
+        name="Updated Name",
+        duration_minutes=45,
+        source_metadata=None,
+        is_active=True,
+        synced_at=datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc),
+    )
+    _monkeypatch_session(monkeypatch, cached)
+
+    async def fake_get_adapter(*_args, **_kwargs):
+        return _FakeGoTrackerAdapter()
+
+    monkeypatch.setattr(route, "_get_adapter", fake_get_adapter)
+
+    req = route.UpdateAppointmentTypeRequest(provider_ids=[])
+    with pytest.raises(HTTPException) as exc:
+        await route.update_appointment_type(
+            source_id="gt-100",
+            req=req,
+            current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
+            location_id=None,
+        )
+
+    assert exc.value.status_code == 400
+    assert "require at least one provider" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio
