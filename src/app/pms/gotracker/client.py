@@ -67,6 +67,14 @@ class GoTrackerClient:
                 status_code=response.status_code,
             )
 
+        # Some Synchronizer endpoints (observed: /api/providers/getAllProviders)
+        # return a bare JSON array instead of a {"data": [...]} envelope, which
+        # tripped the dict-only guard below and failed provider sync with
+        # "returned an unexpected payload". Normalize a top-level array to the
+        # envelope shape so callers can uniformly read ``raw.get("data")``.
+        if isinstance(payload, list):
+            return {"data": payload}
+
         if not isinstance(payload, dict):
             raise GoTrackerAPIError("GoTracker Synchronizer returned an unexpected payload")
 
