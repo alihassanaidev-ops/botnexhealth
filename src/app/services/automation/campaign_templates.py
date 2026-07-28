@@ -3,7 +3,8 @@
 Each template carries a normal executable WorkflowDefinition plus product
 metadata used by the template picker, guided setup, launch checklist, and future
 analytics/audience work. Voice definitions use a non-executable placeholder that
-the instantiate endpoint must replace with a clinic-specific Retell agent ID.
+the instantiate endpoint must replace with a location-specific outbound voice
+profile id.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import re
 from typing import Any
 
 VOICE_AGENT_PLACEHOLDER = "__SELECT_OUTBOUND_VOICE_AGENT__"
+VOICE_PROFILE_PLACEHOLDER = "__SELECT_OUTBOUND_VOICE_PROFILE__"
 _TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
 
@@ -76,6 +78,7 @@ def template_tokens(definition: dict[str, Any]) -> list[str]:
 def instantiate_definition(
     template: CampaignTemplate,
     *,
+    voice_profile_id: str | None = None,
     voice_agent_id: str | None = None,
     setup_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -83,16 +86,28 @@ def instantiate_definition(
     definition = copy.deepcopy(template.definition)
     setup_options = setup_options or {}
     requires_voice = any(
-        node.get("type") == "send_voice" and node.get("retell_agent_id") == VOICE_AGENT_PLACEHOLDER
+        node.get("type") == "send_voice"
+        and (
+            node.get("voice_profile_id") == VOICE_PROFILE_PLACEHOLDER
+            or node.get("retell_agent_id") == VOICE_AGENT_PLACEHOLDER
+        )
         for node in definition.get("nodes", [])
         if isinstance(node, dict)
     )
     if requires_voice:
-        if not voice_agent_id or not voice_agent_id.strip():
-            raise ValueError("voice_agent_id is required for this template")
+        selected_profile_id = (voice_profile_id or voice_agent_id or "").strip()
+        if not selected_profile_id:
+            raise ValueError("voice_profile_id is required for this template")
         for node in definition.get("nodes", []):
-            if isinstance(node, dict) and node.get("retell_agent_id") == VOICE_AGENT_PLACEHOLDER:
-                node["retell_agent_id"] = voice_agent_id.strip()
+            if not isinstance(node, dict):
+                continue
+            if (
+                node.get("voice_profile_id") == VOICE_PROFILE_PLACEHOLDER
+                or node.get("retell_agent_id") == VOICE_AGENT_PLACEHOLDER
+            ):
+                node["voice_profile_id"] = selected_profile_id
+                if node.get("retell_agent_id") == VOICE_AGENT_PLACEHOLDER:
+                    node["retell_agent_id"] = ""
 
     _apply_required_setup_fields(template, definition, setup_options)
     return definition
@@ -105,12 +120,12 @@ def _apply_required_setup_fields(
 ) -> None:
     """Apply setup fields that affect executable workflow behavior."""
     fields = template.metadata.setup_fields
-    for field in fields:
-        field_id = field.get("id")
+    for setup_field in fields:
+        field_id = setup_field.get("id")
         if field_id == "appointment_type_ids":
             raw = setup_options.get(field_id)
             values = _string_list(raw)
-            if field.get("required") and not values:
+            if setup_field.get("required") and not values:
                 raise ValueError("appointment_type_ids is required for this template")
             trigger = definition.get("trigger")
             if isinstance(trigger, dict) and trigger.get("type") == "appointment_offset":
@@ -407,7 +422,8 @@ _CALLBACK_AUTOMATION: dict[str, Any] = {
         {
             "type": "send_voice",
             "id": "voice-callback",
-            "retell_agent_id": VOICE_AGENT_PLACEHOLDER,
+            "retell_agent_id": "",
+            "voice_profile_id": VOICE_PROFILE_PLACEHOLDER,
             "wait_for_outcome": True,
             "max_attempts": 1,
             "next_node_id": "check-call-outcome",
@@ -482,7 +498,8 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
         {
             "type": "send_voice",
             "id": "voice-preop-confirmation",
-            "retell_agent_id": VOICE_AGENT_PLACEHOLDER,
+            "retell_agent_id": "",
+            "voice_profile_id": VOICE_PROFILE_PLACEHOLDER,
             "wait_for_outcome": True,
             "max_attempts": 1,
             "next_node_id": "check-preop-outcome",
@@ -613,7 +630,8 @@ _POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
         {
             "type": "send_voice",
             "id": "voice-post-op",
-            "retell_agent_id": VOICE_AGENT_PLACEHOLDER,
+            "retell_agent_id": "",
+            "voice_profile_id": VOICE_PROFILE_PLACEHOLDER,
             "wait_for_outcome": True,
             "max_attempts": 1,
             "next_node_id": "check-post-op-dnc",
@@ -911,6 +929,13 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             },
             setup_fields=[
                 {
+                    "id": "voice_profile_id",
+                    "label": "Surgery confirmation voice profile",
+                    "type": "voice_profile_select",
+                    "required": True,
+                    "placeholder": "Choose outbound voice profile",
+                },
+                {
                     "id": "appointment_type_ids",
                     "label": "Major appointment types",
                     "type": "appointment_type_multiselect",
@@ -960,11 +985,11 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             },
             setup_fields=[
                 {
-                    "id": "voice_agent_id",
+                    "id": "voice_profile_id",
                     "label": "Post-op voice profile",
-                    "type": "text",
+                    "type": "voice_profile_select",
                     "required": True,
-                    "placeholder": "Retell agent ID",
+                    "placeholder": "Choose outbound voice profile",
                 }
             ],
         ),
@@ -1005,11 +1030,11 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             },
             setup_fields=[
                 {
-                    "id": "voice_agent_id",
+                    "id": "voice_profile_id",
                     "label": "Voice profile",
-                    "type": "text",
+                    "type": "voice_profile_select",
                     "required": True,
-                    "placeholder": "Retell agent ID",
+                    "placeholder": "Choose outbound voice profile",
                 }
             ],
         ),

@@ -37,7 +37,7 @@ import { listAppointmentTypes } from "@/lib/tenant-api"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
 import { addVoiceOutcomeBranch, TRIGGER_NODE_ID, VOICE_OUTCOME_BRANCH_VALUES } from "@/lib/workflow/graph"
-import type { CachedAppointmentType } from "@/types"
+import type { CachedAppointmentType, OutboundVoiceProfile } from "@/types"
 import type {
     ConditionNode,
     ConditionOp,
@@ -68,6 +68,7 @@ export interface StepConfigPanelProps {
     onDeleteNode: (id: string) => void
     onSetEntry: (id: string) => void
     locationId?: string | null
+    voiceProfiles?: OutboundVoiceProfile[]
     readOnly?: boolean
 }
 
@@ -278,6 +279,7 @@ function NodeForm({
     onDefinitionChange,
     onDeleteNode,
     onSetEntry,
+    voiceProfiles,
     readOnly,
 }: StepConfigPanelProps & { node: WorkflowNode }) {
     const meta = NODE_META[node.type]
@@ -301,6 +303,7 @@ function NodeForm({
                         def={def}
                         onChange={onNodeChange}
                         onDefinitionChange={onDefinitionChange}
+                        voiceProfiles={voiceProfiles ?? []}
                         readOnly={readOnly}
                     />
                 )}
@@ -450,29 +453,66 @@ function VoiceFields({
     def,
     onChange,
     onDefinitionChange,
+    voiceProfiles,
     readOnly,
 }: {
     node: SendVoiceNode
     def: WorkflowDefinition
     onChange: (n: WorkflowNode) => void
     onDefinitionChange: (def: WorkflowDefinition) => void
+    voiceProfiles: OutboundVoiceProfile[]
     readOnly?: boolean
 }) {
+    const hasLegacyAgent = Boolean(node.retell_agent_id?.trim() && !node.voice_profile_id)
+    const hasProfiles = voiceProfiles.length > 0
+
     return (
         <>
-            <Field label="Retell agent ID" hint="The location's outbound voice agent.">
-                <Input
-                    value={node.retell_agent_id}
+            <Field label="Outbound voice profile" hint="Named location profile used for this outbound call.">
+                <Select
+                    value={node.voice_profile_id || NONE}
                     disabled={readOnly}
-                    placeholder="agent_..."
-                    onChange={(e) => onChange({ ...node, retell_agent_id: e.target.value })}
-                />
+                    onValueChange={(value) => {
+                        onChange({
+                            ...node,
+                            voice_profile_id: value === NONE ? null : value,
+                        })
+                    }}
+                >
+                    <SelectTrigger>
+                        <SelectValue placeholder="Choose outbound profile" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {hasLegacyAgent ? (
+                            <SelectItem value={NONE}>Legacy voice agent</SelectItem>
+                        ) : (
+                            <SelectItem value={NONE} disabled={hasProfiles}>
+                                No profile selected
+                            </SelectItem>
+                        )}
+                        {voiceProfiles.map((profile) => (
+                            <SelectItem key={profile.id} value={profile.id}>
+                                {profile.display_name || profile.purpose || "Unnamed voice profile"}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
             </Field>
+            {!hasProfiles && !hasLegacyAgent && (
+                <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    No outbound voice profiles are configured for this location. Ask a platform admin to add one.
+                </p>
+            )}
+            {hasLegacyAgent && (
+                <p className="rounded-md border border-border px-3 py-2 text-xs text-muted-foreground">
+                    This workflow has an older voice agent configured. Switch it to a named profile when one is available.
+                </p>
+            )}
             <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
                 <div>
                     <Label className="text-sm">Wait for voice outcome</Label>
                     <p className="text-xs text-muted-foreground">
-                        Pause this run until the Retell post-call webhook writes call_outcome.
+                        Pause this run until the post-call result writes call_outcome.
                     </p>
                 </div>
                 <Switch

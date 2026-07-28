@@ -3,10 +3,10 @@
 Gives outbound campaign voice its own durable system of record, distinct from the
 generic step-execution ledger:
 
-- ``outbound_voice_profiles`` — per-location outbound configuration (which Retell
-  agent + from-number a location dials with, plus free-form config). The voice
-  executor resolves it as an *override with fallback* to the node/location
-  defaults, so an absent profile changes nothing (backward-compatible).
+- ``outbound_voice_profiles`` — named per-location outbound configurations (which
+  Retell agent + from-number a location dials with, plus free-form config). New
+  workflows select a profile by id; legacy workflows can still fall back to the
+  raw node/location defaults.
 - ``workflow_voice_attempts`` — one row per placed outbound call attempt, carrying
   the ``retell_call_id`` correlation key, masked endpoints, a lifecycle ``status``,
   and the normalized ``dial_outcome``. This is the attempt/outcome history the UI
@@ -70,24 +70,24 @@ VOICE_DIAL_OUTCOMES: tuple[str, ...] = (
 
 
 class OutboundVoiceProfile(Base):
-    """Per-location outbound voice configuration.
+    """Named per-location outbound voice configuration.
 
-    Formalizes what the executor otherwise reads from the node
-    (``retell_agent_id``) and the location (``retell_from_number``): a location can
-    declare its own outbound agent/number here. Resolution is override-with-fallback
-    — an absent or inactive profile leaves existing behavior unchanged. At most one
-    active profile per location (partial unique index).
+    Inbound Retell routing remains on ``InstitutionLocation.retell_agent_id``.
+    This table is only for outbound campaign/workflow dialing. A location can have
+    multiple active profiles such as "Surgery confirmation" and "Recall".
     """
 
     __tablename__ = "outbound_voice_profiles"
     __table_args__ = (
         Index(
-            "uq_outbound_voice_profiles_active_location",
+            "uq_outbound_voice_profiles_active_location_purpose",
             "location_id",
+            "purpose",
             unique=True,
-            postgresql_where=text("is_active = true"),
+            postgresql_where=text("is_active = true AND purpose IS NOT NULL"),
         ),
         Index("ix_outbound_voice_profiles_institution_active", "institution_id", "is_active"),
+        Index("ix_outbound_voice_profiles_location_active", "location_id", "is_active"),
     )
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
@@ -101,6 +101,7 @@ class OutboundVoiceProfile(Base):
     retell_from_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
     retell_llm_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    purpose: Mapped[str | None] = mapped_column(String(80), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_by_user_id: Mapped[str | None] = mapped_column(

@@ -119,6 +119,8 @@ export interface SendSmsNode {
 export interface SendVoiceNode {
     type: "send_voice"
     id: string
+    voice_profile_id?: string | null
+    /** Legacy fallback for old workflows and emergency manual entry. */
     retell_agent_id: string
     next_node_id: string
     respect_quiet_hours?: boolean

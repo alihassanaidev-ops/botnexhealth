@@ -423,6 +423,7 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
             return {
                 type,
                 id,
+                voice_profile_id: null,
                 retell_agent_id: "",
                 next_node_id: "",
                 respect_quiet_hours: true,

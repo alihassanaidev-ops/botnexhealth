@@ -1198,6 +1198,7 @@ def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
         base["false_next_node_id"] = node.false_next_node_id
     elif isinstance(node, SendVoiceNode):
         base["retell_agent_id"] = node.retell_agent_id
+        base["voice_profile_id"] = node.voice_profile_id
         base["wait_for_outcome"] = node.wait_for_outcome
         base["max_attempts"] = node.max_attempts
         base["next_node_id"] = node.next_node_id

@@ -261,6 +261,7 @@ export async function createWorkflowFromTemplate(
     name?: string,
     setup?: {
         locationId?: string | null
+        voiceProfileId?: string | null
         voiceAgentId?: string | null
         setupOptions?: Record<string, unknown>
     },
@@ -268,6 +269,7 @@ export async function createWorkflowFromTemplate(
     const body: Record<string, unknown> = {}
     if (name?.trim()) body.name = name.trim()
     if (setup?.locationId) body.location_id = setup.locationId
+    if (setup?.voiceProfileId?.trim()) body.voice_profile_id = setup.voiceProfileId.trim()
     if (setup?.voiceAgentId?.trim()) body.voice_agent_id = setup.voiceAgentId.trim()
     if (setup?.setupOptions) body.setup_options = setup.setupOptions
     const { data } = await api.post<AutomationWorkflow>(

@@ -34,7 +34,11 @@ function stepSummary(node: WfNode): string {
         case "send_email":
             return truncate(node.subject_template) || "No subject yet"
         case "send_voice":
-            return node.retell_agent_id ? `Agent ${truncate(node.retell_agent_id, 20)}` : "No agent selected"
+            return node.voice_profile_id
+                ? "Voice profile selected"
+                : node.retell_agent_id
+                    ? "Legacy voice agent"
+                    : "No profile selected"
         case "update_patient_status":
             return `Status: ${truncate(node.status, 30)}`
         case "condition":

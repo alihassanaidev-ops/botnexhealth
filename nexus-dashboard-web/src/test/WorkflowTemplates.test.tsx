@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom"
 import WorkflowTemplates from "@/pages/WorkflowTemplates"
 import { listTemplates, createWorkflowFromTemplate } from "@/lib/workflow-api"
 import { listAppointmentTypes, listLocations } from "@/lib/tenant-api"
+import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 
 vi.mock("@/lib/workflow-api", () => ({
     listTemplates: vi.fn(),
@@ -14,12 +15,16 @@ vi.mock("@/lib/tenant-api", () => ({
     listLocations: vi.fn(),
     listAppointmentTypes: vi.fn(),
 }))
+vi.mock("@/lib/outbound-voice-api", () => ({
+    listOutboundVoiceProfiles: vi.fn(),
+}))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
 
 const list = listTemplates as ReturnType<typeof vi.fn>
 const create = createWorkflowFromTemplate as ReturnType<typeof vi.fn>
 const locations = listLocations as ReturnType<typeof vi.fn>
 const appointmentTypes = listAppointmentTypes as ReturnType<typeof vi.fn>
+const voiceProfiles = listOutboundVoiceProfiles as ReturnType<typeof vi.fn>
 
 const TEMPLATES = [
     {
@@ -80,8 +85,10 @@ beforeEach(() => {
     create.mockReset()
     locations.mockReset()
     appointmentTypes.mockReset()
+    voiceProfiles.mockReset()
     locations.mockResolvedValue(LOCATIONS)
     appointmentTypes.mockResolvedValue([])
+    voiceProfiles.mockResolvedValue([])
 })
 
 describe("WorkflowTemplates page", () => {
@@ -123,7 +130,7 @@ describe("WorkflowTemplates page", () => {
         await waitFor(() => {
             expect(create).toHaveBeenCalledWith("appointment-reminder-24h", "Appointment Reminder (24h)", {
                 locationId: "loc-1",
-                voiceAgentId: "",
+                voiceProfileId: "",
                 setupOptions: {
                     audience_source: "Upcoming appointments",
                     channel_sequence: "SMS",

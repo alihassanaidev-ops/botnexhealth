@@ -15,7 +15,6 @@ from src.app.api.routes.outbound_voice import (
     OutboundVoiceProfileResponse,
     OutboundVoiceProfileUpdate,
     WorkflowVoiceAttemptResponse,
-    _institution_id,
     create_profile,
     delete_profile,
     get_profile,
@@ -45,11 +44,19 @@ def _make_profile(institution_id="inst-1", location_id="loc-1"):
     p.retell_from_number = "+15005550000"
     p.retell_llm_id = None
     p.display_name = "Front Desk"
+    p.purpose = "surgery_confirmation"
     p.is_active = True
     p.config = None
     p.created_at = _NOW
     p.updated_at = _NOW
     return p
+
+
+def _make_location(institution_id="inst-1"):
+    loc = MagicMock()
+    loc.id = "loc-1"
+    loc.institution_id = institution_id
+    return loc
 
 
 def _make_session(*, get_result=None, execute_rows=None, flush_exc=None):
@@ -87,15 +94,24 @@ def test_profile_response_from_model():
     resp = OutboundVoiceProfileResponse.from_model(_make_profile())
     assert resp.id == "prof-1" and resp.location_id == "loc-1"
     assert resp.retell_from_number == "+15005550000" and resp.is_active is True
+    assert resp.purpose == "surgery_confirmation"
 
 
 def test_attempt_response_from_model():
     a = MagicMock()
-    a.id = "att-1"; a.workflow_run_id = "run-1"; a.step_execution_id = "se-1"
-    a.step_id = "v1"; a.attempt_number = 1; a.retell_call_id = "call_1"
-    a.from_number_masked = "+*******0000"; a.to_number_masked = "+*******1234"
-    a.status = "completed"; a.dial_outcome = "answered"; a.disconnection_reason = "user_hangup"
-    a.error_message = None; a.created_at = _NOW
+    a.id = "att-1"
+    a.workflow_run_id = "run-1"
+    a.step_execution_id = "se-1"
+    a.step_id = "v1"
+    a.attempt_number = 1
+    a.retell_call_id = "call_1"
+    a.from_number_masked = "+*******0000"
+    a.to_number_masked = "+*******1234"
+    a.status = "completed"
+    a.dial_outcome = "answered"
+    a.disconnection_reason = "user_hangup"
+    a.error_message = None
+    a.created_at = _NOW
     resp = WorkflowVoiceAttemptResponse.from_model(a)
     assert resp.status == "completed" and resp.dial_outcome == "answered"
     assert resp.to_number_masked.endswith("1234")
@@ -104,20 +120,37 @@ def test_attempt_response_from_model():
 # --- create -----------------------------------------------------------------
 
 
-def test_create_profile_returns_201_and_scopes_institution_from_auth():
-    session = _make_session()
-    data = OutboundVoiceProfileCreate(location_id="loc-1", retell_agent_id="agent_x")
+def test_create_profile_returns_201_and_scopes_institution_from_location():
+    session = _make_session(get_result=_make_location(institution_id="inst-from-location"))
+    data = OutboundVoiceProfileCreate(
+        location_id="loc-1",
+        retell_agent_id="agent_x",
+        purpose="Surgery Confirmation",
+    )
     with _patch_db(session):
         resp = asyncio.run(create_profile(data, _make_user(institution_id="inst-1")))
     session.add.assert_called_once()
     added = session.add.call_args.args[0]
-    assert added.institution_id == "inst-1"      # from auth, not body
+    assert added.institution_id == "inst-from-location"
     assert added.created_by_user_id == "user-1"
+    assert added.purpose == "surgery_confirmation"
     assert resp.location_id == "loc-1"
 
 
+def test_create_profile_404_when_location_missing():
+    session = _make_session(get_result=None)
+    data = OutboundVoiceProfileCreate(location_id="loc-missing")
+    with _patch_db(session):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(create_profile(data, _make_user()))
+    assert exc.value.status_code == 404
+
+
 def test_create_profile_conflict_returns_409():
-    session = _make_session(flush_exc=IntegrityError("stmt", {}, Exception("dup")))
+    session = _make_session(
+        get_result=_make_location(),
+        flush_exc=IntegrityError("stmt", {}, Exception("dup")),
+    )
     data = OutboundVoiceProfileCreate(location_id="loc-1")
     with _patch_db(session):
         with pytest.raises(HTTPException) as exc:
@@ -142,6 +175,16 @@ def test_get_profile_404_on_wrong_institution():
         with pytest.raises(HTTPException) as exc:
             asyncio.run(get_profile("prof-1", _make_user(institution_id="inst-1")))
     assert exc.value.status_code == 404
+
+
+def test_get_profile_hides_technical_fields_from_clinic_reader():
+    session = _make_session(get_result=_make_profile())
+    with _patch_db(session):
+        resp = asyncio.run(get_profile("prof-1", _make_user(institution_id="inst-1")))
+    assert resp.display_name == "Front Desk"
+    assert resp.retell_agent_id is None
+    assert resp.retell_from_number is None
+    assert resp.retell_llm_id is None
 
 
 def test_update_profile_applies_only_set_fields():
@@ -179,16 +222,25 @@ def test_list_profiles_returns_mapped():
     with _patch_db(session):
         rows = asyncio.run(list_profiles(_make_user(), location_id="loc-1", is_active=True))
     assert len(rows) == 2 and all(r.location_id == "loc-1" for r in rows)
+    assert all(r.retell_agent_id is None for r in rows)
 
 
 def test_list_attempts_delegates_to_helper():
     session = _make_session()
     a = MagicMock()
-    a.id = "att-1"; a.workflow_run_id = "run-1"; a.step_execution_id = None
-    a.step_id = "v1"; a.attempt_number = 1; a.retell_call_id = "c1"
-    a.from_number_masked = None; a.to_number_masked = "+*******1234"
-    a.status = "placed"; a.dial_outcome = None; a.disconnection_reason = None
-    a.error_message = None; a.created_at = _NOW
+    a.id = "att-1"
+    a.workflow_run_id = "run-1"
+    a.step_execution_id = None
+    a.step_id = "v1"
+    a.attempt_number = 1
+    a.retell_call_id = "c1"
+    a.from_number_masked = None
+    a.to_number_masked = "+*******1234"
+    a.status = "placed"
+    a.dial_outcome = None
+    a.disconnection_reason = None
+    a.error_message = None
+    a.created_at = _NOW
     with _patch_db(session), patch(f"{_MOD}.list_voice_attempts", AsyncMock(return_value=[a])) as helper:
         rows = asyncio.run(list_attempts(_make_user(institution_id="inst-1"), workflow_run_id="run-1"))
     assert len(rows) == 1 and rows[0].status == "placed"

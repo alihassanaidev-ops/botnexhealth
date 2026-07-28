@@ -94,13 +94,13 @@ describe("workflow-api", () => {
         post.mockResolvedValue({ data: { id: "w4" } })
         await createWorkflowFromTemplate("tpl-1", "  My Campaign  ", {
             locationId: "loc-1",
-            voiceAgentId: " agent-1 ",
+            voiceProfileId: " prof-1 ",
             setupOptions: { copy_variant: "standard" },
         })
         expect(post).toHaveBeenCalledWith("/automation/templates/tpl-1/instantiate", {
             name: "My Campaign",
             location_id: "loc-1",
-            voice_agent_id: "agent-1",
+            voice_profile_id: "prof-1",
             setup_options: { copy_variant: "standard" },
         })
     })

@@ -28,7 +28,8 @@ import { toast } from "sonner"
 import { createWorkflowFromTemplate, listTemplates, type CampaignTemplate } from "@/lib/workflow-api"
 import { triggerTypeLabel } from "@/lib/workflow/catalog"
 import { listAppointmentTypes, listLocations } from "@/lib/tenant-api"
-import type { CachedAppointmentType, LocationInfo } from "@/types"
+import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
+import type { CachedAppointmentType, LocationInfo, OutboundVoiceProfile } from "@/types"
 import type { TriggerType } from "@/types/workflow"
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -45,8 +46,10 @@ function label(value: string) {
     return CATEGORY_LABELS[value] ?? value.replace(/_/g, " ")
 }
 
-function requiresVoiceAgent(template: CampaignTemplate) {
-    return template.metadata.setup_fields.some((field) => field.id === "voice_agent_id" && field.required)
+function requiresVoiceProfile(template: CampaignTemplate) {
+    return template.metadata.setup_fields.some(
+        (field) => ["voice_profile_id", "voice_agent_id"].includes(field.id) && field.required,
+    )
 }
 
 function requiresAppointmentTypes(template: CampaignTemplate) {
@@ -89,8 +92,10 @@ export default function WorkflowTemplates() {
     const [templates, setTemplates] = useState<CampaignTemplate[]>([])
     const [locations, setLocations] = useState<LocationInfo[]>([])
     const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
+    const [voiceProfiles, setVoiceProfiles] = useState<OutboundVoiceProfile[]>([])
     const [appointmentTypesLocationId, setAppointmentTypesLocationId] = useState<string | null>(null)
     const [appointmentTypesLoading, setAppointmentTypesLoading] = useState(false)
+    const [voiceProfilesLoading, setVoiceProfilesLoading] = useState(false)
     const [loading, setLoading] = useState(true)
     const [picked, setPicked] = useState<CampaignTemplate | null>(null)
     const [name, setName] = useState("")
@@ -99,7 +104,7 @@ export default function WorkflowTemplates() {
     const [channelSequence, setChannelSequence] = useState("")
     const [copyVariant, setCopyVariant] = useState("")
     const [handoffBehavior, setHandoffBehavior] = useState("")
-    const [voiceAgentId, setVoiceAgentId] = useState("")
+    const [voiceProfileId, setVoiceProfileId] = useState("")
     const [appointmentTypeIds, setAppointmentTypeIds] = useState<string[]>([])
     const [activeCategory, setActiveCategory] = useState<string>("all")
     const [creating, setCreating] = useState(false)
@@ -143,6 +148,37 @@ export default function WorkflowTemplates() {
             active = false
         }
     }, [selectedLocationId])
+
+    useEffect(() => {
+        if (!picked || !selectedLocationId || !requiresVoiceProfile(picked)) {
+            setVoiceProfiles([])
+            setVoiceProfileId("")
+            return
+        }
+        let active = true
+        ;(async () => {
+            setVoiceProfilesLoading(true)
+            try {
+                const rows = await listOutboundVoiceProfiles({ locationId: selectedLocationId, isActive: true })
+                if (!active) return
+                setVoiceProfiles(rows)
+                setVoiceProfileId((current) =>
+                    rows.some((profile) => profile.id === current) ? current : "",
+                )
+            } catch {
+                if (active) {
+                    setVoiceProfiles([])
+                    setVoiceProfileId("")
+                    toast.error("Failed to load outbound voice profiles")
+                }
+            } finally {
+                if (active) setVoiceProfilesLoading(false)
+            }
+        })()
+        return () => {
+            active = false
+        }
+    }, [picked, selectedLocationId])
 
     useEffect(() => {
         if (!picked || !selectedLocationId || !requiresAppointmentTypes(picked)) return
@@ -207,7 +243,8 @@ export default function WorkflowTemplates() {
                 t.metadata.default_staff_handoff_reason ?? "Monitor campaign operations",
             ),
         )
-        setVoiceAgentId("")
+        setVoiceProfileId("")
+        setVoiceProfiles([])
         setAppointmentTypeIds([])
         setAppointmentTypes([])
         setAppointmentTypesLocationId(null)
@@ -228,7 +265,7 @@ export default function WorkflowTemplates() {
             }
             const wf = await createWorkflowFromTemplate(picked.id, name, {
                 locationId: selectedLocationId || null,
-                voiceAgentId,
+                voiceProfileId,
                 setupOptions,
             })
             toast.success(`Created paused campaign "${wf.name}"`)
@@ -239,7 +276,7 @@ export default function WorkflowTemplates() {
         }
     }
 
-    const voiceRequired = picked ? requiresVoiceAgent(picked) : false
+    const voiceRequired = picked ? requiresVoiceProfile(picked) : false
     const appointmentTypesRequired = picked ? requiresAppointmentTypes(picked) : false
     const pickedCapability = picked ? pmsCapabilityStatus(picked) : null
     const audienceSourceOptions = picked
@@ -277,7 +314,7 @@ export default function WorkflowTemplates() {
         creating ||
         !name.trim() ||
         !selectedLocationId ||
-        (voiceRequired && !voiceAgentId.trim()) ||
+        (voiceRequired && !voiceProfileId.trim()) ||
         (appointmentTypesRequired && appointmentTypeIds.length === 0) ||
         pickedCapability?.supported === false
 
@@ -497,12 +534,30 @@ export default function WorkflowTemplates() {
                                 {voiceRequired && (
                                     <div className="space-y-2">
                                         <Label htmlFor="voice-agent">Voice profile</Label>
-                                        <Input
-                                            id="voice-agent"
-                                            value={voiceAgentId}
-                                            onChange={(e) => setVoiceAgentId(e.target.value)}
-                                            placeholder="Retell agent ID"
-                                        />
+                                        <Select
+                                            value={voiceProfileId || "__none__"}
+                                            disabled={voiceProfilesLoading || voiceProfiles.length === 0}
+                                            onValueChange={(value) => setVoiceProfileId(value === "__none__" ? "" : value)}
+                                        >
+                                            <SelectTrigger id="voice-agent">
+                                                <SelectValue placeholder="Choose outbound voice profile" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="__none__" disabled={voiceProfiles.length > 0}>
+                                                    {voiceProfilesLoading ? "Loading profiles..." : "No profile selected"}
+                                                </SelectItem>
+                                                {voiceProfiles.map((profile) => (
+                                                    <SelectItem key={profile.id} value={profile.id}>
+                                                        {profile.display_name || profile.purpose || "Unnamed voice profile"}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        {!voiceProfilesLoading && voiceProfiles.length === 0 && (
+                                            <p className="text-xs text-muted-foreground">
+                                                No outbound voice profiles are configured for this location. Ask a platform admin to add one.
+                                            </p>
+                                        )}
                                     </div>
                                 )}
                                 {appointmentTypesRequired && (

@@ -82,6 +82,21 @@ export interface Location {
     user: LocationUser | null;
 }
 
+export interface OutboundVoiceProfile {
+    id: string;
+    institution_id: string;
+    location_id: string;
+    retell_agent_id: string | null;
+    retell_from_number: string | null;
+    retell_llm_id: string | null;
+    display_name: string | null;
+    purpose: string | null;
+    is_active: boolean;
+    config: Record<string, unknown> | null;
+    created_at: string;
+    updated_at: string;
+}
+
 export interface SyncResult {
     location: string;
     success: boolean;

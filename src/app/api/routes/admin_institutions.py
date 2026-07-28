@@ -16,6 +16,7 @@ from src.app.api.deps import get_current_admin
 from src.app.config import settings
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution import DEFAULT_JURISDICTION, Jurisdiction
+from src.app.models.outbound_voice import OutboundVoiceProfile
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit
 from src.app.services.audit_decorator import audit
@@ -780,6 +781,65 @@ class LocationResponse(BaseModel):
         )
 
 
+class AdminOutboundVoiceProfileCreate(BaseModel):
+    retell_agent_id: str | None = Field(None, max_length=255)
+    retell_from_number: str | None = Field(None, max_length=32)
+    retell_llm_id: str | None = Field(None, max_length=255)
+    display_name: str | None = Field(None, max_length=120)
+    purpose: str | None = Field(None, max_length=80)
+    is_active: bool = True
+    config: dict[str, Any] | None = None
+
+
+class AdminOutboundVoiceProfileUpdate(BaseModel):
+    retell_agent_id: str | None = Field(None, max_length=255)
+    retell_from_number: str | None = Field(None, max_length=32)
+    retell_llm_id: str | None = Field(None, max_length=255)
+    display_name: str | None = Field(None, max_length=120)
+    purpose: str | None = Field(None, max_length=80)
+    is_active: bool | None = None
+    config: dict[str, Any] | None = None
+
+
+class AdminOutboundVoiceProfileResponse(BaseModel):
+    id: str
+    institution_id: str
+    location_id: str
+    retell_agent_id: str | None
+    retell_from_number: str | None
+    retell_llm_id: str | None
+    display_name: str | None
+    purpose: str | None
+    is_active: bool
+    config: dict[str, Any] | None
+    created_at: Any
+    updated_at: Any
+
+    @classmethod
+    def from_profile(cls, profile: Any) -> "AdminOutboundVoiceProfileResponse":
+        return cls(
+            id=str(profile.id),
+            institution_id=str(profile.institution_id),
+            location_id=str(profile.location_id),
+            retell_agent_id=profile.retell_agent_id,
+            retell_from_number=profile.retell_from_number,
+            retell_llm_id=profile.retell_llm_id,
+            display_name=profile.display_name,
+            purpose=profile.purpose,
+            is_active=profile.is_active,
+            config=profile.config,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+        )
+
+
+def _normalize_voice_purpose(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower().replace(" ", "_").replace("-", "_")
+    return normalized or None
+
+
 # =============================================================================
 # Location Routes
 # =============================================================================
@@ -902,6 +962,128 @@ async def get_location(
             )
 
         return LocationResponse.from_location(location)
+
+
+async def _get_admin_location_or_404(session: Any, slug: str, loc_slug: str) -> Any:
+    institution_service = InstitutionService(session)
+    institution = await institution_service.get_by_slug(slug, include_inactive=True)
+    if not institution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Institution '{slug}' not found",
+        )
+    location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+    if not location:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Location '{loc_slug}' not found",
+        )
+    return location
+
+
+@router.get(
+    "/{slug}/locations/{loc_slug}/outbound-voice-profiles",
+    response_model=list[AdminOutboundVoiceProfileResponse],
+)
+async def list_admin_outbound_voice_profiles(
+    slug: str,
+    loc_slug: str,
+    _: User = Depends(get_current_admin),
+) -> list[AdminOutboundVoiceProfileResponse]:
+    async with get_db_session() as session:
+        location = await _get_admin_location_or_404(session, slug, loc_slug)
+        result = await session.execute(
+            select(OutboundVoiceProfile)
+            .where(OutboundVoiceProfile.location_id == str(location.id))
+            .order_by(OutboundVoiceProfile.display_name.asc().nulls_last(), OutboundVoiceProfile.created_at.desc())
+        )
+        return [AdminOutboundVoiceProfileResponse.from_profile(p) for p in result.scalars().all()]
+
+
+@router.post(
+    "/{slug}/locations/{loc_slug}/outbound-voice-profiles",
+    response_model=AdminOutboundVoiceProfileResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_admin_outbound_voice_profile(
+    slug: str,
+    loc_slug: str,
+    data: AdminOutboundVoiceProfileCreate,
+    current_admin: User = Depends(get_current_admin),
+) -> AdminOutboundVoiceProfileResponse:
+    async with get_db_session() as session:
+        location = await _get_admin_location_or_404(session, slug, loc_slug)
+        profile = OutboundVoiceProfile(
+            institution_id=str(location.institution_id),
+            location_id=str(location.id),
+            retell_agent_id=data.retell_agent_id,
+            retell_from_number=data.retell_from_number,
+            retell_llm_id=data.retell_llm_id,
+            display_name=data.display_name,
+            purpose=_normalize_voice_purpose(data.purpose),
+            is_active=data.is_active,
+            config=data.config,
+            created_by_user_id=str(current_admin.id),
+        )
+        session.add(profile)
+        try:
+            await session.flush()
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An active outbound voice profile with this purpose already exists for this location",
+            )
+        await session.refresh(profile)
+        return AdminOutboundVoiceProfileResponse.from_profile(profile)
+
+
+@router.patch(
+    "/{slug}/locations/{loc_slug}/outbound-voice-profiles/{profile_id}",
+    response_model=AdminOutboundVoiceProfileResponse,
+)
+async def update_admin_outbound_voice_profile(
+    slug: str,
+    loc_slug: str,
+    profile_id: str,
+    data: AdminOutboundVoiceProfileUpdate,
+    _: User = Depends(get_current_admin),
+) -> AdminOutboundVoiceProfileResponse:
+    async with get_db_session() as session:
+        location = await _get_admin_location_or_404(session, slug, loc_slug)
+        profile = await session.get(OutboundVoiceProfile, profile_id)
+        if profile is None or str(profile.location_id) != str(location.id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice profile not found")
+        for field, value in data.model_dump(exclude_unset=True).items():
+            if field == "purpose":
+                value = _normalize_voice_purpose(value)
+            setattr(profile, field, value)
+        try:
+            await session.flush()
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An active outbound voice profile with this purpose already exists for this location",
+            )
+        await session.refresh(profile)
+        return AdminOutboundVoiceProfileResponse.from_profile(profile)
+
+
+@router.delete(
+    "/{slug}/locations/{loc_slug}/outbound-voice-profiles/{profile_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_admin_outbound_voice_profile(
+    slug: str,
+    loc_slug: str,
+    profile_id: str,
+    _: User = Depends(get_current_admin),
+) -> None:
+    async with get_db_session() as session:
+        location = await _get_admin_location_or_404(session, slug, loc_slug)
+        profile = await session.get(OutboundVoiceProfile, profile_id)
+        if profile is None or str(profile.location_id) != str(location.id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice profile not found")
+        await session.delete(profile)
 
 
 @router.patch("/{slug}/locations/{loc_slug}", response_model=LocationResponse)

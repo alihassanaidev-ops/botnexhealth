@@ -16,6 +16,9 @@ vi.mock("@/lib/workflow-api", () => ({
     previewLaunchChecklist: vi.fn(),
     listMergeFields: vi.fn().mockResolvedValue([]),
 }))
+vi.mock("@/lib/outbound-voice-api", () => ({
+    listOutboundVoiceProfiles: vi.fn().mockResolvedValue([]),
+}))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
 
 const get = getWorkflow as ReturnType<typeof vi.fn>

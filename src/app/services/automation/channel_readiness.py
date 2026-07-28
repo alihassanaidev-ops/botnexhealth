@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.config import settings
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
+from src.app.models.outbound_voice import OutboundVoiceProfile
 from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
@@ -30,6 +31,7 @@ from src.app.services.automation.definition_schema import (
 )
 from src.app.services.automation.validation_service import ValidationIssue
 from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
+from sqlalchemy import select
 
 _READINESS_CODE = "channel_not_ready"
 _PLACEHOLDER_VALUES = {
@@ -135,21 +137,7 @@ class ChannelReadinessService:
                 )
 
         for node in voice_nodes:
-            # Voice readiness is carried on the node itself (retell_agent_id is a
-            # required, non-empty field on SendVoiceNode), so a structurally valid
-            # definition is voice-configurable. Warn only if it is somehow blank.
-            if not (node.retell_agent_id or "").strip():
-                issues.append(
-                    ValidationIssue(
-                        severity="warning",
-                        code=_READINESS_CODE,
-                        node_id=node.id,
-                        message=(
-                            "Voice channel is not configured: this node has no Retell "
-                            "agent id. Calls will fail until an agent is assigned."
-                        ),
-                    )
-                )
+            issues += await self._voice_node_issues(node, location)
 
         return issues
 
@@ -174,7 +162,7 @@ class ChannelReadinessService:
 
         sms_ready = self._sms_ready(institution, location)
         email_ready = self._email_ready(institution)
-        voice_ready = bool(location and (location.retell_agent_id or "").strip())
+        voice_ready = await self._location_has_usable_outbound_profile(location)
 
         details = [
             {
@@ -196,7 +184,7 @@ class ChannelReadinessService:
                 "ready": voice_ready,
                 "reason": None
                 if voice_ready
-                else "No Retell agent assigned to this location.",
+                else "No active outbound voice profile with a Retell agent is configured for this location.",
             },
         ]
         return ChannelReadinessReport(
@@ -230,3 +218,113 @@ class ChannelReadinessService:
             _has_real_value(email_from.from_address)
             and _has_real_value(settings.resend_api_key)
         )
+
+    async def _voice_node_issues(
+        self,
+        node: SendVoiceNode,
+        location: InstitutionLocation | None,
+    ) -> list[ValidationIssue]:
+        if not self.session:
+            return []
+
+        profile_id = (node.voice_profile_id or "").strip()
+        legacy_agent_id = (node.retell_agent_id or "").strip()
+        if not profile_id and not legacy_agent_id:
+            return [
+                ValidationIssue(
+                    severity="error",
+                    code=_READINESS_CODE,
+                    node_id=node.id,
+                    message=(
+                        "Voice step has no outbound voice profile or Retell agent selected."
+                    ),
+                )
+            ]
+
+        if profile_id:
+            profile = await self._get_active_profile(profile_id, location)
+            if profile is None:
+                return [
+                    ValidationIssue(
+                        severity="error",
+                        code=_READINESS_CODE,
+                        node_id=node.id,
+                        message=(
+                            "Selected outbound voice profile is missing, inactive, "
+                            "or not attached to this location."
+                        ),
+                    )
+                ]
+
+            issues: list[ValidationIssue] = []
+            if not _has_real_value(profile.retell_agent_id):
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code=_READINESS_CODE,
+                        node_id=node.id,
+                        message="Selected outbound voice profile has no Retell agent id.",
+                    )
+                )
+            if not _has_real_value(profile.retell_from_number) and not _has_real_value(
+                location.retell_from_number if location else None
+            ):
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code=_READINESS_CODE,
+                        node_id=node.id,
+                        message=(
+                            "Selected outbound voice profile has no from-number, and "
+                            "the location has no Retell outbound from-number fallback."
+                        ),
+                    )
+                )
+            return issues
+
+        if not _has_real_value(location.retell_from_number if location else None):
+            return [
+                ValidationIssue(
+                    severity="error",
+                    code=_READINESS_CODE,
+                    node_id=node.id,
+                    message="Voice step has no Retell outbound from-number for this location.",
+                )
+            ]
+        return []
+
+    async def _get_active_profile(
+        self,
+        profile_id: str,
+        location: InstitutionLocation | None,
+    ) -> OutboundVoiceProfile | None:
+        if not self.session or not location:
+            return None
+        return (
+            await self.session.execute(
+                select(OutboundVoiceProfile).where(
+                    OutboundVoiceProfile.id == profile_id,
+                    OutboundVoiceProfile.location_id == str(location.id),
+                    OutboundVoiceProfile.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+
+    async def _location_has_usable_outbound_profile(
+        self,
+        location: InstitutionLocation | None,
+    ) -> bool:
+        if not self.session or not location:
+            return False
+        return (
+            await self.session.execute(
+                select(OutboundVoiceProfile.id)
+                .where(
+                    OutboundVoiceProfile.location_id == str(location.id),
+                    OutboundVoiceProfile.is_active.is_(True),
+                    OutboundVoiceProfile.retell_agent_id.is_not(None),
+                    OutboundVoiceProfile.retell_agent_id != "",
+                )
+                .limit(1)
+            )
+        ).scalar() is not None

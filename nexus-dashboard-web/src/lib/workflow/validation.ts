@@ -174,12 +174,12 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
             }
             case "send_voice": {
                 refError(node, node.next_node_id, "Voice step")
-                if (!node.retell_agent_id.trim()) {
+                if (!node.voice_profile_id && !node.retell_agent_id.trim()) {
                     issues.push({
                         node_id: node.id,
                         severity: "error",
-                        message: "Voice step has no Retell agent selected.",
-                        fix: "Choose the location's outbound voice agent.",
+                        message: "Voice step has no outbound voice profile selected.",
+                        fix: "Choose a location outbound voice profile.",
                     })
                 }
                 checkAttempts(node.max_attempts, node.id, issues)

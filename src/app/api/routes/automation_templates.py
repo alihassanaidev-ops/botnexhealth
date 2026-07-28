@@ -76,6 +76,7 @@ class CampaignTemplateResponse(BaseModel):
 class CampaignTemplateInstantiateRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     location_id: str | None = None
+    voice_profile_id: str | None = Field(None, max_length=255)
     voice_agent_id: str | None = Field(None, max_length=255)
     setup_options: dict[str, Any] = Field(default_factory=dict)
 
@@ -184,6 +185,7 @@ async def instantiate_template(
     try:
         definition = instantiate_definition(
             template,
+            voice_profile_id=data.voice_profile_id,
             voice_agent_id=data.voice_agent_id,
             setup_options=data.setup_options,
         )

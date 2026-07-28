@@ -137,9 +137,20 @@ class VoiceNodeExecutor:
             if run.location_id
             else None
         )
-        # A per-location outbound profile (V-4) overrides the node/location defaults
-        # when present; an absent or inactive profile leaves resolution unchanged.
-        profile = await resolve_outbound_voice_profile(self.session, run.location_id)
+        # New workflows select a named outbound profile. Legacy workflows without
+        # voice_profile_id retain the older profile/node/location fallback behavior.
+        profile = await resolve_outbound_voice_profile(
+            self.session,
+            run.location_id,
+            node.voice_profile_id,
+        )
+        if node.voice_profile_id and profile is None:
+            await self.runtime.fail_step(step, result_code="voice_profile_not_found")
+            await self.runtime.fail_run(
+                run,
+                reason="send_voice: selected outbound voice profile is missing or inactive",
+            )
+            return node.next_node_id
         from_number = (
             (profile.retell_from_number if profile and profile.retell_from_number else None)
             or (location.retell_from_number if location else None)
@@ -151,6 +162,13 @@ class VoiceNodeExecutor:
         agent_id = (
             profile.retell_agent_id if profile and profile.retell_agent_id else node.retell_agent_id
         )
+        if not (agent_id or "").strip():
+            await self.runtime.fail_step(step, result_code="no_retell_agent")
+            await self.runtime.fail_run(
+                run,
+                reason="send_voice: no Retell agent selected for outbound voice",
+            )
+            return node.next_node_id
 
         api_key = settings.retell_api_secret
         if not api_key:

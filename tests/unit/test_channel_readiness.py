@@ -70,10 +70,11 @@ def _exit_only_def():
 # ---------------------------------------------------------------------------
 
 
-def _make_location(from_number="+16475550001", retell_agent_id=None):
+def _make_location(from_number="+16475550001", retell_agent_id=None, retell_from_number="+16475550002"):
     loc = MagicMock(spec=InstitutionLocation)
     loc.twilio_from_number = from_number
     loc.retell_agent_id = retell_agent_id
+    loc.retell_from_number = retell_from_number
     return loc
 
 
@@ -86,7 +87,7 @@ def _make_institution(sid=None, token=None, email_from=None):
     return inst
 
 
-def _make_session(location=None, institution=None):
+def _make_session(location=None, institution=None, profile_exists=False):
     session = AsyncMock()
 
     async def _get(model, pk):
@@ -97,6 +98,10 @@ def _make_session(location=None, institution=None):
         return None
 
     session.get = AsyncMock(side_effect=_get)
+    exec_result = MagicMock()
+    exec_result.scalar = MagicMock(return_value="profile-1" if profile_exists else None)
+    exec_result.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute = AsyncMock(return_value=exec_result)
     return session
 
 
@@ -250,7 +255,7 @@ def test_voice_configurable_when_node_has_agent():
 def test_readiness_for_location_reports_all_channels():
     inst = _make_institution(email_from="clinic@example.com")
     loc = _make_location(from_number="+16475550001", retell_agent_id="agent-1")
-    session = _make_session(location=loc, institution=inst)
+    session = _make_session(location=loc, institution=inst, profile_exists=True)
     with patch("src.app.services.messaging_credentials.settings") as ms, patch(
         "src.app.services.automation.channel_readiness.settings"
     ) as cs:

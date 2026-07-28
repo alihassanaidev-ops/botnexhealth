@@ -100,7 +100,11 @@ function describe(
                     node_id: node.id,
                     node_type: "send_voice",
                     summary: "Place AI voice call",
-                    detail: `Retell agent: ${node.retell_agent_id || "(none)"}`,
+                    detail: node.voice_profile_id
+                        ? "Voice profile selected"
+                        : node.retell_agent_id
+                            ? "Legacy voice agent configured"
+                            : "No voice profile selected",
                 },
                 next: node.next_node_id,
             }

@@ -96,6 +96,7 @@ async def lifespan(app: FastAPI):
                             JOIN pg_namespace n ON c.relnamespace = n.oid
                             WHERE n.nspname = 'public'
                               AND c.relkind = 'r'
+                              AND c.relispartition = false
                               AND c.relrowsecurity = false
                               AND EXISTS (
                                   SELECT 1 FROM information_schema.columns

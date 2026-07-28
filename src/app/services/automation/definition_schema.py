@@ -189,7 +189,10 @@ class SendVoiceNode(BaseModel):
 
     id: str = Field(min_length=1)
     type: Literal["send_voice"] = "send_voice"
-    retell_agent_id: str = Field(min_length=1)
+    # Legacy fallback. New workflows should prefer voice_profile_id so changing a
+    # Retell agent later does not require editing every workflow definition.
+    retell_agent_id: str = ""
+    voice_profile_id: str | None = None
     next_node_id: str
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)

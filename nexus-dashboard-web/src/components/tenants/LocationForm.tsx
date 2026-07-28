@@ -33,6 +33,7 @@ import { verifyRetellAgent, listTwilioPhoneNumbers } from "@/lib/admin-api";
 import { SUPPORTED_TIMEZONES } from "@/lib/timezones";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic, TwilioPhoneNumber } from "@/types";
 import { cn } from "@/lib/utils";
+import { OutboundVoiceProfilesAdmin } from "./OutboundVoiceProfilesAdmin";
 
 const US_STATES = [
     { value: "AL", label: "AL — Alabama" }, { value: "AK", label: "AK — Alaska" },
@@ -478,6 +479,18 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                             )}
                         />
                     </SectionCard>
+
+                    {isEditing && location && (
+                        <SectionCard
+                            title="Outbound Voice Profiles"
+                            description="Named outbound agents used by campaign workflow voice steps."
+                        >
+                            <OutboundVoiceProfilesAdmin
+                                institutionSlug={institutionSlug}
+                                locationSlug={location.slug}
+                            />
+                        </SectionCard>
+                    )}
 
                     {/* Section: Twilio SMS */}
                     <SectionCard

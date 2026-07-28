@@ -33,10 +33,17 @@ def _make_run(contact_id="c-1", location_id="l-1", institution_id="inst-1"):
     return run
 
 
-def _make_node(agent_id="agent_abc", next_id="node-2", max_attempts=1, wait_for_outcome=False):
+def _make_node(
+    agent_id="agent_abc",
+    next_id="node-2",
+    max_attempts=1,
+    wait_for_outcome=False,
+    voice_profile_id=None,
+):
     return SendVoiceNode(
         id="node-1",
         retell_agent_id=agent_id,
+        voice_profile_id=voice_profile_id,
         next_node_id=next_id,
         max_attempts=max_attempts,
         wait_for_outcome=wait_for_outcome,
@@ -216,6 +223,49 @@ def test_executor_profile_overrides_agent_and_from_number():
     kw = call_mock.call_args.kwargs
     assert kw["from_number"] == "+15559990000"      # profile wins over location
     assert kw["override_agent_id"] == "agent_profile"  # profile wins over node
+
+
+def test_executor_selected_profile_supplies_agent_when_node_agent_blank():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        profile=_make_profile(agent_id="agent_surgery", from_number="+15559990000"),
+    )
+    with _patch_client(result=RetellCallResult(call_id="c1")) as call_mock:
+        asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(agent_id="", voice_profile_id="prof-surgery"),
+                {},
+            )
+        )
+    kw = call_mock.call_args.kwargs
+    assert kw["from_number"] == "+15559990000"
+    assert kw["override_agent_id"] == "agent_surgery"
+
+
+def test_executor_fails_when_selected_profile_missing():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        profile=None,
+    )
+    asyncio.run(
+        executor.execute(
+            _make_run(),
+            _make_node(agent_id="", voice_profile_id="missing-profile"),
+            {},
+        )
+    )
+    runtime.fail_step.assert_called()
+    assert "profile" in _fail_reason(runtime)
+
+
+def test_executor_fails_when_no_profile_or_agent():
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    asyncio.run(executor.execute(_make_run(), _make_node(agent_id=""), {}))
+    runtime.fail_step.assert_called()
+    assert "no Retell agent" in _fail_reason(runtime)
 
 
 def test_executor_falls_back_when_profile_fields_blank():

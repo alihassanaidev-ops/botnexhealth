@@ -101,9 +101,9 @@ async def _seed_tenants(conn) -> None:
             """
             INSERT INTO institution_locations
               (id, institution_id, name, slug, is_active, retell_agent_id,
-               twilio_from_number, timezone) VALUES
-              (:la, :a, 'A One', 'a-one', true, 'agent-a', '+15550000001', 'UTC'),
-              (:lb, :b, 'B One', 'b-one', true, 'agent-b', '+15550000003', 'UTC')
+               retell_from_number, twilio_from_number, timezone) VALUES
+              (:la, :a, 'A One', 'a-one', true, 'agent-a', '+15550000011', '+15550000001', 'UTC'),
+              (:lb, :b, 'B One', 'b-one', true, 'agent-b', '+15550000013', '+15550000003', 'UTC')
             ON CONFLICT DO NOTHING
             """
         ),
@@ -529,8 +529,8 @@ async def test_voice_claim_blocks_redial_but_failed_allows_retry(session):
 @pytest.mark.asyncio
 async def test_outbound_voice_profile_unique_active_and_attempt_list(session):
     """V-8 DB guarantees against real Postgres: at most one ACTIVE outbound-voice
-    profile per location (the API's 409 path), and list_voice_attempts filters by
-    run/status (the drill-down read)."""
+    profile per location/purpose (the API's 409 path), and list_voice_attempts
+    filters by run/status (the drill-down read)."""
     from sqlalchemy import delete as sa_delete
     from sqlalchemy.exc import IntegrityError
 
@@ -547,15 +547,51 @@ async def test_outbound_voice_profile_unique_active_and_attempt_list(session):
     await session.execute(sa_delete(OutboundVoiceProfile).where(OutboundVoiceProfile.location_id == LOC_A))
     await session.commit()
 
-    # One active profile per location; a second ACTIVE one violates the partial unique index.
-    session.add(OutboundVoiceProfile(institution_id=INST_A, location_id=LOC_A, retell_agent_id="a1", is_active=True))
+    # Multiple active profiles are allowed per location when their purposes differ.
+    session.add(
+        OutboundVoiceProfile(
+            institution_id=INST_A,
+            location_id=LOC_A,
+            retell_agent_id="a1",
+            purpose="surgery_confirmation",
+            is_active=True,
+        )
+    )
     await session.commit()
-    session.add(OutboundVoiceProfile(institution_id=INST_A, location_id=LOC_A, retell_agent_id="a2", is_active=True))
+    session.add(
+        OutboundVoiceProfile(
+            institution_id=INST_A,
+            location_id=LOC_A,
+            retell_agent_id="a2",
+            purpose="post_op_follow_up",
+            is_active=True,
+        )
+    )
+    await session.commit()
+
+    # A second active profile with the same purpose violates the partial unique index.
+    session.add(
+        OutboundVoiceProfile(
+            institution_id=INST_A,
+            location_id=LOC_A,
+            retell_agent_id="a2b",
+            purpose="surgery_confirmation",
+            is_active=True,
+        )
+    )
     with pytest.raises(IntegrityError):
         await session.flush()
     await session.rollback()
-    # ...but an INACTIVE second profile for the same location is allowed.
-    session.add(OutboundVoiceProfile(institution_id=INST_A, location_id=LOC_A, retell_agent_id="a3", is_active=False))
+    # ...but an INACTIVE duplicate purpose for the same location is allowed.
+    session.add(
+        OutboundVoiceProfile(
+            institution_id=INST_A,
+            location_id=LOC_A,
+            retell_agent_id="a3",
+            purpose="surgery_confirmation",
+            is_active=False,
+        )
+    )
     await session.commit()
 
     # Attempt listing: two attempts on one run, filterable by run and status.

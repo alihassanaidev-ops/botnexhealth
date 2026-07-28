@@ -25,23 +25,25 @@ logger = logging.getLogger(__name__)
 
 
 async def resolve_outbound_voice_profile(
-    session: AsyncSession, location_id: str | None
+    session: AsyncSession, location_id: str | None, profile_id: str | None = None
 ) -> OutboundVoiceProfile | None:
-    """Return the active outbound-voice profile for a location, or None.
+    """Return an active outbound-voice profile, or None.
 
-    Resolution is override-with-fallback: callers prefer the profile's
-    agent/from-number when present and fall back to the node/location defaults, so
-    an absent or inactive profile leaves existing behavior unchanged.
+    New workflows pass ``profile_id``. Legacy workflows omit it and get the oldest
+    active profile for backward-compatible override behavior.
     """
     if not location_id:
         return None
+    query = select(OutboundVoiceProfile).where(
+        OutboundVoiceProfile.location_id == location_id,
+        OutboundVoiceProfile.is_active.is_(True),
+    )
+    if profile_id:
+        query = query.where(OutboundVoiceProfile.id == profile_id)
+    else:
+        query = query.order_by(OutboundVoiceProfile.created_at.asc()).limit(1)
     return (
-        await session.execute(
-            select(OutboundVoiceProfile).where(
-                OutboundVoiceProfile.location_id == location_id,
-                OutboundVoiceProfile.is_active.is_(True),
-            )
-        )
+        await session.execute(query)
     ).scalar_one_or_none()
 
 

@@ -25,6 +25,7 @@ import {
     updateWorkflow,
     validateDefinition as validateDefinitionOnServer,
 } from "@/lib/workflow-api"
+import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import {
     addNode,
     blankDefinition,
@@ -51,6 +52,7 @@ import ComplianceSettings from "@/components/workflow/ComplianceSettings"
 import LaunchChecklistPanel from "@/components/workflow/LaunchChecklistPanel"
 import TestRunDialog from "@/components/workflow/TestRunDialog"
 import type { AutomationWorkflow } from "@/types"
+import type { OutboundVoiceProfile } from "@/types"
 import type {
     ChannelReadiness,
     ComplianceMetadata,
@@ -87,6 +89,7 @@ export default function WorkflowBuilder() {
     const [testOpen, setTestOpen] = useState(false)
     const [backendIssues, setBackendIssues] = useState<ValidationIssue[]>([])
     const [readiness, setReadiness] = useState<ChannelReadiness | null>(null)
+    const [voiceProfiles, setVoiceProfiles] = useState<OutboundVoiceProfile[]>([])
     const [launchChecklist, setLaunchChecklist] = useState<LaunchChecklist | null>(null)
     const [launchChecklistLoading, setLaunchChecklistLoading] = useState(false)
     const serverDef = useRef<WorkflowDefinition | null>(null)
@@ -134,16 +137,26 @@ export default function WorkflowBuilder() {
     useEffect(() => {
         if (!locationId) {
             setReadiness(null)
+            setVoiceProfiles([])
             return
         }
         let cancelled = false
-        getChannelReadiness(locationId)
+        Promise.all([
+            getChannelReadiness(locationId),
+            listOutboundVoiceProfiles({ locationId, isActive: true }),
+        ])
             .then((r) => {
-                if (!cancelled) setReadiness(r)
+                if (!cancelled) {
+                    setReadiness(r[0])
+                    setVoiceProfiles(r[1])
+                }
             })
             .catch(() => {
                 // Advisory only — a failed lookup silently omits the indicator.
-                if (!cancelled) setReadiness(null)
+                if (!cancelled) {
+                    setReadiness(null)
+                    setVoiceProfiles([])
+                }
             })
         return () => {
             cancelled = true
@@ -506,6 +519,7 @@ export default function WorkflowBuilder() {
                 onDeleteNode={onDeleteNode}
                 onSetEntry={onSetEntry}
                 locationId={locationId}
+                voiceProfiles={voiceProfiles}
                 readOnly={readOnly}
             />
             <TestRunDialog open={testOpen} onOpenChange={setTestOpen} def={def} />
