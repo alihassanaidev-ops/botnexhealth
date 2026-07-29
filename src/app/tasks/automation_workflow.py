@@ -75,6 +75,26 @@ _RETELL_OUTCOME_POLL_BATCH = 25
 _RETELL_OUTCOME_MIN_AGE_SECONDS = 30
 _RETELL_TERMINAL_CALL_STATUSES = frozenset({"ended", "not_connected", "error"})
 
+# System SUPER_ADMIN identity for background tasks that scan across *all*
+# institutions (webhook-subscription + sync-status lifecycle). The tenant-scoped
+# 'celery' RLS context can only see rows for a single institution_id, so a
+# cross-institution scan under it (institutions/institution_locations) matches
+# zero rows and silently creates nothing. These lifecycle tasks therefore run as
+# SUPER_ADMIN — context_type='user' + role='SUPER_ADMIN', which
+# app_rls_is_super_admin() recognizes — mirroring the invite bootstrap identity.
+# Per-institution tasks keep the scoped 'celery' context.
+_SYSTEM_SUPER_ADMIN_ID = "00000000-0000-0000-0000-000000000000"
+
+
+def _superadmin_system_session(external_id: str):
+    """DB session that can see every institution (cross-tenant lifecycle scans)."""
+    return get_system_db_session(
+        "user",
+        role="SUPER_ADMIN",
+        user_id=_SYSTEM_SUPER_ADMIN_ID,
+        external_id=external_id,
+    )
+
 
 def _ensure_db() -> None:
     from src.app.config import settings
@@ -675,8 +695,8 @@ def ensure_nexhealth_webhook_subscriptions(self) -> dict:
 async def _ensure_nexhealth_webhook_subscriptions_async() -> dict:
     from src.app.config import settings
 
-    async with get_system_db_session(
-        "celery", external_id="nexhealth_subscription_lifecycle"
+    async with _superadmin_system_session(
+        "nexhealth_subscription_lifecycle"
     ) as session:
         svc = NexHealthSubscriptionLifecycleService(session)
         ensure_summary = await svc.ensure_for_configured_locations(
@@ -715,8 +735,8 @@ def ensure_gotracker_webhook_subscriptions(self) -> dict:
 async def _ensure_gotracker_webhook_subscriptions_async() -> dict:
     from src.app.config import settings
 
-    async with get_system_db_session(
-        "celery", external_id="gotracker_subscription_lifecycle"
+    async with _superadmin_system_session(
+        "gotracker_subscription_lifecycle"
     ) as session:
         svc = GoTrackerSubscriptionLifecycleService(session)
         ensure_summary = await svc.ensure_for_configured_locations(
@@ -817,8 +837,8 @@ def poll_nexhealth_sync_statuses(self) -> dict:
 
 
 async def _poll_nexhealth_sync_statuses_async() -> dict:
-    async with get_system_db_session(
-        "celery", external_id="nexhealth_sync_status_poll"
+    async with _superadmin_system_session(
+        "nexhealth_sync_status_poll"
     ) as session:
         summary = await NexHealthSyncStatusService(session).poll_all_configured_locations()
         await session.commit()
