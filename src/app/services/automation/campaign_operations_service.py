@@ -36,6 +36,7 @@ from src.app.models.sms_history_log import SmsHistoryLog
 from src.app.models.usage_event import UsageEvent
 from src.app.services.automation.definition_schema import (
     ConditionNode,
+    DripNode,
     ExitNode,
     SendEmailNode,
     SendSmsNode,
@@ -1090,6 +1091,9 @@ _TIMELINE_SAFE_METADATA_KEYS = {
     "attempt_number",
     "branch",
     "branch_taken",
+    "batch_number",
+    "batch_position",
+    "batch_size",
     "call_outcome",
     "completed_at",
     "currency",
@@ -1099,6 +1103,7 @@ _TIMELINE_SAFE_METADATA_KEYS = {
     "duration_ms",
     "external_ref",
     "fired_at",
+    "interval_seconds",
     "max_attempts",
     "next_node_id",
     "outcome",
@@ -1162,7 +1167,7 @@ def _step_output_snapshot(
             output["next_node_id"] = node.true_next_node_id
         elif branch == "false":
             output["next_node_id"] = node.false_next_node_id
-    elif isinstance(node, WaitNode):
+    elif isinstance(node, (WaitNode, DripNode)):
         output["scheduled_at"] = step.scheduled_at
         output["scheduled_local_at"] = step.scheduled_local_at
         output["scheduled_timezone"] = step.scheduled_timezone
@@ -1183,6 +1188,10 @@ def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
     base: dict[str, Any] = {"id": node.id, "type": node.type}
     if isinstance(node, WaitNode):
         base["delay"] = node.delay.model_dump(mode="json")
+        base["next_node_id"] = node.next_node_id
+    elif isinstance(node, DripNode):
+        base["batch_size"] = node.batch_size
+        base["interval_seconds"] = node.interval_seconds
         base["next_node_id"] = node.next_node_id
     elif isinstance(node, ConditionNode):
         base["logic"] = node.logic

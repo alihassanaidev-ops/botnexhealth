@@ -50,6 +50,21 @@ describe("dry-run simulation", () => {
         expect(result.outcome).toBe("confirmed")
     })
 
+    it("describes drip actions in the simulated path", () => {
+        const drip: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "drip-1",
+            nodes: [
+                { type: "drip", id: "drip-1", batch_size: 25, interval_seconds: 3600, next_node_id: "exit-1" },
+                { type: "exit", id: "exit-1", outcome: "released" },
+            ],
+        }
+        const result = simulateRun(drip)
+        expect(result.steps.map((s) => s.node_type)).toEqual(["drip", "exit"])
+        expect(result.steps[0].detail).toContain("25 contact(s)")
+    })
+
     it("honors an explicit false branch choice", () => {
         const result = simulateRun(BRANCHED, { conditionChoices: { "cond-1": false } })
         expect(result.steps.map((s) => s.node_id)).toEqual(["cond-1", "sms-1", "exit-no"])

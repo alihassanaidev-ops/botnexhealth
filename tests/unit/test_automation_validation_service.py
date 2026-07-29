@@ -162,3 +162,23 @@ def test_non_sending_workflow_has_no_content_warning() -> None:
     issues = _validate(definition)
     assert not any(i.code == "content_class_unset" for i in issues)
     assert WorkflowValidationService.is_publishable(issues) is True
+
+
+def test_drip_only_workflow_has_no_content_warning() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "drip-1",
+        "nodes": [
+            {
+                "type": "drip",
+                "id": "drip-1",
+                "batch_size": 25,
+                "interval_seconds": 3600,
+                "next_node_id": "x1",
+            },
+            {"type": "exit", "id": "x1", "outcome": "done"},
+        ],
+    }
+    issues = _validate(definition)
+    assert not any(i.code == "content_class_unset" for i in issues)
+    assert WorkflowValidationService.is_publishable(issues) is True

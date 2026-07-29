@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.services.automation.definition_schema import (
     ConditionNode,
+    DripNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -168,7 +169,7 @@ class WorkflowValidationService:
             node = node_map[nid]
             if isinstance(node, ConditionNode):
                 stack.extend([node.true_next_node_id, node.false_next_node_id])
-            elif isinstance(node, (WaitNode, *_SEND_NODE_TYPES)):
+            elif isinstance(node, (WaitNode, DripNode, *_SEND_NODE_TYPES)):
                 stack.append(node.next_node_id)
         return [
             ValidationIssue(

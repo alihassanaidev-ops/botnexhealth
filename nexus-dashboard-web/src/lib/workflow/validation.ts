@@ -137,6 +137,24 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                 }
                 break
             }
+            case "drip": {
+                refError(node, node.next_node_id, "Drip step")
+                if (!Number.isFinite(node.batch_size) || node.batch_size < 1 || node.batch_size > 10000) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Drip batch size must be between 1 and 10,000.",
+                    })
+                }
+                if (!Number.isFinite(node.interval_seconds) || node.interval_seconds < 1) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Drip interval must be at least 1 second.",
+                    })
+                }
+                break
+            }
             case "send_sms": {
                 refError(node, node.next_node_id, "SMS step")
                 if (!node.body_template.trim()) {

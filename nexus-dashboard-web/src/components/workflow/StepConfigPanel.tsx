@@ -42,6 +42,7 @@ import type {
     ConditionNode,
     ConditionOp,
     ConditionRule,
+    DripNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -308,6 +309,7 @@ function NodeForm({
                     />
                 )}
                 {node.type === "wait" && <WaitFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
+                {node.type === "drip" && <DripFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "update_patient_status" && (
                     <UpdatePatientStatusFields node={node} onChange={onNodeChange} readOnly={readOnly} />
                 )}
@@ -674,6 +676,43 @@ function relativeWaitPreset(seconds: number): string {
     return presets.has(text) ? text : text
 }
 
+function DripFields({ node, onChange, readOnly }: { node: DripNode; onChange: (n: WorkflowNode) => void; readOnly?: boolean }) {
+    return (
+        <>
+            <Field label="Batch size" hint="How many contacts are released immediately in each batch.">
+                <Input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    value={node.batch_size}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({
+                            ...node,
+                            batch_size: clamp(toInt(e.target.value, node.batch_size), 1, 10000),
+                        })
+                    }
+                />
+            </Field>
+            <Field label="Interval (minutes)" hint="How long to wait before opening the next batch.">
+                <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={Math.max(1, Math.round(node.interval_seconds / 60))}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({
+                            ...node,
+                            interval_seconds: Math.max(1, toInt(e.target.value, Math.round(node.interval_seconds / 60))) * 60,
+                        })
+                    }
+                />
+            </Field>
+        </>
+    )
+}
+
 function UpdatePatientStatusFields({
     node,
     onChange,
@@ -978,6 +1017,9 @@ function toInt(v: string, fallback: number): number {
 function toFloat(v: string, fallback: number): number {
     const n = parseFloat(v)
     return Number.isFinite(n) ? n : fallback
+}
+function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value))
 }
 function round2(n: number): number {
     return Math.round(n * 100) / 100

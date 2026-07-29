@@ -18,15 +18,21 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.app.models.automation_workflow import AutomationWorkflowRun
+from src.app.models.automation_workflow import (
+    AutomationWorkflowDripState,
+    AutomationWorkflowRun,
+)
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import (
     AppointmentRelativeDelay,
     CalendarDelay,
     ConditionNode,
     ConditionRule,
+    DripNode,
     DurationDelay,
     ExitNode,
     SendEmailNode,
@@ -135,6 +141,50 @@ class WorkflowStepDispatcher:
                     scheduled_at=due_at,
                     scheduled_timezone=location_timezone,
                 )
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=step.id,
+                    due_at=due_at,
+                    timezone_name=location_timezone,
+                )
+                await self.runtime.wait_run(run, step)
+                return DispatchResult(
+                    status="waiting",
+                    timer_id=timer.id,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
+            elif isinstance(node, DripNode):
+                due_at, batch_number, batch_position = await self._allocate_drip_slot(
+                    run, node, now
+                )
+                step = await self.runtime.begin_step(
+                    run,
+                    step_id=node.id,
+                    step_type="drip",
+                    scheduled_at=due_at,
+                    scheduled_timezone=location_timezone,
+                )
+                metadata = {
+                    "batch_number": batch_number,
+                    "batch_position": batch_position,
+                    "batch_size": node.batch_size,
+                    "interval_seconds": node.interval_seconds,
+                    "release_at": due_at.isoformat(),
+                }
+                if due_at <= now:
+                    await self.runtime.complete_step(
+                        step,
+                        result_code="drip_released",
+                        result_metadata=metadata,
+                    )
+                    current_node_id = node.next_node_id
+                    continue
+
+                step.result_metadata = metadata
                 timer = await self.scheduler.create_timer(
                     institution_id=run.institution_id,
                     location_id=run.location_id,
@@ -335,10 +385,11 @@ class WorkflowStepDispatcher:
         node_map = {n.id: n for n in definition.nodes}
         current_node = node_map.get(run.current_step_id or "")
         is_wait = isinstance(current_node, WaitNode)
+        is_drip = isinstance(current_node, DripNode)
         is_held_send = isinstance(current_node, (SendSmsNode, SendVoiceNode, SendEmailNode))
-        if not (is_wait or is_held_send):
+        if not (is_wait or is_drip or is_held_send):
             await self.runtime.fail_run(
-                run, reason=f"expected wait or held send node at '{run.current_step_id}'"
+                run, reason=f"expected wait, drip, or held send node at '{run.current_step_id}'"
             )
             return DispatchResult(status="failed")
 
@@ -360,11 +411,13 @@ class WorkflowStepDispatcher:
             return DispatchResult(status="failed")
 
         await self.runtime.resume_run(run, waiting_step)
+        if is_drip:
+            waiting_step.result_code = "drip_released"
         is_parked_voice = is_held_send and waiting_step.result_code == _CALL_PLACED_AWAITING
-        if is_wait or is_parked_voice:
-            # WaitNode: move past the wait. Parked voice: the call already went out,
-            # so advance PAST the send node (never re-dial) into whatever follows —
-            # typically a ConditionNode that branches on `call_outcome`.
+        if is_wait or is_drip or is_parked_voice:
+            # WaitNode/DripNode: move past the gate. Parked voice: the call already
+            # went out, so advance PAST the send node (never re-dial) into whatever
+            # follows — typically a ConditionNode that branches on `call_outcome`.
             run.current_step_id = current_node.next_node_id
             if is_parked_voice and "call_outcome" not in context:
                 # Safety-timeout fired before any outcome webhook arrived → treat as
@@ -376,6 +429,78 @@ class WorkflowStepDispatcher:
         return await self.advance(
             run, definition, context=context, location_timezone=location_timezone, now=now
         )
+
+    async def _allocate_drip_slot(
+        self,
+        run: AutomationWorkflowRun,
+        node: DripNode,
+        now: datetime,
+    ) -> tuple[datetime, int, int]:
+        """Reserve this run's release slot for a Drip action.
+
+        The state row is scoped to the immutable workflow version and node id, so
+        publishing edited drip settings naturally gives new runs a fresh cursor
+        while already queued runs keep their original timers.
+        """
+        result = await self.session.execute(
+            select(AutomationWorkflowDripState)
+            .where(
+                AutomationWorkflowDripState.workflow_version_id
+                == run.workflow_version_id,
+                AutomationWorkflowDripState.step_id == node.id,
+            )
+            .with_for_update()
+        )
+        state = result.scalar_one_or_none()
+        if state is None:
+            await self.session.execute(
+                pg_insert(AutomationWorkflowDripState)
+                .values(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_id=run.workflow_id,
+                    workflow_version_id=run.workflow_version_id,
+                    step_id=node.id,
+                    batch_size=node.batch_size,
+                    interval_seconds=node.interval_seconds,
+                    current_batch_number=0,
+                    current_batch_count=0,
+                    next_due_at=now,
+                )
+                .on_conflict_do_nothing(
+                    constraint="uq_automation_drip_state_version_step"
+                )
+            )
+            result = await self.session.execute(
+                select(AutomationWorkflowDripState)
+                .where(
+                    AutomationWorkflowDripState.workflow_version_id
+                    == run.workflow_version_id,
+                    AutomationWorkflowDripState.step_id == node.id,
+                )
+                .with_for_update()
+            )
+            state = result.scalar_one()
+
+        if state.next_due_at is None:
+            state.next_due_at = now
+
+        if state.current_batch_count >= node.batch_size:
+            next_due_at = state.next_due_at + timedelta(seconds=node.interval_seconds)
+            if next_due_at < now:
+                next_due_at = now
+            state.next_due_at = next_due_at
+            state.current_batch_number += 1
+            state.current_batch_count = 0
+
+        due_at = state.next_due_at
+        batch_number = state.current_batch_number + 1
+        batch_position = state.current_batch_count + 1
+        state.batch_size = node.batch_size
+        state.interval_seconds = node.interval_seconds
+        state.current_batch_count += 1
+        await self.session.flush()
+        return due_at, batch_number, batch_position
 
     async def _dispatch_send_stub(
         self,

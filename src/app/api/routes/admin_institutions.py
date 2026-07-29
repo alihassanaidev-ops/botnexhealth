@@ -38,6 +38,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/institutions", tags=["Admin - Institutions"])
 
 
+class RetellPhoneNumberResponse(BaseModel):
+    phone_number: str
+    phone_number_pretty: str | None = None
+    nickname: str | None = None
+    phone_number_type: str | None = None
+    inbound_agents: list[Any] | None = None
+    outbound_agents: list[Any] | None = None
+
+
 # =============================================================================
 # Retell Agents API
 # =============================================================================
@@ -129,6 +138,79 @@ async def verify_retell_agent(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to communicate with Retell API",
         )
+
+
+@router.get("/retell/phone-numbers", response_model=list[RetellPhoneNumberResponse])
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda *args, **kwargs: "retell:phone-numbers",
+    actor=AuditActor.ADMIN,
+)
+async def list_retell_phone_numbers(
+    _: User = Depends(get_current_admin),
+) -> list[RetellPhoneNumberResponse]:
+    """
+    List Retell phone numbers available on the configured Retell account.
+
+    Used by Super Admins to select the outbound from-number for a named voice
+    profile. The selected number is stored on outbound_voice_profiles.
+    """
+    import httpx
+
+    if not settings.retell_api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retell API secret not configured",
+        )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.retellai.com/v2/list-phone-numbers",
+                headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+    except httpx.HTTPError as e:
+        logger.error("Failed to fetch Retell phone numbers: %s", safe_error_summary(e))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to communicate with Retell API",
+        )
+
+    raw = response.json()
+    if isinstance(raw, dict):
+        data = raw.get("data")
+        items = (
+            raw.get("phone_numbers")
+            or raw.get("items")
+            or raw.get("numbers")
+            or (data.get("phone_numbers") if isinstance(data, dict) else None)
+            or (data.get("items") if isinstance(data, dict) else None)
+            or (data.get("numbers") if isinstance(data, dict) else None)
+            or (data if isinstance(data, list) else [])
+        )
+    else:
+        items = raw
+
+    results: list[RetellPhoneNumberResponse] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        phone_number = item.get("phone_number") or item.get("number")
+        if not phone_number:
+            continue
+        results.append(
+            RetellPhoneNumberResponse(
+                phone_number=str(phone_number),
+                phone_number_pretty=item.get("phone_number_pretty"),
+                nickname=item.get("nickname"),
+                phone_number_type=item.get("phone_number_type"),
+                inbound_agents=item.get("inbound_agents"),
+                outbound_agents=item.get("outbound_agents"),
+            )
+        )
+    return results
 
 
 # =============================================================================

@@ -54,6 +54,21 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.node_id === "sms-1" && i.message.includes("body is empty"))).toBe(true)
     })
 
+    it("validates drip batch size and interval", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "drip-1",
+            nodes: [
+                { type: "drip", id: "drip-1", batch_size: 0, interval_seconds: 0, next_node_id: "exit-1" },
+                { type: "exit", id: "exit-1", outcome: "released" },
+            ],
+        }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.node_id === "drip-1" && i.message.includes("batch size"))).toBe(true)
+        expect(issues.some((i) => i.node_id === "drip-1" && i.message.includes("interval"))).toBe(true)
+    })
+
     it("flags out-of-range max_attempts", () => {
         const def = base()
         ;(def.nodes[0] as { max_attempts: number }).max_attempts = 9

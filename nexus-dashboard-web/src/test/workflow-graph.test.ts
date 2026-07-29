@@ -150,6 +150,7 @@ describe("workflow graph — factories", () => {
     })
     it("createNode yields schema-shaped defaults", () => {
         expect(createNode("wait", "w").type).toBe("wait")
+        expect(createNode("drip", "d")).toMatchObject({ batch_size: 25, interval_seconds: 3600 })
         expect(createNode("send_sms", "s")).toMatchObject({ max_attempts: 1, body_template: "" })
         expect(createNode("send_voice", "v")).toMatchObject({ wait_for_outcome: false, max_attempts: 1 })
         expect(createNode("condition", "c")).toMatchObject({ logic: "AND" })
@@ -189,6 +190,19 @@ describe("workflow graph — mutations", () => {
         const sms = next.nodes.find((n) => n.id === "sms-1")!
         expect(sms.type === "send_sms" && sms.next_node_id).toBe("exit-1")
     })
+    it("removeNode bypasses drip predecessors to the removed node's next", () => {
+        const def: WorkflowDefinition = {
+            ...LINEAR,
+            entry_node_id: "drip-1",
+            nodes: [
+                { type: "drip", id: "drip-1", batch_size: 25, interval_seconds: 3600, next_node_id: "wait-1" },
+                ...LINEAR.nodes.slice(1),
+            ],
+        }
+        const next = removeNode(def, "wait-1")
+        const drip = next.nodes.find((n) => n.id === "drip-1")!
+        expect(drip.type === "drip" && drip.next_node_id).toBe("exit-1")
+    })
     it("removeNode on the entry node repoints entry to the bypass target", () => {
         const next = removeNode(LINEAR, "sms-1")
         expect(next.entry_node_id).toBe("wait-1")
@@ -206,6 +220,19 @@ describe("workflow graph — drag-to-connect (Phase 4)", () => {
         const next = connectNodes(LINEAR, "sms-1", "exit-1")
         const sms = next.nodes.find((n) => n.id === "sms-1")!
         expect(sms.type === "send_sms" && sms.next_node_id).toBe("exit-1")
+    })
+
+    it("connecting from a drip node sets its next_node_id", () => {
+        const def: WorkflowDefinition = {
+            ...LINEAR,
+            nodes: [
+                { type: "drip", id: "drip-1", batch_size: 25, interval_seconds: 3600, next_node_id: "" },
+                ...LINEAR.nodes,
+            ],
+        }
+        const next = connectNodes(def, "drip-1", "sms-1")
+        const drip = next.nodes.find((n) => n.id === "drip-1")!
+        expect(drip.type === "drip" && drip.next_node_id).toBe("sms-1")
     })
 
     it("connecting from a condition node's true/false handle sets the matching branch", () => {

@@ -4,6 +4,7 @@ import type {
     SmsLocation,
     SmsSuppression,
     TwilioPhoneNumber,
+    RetellPhoneNumber,
     SendSmsRequest,
     SendSmsResponse,
     OutboundVoiceProfile,
@@ -25,6 +26,11 @@ export async function listTwilioPhoneNumbers(): Promise<TwilioPhoneNumber[]> {
     return data
 }
 
+export async function listRetellPhoneNumbers(): Promise<RetellPhoneNumber[]> {
+    const { data } = await api.get<RetellPhoneNumber[]>("/admin/institutions/retell/phone-numbers")
+    return data
+}
+
 export async function listAdminOutboundVoiceProfiles(
     institutionSlug: string,
     locationSlug: string,
@@ -41,6 +47,7 @@ export async function createAdminOutboundVoiceProfile(
     payload: {
         display_name?: string | null
         retell_agent_id?: string | null
+        retell_from_number?: string | null
         is_active?: boolean
         config?: Record<string, unknown> | null
     },
@@ -59,6 +66,7 @@ export async function updateAdminOutboundVoiceProfile(
     payload: {
         display_name?: string | null
         retell_agent_id?: string | null
+        retell_from_number?: string | null
         is_active?: boolean
         config?: Record<string, unknown> | null
     },

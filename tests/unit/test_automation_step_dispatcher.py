@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,6 +11,7 @@ import pytest
 
 from src.app.models.automation_workflow import (
     AutomationRunStatus,
+    AutomationWorkflowDripState,
     AutomationWorkflowRun,
     AutomationWorkflowStepExecution,
     AutomationStepStatus,
@@ -21,6 +22,7 @@ from src.app.services.automation.definition_schema import (
     CalendarDelay,
     ConditionNode,
     ConditionRule,
+    DripNode,
     DurationDelay,
     ExitNode,
     SendSmsNode,
@@ -52,13 +54,18 @@ def _make_run(status: str = AutomationRunStatus.RUNNING.value) -> AutomationWork
     )
 
 
-def _make_step(status: str = AutomationStepStatus.WAITING.value) -> AutomationWorkflowStepExecution:
+def _make_step(
+    status: str = AutomationStepStatus.WAITING.value,
+    *,
+    step_id: str = "wait-1",
+    step_type: str = "wait",
+) -> AutomationWorkflowStepExecution:
     return AutomationWorkflowStepExecution(
         institution_id="inst-1",
         workflow_run_id="run-1",
         workflow_version_id="ver-1",
-        step_id="wait-1",
-        step_type="wait",
+        step_id=step_id,
+        step_type=step_type,
         status=status,
     )
 
@@ -197,6 +204,134 @@ def test_advance_appointment_relative_wait_uses_appointment_at_context() -> None
     assert sched.create_timer.await_args.kwargs["due_at"] == datetime(
         2026, 7, 3, 13, 0, 0, tzinfo=timezone.utc
     )
+
+
+# ---------------------------------------------------------------------------
+# advance() — drip action releases configured batches
+# ---------------------------------------------------------------------------
+
+
+def test_advance_drip_releases_available_batch_slot_immediately() -> None:
+    session = _make_session()
+    state = AutomationWorkflowDripState(
+        institution_id="inst-1",
+        location_id=None,
+        workflow_id="wf-1",
+        workflow_version_id="ver-1",
+        step_id="drip-1",
+        batch_size=2,
+        interval_seconds=3600,
+        current_batch_number=0,
+        current_batch_count=0,
+        next_due_at=_NOW,
+    )
+    result_row = MagicMock()
+    result_row.scalar_one_or_none.return_value = state
+    session.execute = AsyncMock(return_value=result_row)
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run()
+    defn = _definition(
+        nodes=[
+            DripNode(id="drip-1", batch_size=2, interval_seconds=3600, next_node_id="exit-1"),
+            ExitNode(id="exit-1", outcome="released"),
+        ],
+        entry="drip-1",
+    )
+
+    result = asyncio.run(dispatcher.advance(run, defn, context={}, now=_NOW))
+
+    assert result.status == "completed"
+    assert result.outcome == "released"
+    assert state.current_batch_count == 1
+    sched.create_timer.assert_not_awaited()
+    rt.complete_step.assert_any_await(
+        rt.begin_step.return_value,
+        result_code="drip_released",
+        result_metadata={
+            "batch_number": 1,
+            "batch_position": 1,
+            "batch_size": 2,
+            "interval_seconds": 3600,
+            "release_at": _NOW.isoformat(),
+        },
+    )
+
+
+def test_advance_drip_waits_for_next_batch_after_batch_is_full() -> None:
+    session = _make_session()
+    state = AutomationWorkflowDripState(
+        institution_id="inst-1",
+        location_id=None,
+        workflow_id="wf-1",
+        workflow_version_id="ver-1",
+        step_id="drip-1",
+        batch_size=2,
+        interval_seconds=3600,
+        current_batch_number=0,
+        current_batch_count=2,
+        next_due_at=_NOW,
+    )
+    result_row = MagicMock()
+    result_row.scalar_one_or_none.return_value = state
+    session.execute = AsyncMock(return_value=result_row)
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+    due_at = _NOW + timedelta(seconds=3600)
+
+    run = _make_run()
+    defn = _definition(
+        nodes=[
+            DripNode(id="drip-1", batch_size=2, interval_seconds=3600, next_node_id="exit-1"),
+            ExitNode(id="exit-1", outcome="released"),
+        ],
+        entry="drip-1",
+    )
+
+    result = asyncio.run(dispatcher.advance(run, defn, context={}, now=_NOW))
+
+    assert result.status == "waiting"
+    assert result.timer_id == "timer-1"
+    assert state.current_batch_number == 1
+    assert state.current_batch_count == 1
+    assert state.next_due_at == due_at
+    sched.create_timer.assert_awaited_once()
+    assert sched.create_timer.await_args.kwargs["due_at"] == due_at
+    rt.wait_run.assert_awaited_once()
+
+
+def test_resume_after_timer_moves_past_drip_gate() -> None:
+    session = _make_session()
+    waiting_step = _make_step(step_id="drip-1", step_type="drip")
+    waiting_step.id = "step-exec-1"
+    result_row = MagicMock()
+    result_row.scalar_one_or_none.return_value = waiting_step
+    session.execute = AsyncMock(return_value=result_row)
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run(status=AutomationRunStatus.WAITING.value)
+    run.id = "run-1"
+    run.current_step_id = "drip-1"
+    defn = _definition(
+        nodes=[
+            DripNode(id="drip-1", batch_size=2, interval_seconds=3600, next_node_id="exit-1"),
+            ExitNode(id="exit-1", outcome="released"),
+        ],
+        entry="drip-1",
+    )
+
+    result = asyncio.run(dispatcher.resume_after_timer(run, defn, context={}, now=_NOW))
+
+    assert result.status == "completed"
+    assert result.outcome == "released"
+    assert run.current_step_id == "exit-1"
+    assert waiting_step.result_code == "drip_released"
+    rt.resume_run.assert_awaited_once_with(run, waiting_step)
 
 
 # ---------------------------------------------------------------------------

@@ -119,6 +119,45 @@ def test_duration_wait() -> None:
     assert d.nodes[0].delay.duration_seconds == 3600
 
 
+def test_drip_node() -> None:
+    defn = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "drip-1",
+        "nodes": [
+            {
+                "type": "drip",
+                "id": "drip-1",
+                "batch_size": 25,
+                "interval_seconds": 3600,
+                "next_node_id": "exit-1",
+            },
+            {"type": "exit", "id": "exit-1"},
+        ],
+    }
+    d = WorkflowDefinition.model_validate(defn)
+    assert d.nodes[0].type == "drip"
+    assert d.nodes[0].batch_size == 25
+
+
+def test_drip_node_rejects_invalid_batch_settings() -> None:
+    defn = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "drip-1",
+        "nodes": [
+            {
+                "type": "drip",
+                "id": "drip-1",
+                "batch_size": 0,
+                "interval_seconds": 0,
+                "next_node_id": "exit-1",
+            },
+            {"type": "exit", "id": "exit-1"},
+        ],
+    }
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
 def test_voice_node() -> None:
     defn = {
         "trigger": {"type": "manual"},

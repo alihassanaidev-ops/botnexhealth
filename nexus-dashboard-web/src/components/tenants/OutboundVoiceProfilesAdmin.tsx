@@ -6,26 +6,32 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
     createAdminOutboundVoiceProfile,
     deleteAdminOutboundVoiceProfile,
+    listRetellPhoneNumbers,
     listAdminOutboundVoiceProfiles,
     updateAdminOutboundVoiceProfile,
     verifyRetellAgent,
 } from "@/lib/admin-api"
-import type { OutboundVoiceProfile } from "@/types"
+import type { OutboundVoiceProfile, RetellPhoneNumber } from "@/types"
 
 type FormState = {
     displayName: string
     retellAgentId: string
+    retellFromNumber: string
     isActive: boolean
 }
 
 const EMPTY_FORM: FormState = {
     displayName: "",
     retellAgentId: "",
+    retellFromNumber: "",
     isActive: true,
 }
+
+const NO_NUMBER = "__no_retell_number__"
 
 function fieldValue(value: string) {
     const trimmed = value.trim()
@@ -36,8 +42,14 @@ function formFromProfile(profile: OutboundVoiceProfile): FormState {
     return {
         displayName: profile.display_name ?? "",
         retellAgentId: profile.retell_agent_id ?? "",
+        retellFromNumber: profile.retell_from_number ?? "",
         isActive: profile.is_active,
     }
+}
+
+function phoneLabel(number: RetellPhoneNumber) {
+    const display = number.phone_number_pretty || number.phone_number
+    return number.nickname ? `${number.nickname} (${display})` : display
 }
 
 function apiErrorMessage(error: unknown, fallback: string) {
@@ -54,8 +66,10 @@ export function OutboundVoiceProfilesAdmin({
 }) {
     const [profiles, setProfiles] = useState<OutboundVoiceProfile[]>([])
     const [loading, setLoading] = useState(true)
+    const [loadingNumbers, setLoadingNumbers] = useState(false)
     const [showForm, setShowForm] = useState(false)
     const [editingProfile, setEditingProfile] = useState<OutboundVoiceProfile | null>(null)
+    const [phoneNumbers, setPhoneNumbers] = useState<RetellPhoneNumber[]>([])
     const [saving, setSaving] = useState(false)
     const [deletingId, setDeletingId] = useState<string | null>(null)
     const [form, setForm] = useState<FormState>(EMPTY_FORM)
@@ -63,6 +77,25 @@ export function OutboundVoiceProfilesAdmin({
     const [agentVerificationStatus, setAgentVerificationStatus] = useState<"idle" | "success" | "error">("idle")
 
     const activeCount = useMemo(() => profiles.filter((profile) => profile.is_active).length, [profiles])
+    const phoneNumberOptions = useMemo(() => {
+        const selected = fieldValue(form.retellFromNumber)
+        const hasSelected = selected
+            ? phoneNumbers.some((number) => number.phone_number === selected)
+            : true
+        return selected && !hasSelected
+            ? [
+                {
+                    phone_number: selected,
+                    phone_number_pretty: selected,
+                    nickname: "Current saved number",
+                    phone_number_type: null,
+                    inbound_agents: null,
+                    outbound_agents: null,
+                },
+                ...phoneNumbers,
+            ]
+            : phoneNumbers
+    }, [form.retellFromNumber, phoneNumbers])
 
     const loadProfiles = useCallback(async () => {
         setLoading(true)
@@ -75,9 +108,24 @@ export function OutboundVoiceProfilesAdmin({
         }
     }, [institutionSlug, locationSlug])
 
+    const loadPhoneNumbers = useCallback(async () => {
+        setLoadingNumbers(true)
+        try {
+            setPhoneNumbers(await listRetellPhoneNumbers())
+        } catch (error: unknown) {
+            toast.error(apiErrorMessage(error, "Failed to load Retell phone numbers"))
+        } finally {
+            setLoadingNumbers(false)
+        }
+    }, [])
+
     useEffect(() => {
         void loadProfiles()
     }, [loadProfiles])
+
+    useEffect(() => {
+        void loadPhoneNumbers()
+    }, [loadPhoneNumbers])
 
     function updateForm(patch: Partial<FormState>) {
         setForm((current) => ({ ...current, ...patch }))
@@ -128,12 +176,17 @@ export function OutboundVoiceProfilesAdmin({
             toast.error("Retell agent ID is required")
             return
         }
+        if (!fieldValue(form.retellFromNumber)) {
+            toast.error("Retell from number is required")
+            return
+        }
 
         setSaving(true)
         try {
             const payload = {
                 display_name: fieldValue(form.displayName),
                 retell_agent_id: fieldValue(form.retellAgentId),
+                retell_from_number: fieldValue(form.retellFromNumber),
                 is_active: form.isActive,
             }
             if (editingProfile) {
@@ -241,6 +294,31 @@ export function OutboundVoiceProfilesAdmin({
                                 </p>
                             )}
                         </div>
+                        <div className="space-y-2">
+                            <Label>Retell from number</Label>
+                            <Select
+                                value={form.retellFromNumber || NO_NUMBER}
+                                onValueChange={(value) => updateForm({ retellFromNumber: value === NO_NUMBER ? "" : value })}
+                                disabled={loadingNumbers}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder={loadingNumbers ? "Loading Retell numbers..." : "Select Retell number"} />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={NO_NUMBER}>Select Retell number</SelectItem>
+                                    {phoneNumberOptions.map((number) => (
+                                        <SelectItem key={number.phone_number} value={number.phone_number}>
+                                            {phoneLabel(number)}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            {phoneNumberOptions.length === 0 && !loadingNumbers && (
+                                <p className="text-xs text-muted-foreground">
+                                    No Retell phone numbers found for this account.
+                                </p>
+                            )}
+                        </div>
                         <label className="flex items-center gap-2 pt-7 text-sm font-medium">
                             <Checkbox checked={form.isActive} onCheckedChange={(checked) => updateForm({ isActive: checked === true })} />
                             Active
@@ -270,6 +348,9 @@ export function OutboundVoiceProfilesAdmin({
                             </div>
                             <p className="mt-1 font-mono text-xs text-muted-foreground">
                                 {profile.retell_agent_id || "missing agent"}
+                            </p>
+                            <p className="mt-1 font-mono text-xs text-muted-foreground">
+                                From: {profile.retell_from_number || "missing Retell number"}
                             </p>
                         </div>
                         <div className="flex gap-2">

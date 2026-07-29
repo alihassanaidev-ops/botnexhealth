@@ -74,6 +74,16 @@ function describe(
                 next: node.next_node_id,
             }
         }
+        case "drip":
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "drip",
+                    summary: "Drip",
+                    detail: `Release ${node.batch_size} contact(s) every ${humanizeSeconds(node.interval_seconds)}`,
+                },
+                next: node.next_node_id,
+            }
         case "send_sms":
             return {
                 step: {

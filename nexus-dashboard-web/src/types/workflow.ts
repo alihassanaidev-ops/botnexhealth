@@ -94,6 +94,7 @@ export interface ConditionRule {
 // ---------------------------------------------------------------------------
 export type NodeType =
     | "wait"
+    | "drip"
     | "send_sms"
     | "send_voice"
     | "send_email"
@@ -107,6 +108,13 @@ export interface WaitNode {
     delay: WaitDelay
     next_node_id: string
     respect_quiet_hours?: boolean
+}
+export interface DripNode {
+    type: "drip"
+    id: string
+    batch_size: number
+    interval_seconds: number
+    next_node_id: string
 }
 export interface SendSmsNode {
     type: "send_sms"
@@ -159,6 +167,7 @@ export interface ExitNode {
 
 export type WorkflowNode =
     | WaitNode
+    | DripNode
     | SendSmsNode
     | SendVoiceNode
     | SendEmailNode
@@ -201,7 +210,7 @@ export interface WorkflowDefinition {
 }
 
 /** Node types that carry exactly one forward pointer (`next_node_id`). */
-export type LinearNode = WaitNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode
+export type LinearNode = WaitNode | DripNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode
 /** Node types that place a message/call on a channel. */
 export type SendNode = SendSmsNode | SendVoiceNode | SendEmailNode
 

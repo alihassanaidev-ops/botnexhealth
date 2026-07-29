@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from src.app.services.automation.definition_schema import (
     ConditionNode,
+    DripNode,
     ExitNode,
     SendEmailNode,
     SendSmsNode,
@@ -56,6 +57,13 @@ def _describe_wait(node: WaitNode) -> str:
     return f"Wait until day +{delay.offset_days} at {delay.time_of_day} (local)"
 
 
+def _describe_drip(node: DripNode) -> str:
+    return (
+        f"Drip {node.batch_size} contact"
+        f"{'' if node.batch_size == 1 else 's'} every {node.interval_seconds} seconds"
+    )
+
+
 def simulate_run(
     definition: WorkflowDefinition,
     *,
@@ -86,6 +94,9 @@ def simulate_run(
 
         if isinstance(node, WaitNode):
             result.steps.append(DryRunStep(node.id, "wait", _describe_wait(node)))
+            current = node.next_node_id
+        elif isinstance(node, DripNode):
+            result.steps.append(DryRunStep(node.id, "drip", _describe_drip(node)))
             current = node.next_node_id
         elif isinstance(node, SendSmsNode):
             body = render_sms_body(node.body_template, None, None, ctx)

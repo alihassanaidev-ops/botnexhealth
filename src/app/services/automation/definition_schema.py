@@ -3,7 +3,8 @@
 Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, recall_scan, manual, bulk_import, callback_requested,
             patient_status_changed
-  Nodes:    wait, send_sms, send_voice, send_email, update_patient_status, condition, exit
+  Nodes:    wait, drip, send_sms, send_voice, send_email, update_patient_status,
+            condition, exit
 """
 
 from __future__ import annotations
@@ -173,6 +174,16 @@ class WaitNode(BaseModel):
     respect_quiet_hours: bool = True
 
 
+class DripNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["drip"] = "drip"
+    batch_size: int = Field(ge=1, le=10_000)
+    interval_seconds: int = Field(ge=1)
+    next_node_id: str
+
+
 class SendSmsNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -247,6 +258,7 @@ class ExitNode(BaseModel):
 WorkflowNode = Annotated[
     Union[
         WaitNode,
+        DripNode,
         SendSmsNode,
         SendVoiceNode,
         SendEmailNode,
@@ -318,6 +330,7 @@ class WorkflowDefinition(BaseModel):
                 node,
                 (
                     WaitNode,
+                    DripNode,
                     SendSmsNode,
                     SendVoiceNode,
                     SendEmailNode,

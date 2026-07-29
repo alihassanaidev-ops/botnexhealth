@@ -62,6 +62,25 @@ def test_dry_run_condition_follows_choice() -> None:
     assert simulate_run(d, condition_choices={"c1": True}).outcome == "yes"
 
 
+def test_dry_run_describes_drip_action() -> None:
+    d = _defn(
+        [
+            {
+                "type": "drip",
+                "id": "drip-1",
+                "batch_size": 25,
+                "interval_seconds": 3600,
+                "next_node_id": "x1",
+            },
+            {"type": "exit", "id": "x1", "outcome": "released"},
+        ],
+        "drip-1",
+    )
+    r = simulate_run(d)
+    assert [s.node_type for s in r.steps] == ["drip", "exit"]
+    assert "25 contacts" in r.steps[0].summary
+
+
 def test_dry_run_truncates_on_loop() -> None:
     d = _defn(
         [

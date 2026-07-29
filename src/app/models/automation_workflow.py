@@ -395,6 +395,64 @@ class AutomationWorkflowStepExecution(Base):
     )
 
 
+class AutomationWorkflowDripState(Base):
+    """Durable batch cursor for one Drip action in one published workflow version."""
+
+    __tablename__ = "automation_workflow_drip_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow_version_id",
+            "step_id",
+            name="uq_automation_drip_state_version_step",
+        ),
+        CheckConstraint("batch_size > 0", name="ck_automation_drip_state_batch_size"),
+        CheckConstraint("current_batch_count >= 0", name="ck_automation_drip_state_batch_count"),
+        CheckConstraint("current_batch_number >= 0", name="ck_automation_drip_state_batch_number"),
+        Index("ix_automation_drip_states_institution", "institution_id"),
+        Index("ix_automation_drip_states_workflow_version", "workflow_version_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    institution_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    location_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institution_locations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("automation_workflows.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workflow_version_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("automation_workflow_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    step_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_batch_number: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    current_batch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    next_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+
 class AutomationWorkflowTimer(Base):
     """Durable scheduler row for delayed workflow execution."""
 

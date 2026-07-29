@@ -119,6 +119,7 @@ interface Outgoing {
 export function outgoing(node: WorkflowNode): Outgoing[] {
     switch (node.type) {
         case "wait":
+        case "drip":
         case "send_sms":
         case "send_voice":
         case "send_email":
@@ -162,6 +163,7 @@ export function referencedIds(node: WorkflowNode): string[] {
 function singleNext(node: WorkflowNode): string | undefined {
     if (
         node.type === "wait" ||
+        node.type === "drip" ||
         node.type === "send_sms" ||
         node.type === "send_voice" ||
         node.type === "send_email" ||
@@ -410,6 +412,14 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 next_node_id: "",
                 respect_quiet_hours: true,
             }
+        case "drip":
+            return {
+                type,
+                id,
+                batch_size: 25,
+                interval_seconds: 3600,
+                next_node_id: "",
+            }
         case "send_sms":
             return {
                 type,
@@ -568,6 +578,7 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
         .map((n): WorkflowNode => {
             switch (n.type) {
                 case "wait":
+                case "drip":
                 case "send_sms":
                 case "send_voice":
                 case "send_email":
@@ -614,6 +625,7 @@ export function connectNodes(
     if (!node) return def
     switch (node.type) {
         case "wait":
+        case "drip":
         case "send_sms":
         case "send_voice":
         case "send_email":

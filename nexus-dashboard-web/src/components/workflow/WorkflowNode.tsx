@@ -29,6 +29,8 @@ function stepSummary(node: WfNode): string {
                 return `${humanizeSeconds(Math.abs(node.delay.offset_seconds))} ${direction} appointment`
             }
             return `${node.delay.offset_days} day(s) @ ${node.delay.time_of_day}`
+        case "drip":
+            return `${node.batch_size} every ${humanizeSeconds(node.interval_seconds)}`
         case "send_sms":
             return truncate(node.body_template) || "No message yet"
         case "send_email":

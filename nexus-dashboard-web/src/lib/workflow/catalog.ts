@@ -59,6 +59,13 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         group: "action",
         accent: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
     },
+    drip: {
+        label: "Drip",
+        description: "Release contacts in batches over time.",
+        icon: Clock,
+        group: "action",
+        accent: "bg-cyan-100 text-cyan-700 dark:bg-cyan-950/50 dark:text-cyan-300",
+    },
     wait: {
         label: "Wait",
         description: "Pause for a duration or until a time.",
@@ -124,7 +131,7 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
     { title: "Channels", group: "channel", types: ["send_sms", "send_voice", "send_email"] },
-    { title: "Actions", group: "action", types: ["update_patient_status"] },
+    { title: "Actions", group: "action", types: ["drip", "update_patient_status"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
 ]
 

@@ -439,6 +439,15 @@ export interface TwilioPhoneNumber {
     status: string | null;
 }
 
+export interface RetellPhoneNumber {
+    phone_number: string;
+    phone_number_pretty: string | null;
+    nickname: string | null;
+    phone_number_type: string | null;
+    inbound_agents: unknown[] | null;
+    outbound_agents: unknown[] | null;
+}
+
 export interface SendSmsRequest {
     from_number: string;
     to_number: string;
