@@ -25,6 +25,15 @@ def _result(*, first=None, scalar=None):
     return result
 
 
+def _compiled_sql(stmt) -> str:
+    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
+
+
+def _assert_nexhealth_pms_filter(stmt) -> None:
+    sql = _compiled_sql(stmt)
+    assert "institutions.pms_type = 'nexhealth'" in sql
+
+
 @pytest.mark.asyncio
 async def test_backfill_projects_new_appointment_and_triggers_workflow():
     subscription = SimpleNamespace(
@@ -256,3 +265,43 @@ async def test_patient_reconciliation_uses_patient_watermark_overlap():
     adapter.list_patients.assert_awaited_once_with(
         updated_since="2026-07-21T09:00:00+00:00"
     )
+
+
+@pytest.mark.asyncio
+async def test_appointment_target_scan_only_loads_nexhealth_institutions():
+    session = AsyncMock()
+    result = MagicMock()
+    result.all.return_value = []
+    session.execute = AsyncMock(return_value=result)
+
+    await NexHealthAppointmentSyncService(session)._load_subscription_locations()
+
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_appointment_sync_subscription_ignores_non_nexhealth_institutions():
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(first=None))
+
+    summary = await NexHealthAppointmentSyncService(session).sync_subscription(
+        subscription_id="sub-1",
+        mode="backfill",
+    )
+
+    assert summary.locations_scanned == 0
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_patient_sync_subscription_ignores_non_nexhealth_institutions():
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(first=None))
+
+    summary = await NexHealthPatientSyncService(session).sync_subscription(
+        subscription_id="sub-1",
+        mode="backfill",
+    )
+
+    assert summary.locations_scanned == 0
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])

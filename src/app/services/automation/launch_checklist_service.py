@@ -197,7 +197,7 @@ class CampaignLaunchChecklistService:
             else None
         )
         estimated_cost_cents: int | None = None
-        estimate_basis = ("Audience preview provides the current count; projected cost awaits channel pricing configuration."
+        estimate_basis = ("Audience preview provides the current count."
             if estimated_audience is not None
             else "Audience preview is not available yet; showing planned sends per enrolled contact."
         )
@@ -205,12 +205,12 @@ class CampaignLaunchChecklistService:
             CampaignLaunchChecklistItem(
                 id="send_volume_cost",
                 section="estimates",
-                label="Estimated send volume and cost",
+                label="Estimated send volume",
                 status="warning" if estimated_send_volume is not None else "unknown",
                 message=(
-                    f"Previewed audience can attempt {_format_volume(estimated_send_volume)}; projected spend is not configured."
+                    f"Previewed audience can attempt {_format_volume(estimated_send_volume)}."
                     if estimated_send_volume is not None
-                    else "Exact send volume and projected spend need an audience count. "
+                    else "Exact send volume needs an audience count. "
                     f"Per enrolled contact, this workflow can attempt {_format_volume(per_contact)}."
                 ),
                 fix_href="/institution-admin/campaigns/audience",

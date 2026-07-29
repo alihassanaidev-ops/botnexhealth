@@ -43,7 +43,7 @@ def _run(service: CampaignLaunchChecklistService, workflow, **kwargs):
     )
 
 
-def test_manual_campaign_surfaces_unknown_audience_and_cost() -> None:
+def test_manual_campaign_surfaces_unknown_audience_and_volume() -> None:
     definition = {
         "trigger": {"type": "manual"},
         "entry_node_id": "s1",
@@ -60,7 +60,11 @@ def test_manual_campaign_surfaces_unknown_audience_and_cost() -> None:
     assert checklist.estimated_audience is None
     assert checklist.estimated_send_volume is None
     assert _item(checklist, "audience_estimate").status == "warning"
-    assert _item(checklist, "send_volume_cost").status == "unknown"
+    volume_item = _item(checklist, "send_volume_cost")
+    assert volume_item.status == "unknown"
+    assert volume_item.label == "Estimated send volume"
+    assert "cost" not in volume_item.message.lower()
+    assert "spend" not in volume_item.message.lower()
 
 
 def test_marketing_without_consent_blocks_launch_checklist() -> None:

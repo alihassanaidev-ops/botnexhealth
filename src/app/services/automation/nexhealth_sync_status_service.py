@@ -109,9 +109,14 @@ class NexHealthSyncStatusService:
     ) -> list[InstitutionLocation]:
         status_payload = _sync_status_payload(payload)
         location_ids = _nexhealth_location_ids(status_payload)
-        stmt = select(InstitutionLocation).where(
-            InstitutionLocation.nexhealth_subdomain == subdomain,
-            InstitutionLocation.nexhealth_location_id.is_not(None),
+        stmt = (
+            select(InstitutionLocation)
+            .join(Institution, Institution.id == InstitutionLocation.institution_id)
+            .where(
+                Institution.pms_type == "nexhealth",
+                InstitutionLocation.nexhealth_subdomain == subdomain,
+                InstitutionLocation.nexhealth_location_id.is_not(None),
+            )
         )
         if location_ids:
             stmt = stmt.where(InstitutionLocation.nexhealth_location_id.in_(location_ids))
@@ -214,6 +219,7 @@ class NexHealthSyncStatusService:
                 InstitutionLocation.id == NexHealthWebhookSubscription.location_id,
             )
             .where(
+                Institution.pms_type == "nexhealth",
                 NexHealthWebhookSubscription.status.in_(
                     [
                         NexHealthWebhookSubscriptionStatus.ACTIVE.value,

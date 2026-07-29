@@ -63,10 +63,9 @@ export default function LaunchChecklistPanel({
                 <StatusPill status={checklist.overall_status} />
             </div>
 
-            <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="grid grid-cols-2 gap-2 text-xs">
                 <Metric label="Audience" value={checklist.estimated_audience === null ? "Unknown" : checklist.estimated_audience.toLocaleString()} />
                 <Metric label="Volume" value={formatVolume(checklist.estimated_send_volume)} />
-                <Metric label="Cost" value={formatCost(checklist.estimated_cost_cents)} />
             </div>
             {!compact && <p className="text-xs text-muted-foreground">{checklist.estimate_basis}</p>}
 
@@ -148,9 +147,4 @@ function formatVolume(volume: Record<string, number> | null): string {
     const entries = Object.entries(volume).filter(([, value]) => value > 0)
     if (!entries.length) return "0"
     return entries.map(([channel, value]) => `${value} ${channel}`).join(", ")
-}
-
-function formatCost(cents: number | null): string {
-    if (cents === null) return "Unknown"
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100)
 }

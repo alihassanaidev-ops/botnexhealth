@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -269,6 +270,61 @@ def _availability_response_from_raw(
         source_metadata={
             "tz_offset": item.get("tz_offset"),
             "custom_recurrence": item.get("custom_recurrence"),
+        },
+    )
+
+
+def _today_for_location(location: InstitutionLocation) -> str:
+    timezone_name = location.timezone or "UTC"
+    try:
+        return datetime.now(ZoneInfo(timezone_name)).date().isoformat()
+    except Exception:
+        return datetime.utcnow().date().isoformat()
+
+
+def _time_from_iso(value: str | None) -> str | None:
+    if not value:
+        return None
+    time_part = str(value).split("T", 1)[1] if "T" in str(value) else str(value)
+    time_part = time_part.replace("Z", "")
+    if "+" in time_part:
+        time_part = time_part.split("+", 1)[0]
+    elif len(time_part) > 8 and time_part[8] == "-":
+        time_part = time_part[:8]
+    return time_part[:5] if len(time_part) >= 5 else time_part
+
+
+def _date_from_iso(value: str | None) -> str | None:
+    if not value:
+        return None
+    return str(value).split("T", 1)[0]
+
+
+def _availability_response_from_slot(slot: Any, *, index: int) -> CachedAvailabilityResponse:
+    source_id = f"gt-slot-{slot.provider_id or 'provider'}-{slot.operatory_id or 'operatory'}-{slot.start or index}"
+    appointment_type_ids = [slot.appointment_type_id] if slot.appointment_type_id else []
+
+    return CachedAvailabilityResponse(
+        id=source_id,
+        source_id=source_id,
+        provider_source_id=slot.provider_id,
+        provider_name=slot.provider_name or None,
+        operatory_source_id=slot.operatory_id,
+        operatory_name=slot.operatory_name,
+        begin_time=_time_from_iso(slot.start),
+        end_time=_time_from_iso(slot.end),
+        days=[],
+        specific_date=_date_from_iso(slot.start),
+        appointment_type_ids=appointment_type_ids,
+        appointment_type_names=[],
+        active=True,
+        synced=True,
+        source_metadata={
+            "kind": "bookable_slot",
+            "source": "gotracker",
+            "location_source_id": slot.location_id,
+            "start": slot.start,
+            "end": slot.end,
         },
     )
 
@@ -803,7 +859,7 @@ async def list_availabilities(
     location_id: str | None = Query(None),
     provider_source_id: str | None = Query(None, description="Filter by provider"),
 ):
-    """Fetch availabilities live from PMS for the institution location."""
+    """Fetch schedule availability live from PMS for the institution location."""
     async with get_db_session() as session:
         institution, location = await _resolve_institution_location(current_user, session, location_id)
         adapter = await _get_adapter(institution, location)
@@ -811,27 +867,31 @@ async def list_availabilities(
         # Build extra params for the PMS call
         extra: dict[str, Any] = {}
         if provider_source_id:
-            # Strip prefix (e.g. "nh-449151038" -> "449151038")
-            raw_pid = provider_source_id.removeprefix("nh-")
-            extra["provider_id"] = raw_pid
+            extra["provider_id"] = provider_source_id
 
         try:
-            raw_items = await adapter.list_availabilities(**extra)
+            if isinstance(adapter, SupportsAvailabilityLinking):
+                raw_items = await adapter.list_availabilities(**extra)
+                return [_availability_response_from_raw(item) for item in raw_items]
+
+            slot_result = await adapter.find_available_slots(
+                start_date=_today_for_location(location),
+                days=7,
+                provider_id=provider_source_id,
+            )
+            return [
+                _availability_response_from_slot(slot, index=index)
+                for index, slot in enumerate(slot_result.slots)
+            ]
         except Exception as e:
             logger.error(
-                "Failed to fetch availabilities from PMS: %s",
+                "Failed to fetch schedule availability from PMS: %s",
                 safe_error_summary(e),
             )
             raise HTTPException(
                 status.HTTP_502_BAD_GATEWAY,
                 "Failed to fetch availabilities",
             )
-
-        # Map raw PMS response to the response schema
-        results: list[CachedAvailabilityResponse] = []
-        for item in raw_items:
-            results.append(_availability_response_from_raw(item))
-        return results
 
 
 @router.post("/availabilities", response_model=CachedAvailabilityResponse, status_code=201)

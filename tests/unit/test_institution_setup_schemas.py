@@ -19,7 +19,9 @@ from src.app.api.routes.institution_setup import (
     SetupOverviewResponse,
     UpdateAppointmentTypeRequest,
     UpdateAvailabilityRequest,
+    _availability_response_from_slot,
 )
+from src.app.pms.models import UniversalSlot
 
 
 class TestCachedProviderResponse:
@@ -86,6 +88,27 @@ class TestCachedAvailabilityResponse:
         av = CachedAvailabilityResponse(id="uuid-5", source_id="200")
         assert av.active is True
         assert av.synced is False
+
+    def test_gotracker_slot_maps_to_read_only_availability_row(self):
+        slot = UniversalSlot(
+            start="2026-07-30T09:00:00+00:00",
+            end="2026-07-30T09:15:00+00:00",
+            provider_id="gt-2",
+            operatory_id="gt-1",
+            location_id="gt-4",
+        )
+
+        av = _availability_response_from_slot(slot, index=0)
+
+        assert av.source_id == "gt-slot-gt-2-gt-1-2026-07-30T09:00:00+00:00"
+        assert av.provider_source_id == "gt-2"
+        assert av.operatory_source_id == "gt-1"
+        assert av.specific_date == "2026-07-30"
+        assert av.begin_time == "09:00"
+        assert av.end_time == "09:15"
+        assert av.appointment_type_ids == []
+        assert av.synced is True
+        assert av.source_metadata["kind"] == "bookable_slot"
 
 
 class TestLocationInfoResponse:

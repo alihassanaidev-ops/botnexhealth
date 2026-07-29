@@ -17,7 +17,18 @@ from src.app.services.automation.nexhealth_sync_status_service import (
 def _result(value):
     result = MagicMock()
     result.scalar_one_or_none.return_value = value
+    result.scalars.return_value.all.return_value = []
+    result.all.return_value = []
     return result
+
+
+def _compiled_sql(stmt) -> str:
+    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
+
+
+def _assert_nexhealth_pms_filter(stmt) -> None:
+    sql = _compiled_sql(stmt)
+    assert "institutions.pms_type = 'nexhealth'" in sql
 
 
 @pytest.mark.asyncio
@@ -112,3 +123,28 @@ async def test_poll_location_calls_nexhealth_sync_status_endpoint():
         params={"subdomain": "clinic-sub", "location_id": "nh-loc-1"},
     )
     adapter.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_locations_for_payload_only_returns_nexhealth_institutions():
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(None))
+
+    locations = await NexHealthSyncStatusService(session).resolve_locations_for_payload(
+        subdomain="clinic-sub",
+        payload={"data": {"locations": [{"id": "nh-loc-1"}]}},
+    )
+
+    assert locations == []
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_sync_status_poll_target_scan_only_loads_nexhealth_institutions():
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(None))
+
+    rows = await NexHealthSyncStatusService(session)._load_subscription_locations()
+
+    assert rows == []
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])

@@ -28,6 +28,15 @@ def _session(result) -> AsyncMock:
     return session
 
 
+def _compiled_sql(stmt) -> str:
+    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
+
+
+def _assert_nexhealth_pms_filter(stmt) -> None:
+    sql = _compiled_sql(stmt)
+    assert "institutions.pms_type = 'nexhealth'" in sql
+
+
 @pytest.mark.asyncio
 async def test_ensure_location_subscription_creates_pending_row_without_callback():
     result = MagicMock()
@@ -140,9 +149,33 @@ async def test_active_or_pending_targets_returns_subscription_ids():
     ]
     result = MagicMock()
     result.scalars.return_value.all.return_value = rows
-    svc = NexHealthSubscriptionLifecycleService(_session(result))
+    session = _session(result)
+    svc = NexHealthSubscriptionLifecycleService(session)
 
     assert await svc.active_or_pending_targets() == [
         ("inst-1", "sub-1"),
         ("inst-2", "sub-2"),
     ]
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_ensure_for_configured_locations_only_targets_nexhealth_institutions():
+    result = MagicMock()
+    result.all.return_value = []
+    session = _session(result)
+
+    await NexHealthSubscriptionLifecycleService(session).ensure_for_configured_locations()
+
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_configured_subscription_targets_only_returns_nexhealth_institutions():
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session = _session(result)
+
+    await NexHealthSubscriptionLifecycleService(session).configured_subscription_targets()
+
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])

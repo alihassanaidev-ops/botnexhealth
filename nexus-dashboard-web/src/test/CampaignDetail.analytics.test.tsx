@@ -291,7 +291,7 @@ beforeEach(() => {
 })
 
 describe("CampaignDetail analytics tab", () => {
-    it("renders normalized outcome labels and cost per result", async () => {
+    it("renders normalized outcome labels and channel trend", async () => {
         const user = userEvent.setup()
         render(
             <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
@@ -306,8 +306,6 @@ describe("CampaignDetail analytics tab", () => {
 
         expect(await screen.findByText("Recall Booked")).toBeInTheDocument()
         expect(screen.getByText("25%")).toBeInTheDocument()
-        expect(screen.getByText("Cost per booking")).toBeInTheDocument()
-        expect(screen.getByText("$2.83")).toBeInTheDocument()
         expect(screen.getByText("Channel funnel")).toBeInTheDocument()
         expect(screen.getByText("2026-07-18")).toBeInTheDocument()
     })

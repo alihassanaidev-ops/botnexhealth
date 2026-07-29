@@ -14,6 +14,7 @@ from sqlalchemy import select
 from src.app.config import settings
 from src.app.database import get_system_db_session
 from src.app.models.contact import Contact
+from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.dead_letter import capture_dead_letter
 from src.app.services.sms_privacy import payload_hash, safe_error_summary
@@ -549,8 +550,13 @@ async def _process_patient_event(
     async with get_system_db_session(
         "nexhealth_lookup", external_id=patient_id
     ) as session:
-        stmt = select(InstitutionLocation).where(
-            InstitutionLocation.nexhealth_location_id.in_(nexhealth_location_ids)
+        stmt = (
+            select(InstitutionLocation)
+            .join(Institution, Institution.id == InstitutionLocation.institution_id)
+            .where(
+                Institution.pms_type == "nexhealth",
+                InstitutionLocation.nexhealth_location_id.in_(nexhealth_location_ids),
+            )
         )
         if subdomain:
             stmt = stmt.where(InstitutionLocation.nexhealth_subdomain == subdomain)
@@ -682,8 +688,11 @@ async def _process_appointment_event(
         "nexhealth_lookup", external_id=appointment_id
     ) as session:
         loc_row = await session.execute(
-            select(InstitutionLocation).where(
-                InstitutionLocation.nexhealth_location_id == nexhealth_location_id
+            select(InstitutionLocation)
+            .join(Institution, Institution.id == InstitutionLocation.institution_id)
+            .where(
+                Institution.pms_type == "nexhealth",
+                InstitutionLocation.nexhealth_location_id == nexhealth_location_id,
             )
         )
         location = loc_row.scalar_one_or_none()

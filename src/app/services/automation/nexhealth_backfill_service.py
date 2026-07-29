@@ -104,6 +104,7 @@ class NexHealthAppointmentSyncService:
             .join(Institution, Institution.id == NexHealthWebhookSubscription.institution_id)
             .join(InstitutionLocation, InstitutionLocation.id == NexHealthWebhookSubscription.location_id)
             .where(
+                Institution.pms_type == "nexhealth",
                 NexHealthWebhookSubscription.status.in_(
                     [
                         NexHealthWebhookSubscriptionStatus.ACTIVE.value,
@@ -135,7 +136,10 @@ class NexHealthAppointmentSyncService:
             )
             .join(Institution, Institution.id == NexHealthWebhookSubscription.institution_id)
             .join(InstitutionLocation, InstitutionLocation.id == NexHealthWebhookSubscription.location_id)
-            .where(NexHealthWebhookSubscription.id == subscription_id)
+            .where(
+                NexHealthWebhookSubscription.id == subscription_id,
+                Institution.pms_type == "nexhealth",
+            )
         )
         row = result.first()
         summary = AppointmentSyncSummary()
@@ -341,7 +345,10 @@ class NexHealthPatientSyncService:
                 InstitutionLocation,
                 InstitutionLocation.id == NexHealthWebhookSubscription.location_id,
             )
-            .where(NexHealthWebhookSubscription.id == subscription_id)
+            .where(
+                NexHealthWebhookSubscription.id == subscription_id,
+                Institution.pms_type == "nexhealth",
+            )
         )
         row = result.first()
         summary = PatientSyncSummary()

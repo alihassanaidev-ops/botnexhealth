@@ -9,7 +9,6 @@ import {
     CheckCircle2,
     ChevronRight,
     Clock3,
-    DollarSign,
     Filter,
     Hash,
     Loader2,
@@ -71,7 +70,6 @@ import {
     getCampaignOverview,
     getRunTimeline,
     getUsageByCampaign,
-    getUsageSummary,
     listCampaignRuns,
     pauseCampaign,
     previewCampaignAudience,
@@ -95,7 +93,6 @@ import type {
     CampaignUsage,
     RunTimeline,
     RunTimelineItem,
-    UsageSummary,
 } from "@/types"
 
 const WORKFLOW_STATUS_STYLES: Record<string, string> = {
@@ -172,14 +169,6 @@ function elapsed(run: CampaignRunListItem): string {
     const minutes = Math.floor(seconds / 60)
     if (minutes < 60) return `${minutes}m ${seconds % 60}s`
     return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-}
-
-function money(value: number | undefined, currency = "USD"): string {
-    return new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency,
-        maximumFractionDigits: 2,
-    }).format(value ?? 0)
 }
 
 function number(value: number | undefined): string {
@@ -382,12 +371,10 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
 
 function OverviewTab({
     overview,
-    usageSummary,
     campaignUsage,
     loading,
 }: {
     overview: CampaignOverview | null
-    usageSummary: UsageSummary | null
     campaignUsage: CampaignUsage | null
     loading: boolean
 }) {
@@ -397,9 +384,9 @@ function OverviewTab({
     const readiness = overview?.readiness
     return (
         <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-5">
+            <div className="grid gap-3 md:grid-cols-4">
                 {loading ? (
-                    Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)
+                    Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)
                 ) : (
                     <>
                         <Stat icon={<ActivitySquare className="h-3.5 w-3.5" />} label="Active runs" value={number((runCounts.running ?? 0) + (runCounts.waiting ?? 0) + (runCounts.pending ?? 0))} />
@@ -452,14 +439,13 @@ function OverviewTab({
                 </CardHeader>
                 <CardContent>
                     {loading ? (
-                        <div className="grid gap-3 md:grid-cols-5">
-                            {Array.from({ length: 5 }).map((_, i) => (
+                        <div className="grid gap-3 md:grid-cols-4">
+                            {Array.from({ length: 4 }).map((_, i) => (
                                 <Skeleton key={i} className="h-20 w-full" />
                             ))}
                         </div>
                     ) : (
-                        <div className="grid gap-3 md:grid-cols-5">
-                            <Stat icon={<DollarSign className="h-3.5 w-3.5" />} label="Campaign cost" value={money(campaignUsage?.total_cost, usageSummary?.currency)} />
+                        <div className="grid gap-3 md:grid-cols-4">
                             <Stat icon={<Hash className="h-3.5 w-3.5" />} label="Events" value={number(campaignUsage?.event_count)} />
                             <Stat icon={<MessageSquare className="h-3.5 w-3.5" />} label="SMS segments" value={number(campaignUsage?.total_segments)} />
                             <Stat icon={<Phone className="h-3.5 w-3.5" />} label="Voice minutes" value={number(campaignUsage?.total_minutes)} />
@@ -1119,59 +1105,44 @@ function AnalyticsTab({
                         <Stat icon={<BarChart3 className="h-3.5 w-3.5" />} label="Send attempts" value={number(totalSends)} />
                         <Stat icon={<MessageSquare className="h-3.5 w-3.5" />} label="Responses" value={number(totalResponses)} />
                         <Stat icon={<CheckCircle2 className="h-3.5 w-3.5" />} label="Confirmed" value={number(summary.confirmed)} tone="text-emerald-600" />
-                        <Stat icon={<DollarSign className="h-3.5 w-3.5" />} label="Cost" value={money(analytics?.cost.total_cost, analytics?.cost.currency)} />
                     </>
                 )}
             </div>
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
-                <Card>
-                    <CardHeader className="pb-3">
-                        <CardTitle className="flex items-center gap-2 text-base font-semibold">
-                            <TrendingUp className="h-4 w-4" />
-                            Outcome analytics
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        {loading ? (
-                            <div className="grid gap-3 md:grid-cols-2">
-                                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
-                            </div>
-                        ) : analytics?.outcomes.length ? (
-                            <div className="grid gap-3 md:grid-cols-2">
-                                {analytics.outcomes.map((outcome) => (
-                                    <div key={outcome.key} className="rounded-md border border-border p-4">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className="min-w-0">
-                                                <p className="truncate text-sm font-medium">{outcome.label}</p>
-                                                <p className="mt-1 text-xs text-muted-foreground">{outcome.description}</p>
-                                            </div>
-                                            <Badge variant="outline" className="capitalize">{label(outcome.group)}</Badge>
+            <Card>
+                <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                        <TrendingUp className="h-4 w-4" />
+                        Outcome analytics
+                    </CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {loading ? (
+                        <div className="grid gap-3 md:grid-cols-2">
+                            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
+                        </div>
+                    ) : analytics?.outcomes.length ? (
+                        <div className="grid gap-3 md:grid-cols-2">
+                            {analytics.outcomes.map((outcome) => (
+                                <div key={outcome.key} className="rounded-md border border-border p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="truncate text-sm font-medium">{outcome.label}</p>
+                                            <p className="mt-1 text-xs text-muted-foreground">{outcome.description}</p>
                                         </div>
-                                        <div className="mt-4 flex items-end justify-between gap-3">
-                                            <span className="text-2xl font-semibold tabular-nums">{number(outcome.count)}</span>
-                                            <span className="text-sm text-muted-foreground">{percent(outcome.rate)}</span>
-                                        </div>
+                                        <Badge variant="outline" className="capitalize">{label(outcome.group)}</Badge>
                                     </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <p className="text-sm text-muted-foreground">No analytics rollup rows for this range.</p>
-                        )}
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="pb-3">
-                        <CardTitle className="text-base font-semibold">Cost per result</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                        <InfoRow label="Cost per booking" value={analytics?.cost.cost_per_booking === null || analytics?.cost.cost_per_booking === undefined ? "-" : money(analytics.cost.cost_per_booking, analytics.cost.currency)} />
-                        <InfoRow label="Cost per confirmation" value={analytics?.cost.cost_per_confirmation === null || analytics?.cost.cost_per_confirmation === undefined ? "-" : money(analytics.cost.cost_per_confirmation, analytics.cost.currency)} />
-                        <InfoRow label="Booked" value={number(summary.booked)} />
-                        <InfoRow label="Staff handoffs" value={number(summary.staff_handoff)} />
-                        <InfoRow label="Rollup freshness" value={analytics?.rollup_fresh_at ? fmt(analytics.rollup_fresh_at) : "-"} />
-                    </CardContent>
-                </Card>
-            </div>
+                                    <div className="mt-4 flex items-end justify-between gap-3">
+                                        <span className="text-2xl font-semibold tabular-nums">{number(outcome.count)}</span>
+                                        <span className="text-sm text-muted-foreground">{percent(outcome.rate)}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-sm text-muted-foreground">No analytics rollup rows for this range.</p>
+                    )}
+                </CardContent>
+            </Card>
             <div className="grid gap-4 lg:grid-cols-2">
                 <Card>
                     <CardHeader className="pb-3">
@@ -1207,7 +1178,6 @@ function AnalyticsTab({
                                             <th className="py-2 text-right font-medium">Responses</th>
                                             <th className="py-2 text-right font-medium">Confirmed</th>
                                             <th className="py-2 text-right font-medium">Booked</th>
-                                            <th className="py-2 text-right font-medium">Cost</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1219,7 +1189,6 @@ function AnalyticsTab({
                                                 <td className="py-2 text-right tabular-nums">{number(point.responses)}</td>
                                                 <td className="py-2 text-right tabular-nums">{number(point.confirmed)}</td>
                                                 <td className="py-2 text-right tabular-nums">{number(point.booked)}</td>
-                                                <td className="py-2 text-right tabular-nums">{money(point.total_cost, analytics.cost.currency)}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -1386,7 +1355,6 @@ export default function CampaignDetail() {
     const [runs, setRuns] = useState<CampaignRunListItem[]>([])
     const [nextCursor, setNextCursor] = useState<string | null>(null)
     const [operations, setOperations] = useState<CampaignOperations | null>(null)
-    const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null)
     const [campaignUsage, setCampaignUsage] = useState<CampaignUsage | null>(null)
     const [filters, setFilters] = useState<CampaignRunFilters>({ limit: 50 })
     const [loading, setLoading] = useState(true)
@@ -1411,13 +1379,12 @@ export default function CampaignDetail() {
         setRunsLoading(true)
         setOperationsLoading(true)
         try {
-            const [wf, ov, analyticsData, runPage, ops, summary, byCampaign] = await Promise.all([
+            const [wf, ov, analyticsData, runPage, ops, byCampaign] = await Promise.all([
                 getCampaign(id),
                 getCampaignOverview(id),
                 getCampaignAnalytics(id),
                 listCampaignRuns(id, { ...filters, cursor: undefined }),
                 getCampaignOperations(id),
-                getUsageSummary(),
                 getUsageByCampaign(undefined, 200),
             ])
             setCampaign(wf)
@@ -1426,7 +1393,6 @@ export default function CampaignDetail() {
             setRuns(runPage.items)
             setNextCursor(runPage.next_cursor)
             setOperations(ops)
-            setUsageSummary(summary)
             setCampaignUsage(byCampaign.campaigns.find((row) => row.workflow_id === id) ?? null)
         } catch {
             toast.error("Failed to load campaign")
@@ -1648,7 +1614,6 @@ export default function CampaignDetail() {
                 <TabsContent value="overview">
                     <OverviewTab
                         overview={overview}
-                        usageSummary={usageSummary}
                         campaignUsage={campaignUsage}
                         loading={loading}
                     />

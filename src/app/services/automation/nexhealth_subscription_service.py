@@ -92,6 +92,7 @@ class NexHealthSubscriptionLifecycleService:
             select(InstitutionLocation, Institution)
             .join(Institution, Institution.id == InstitutionLocation.institution_id)
             .where(
+                Institution.pms_type == "nexhealth",
                 InstitutionLocation.nexhealth_subdomain.is_not(None),
                 InstitutionLocation.nexhealth_location_id.is_not(None),
             )
@@ -121,7 +122,10 @@ class NexHealthSubscriptionLifecycleService:
     async def configured_subscription_targets(self) -> list[tuple[str, str]]:
         """Return (institution_id, location_id) for PMS-configured locations."""
         result = await self.session.execute(
-            select(InstitutionLocation).where(
+            select(InstitutionLocation)
+            .join(Institution, Institution.id == InstitutionLocation.institution_id)
+            .where(
+                Institution.pms_type == "nexhealth",
                 InstitutionLocation.nexhealth_subdomain.is_not(None),
                 InstitutionLocation.nexhealth_location_id.is_not(None),
             )
@@ -134,7 +138,10 @@ class NexHealthSubscriptionLifecycleService:
     async def active_or_pending_targets(self) -> list[tuple[str, str]]:
         """Return (institution_id, subscription_id) for rows due for sync."""
         result = await self.session.execute(
-            select(NexHealthWebhookSubscription).where(
+            select(NexHealthWebhookSubscription)
+            .join(Institution, Institution.id == NexHealthWebhookSubscription.institution_id)
+            .where(
+                Institution.pms_type == "nexhealth",
                 NexHealthWebhookSubscription.status.in_(
                     [
                         NexHealthWebhookSubscriptionStatus.ACTIVE.value,
