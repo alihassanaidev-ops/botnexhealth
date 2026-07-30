@@ -30,17 +30,21 @@ if (!("DOMMatrixReadOnly" in globalThis)) {
         constructor() {}
     } as unknown as typeof DOMMatrixReadOnly
 }
+// jsdom lacks these Element methods; TS's DOM lib already declares them, so the
+// negated `in` branch narrows Element.prototype to `never`. Assign via a mutable
+// cast so `tsc -b` (which type-checks test setup) doesn't fail the prod build.
+const _elemProto = Element.prototype as unknown as Record<string, unknown>
 if (!("hasPointerCapture" in Element.prototype)) {
-  Element.prototype.hasPointerCapture = () => false
+  _elemProto.hasPointerCapture = () => false
 }
 if (!("setPointerCapture" in Element.prototype)) {
-  Element.prototype.setPointerCapture = () => {}
+  _elemProto.setPointerCapture = () => {}
 }
 if (!("releasePointerCapture" in Element.prototype)) {
-  Element.prototype.releasePointerCapture = () => {}
+  _elemProto.releasePointerCapture = () => {}
 }
 if (!("scrollIntoView" in Element.prototype)) {
-  Element.prototype.scrollIntoView = () => {}
+  _elemProto.scrollIntoView = () => {}
 }
 
 afterEach(() => {
