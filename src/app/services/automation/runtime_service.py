@@ -164,10 +164,12 @@ class AutomationWorkflowRuntimeService:
         *,
         error_message: str | None = None,
         result_code: str | None = None,
+        result_metadata: dict | None = None,
     ) -> AutomationWorkflowStepExecution:
         step.status = AutomationStepStatus.FAILED.value
         step.error_message = error_message
         step.result_code = result_code
+        step.result_metadata = result_metadata
         step.completed_at = datetime.now(tz=timezone.utc)
         await self.session.flush()
         return step

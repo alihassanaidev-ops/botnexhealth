@@ -12,6 +12,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from src.app.services.sms_privacy import sanitize_provider_error
+
 logger = logging.getLogger(__name__)
 
 _CREATE_CALL_URL = "https://api.retellai.com/v2/create-phone-call"
@@ -106,7 +108,8 @@ class RetellOutboundClient:
             raise RetellTransientError(f"retell_5xx: {status}")
         if status >= 400:
             # 4xx = bad request / auth / not-found — retrying won't help.
-            raise RetellPermanentError(f"retell_4xx: {status}")
+            detail = sanitize_provider_error(response.text, max_length=180)
+            raise RetellPermanentError(f"retell_4xx: {status}: {detail}")
 
         call_id: str | None = None
         call_status: str | None = None

@@ -70,9 +70,10 @@ def _run_get(*, result=None, exc=None):
         return asyncio.run(RetellOutboundClient("re_key").get_phone_call("call_abc"))
 
 
-def _resp(status, body=None):
+def _resp(status, body=None, text=""):
     r = MagicMock()
     r.status_code = status
+    r.text = text
     r.json = MagicMock(return_value=body or {})
     return r
 
@@ -95,6 +96,16 @@ def test_5xx_raises_transient():
 def test_4xx_raises_permanent():
     with pytest.raises(RetellPermanentError):
         _run(result=_resp(422))
+
+
+def test_4xx_includes_sanitized_response_detail():
+    with pytest.raises(RetellPermanentError) as exc:
+        _run(result=_resp(400, text="Invalid to_number +12363140843 for user test@example.com"))
+    message = str(exc.value)
+    assert "retell_4xx: 400" in message
+    assert "+[phone-redacted]" not in message
+    assert "[phone-redacted]" in message
+    assert "[email-redacted]" in message
 
 
 def test_200_returns_call_id():

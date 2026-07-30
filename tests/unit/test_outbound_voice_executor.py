@@ -127,6 +127,10 @@ def _fail_reason(runtime) -> str:
     return runtime.fail_run.call_args.kwargs.get("reason", "")
 
 
+def _result_metadata(call) -> dict:
+    return call.call_args.kwargs.get("result_metadata") or {}
+
+
 # ---------------------------------------------------------------------------
 # Precondition failure paths (return before the vendor call)
 # ---------------------------------------------------------------------------
@@ -153,6 +157,15 @@ def test_executor_fails_when_no_phone():
     assert "no phone" in _fail_reason(runtime)
 
 
+def test_executor_fails_when_phone_invalid():
+    executor, runtime, _ = _make_executor(contact=_make_contact(phone="not-a-phone"))
+    with _patch_client(result=RetellCallResult(call_id="x")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    runtime.fail_run.assert_called_once()
+    assert "phone number is invalid" in _fail_reason(runtime)
+    call_mock.assert_not_called()
+
+
 def test_executor_fails_when_no_retell_from_number():
     executor, runtime, _ = _make_executor(
         contact=_make_contact(), location=_make_location(retell_from_number=None)
@@ -160,6 +173,17 @@ def test_executor_fails_when_no_retell_from_number():
     asyncio.run(executor.execute(_make_run(), _make_node(), {}))
     runtime.fail_run.assert_called_once()
     assert "retell_from_number" in _fail_reason(runtime)
+
+
+def test_executor_fails_when_retell_from_number_invalid():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(retell_from_number="bad-from")
+    )
+    with _patch_client(result=RetellCallResult(call_id="x")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    runtime.fail_run.assert_called_once()
+    assert "retell_from_number is invalid" in _fail_reason(runtime)
+    call_mock.assert_not_called()
 
 
 def test_executor_fails_when_retell_not_configured():
@@ -200,14 +224,41 @@ def test_executor_places_call_and_stores_call_id():
     runtime.complete_step.assert_called_once()
     ckw = runtime.complete_step.call_args.kwargs
     assert ckw.get("result_code") == "call_placed"
-    assert ckw.get("result_metadata") == {"retell_call_id": "call_xyz"}
+    result_metadata = ckw.get("result_metadata")
+    assert result_metadata["retell_call_id"] == "call_xyz"
+    assert result_metadata["retell_agent_configured"] is True
+    assert result_metadata["retell_agent_source"] == "node"
+    assert result_metadata["retell_from_number_source"] == "location"
+    assert result_metadata["retell_from_number_masked"] == "+*******0000"
+    assert result_metadata["to_number_masked"] == "+*******1234"
     runtime.fail_run.assert_not_called()
 
 
-def _make_profile(agent_id="agent_profile", from_number="+15559990000"):
+def test_executor_normalizes_display_formatted_numbers_before_retell():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(phone="(236) 314-0843"),
+        location=_make_location(retell_from_number="(548) 708-8349"),
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_xyz"), {}))
+
+    kw = call_mock.call_args.kwargs
+    assert kw["from_number"] == "+15487088349"
+    assert kw["to_number"] == "+12363140843"
+    assert kw["dynamic_variables"]["user_number"] == "+12363140843"
+    result_metadata = _result_metadata(runtime.complete_step)
+    assert result_metadata["retell_from_number_masked"] == "+*******8349"
+    assert result_metadata["to_number_masked"] == "+*******0843"
+    assert result_metadata["retell_from_number_normalized"] is True
+    assert result_metadata["to_number_normalized"] is True
+    runtime.fail_run.assert_not_called()
+
+
+def _make_profile(agent_id="agent_profile", from_number="+14163140843", display_name="Surgery profile"):
     p = MagicMock()
     p.retell_agent_id = agent_id
     p.retell_from_number = from_number
+    p.display_name = display_name
     return p
 
 
@@ -216,12 +267,12 @@ def test_executor_profile_overrides_agent_and_from_number():
     executor, runtime, _ = _make_executor(
         contact=_make_contact(),
         location=_make_location(),
-        profile=_make_profile(agent_id="agent_profile", from_number="+15559990000"),
+        profile=_make_profile(agent_id="agent_profile", from_number="+14163140843"),
     )
     with _patch_client(result=RetellCallResult(call_id="c1")) as call_mock:
         asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_node"), {}))
     kw = call_mock.call_args.kwargs
-    assert kw["from_number"] == "+15559990000"      # profile wins over location
+    assert kw["from_number"] == "+14163140843"      # profile wins over location
     assert kw["override_agent_id"] == "agent_profile"  # profile wins over node
 
 
@@ -229,7 +280,7 @@ def test_executor_selected_profile_supplies_agent_when_node_agent_blank():
     executor, runtime, _ = _make_executor(
         contact=_make_contact(),
         location=_make_location(),
-        profile=_make_profile(agent_id="agent_surgery", from_number="+15559990000"),
+        profile=_make_profile(agent_id="agent_surgery", from_number="+14163140843"),
     )
     with _patch_client(result=RetellCallResult(call_id="c1")) as call_mock:
         asyncio.run(
@@ -240,7 +291,7 @@ def test_executor_selected_profile_supplies_agent_when_node_agent_blank():
             )
         )
     kw = call_mock.call_args.kwargs
-    assert kw["from_number"] == "+15559990000"
+    assert kw["from_number"] == "+14163140843"
     assert kw["override_agent_id"] == "agent_surgery"
 
 
@@ -340,7 +391,10 @@ def test_executor_parks_when_wait_for_outcome():
     runtime.mark_step_awaiting_outcome.assert_called_once()
     mkw = runtime.mark_step_awaiting_outcome.call_args.kwargs
     assert mkw.get("result_code") == "call_placed_awaiting_outcome"
-    assert mkw.get("result_metadata") == {"retell_call_id": "call_park"}
+    result_metadata = mkw.get("result_metadata")
+    assert result_metadata["retell_call_id"] == "call_park"
+    assert result_metadata["retell_from_number_masked"] == "+*******0000"
+    assert result_metadata["to_number_masked"] == "+*******1234"
     runtime.complete_step.assert_not_called()
     runtime.fail_run.assert_not_called()
 
@@ -440,6 +494,10 @@ def test_executor_permanent_error_fails_run():
     assert result == "node-2"
     runtime.fail_step.assert_called_once()
     runtime.fail_run.assert_called_once()
+    result_metadata = _result_metadata(runtime.fail_step)
+    assert result_metadata["retell_from_number_masked"] == "+*******0000"
+    assert result_metadata["to_number_masked"] == "+*******1234"
+    assert result_metadata["retell_agent_configured"] is True
     assert "send_voice error" in _fail_reason(runtime)
 
 

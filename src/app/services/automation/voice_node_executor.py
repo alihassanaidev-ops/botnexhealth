@@ -40,6 +40,7 @@ from src.app.services.automation.voice_attempt_recorder import (
     resolve_outbound_voice_profile,
     voice_send_already_claimed,
 )
+from src.app.services.sms_privacy import mask_phone, normalize_phone
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,32 @@ _CALL_PLACED = "call_placed"
 # from a completed fire-and-forget "call_placed" so resume knows the call already
 # went out (advance past, never re-dial).
 _CALL_PLACED_AWAITING = "call_placed_awaiting_outcome"
+
+
+def _voice_config_metadata(
+    *,
+    node: SendVoiceNode,
+    profile: object | None,
+    raw_from_number: str | None,
+    from_number: str | None,
+    raw_to_number: str | None,
+    to_number: str | None,
+) -> dict:
+    profile_agent_id = getattr(profile, "retell_agent_id", None) if profile else None
+    profile_from_number = getattr(profile, "retell_from_number", None) if profile else None
+    return {
+        "voice_profile_id": node.voice_profile_id,
+        "voice_profile_name": getattr(profile, "display_name", None) if profile else None,
+        "retell_agent_configured": bool((profile_agent_id or node.retell_agent_id or "").strip()),
+        "retell_agent_source": "profile" if profile_agent_id else "node",
+        "retell_from_number_source": "profile" if profile_from_number else "location",
+        "retell_from_number_masked": mask_phone(from_number or raw_from_number),
+        "to_number_masked": mask_phone(to_number or raw_to_number),
+        "to_number_normalized": bool(raw_to_number and to_number and raw_to_number != to_number),
+        "retell_from_number_normalized": bool(
+            raw_from_number and from_number and raw_from_number != from_number
+        ),
+    }
 
 
 @dataclass(frozen=True)
@@ -126,10 +153,22 @@ class VoiceNodeExecutor:
             await self.runtime.fail_run(run, reason=f"send_voice: contact {run.contact_id} not found")
             return node.next_node_id
 
-        to_number = contact.phone
-        if not to_number:
+        raw_to_number = contact.phone
+        if not raw_to_number:
             await self.runtime.fail_step(step, result_code="no_phone")
             await self.runtime.fail_run(run, reason="send_voice: contact has no phone number")
+            return node.next_node_id
+        to_number = normalize_phone(raw_to_number)
+        if not to_number:
+            await self.runtime.fail_step(
+                step,
+                result_code="invalid_phone",
+                result_metadata={
+                    "to_number_masked": mask_phone(raw_to_number),
+                    "to_number_normalized": False,
+                },
+            )
+            await self.runtime.fail_run(run, reason="send_voice: contact phone number is invalid")
             return node.next_node_id
 
         location: InstitutionLocation | None = (
@@ -145,25 +184,57 @@ class VoiceNodeExecutor:
             node.voice_profile_id,
         )
         if node.voice_profile_id and profile is None:
-            await self.runtime.fail_step(step, result_code="voice_profile_not_found")
+            await self.runtime.fail_step(
+                step,
+                result_code="voice_profile_not_found",
+                result_metadata={"voice_profile_id": node.voice_profile_id},
+            )
             await self.runtime.fail_run(
                 run,
                 reason="send_voice: selected outbound voice profile is missing or inactive",
             )
             return node.next_node_id
-        from_number = (
+        raw_from_number = (
             (profile.retell_from_number if profile and profile.retell_from_number else None)
             or (location.retell_from_number if location else None)
         )
-        if not from_number:
+        if not raw_from_number:
             await self.runtime.fail_step(step, result_code="no_from_number")
             await self.runtime.fail_run(run, reason="send_voice: location has no retell_from_number")
+            return node.next_node_id
+        from_number = normalize_phone(raw_from_number)
+        if not from_number:
+            await self.runtime.fail_step(
+                step,
+                result_code="invalid_from_number",
+                result_metadata={
+                    "voice_profile_id": node.voice_profile_id,
+                    "voice_profile_name": getattr(profile, "display_name", None) if profile else None,
+                    "retell_from_number_masked": mask_phone(raw_from_number),
+                    "retell_from_number_normalized": False,
+                    "to_number_masked": mask_phone(to_number),
+                    "to_number_normalized": raw_to_number != to_number,
+                },
+            )
+            await self.runtime.fail_run(run, reason="send_voice: retell_from_number is invalid")
             return node.next_node_id
         agent_id = (
             profile.retell_agent_id if profile and profile.retell_agent_id else node.retell_agent_id
         )
+        voice_metadata = _voice_config_metadata(
+            node=node,
+            profile=profile,
+            raw_from_number=raw_from_number,
+            from_number=from_number,
+            raw_to_number=raw_to_number,
+            to_number=to_number,
+        )
         if not (agent_id or "").strip():
-            await self.runtime.fail_step(step, result_code="no_retell_agent")
+            await self.runtime.fail_step(
+                step,
+                result_code="no_retell_agent",
+                result_metadata=voice_metadata,
+            )
             await self.runtime.fail_run(
                 run,
                 reason="send_voice: no Retell agent selected for outbound voice",
@@ -172,7 +243,11 @@ class VoiceNodeExecutor:
 
         api_key = settings.retell_api_secret
         if not api_key:
-            await self.runtime.fail_step(step, result_code="retell_not_configured")
+            await self.runtime.fail_step(
+                step,
+                result_code="retell_not_configured",
+                result_metadata=voice_metadata,
+            )
             await self.runtime.fail_run(run, reason="send_voice: Retell not configured (RETELL_API_SECRET)")
             return node.next_node_id
 
@@ -224,7 +299,12 @@ class VoiceNodeExecutor:
             # retry via the Celery task until max_attempts, then give up.
             await mark_attempt_failed(attempt, error_message=str(exc))
             await self.session.commit()
-            await self.runtime.fail_step(step, result_code="retrying_transient", error_message=str(exc))
+            await self.runtime.fail_step(
+                step,
+                result_code="retrying_transient",
+                error_message=str(exc),
+                result_metadata=voice_metadata,
+            )
             if step.attempt_number >= node.max_attempts:
                 logger.error(
                     "send_voice transient error, attempts exhausted (%d): run=%s node=%s err=%s",
@@ -249,7 +329,12 @@ class VoiceNodeExecutor:
                 "institution=%s run=%s node=%s err=%s",
                 run.institution_id, run.id, node.id, exc,
             )
-            await self.runtime.fail_step(step, result_code="send_ambiguous_no_retry", error_message=str(exc))
+            await self.runtime.fail_step(
+                step,
+                result_code="send_ambiguous_no_retry",
+                error_message=str(exc),
+                result_metadata=voice_metadata,
+            )
             await self.runtime.fail_run(
                 run, reason="send_voice: ambiguous timeout, not retrying (at-most-once)"
             )
@@ -261,7 +346,12 @@ class VoiceNodeExecutor:
             )
             await mark_attempt_failed(attempt, error_message=str(exc))
             await self.session.commit()
-            await self.runtime.fail_step(step, result_code="send_failed", error_message=str(exc))
+            await self.runtime.fail_step(
+                step,
+                result_code="send_failed",
+                error_message=str(exc),
+                result_metadata=voice_metadata,
+            )
             await self.runtime.fail_run(run, reason=f"send_voice error: {type(exc).__name__}")
             return node.next_node_id
 
@@ -279,11 +369,13 @@ class VoiceNodeExecutor:
             await self.runtime.mark_step_awaiting_outcome(
                 step,
                 result_code=_CALL_PLACED_AWAITING,
-                result_metadata={"retell_call_id": result.call_id},
+                result_metadata={**voice_metadata, "retell_call_id": result.call_id},
             )
             return VoiceParked(step=step)
 
         await self.runtime.complete_step(
-            step, result_code=_CALL_PLACED, result_metadata={"retell_call_id": result.call_id}
+            step,
+            result_code=_CALL_PLACED,
+            result_metadata={**voice_metadata, "retell_call_id": result.call_id},
         )
         return node.next_node_id

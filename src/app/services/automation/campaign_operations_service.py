@@ -1111,12 +1111,21 @@ _TIMELINE_SAFE_METADATA_KEYS = {
     "provider_message_id",
     "result_code",
     "retell_call_id",
+    "retell_agent_configured",
+    "retell_agent_source",
+    "retell_from_number_masked",
+    "retell_from_number_normalized",
+    "retell_from_number_source",
     "scheduled_at",
     "scheduled_local_at",
     "scheduled_timezone",
     "status",
     "status_written",
     "timezone",
+    "to_number_masked",
+    "to_number_normalized",
+    "voice_profile_id",
+    "voice_profile_name",
 }
 
 
