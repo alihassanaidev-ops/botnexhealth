@@ -1306,13 +1306,15 @@ async def enroll_in_workflow(
     current_user: _InstitutionOrLocationAdmin,
 ) -> WorkflowRunResponse:
     inst_id = _institution_id(current_user)
-    location_id = data.location_id or (
-        str(current_user.location_id) if getattr(current_user, "location_id", None) else None
-    )
 
     async with get_db_session() as session:
         def_svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(def_svc, workflow_id, inst_id)
+        location_id = (
+            data.location_id
+            or (str(current_user.location_id) if getattr(current_user, "location_id", None) else None)
+            or (str(wf.location_id) if getattr(wf, "location_id", None) else None)
+        )
 
         if wf.status != "active":
             raise HTTPException(

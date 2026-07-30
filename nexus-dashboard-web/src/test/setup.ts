@@ -30,6 +30,18 @@ if (!("DOMMatrixReadOnly" in globalThis)) {
         constructor() {}
     } as unknown as typeof DOMMatrixReadOnly
 }
+if (!("hasPointerCapture" in Element.prototype)) {
+  Element.prototype.hasPointerCapture = () => false
+}
+if (!("setPointerCapture" in Element.prototype)) {
+  Element.prototype.setPointerCapture = () => {}
+}
+if (!("releasePointerCapture" in Element.prototype)) {
+  Element.prototype.releasePointerCapture = () => {}
+}
+if (!("scrollIntoView" in Element.prototype)) {
+  Element.prototype.scrollIntoView = () => {}
+}
 
 afterEach(() => {
   cleanup()

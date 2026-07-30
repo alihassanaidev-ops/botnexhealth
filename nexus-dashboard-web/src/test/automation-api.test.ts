@@ -99,9 +99,10 @@ describe("automation-api", () => {
     it("enrolls one contact in a campaign", async () => {
         const now = vi.spyOn(Date, "now").mockReturnValue(12345)
         post.mockResolvedValue({ data: { id: "run-1", status: "running" } })
-        await enrollContactInCampaign("wf-1", "contact-1")
+        await enrollContactInCampaign("wf-1", "contact-1", "loc-1")
         expect(post).toHaveBeenCalledWith("/automation/workflows/wf-1/enroll", {
             contact_id: "contact-1",
+            location_id: "loc-1",
             idempotency_key: "manual:wf-1:contact-1:12345",
             trigger_metadata: { source: "manual_ui" },
         })

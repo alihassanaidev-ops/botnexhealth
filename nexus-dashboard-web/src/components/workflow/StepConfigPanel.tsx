@@ -56,6 +56,7 @@ import type {
 
 const NONE = "__none__"
 const CONDITION_OPS: ConditionOp[] = ["eq", "neq", "in", "not_in", "is_null", "is_not_null", "contains", "not_contains"]
+const CUSTOM_RELATIVE_WAIT = "__custom__"
 
 export interface StepConfigPanelProps {
     open: boolean
@@ -623,18 +624,21 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                 <>
                     <Field label="Timing" hint="Negative = before appointment. Positive = after appointment.">
                         <Select
-                            value={relativeWaitPreset(delay.offset_seconds)}
+                            value={relativeWaitPresetValue(delay.offset_seconds)}
                             disabled={readOnly}
-                            onValueChange={(v) =>
+                            onValueChange={(v) => {
+                                const offsetSeconds = v === CUSTOM_RELATIVE_WAIT
+                                    ? (isRelativeWaitPreset(delay.offset_seconds) ? 0 : delay.offset_seconds)
+                                    : Number(v)
                                 onChange({
                                     ...node,
                                     delay: {
                                         delay_type: "appointment_relative",
-                                        offset_seconds: Number(v),
+                                        offset_seconds: offsetSeconds,
                                         anchor_field: delay.anchor_field ?? "appointment_at",
                                     },
                                 })
-                            }
+                            }}
                         >
                             <SelectTrigger><SelectValue /></SelectTrigger>
                             <SelectContent>
@@ -643,6 +647,7 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                                 <SelectItem value="-3600">1 hour before appointment</SelectItem>
                                 <SelectItem value="3600">1 hour after appointment</SelectItem>
                                 <SelectItem value="86400">1 day after appointment</SelectItem>
+                                <SelectItem value={CUSTOM_RELATIVE_WAIT}>Custom offset</SelectItem>
                             </SelectContent>
                         </Select>
                     </Field>
@@ -670,10 +675,13 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
     )
 }
 
-function relativeWaitPreset(seconds: number): string {
+function relativeWaitPresetValue(seconds: number): string {
+    return isRelativeWaitPreset(seconds) ? String(seconds) : CUSTOM_RELATIVE_WAIT
+}
+
+function isRelativeWaitPreset(seconds: number): boolean {
     const presets = new Set(["-86400", "-7200", "-3600", "3600", "86400"])
-    const text = String(seconds)
-    return presets.has(text) ? text : text
+    return presets.has(String(seconds))
 }
 
 function DripFields({ node, onChange, readOnly }: { node: DripNode; onChange: (n: WorkflowNode) => void; readOnly?: boolean }) {

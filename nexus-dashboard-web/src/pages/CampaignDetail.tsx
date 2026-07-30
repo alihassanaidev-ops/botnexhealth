@@ -290,7 +290,7 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
     async function enroll(contact: ContactListItem) {
         setEnrolling(contact.id)
         try {
-            const run = await enrollContactInCampaign(campaign.id, contact.id)
+            const run = await enrollContactInCampaign(campaign.id, contact.id, campaign.location_id)
             toast.success(`${contact.full_name ?? "Patient"} enrolled`)
             onEnrolled(run)
             onClose()

@@ -75,6 +75,7 @@ def _make_workflow(status="draft", version_id=None):
     wf.trigger_type = "manual"
     wf.definition = {"trigger": {"type": "manual"}, "entry_node_id": "e1", "nodes": []}
     wf.current_version_id = version_id
+    wf.location_id = None
     wf.created_at = _NOW
     wf.updated_at = _NOW
     return wf
@@ -716,6 +717,40 @@ def test_enroll_idempotent_returns_existing_run():
         result = asyncio.run(enroll_in_workflow("wf-1", data, user))
 
     assert result.status == "completed"
+
+
+def test_enroll_uses_workflow_location_when_request_and_user_have_none():
+    """Manual enroll must preserve campaign location for voice profile lookup."""
+    user = _make_user(location_id=None)
+    wf = _make_workflow(status="active", version_id="ver-1")
+    wf.location_id = "loc-1"
+    existing_run = _make_run(status="completed")
+
+    def_svc = AsyncMock()
+    def_svc.get_workflow = AsyncMock(return_value=wf)
+
+    enroll_svc = AsyncMock()
+    enroll_svc.enroll = AsyncMock(return_value=(existing_run, False))
+
+    session = _make_session()
+
+    data = EnrollRequest(idempotency_key="manual-key", contact_id="contact-1")
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=def_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowEnrollmentService",
+            return_value=enroll_svc,
+        ),
+    ):
+        result = asyncio.run(enroll_in_workflow("wf-1", data, user))
+
+    assert result.status == "completed"
+    assert enroll_svc.enroll.call_args.kwargs["location_id"] == "loc-1"
 
 
 # ---------------------------------------------------------------------------

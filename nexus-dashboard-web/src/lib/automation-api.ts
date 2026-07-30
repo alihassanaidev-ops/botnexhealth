@@ -165,12 +165,14 @@ export async function enrollCampaignAudience(
 export async function enrollContactInCampaign(
     workflowId: string,
     contactId: string,
+    locationId?: string | null,
 ): Promise<AutomationWorkflowRun> {
     const idempotencyKey = `manual:${workflowId}:${contactId}:${Date.now()}`
     const { data } = await api.post<AutomationWorkflowRun>(
         `/automation/workflows/${workflowId}/enroll`,
         {
             contact_id: contactId,
+            location_id: locationId ?? null,
             idempotency_key: idempotencyKey,
             trigger_metadata: { source: "manual_ui" },
         },
