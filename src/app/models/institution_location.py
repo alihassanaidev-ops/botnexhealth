@@ -57,6 +57,9 @@ class InstitutionLocation(Base):
     # Location in the synchronizer admin panel and authenticates all data routes.
     gotracker_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     gotracker_product_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gotracker_webhook_secret_encrypted: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
 
     # Retell — per-location agent
     retell_agent_id: Mapped[str | None] = mapped_column(
@@ -102,6 +105,14 @@ class InstitutionLocation(Base):
     @gotracker_product_key.setter
     def gotracker_product_key(self, value: str | None) -> None:
         self.gotracker_product_key_encrypted = encrypt_value(value)
+
+    @property
+    def gotracker_webhook_secret(self) -> str | None:
+        return decrypt_value(self.gotracker_webhook_secret_encrypted)
+
+    @gotracker_webhook_secret.setter
+    def gotracker_webhook_secret(self, value: str | None) -> None:
+        self.gotracker_webhook_secret_encrypted = encrypt_value(value)
 
     def __repr__(self) -> str:
         return f"<InstitutionLocation(id={self.id}, institution_id={self.institution_id}, name='{self.name}')>"

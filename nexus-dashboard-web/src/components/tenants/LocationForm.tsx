@@ -72,6 +72,8 @@ const locationSchema = z.object({
     nexhealth_location_id: z.string().optional(),
     gotracker_base_url: z.string().optional(),
     gotracker_product_key: z.string().optional(),
+    gotracker_webhook_subscription_id: z.string().optional(),
+    gotracker_webhook_secret: z.string().optional(),
     retell_agent_id: z.string().optional(),
     twilio_from_number: z.string().optional(),
     address: z.string().optional(),
@@ -145,6 +147,8 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
             nexhealth_location_id: location?.nexhealth_location_id || "",
             gotracker_base_url: location?.gotracker_base_url || "",
             gotracker_product_key: "",
+            gotracker_webhook_subscription_id: location?.gotracker_webhook_subscription_id || "",
+            gotracker_webhook_secret: "",
             retell_agent_id: location?.retell_agent_id || "",
             twilio_from_number: location?.twilio_from_number || "",
             address: location?.address || "",
@@ -405,8 +409,54 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                             )}
                         />
                         <p className="text-xs text-muted-foreground">
-                            Webhooks use the global GoTracker signing secret and a location-scoped callback URL.
+                            Webhooks use a location-scoped callback URL and signing secret.
                         </p>
+                        {isEditing && (
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <FormField
+                                    control={form.control}
+                                    name="gotracker_webhook_subscription_id"
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>
+                                                Webhook Subscription ID
+                                                <FieldHint text="Synchronizer subscription id for this location. Use this to adopt an existing cloud subscription instead of creating a new one." />
+                                            </FormLabel>
+                                            <FormControl>
+                                                <Input placeholder="14" {...field} />
+                                            </FormControl>
+                                            {location?.gotracker_webhook_status && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    Current status: {location.gotracker_webhook_status}
+                                                </p>
+                                            )}
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                                <FormField
+                                    control={form.control}
+                                    name="gotracker_webhook_secret"
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>
+                                                Webhook Signing Secret
+                                                <FieldHint text="Paste the secret returned by the Synchronizer for this location's webhook subscription. Stored encrypted and never shown again." />
+                                            </FormLabel>
+                                            <FormControl>
+                                                <Input
+                                                    type="password"
+                                                    placeholder={location?.has_gotracker_webhook_secret ? "Configured — enter a new secret to replace" : "Paste webhook secret"}
+                                                    autoComplete="off"
+                                                    {...field}
+                                                />
+                                            </FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                            </div>
+                        )}
                     </SectionCard>
                     )}
 

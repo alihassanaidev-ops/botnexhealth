@@ -54,8 +54,8 @@ async def test_ensure_location_subscription_posts_to_synchronizer():
     client = AsyncMock()
     client.request = AsyncMock(
         side_effect=[
-            {"data": {"id": f"sub-{index}"}}
-            for index, _ in enumerate(DEFAULT_GOTRACKER_WEBHOOK_EVENTS, start=1)
+            {"data": []},
+            {"data": {"id": "sub-1", "secret": "returned-secret"}},
         ]
     )
     adapter = MagicMock()
@@ -63,53 +63,83 @@ async def test_ensure_location_subscription_posts_to_synchronizer():
     adapter.close = AsyncMock()
 
     with patch(
-        "src.app.services.automation.gotracker_subscription_service.settings"
-    ) as mock_settings, patch(
         "src.app.pms.gotracker.adapter.GoTrackerAdapter.create",
         new=AsyncMock(return_value=adapter),
     ):
-        mock_settings.gotracker_webhook_secret = "shared-secret"
+        location = SimpleNamespace(
+            id="loc-1",
+            gotracker_webhook_secret=None,
+            gotracker_webhook_secret_encrypted=None,
+        )
         row, created = await svc.ensure_location_subscription(
             institution=SimpleNamespace(id="inst-1"),
-            location=SimpleNamespace(id="loc-1"),
+            location=location,
             callback_url="https://api.example.com/api/v1/gotracker/webhooks/loc-1",
         )
 
     assert created is True
-    assert row.provider_subscription_id == "sub-1,sub-2,sub-3,sub-4,sub-5"
+    assert row.provider_subscription_id == "sub-1"
     assert row.status == GoTrackerWebhookSubscriptionStatus.ACTIVE.value
-    assert client.request.await_count == len(DEFAULT_GOTRACKER_WEBHOOK_EVENTS)
+    assert location.gotracker_webhook_secret == "returned-secret"
+    assert client.request.await_count == 2
+    client.request.assert_any_await("GET", "/api/webhooks/subscriptions")
     client.request.assert_any_await(
         "POST",
         "/api/webhooks/subscriptions",
         json={
             "url": "https://api.example.com/api/v1/gotracker/webhooks/loc-1",
-            "event_types": "appointment.created",
-            "secret": "shared-secret",
+            "event_types": ",".join(DEFAULT_GOTRACKER_WEBHOOK_EVENTS),
+            "is_active": True,
         },
     )
     adapter.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_remote_create_failure_marks_failed():
+async def test_ensure_location_subscription_adopts_existing_remote_subscription():
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
     session = _session(result)
     svc = GoTrackerSubscriptionLifecycleService(session)
+    client = AsyncMock()
+    client.request = AsyncMock(
+        side_effect=[
+            {
+                "data": [
+                    {
+                        "id": "14",
+                        "url": "https://api.example.com/api/v1/gotracker/webhooks/loc-1",
+                    }
+                ]
+            },
+            {"data": {"id": "14"}},
+        ]
+    )
+    adapter = MagicMock()
+    adapter._client = client
+    adapter.close = AsyncMock()
 
     with patch(
-        "src.app.services.automation.gotracker_subscription_service.settings"
-    ) as mock_settings:
-        mock_settings.gotracker_webhook_secret = ""
+        "src.app.pms.gotracker.adapter.GoTrackerAdapter.create",
+        new=AsyncMock(return_value=adapter),
+    ):
         row, _ = await svc.ensure_location_subscription(
             institution=SimpleNamespace(id="inst-1"),
-            location=SimpleNamespace(id="loc-1"),
+            location=SimpleNamespace(id="loc-1", gotracker_webhook_secret="secret"),
             callback_url="https://api.example.com/api/v1/gotracker/webhooks/loc-1",
         )
 
-    assert row.status == GoTrackerWebhookSubscriptionStatus.FAILED.value
-    assert row.error_metadata == {"reason": "missing_gotracker_webhook_secret"}
+    assert row.provider_subscription_id == "14"
+    assert row.status == GoTrackerWebhookSubscriptionStatus.ACTIVE.value
+    client.request.assert_any_await(
+        "PATCH",
+        "/api/webhooks/subscriptions/14",
+        json={
+            "url": "https://api.example.com/api/v1/gotracker/webhooks/loc-1",
+            "event_types": ",".join(DEFAULT_GOTRACKER_WEBHOOK_EVENTS),
+            "is_active": True,
+        },
+    )
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,6 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.app.config import settings
 from src.app.models.gotracker_webhook_subscription import (
     GoTrackerWebhookSubscription,
     GoTrackerWebhookSubscriptionStatus,
@@ -135,8 +134,8 @@ class GoTrackerSubscriptionLifecycleService:
                 existing.status = GoTrackerWebhookSubscriptionStatus.PENDING.value
             was_created = False
 
-        if callback_url and not existing.provider_subscription_id:
-            await self._try_remote_create(
+        if callback_url:
+            await self._try_remote_reconcile(
                 row=existing,
                 institution=institution,
                 location=location,
@@ -196,7 +195,7 @@ class GoTrackerSubscriptionLifecycleService:
             row.updated_at = now
         return summary
 
-    async def _try_remote_create(
+    async def _try_remote_reconcile(
         self,
         *,
         row: GoTrackerWebhookSubscription,
@@ -207,33 +206,67 @@ class GoTrackerSubscriptionLifecycleService:
     ) -> None:
         from src.app.pms.gotracker.adapter import GoTrackerAdapter
 
-        if not settings.gotracker_webhook_secret:
-            row.status = GoTrackerWebhookSubscriptionStatus.FAILED.value
-            row.error_metadata = {"reason": "missing_gotracker_webhook_secret"}
-            return
-
         adapter = None
         try:
             adapter = await GoTrackerAdapter.create(institution, location)
-            provider_ids: list[str] = []
-            for event_type in event_types:
+            subscriptions = await _list_remote_subscriptions(adapter)
+            matches = _matching_remote_subscriptions(
+                subscriptions,
+                callback_url=callback_url,
+                provider_subscription_id=row.provider_subscription_id,
+            )
+            if matches:
+                primary = matches[0]
+                provider_id = _extract_provider_subscription_id(primary)
+                if provider_id:
+                    await adapter._client.request(  # noqa: SLF001
+                        "PATCH",
+                        f"/api/webhooks/subscriptions/{provider_id}",
+                        json=_subscription_payload(
+                            callback_url=callback_url,
+                            event_types=event_types,
+                            secret=getattr(location, "gotracker_webhook_secret", None),
+                            include_secret=False,
+                        ),
+                    )
+                    row.provider_subscription_id = provider_id
+                    await _delete_duplicate_remote_subscriptions(adapter, matches[1:])
+            elif row.provider_subscription_id:
+                provider_id = row.provider_subscription_id.split(",", 1)[0].strip()
+                if provider_id:
+                    await adapter._client.request(  # noqa: SLF001
+                        "PATCH",
+                        f"/api/webhooks/subscriptions/{provider_id}",
+                        json=_subscription_payload(
+                            callback_url=callback_url,
+                            event_types=event_types,
+                            secret=getattr(location, "gotracker_webhook_secret", None),
+                            include_secret=False,
+                        ),
+                    )
+                    row.provider_subscription_id = provider_id
+            else:
                 raw = await adapter._client.request(  # noqa: SLF001
                     "POST",
                     "/api/webhooks/subscriptions",
-                    json={
-                        "url": callback_url,
-                        "event_types": event_type,
-                        "secret": settings.gotracker_webhook_secret,
-                    },
+                    json=_subscription_payload(
+                        callback_url=callback_url,
+                        event_types=event_types,
+                        secret=getattr(location, "gotracker_webhook_secret", None),
+                        include_secret=True,
+                    ),
                 )
                 provider_id = _extract_provider_subscription_id(raw)
                 if provider_id:
-                    provider_ids.append(provider_id)
+                    row.provider_subscription_id = provider_id
+                returned_secret = _extract_webhook_secret(raw)
+                if returned_secret:
+                    location.gotracker_webhook_secret = returned_secret
         except Exception as exc:  # noqa: BLE001
             row.status = GoTrackerWebhookSubscriptionStatus.FAILED.value
-            row.error_metadata = {"type": type(exc).__name__, "mode": "remote_create"}
+            row.error_metadata = {"type": type(exc).__name__, "mode": "remote_reconcile"}
             logger.warning(
-                "gotracker subscription create failed institution=%s location=%s type=%s",
+                "gotracker subscription reconcile failed institution=%s location=%s type=%s",
                 institution.id,
                 location.id,
                 type(exc).__name__,
@@ -243,7 +276,10 @@ class GoTrackerSubscriptionLifecycleService:
             if adapter is not None:
                 await adapter.close()
 
-        row.provider_subscription_id = ",".join(provider_ids) or None
+        if not row.provider_subscription_id:
+            row.status = GoTrackerWebhookSubscriptionStatus.FAILED.value
+            row.error_metadata = {"reason": "missing_provider_subscription_id"}
+            return
         row.status = GoTrackerWebhookSubscriptionStatus.ACTIVE.value
         row.error_metadata = None
 
@@ -270,6 +306,115 @@ def _extract_provider_subscription_id(raw: dict[str, Any]) -> str | None:
             if value not in (None, ""):
                 return str(value)
     return None
+
+
+async def _list_remote_subscriptions(adapter: Any) -> list[dict[str, Any]]:
+    try:
+        raw = await adapter._client.request("GET", "/api/webhooks/subscriptions")  # noqa: SLF001
+    except Exception:
+        return []
+    return _subscription_items(raw)
+
+
+def _subscription_items(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if not isinstance(raw, dict):
+        return []
+    data = raw.get("data")
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        for key in ("items", "subscriptions", "webhooks"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    for key in ("items", "subscriptions", "webhooks"):
+        value = raw.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _matching_remote_subscriptions(
+    subscriptions: list[dict[str, Any]],
+    *,
+    callback_url: str,
+    provider_subscription_id: str | None,
+) -> list[dict[str, Any]]:
+    provider_ids = {
+        item.strip()
+        for item in (provider_subscription_id or "").split(",")
+        if item.strip()
+    }
+    matches: list[dict[str, Any]] = []
+    for subscription in subscriptions:
+        subscription_id = _extract_provider_subscription_id(subscription)
+        url = _subscription_url(subscription)
+        if (subscription_id and subscription_id in provider_ids) or url == callback_url:
+            matches.append(subscription)
+    return matches
+
+
+def _subscription_url(subscription: dict[str, Any]) -> str | None:
+    for key in ("url", "callback_url", "endpoint_url", "webhook_url"):
+        value = subscription.get(key)
+        if value not in (None, ""):
+            return str(value)
+    data = subscription.get("data")
+    if isinstance(data, dict):
+        return _subscription_url(data)
+    return None
+
+
+def _subscription_payload(
+    *,
+    callback_url: str,
+    event_types: list[str],
+    secret: str | None,
+    include_secret: bool,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "url": callback_url,
+        "event_types": ",".join(event_types),
+        "is_active": True,
+    }
+    if include_secret and secret:
+        payload["secret"] = secret
+    return payload
+
+
+def _extract_webhook_secret(raw: dict[str, Any]) -> str | None:
+    data = raw.get("data") if isinstance(raw, dict) else None
+    candidates: list[Any] = [raw]
+    if isinstance(data, dict):
+        candidates.append(data)
+        subscription = data.get("subscription") or data.get("webhook")
+        if isinstance(subscription, dict):
+            candidates.append(subscription)
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("secret", "webhook_secret", "signing_secret"):
+            value = candidate.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return None
+
+
+async def _delete_duplicate_remote_subscriptions(
+    adapter: Any, duplicates: list[dict[str, Any]]
+) -> None:
+    for duplicate in duplicates:
+        provider_id = _extract_provider_subscription_id(duplicate)
+        if not provider_id:
+            continue
+        try:
+            await adapter._client.request(  # noqa: SLF001
+                "DELETE", f"/api/webhooks/subscriptions/{provider_id}"
+            )
+        except Exception:
+            logger.warning("gotracker duplicate subscription delete failed id=%s", provider_id)
 
 
 def _as_utc(dt: datetime) -> datetime:

@@ -15,6 +15,10 @@ from src.app.database import get_db_session
 from src.app.api.deps import get_current_admin
 from src.app.config import settings
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.models.gotracker_webhook_subscription import (
+    GoTrackerWebhookSubscription,
+    GoTrackerWebhookSubscriptionStatus,
+)
 from src.app.models.institution import DEFAULT_JURISDICTION, Jurisdiction
 from src.app.models.outbound_voice import OutboundVoiceProfile
 from src.app.models.user import User, UserRole
@@ -767,6 +771,8 @@ class LocationCreate(BaseModel):
     nexhealth_location_id: str | None = None
     gotracker_base_url: str | None = None
     gotracker_product_key: str | None = None
+    gotracker_webhook_subscription_id: str | None = None
+    gotracker_webhook_secret: str | None = None
     retell_agent_id: str | None = None
     twilio_from_number: str | None = None
 
@@ -787,6 +793,8 @@ class LocationUpdate(BaseModel):
     nexhealth_location_id: str | None = None
     gotracker_base_url: str | None = None
     gotracker_product_key: str | None = None
+    gotracker_webhook_subscription_id: str | None = None
+    gotracker_webhook_secret: str | None = None
     retell_agent_id: str | None = None
     twilio_from_number: str | None = None
 
@@ -819,6 +827,9 @@ class LocationResponse(BaseModel):
     nexhealth_location_id: str | None
     gotracker_base_url: str | None
     has_gotracker_product_key: bool
+    gotracker_webhook_subscription_id: str | None = None
+    gotracker_webhook_status: str | None = None
+    has_gotracker_webhook_secret: bool = False
     retell_agent_id: str | None
     twilio_from_number: str | None
 
@@ -833,7 +844,12 @@ class LocationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     @classmethod
-    def from_location(cls, loc: Any, user: Any = None) -> "LocationResponse":
+    def from_location(
+        cls,
+        loc: Any,
+        user: Any = None,
+        gotracker_subscription: Any = None,
+    ) -> "LocationResponse":
         user_resp = None
         if user:
             user_resp = LocationUserResponse(
@@ -852,6 +868,17 @@ class LocationResponse(BaseModel):
             nexhealth_location_id=loc.nexhealth_location_id,
             gotracker_base_url=loc.gotracker_base_url,
             has_gotracker_product_key=loc.gotracker_product_key_encrypted is not None,
+            gotracker_webhook_subscription_id=(
+                gotracker_subscription.provider_subscription_id
+                if gotracker_subscription
+                else None
+            ),
+            gotracker_webhook_status=(
+                gotracker_subscription.status if gotracker_subscription else None
+            ),
+            has_gotracker_webhook_secret=(
+                loc.gotracker_webhook_secret_encrypted is not None
+            ),
             retell_agent_id=loc.retell_agent_id,
             twilio_from_number=loc.twilio_from_number,
             address=loc.address,
@@ -922,6 +949,58 @@ def _normalize_voice_purpose(value: str | None) -> str | None:
     return normalized or None
 
 
+async def _get_gotracker_subscription(
+    session: Any, location_id: str
+) -> GoTrackerWebhookSubscription | None:
+    result = await session.execute(
+        select(GoTrackerWebhookSubscription).where(
+            GoTrackerWebhookSubscription.location_id == location_id
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _upsert_gotracker_webhook_config(
+    session: Any,
+    *,
+    institution_id: str,
+    location: Any,
+    provider_subscription_id: str | None = None,
+    webhook_secret: str | None = None,
+) -> GoTrackerWebhookSubscription | None:
+    normalized_subscription_id = (
+        provider_subscription_id.strip() if provider_subscription_id else None
+    )
+    normalized_secret = webhook_secret.strip() if webhook_secret else None
+    if not normalized_subscription_id and not normalized_secret:
+        return await _get_gotracker_subscription(session, str(location.id))
+
+    if normalized_secret:
+        location.gotracker_webhook_secret = normalized_secret
+
+    row = await _get_gotracker_subscription(session, str(location.id))
+    if row is None:
+        row = GoTrackerWebhookSubscription(
+            institution_id=institution_id,
+            location_id=str(location.id),
+            event_types=[
+                "appointment.created",
+                "appointment.updated",
+                "appointment.cancelled",
+                "patient.created",
+                "patient.updated",
+            ],
+            status=GoTrackerWebhookSubscriptionStatus.PENDING.value,
+        )
+        session.add(row)
+
+    if normalized_subscription_id:
+        row.provider_subscription_id = normalized_subscription_id
+        row.status = GoTrackerWebhookSubscriptionStatus.ACTIVE.value
+        row.error_metadata = None
+    return row
+
+
 # =============================================================================
 # Location Routes
 # =============================================================================
@@ -961,7 +1040,9 @@ async def create_location(
                 detail=f"Location with slug '{data.slug}' already exists",
             )
 
-        location_data = data.model_dump()
+        location_data = data.model_dump(
+            exclude={"gotracker_webhook_subscription_id", "gotracker_webhook_secret"}
+        )
         try:
             location = await institution_service.create_location(
                 institution.id, **location_data
@@ -972,7 +1053,18 @@ async def create_location(
                 detail=f"Location with slug '{data.slug}' already exists (race condition)",
             )
 
-        return LocationResponse.from_location(location)
+        gotracker_subscription = await _upsert_gotracker_webhook_config(
+            session,
+            institution_id=str(institution.id),
+            location=location,
+            provider_subscription_id=data.gotracker_webhook_subscription_id,
+            webhook_secret=data.gotracker_webhook_secret,
+        )
+        await session.flush()
+
+        return LocationResponse.from_location(
+            location, gotracker_subscription=gotracker_subscription
+        )
 
 
 @router.get("/{slug}/locations", response_model=list[LocationResponse])
@@ -1010,9 +1102,22 @@ async def list_locations(
             for u in user_result.scalars().all():
                 if u.location_id and u.location_id not in users_by_location:
                     users_by_location[u.location_id] = u
+        subscriptions_by_location: dict[str, GoTrackerWebhookSubscription] = {}
+        if location_ids:
+            subscription_result = await session.execute(
+                select(GoTrackerWebhookSubscription).where(
+                    GoTrackerWebhookSubscription.location_id.in_(location_ids)
+                )
+            )
+            for sub in subscription_result.scalars().all():
+                subscriptions_by_location[str(sub.location_id)] = sub
 
         return [
-            LocationResponse.from_location(loc, user=users_by_location.get(loc.id))
+            LocationResponse.from_location(
+                loc,
+                user=users_by_location.get(loc.id),
+                gotracker_subscription=subscriptions_by_location.get(str(loc.id)),
+            )
             for loc in locations
         ]
 
@@ -1043,7 +1148,12 @@ async def get_location(
                 detail=f"Location '{loc_slug}' not found",
             )
 
-        return LocationResponse.from_location(location)
+        gotracker_subscription = await _get_gotracker_subscription(
+            session, str(location.id)
+        )
+        return LocationResponse.from_location(
+            location, gotracker_subscription=gotracker_subscription
+        )
 
 
 async def _get_admin_location_or_404(session: Any, slug: str, loc_slug: str) -> Any:
@@ -1203,9 +1313,22 @@ async def update_location(
                 detail=f"Location '{loc_slug}' not found",
             )
 
-        updates = data.model_dump(exclude_unset=True)
+        updates = data.model_dump(
+            exclude_unset=True,
+            exclude={"gotracker_webhook_subscription_id", "gotracker_webhook_secret"},
+        )
         location = await institution_service.update_location(location, **updates)
-        return LocationResponse.from_location(location)
+        gotracker_subscription = await _upsert_gotracker_webhook_config(
+            session,
+            institution_id=str(institution.id),
+            location=location,
+            provider_subscription_id=data.gotracker_webhook_subscription_id,
+            webhook_secret=data.gotracker_webhook_secret,
+        )
+        await session.flush()
+        return LocationResponse.from_location(
+            location, gotracker_subscription=gotracker_subscription
+        )
 
 
 @router.delete("/{slug}/locations/{loc_slug}", status_code=status.HTTP_204_NO_CONTENT)

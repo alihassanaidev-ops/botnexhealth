@@ -69,6 +69,9 @@ export interface Location {
     nexhealth_location_id: string | null;
     gotracker_base_url: string | null;
     has_gotracker_product_key: boolean;
+    gotracker_webhook_subscription_id: string | null;
+    gotracker_webhook_status: string | null;
+    has_gotracker_webhook_secret: boolean;
     retell_agent_id: string | null;
     twilio_from_number: string | null;
     has_retell_secret: boolean;

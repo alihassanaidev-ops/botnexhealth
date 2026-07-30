@@ -49,9 +49,14 @@ def _raw_payload_text(raw_body: bytes) -> str:
     return raw_body.decode("utf-8", errors="replace")
 
 
-def _verify_signature(raw_body: bytes, signature_header: str | None) -> None:
+def _verify_signature(
+    raw_body: bytes,
+    signature_header: str | None,
+    *,
+    secret: str | None = None,
+) -> None:
     """Verify `X-ScaleNexus-Signature: t=<unix>,v1=<hex>`."""
-    secret = settings.gotracker_webhook_secret
+    secret = secret or settings.gotracker_webhook_secret
     if not secret:
         if settings.is_production:
             raise HTTPException(
@@ -104,7 +109,17 @@ def _verify_signature(raw_body: bytes, signature_header: str | None) -> None:
 async def gotracker_webhook(location_id: str, request: Request) -> dict[str, Any]:
     """Handle GoTracker appointment and patient events for one local location."""
     raw_body = await request.body()
-    _verify_signature(raw_body, request.headers.get("X-ScaleNexus-Signature"))
+
+    location = await _resolve_location(location_id)
+    if location is None:
+        logger.warning("gotracker_webhook: unknown location_id=%s", location_id)
+        return {"status": "ignored", "reason": "unknown_location"}
+
+    _verify_signature(
+        raw_body,
+        request.headers.get("X-ScaleNexus-Signature"),
+        secret=getattr(location, "gotracker_webhook_secret", None),
+    )
 
     try:
         payload = await request.json()
@@ -117,11 +132,6 @@ async def gotracker_webhook(location_id: str, request: Request) -> dict[str, Any
     if event not in _HANDLED_EVENTS:
         logger.debug("gotracker_webhook: ignoring event=%s", event)
         return {"status": "ignored", "event": event}
-
-    location = await _resolve_location(location_id)
-    if location is None:
-        logger.warning("gotracker_webhook: unknown location_id=%s event=%s", location_id, event)
-        return {"status": "ignored", "reason": "unknown_location", "event": event}
 
     raw_payload = _raw_payload_text(raw_body)
     if event in _PATIENT_EVENTS:
