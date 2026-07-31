@@ -134,8 +134,13 @@ Idempotency (`src/app/retell/idempotency.py`): unique on
 Retell retries a function call → we replay the cached result instead of
 double-booking. In-flight duplicates get a retryable "still processing" response.
 
-`lookup_patient` sits behind an identity gate: the caller must provide DOB plus
-either exact email or phone-last-4 before any PHI is read back.
+`lookup_patient` sits behind an identity gate: before any PHI is read back the
+caller must confirm **any one** of the patient's date of birth, last-4 of the
+phone on file, or exact email. This is single-factor as of 2026-08-01 — it was
+previously DOB *plus* a second factor, which blocked legitimate callers
+(especially records with no email on file) and mis-told the agent to ask for an
+email that didn't exist. Server-side verification is the access control of
+record; the Retell prompt's gate is advisory only.
 
 **After the call** — Retell posts a `call_analyzed` webhook
 (`src/app/retell/webhooks.py`). The request thread only verifies the signature,

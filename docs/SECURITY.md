@@ -63,8 +63,12 @@ visibility model, and a role→route matrix are in
 
 The voice agent is its own principal: Retell requests authenticate by HMAC
 signature, are scoped by the agent→location mapping, and `lookup_patient`
-additionally requires the *caller* to pass an identity gate (DOB + exact email
-or phone-last-4) before PHI is spoken back.
+additionally requires the *caller* to pass an identity gate — confirming **any
+one** of date of birth, last-4 of the phone on file, or exact email — before PHI
+is spoken back. This is single-factor as of 2026-08-01; it was previously DOB
+*plus* a second factor, which blocked legitimate callers whose record had no
+email on file. Single-factor phone verification is standard front-desk practice;
+DOB is still required to disambiguate family members who share a phone number.
 
 ## Tenant isolation
 
