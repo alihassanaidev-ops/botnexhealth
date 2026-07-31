@@ -357,40 +357,38 @@ def _normalize_dob(value: Any) -> str | None:
 def _identity_gate_passes(
     patient: Any, args: dict[str, Any]
 ) -> tuple[bool, str | None]:
-    """Verify the caller supplied a DOB that matches the matched patient.
+    """Confirm caller identity before releasing full PHI.
 
-    A second factor (email exact-match or last 4 digits of phone) is also
-    required so that DOB obtained from social engineering or public records
-    is not by itself sufficient to unlock a patient's PHI.
+    Single-factor, front-desk style: the caller must confirm ANY ONE of the
+    patient's date of birth, the last 4 digits of the phone on file, or the
+    email on file. Previously two factors were required (DOB *and* email/phone),
+    which blocked legitimate callers — especially records with no email on file.
 
     Returns (passed, reason_if_failed).
     """
+    # Factor 1: date of birth.
     supplied_dob = _normalize_dob(args.get("date_of_birth"))
-    if not supplied_dob:
-        return False, "missing_dob"
-
     actual_dob = _normalize_dob(getattr(patient, "date_of_birth", None))
-    if not actual_dob or supplied_dob != actual_dob:
-        return False, "dob_mismatch"
+    if supplied_dob and actual_dob and supplied_dob == actual_dob:
+        return True, None
 
-    supplied_email = (args.get("email") or "").strip().lower() or None
-    supplied_phone = args.get("phone_number")
-    actual_email = (getattr(patient, "email", None) or "").strip().lower() or None
+    # Factor 2: last 4 digits of the phone on file.
     actual_phone_digits = "".join(
         ch for ch in (getattr(patient, "phone", None) or "") if ch.isdigit()
     )
+    supplied_phone = args.get("phone_number")
+    if supplied_phone and len(actual_phone_digits) >= 4:
+        supplied_digits = "".join(ch for ch in str(supplied_phone) if ch.isdigit())
+        if len(supplied_digits) >= 4 and supplied_digits[-4:] == actual_phone_digits[-4:]:
+            return True, None
 
+    # Factor 3: exact email on file.
+    supplied_email = (args.get("email") or "").strip().lower() or None
+    actual_email = (getattr(patient, "email", None) or "").strip().lower() or None
     if supplied_email and actual_email and supplied_email == actual_email:
         return True, None
-    if supplied_phone:
-        supplied_digits = "".join(ch for ch in str(supplied_phone) if ch.isdigit())
-        if (
-            len(supplied_digits) >= 4
-            and len(actual_phone_digits) >= 4
-            and supplied_digits[-4:] == actual_phone_digits[-4:]
-        ):
-            return True, None
-    return False, "second_factor_missing"
+
+    return False, "verification_needed"
 
 
 @register_function("lookup_patient")
@@ -591,8 +589,9 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     elif identity_failure_reason:
         response["identity_gate"] = identity_failure_reason
         response["message"] = (
-            "I can confirm a record exists. To share full appointment details I need to verify "
-            "your date of birth and either your email on file or the last four digits of your phone."
+            "I can confirm a record exists. To share full appointment details, please "
+            "confirm the patient's date of birth or the last four digits of the phone "
+            "number on file."
         )
     else:
         response["message"] = f"Found {len(simplified)} patient(s)."
