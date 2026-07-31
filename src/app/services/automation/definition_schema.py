@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Union
 
+import phonenumbers
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+PHONE_COUNTRY_REGIONS = frozenset(phonenumbers.SUPPORTED_REGIONS)
 
 # ---------------------------------------------------------------------------
 # Triggers
@@ -207,11 +210,36 @@ class SendVoiceNode(BaseModel):
     next_node_id: str
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
+    # Optional workflow-level override for local-format patient phone numbers.
+    # When disabled, only already-international numbers are accepted for voice.
+    phone_country_code_enabled: bool = False
+    phone_country_region: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
     # When true, after the call is placed the run PARKS (WAITING) until the Retell
     # post-call webhook resumes it with the dial outcome (written to run context as
     # `call_outcome` for a following ConditionNode to branch on). When false the node
     # is fire-and-forget (advances immediately). Plan 03 outcome-feedback loop.
     wait_for_outcome: bool = False
+
+    @field_validator("phone_country_region", mode="before")
+    @classmethod
+    def normalize_phone_country_region(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        region = str(value).strip().upper()
+        return region or None
+
+    @field_validator("phone_country_region")
+    @classmethod
+    def validate_phone_country_region(cls, value: str | None) -> str | None:
+        if value is not None and value not in PHONE_COUNTRY_REGIONS:
+            raise ValueError("phone_country_region must be a supported ISO country region")
+        return value
+
+    @model_validator(mode="after")
+    def require_phone_country_when_enabled(self) -> "SendVoiceNode":
+        if self.phone_country_code_enabled and not self.phone_country_region:
+            raise ValueError("phone_country_region is required when phone country code is enabled")
+        return self
 
 
 class SendEmailNode(BaseModel):

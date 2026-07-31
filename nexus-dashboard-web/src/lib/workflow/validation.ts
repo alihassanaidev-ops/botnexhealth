@@ -15,6 +15,7 @@ import { referencedIds, TRIGGER_NODE_ID } from "./graph"
 import { unavailableTokens, unknownTokens } from "./merge-fields"
 
 const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+const PHONE_COUNTRY_REGION_RE = /^[A-Z]{2}$/
 
 export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
     const issues: ValidationIssue[] = []
@@ -198,6 +199,25 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                         severity: "error",
                         message: "Voice step has no outbound voice profile selected.",
                         fix: "Choose a location outbound voice profile.",
+                    })
+                }
+                if (
+                    node.phone_country_code_enabled &&
+                    !PHONE_COUNTRY_REGION_RE.test(node.phone_country_region || "")
+                ) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Phone country override needs a valid country.",
+                        fix: "Choose the country used for local-format patient numbers.",
+                    })
+                }
+                if (!node.phone_country_code_enabled) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "warning",
+                        message: "Phone country override is disabled. Local-format patient numbers will not be called.",
+                        fix: "Enable the override if this workflow receives patient numbers without a +country code.",
                     })
                 }
                 checkAttempts(node.max_attempts, node.id, issues)

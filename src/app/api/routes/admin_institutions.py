@@ -51,12 +51,20 @@ class RetellPhoneNumberResponse(BaseModel):
     outbound_agents: list[Any] | None = None
 
 
+class RetellAgentResponse(BaseModel):
+    agent_id: str
+    agent_name: str | None = None
+    channel: str | None = None
+    version: int | None = None
+    is_published: bool | None = None
+
+
 # =============================================================================
 # Retell Agents API
 # =============================================================================
 
 
-@router.get("/retell/agents")
+@router.get("/retell/agents", response_model=list[RetellAgentResponse])
 @audit(
     AuditAction.READ_LOCATIONS,
     resource=lambda *args, **kwargs: "retell:agents",
@@ -64,14 +72,13 @@ class RetellPhoneNumberResponse(BaseModel):
 )
 async def list_retell_agents(
     _: User = Depends(get_current_admin),
-) -> list[dict[str, Any]]:
+) -> list[RetellAgentResponse]:
     """
-    List all Retell AI agents available for the configured Retell account.
+    List Retell voice agents available for the configured Retell account.
 
-    Used by Admins to select a Retell Agent when creating/configuring a Location.
-    Uses the RETELL_API_SECRET from environment variables to authenticate.
+    Used by Super Admins to select the outbound agent for a named voice
+    profile. The selected ID is stored on outbound_voice_profiles.
     """
-    from src.app.config import settings
     import httpx
 
     if not settings.retell_api_secret:
@@ -80,21 +87,71 @@ async def list_retell_agents(
             detail="Retell API secret not configured",
         )
 
+    raw_items: list[Any] = []
+    pagination_key: str | None = None
+    has_more = True
+
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://api.retellai.com/list-agents",
-                headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
-                timeout=10.0,
-            )
-            response.raise_for_status()
-            return response.json()
+            while has_more:
+                params = {"limit": "1000"}
+                if pagination_key:
+                    params["pagination_key"] = pagination_key
+                response = await client.post(
+                    "https://api.retellai.com/v2/list-agents",
+                    params=params,
+                    headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
+                    json={
+                        "filter_criteria": {
+                            "channel": {
+                                "type": "string",
+                                "op": "eq",
+                                "value": "voice",
+                            }
+                        }
+                    },
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+
+                raw = response.json()
+                if isinstance(raw, dict):
+                    items = raw.get("items")
+                    raw_items.extend(items if isinstance(items, list) else [])
+                    pagination_key = raw.get("pagination_key")
+                    has_more = bool(raw.get("has_more")) and bool(pagination_key)
+                else:
+                    raw_items.extend(raw if isinstance(raw, list) else [])
+                    has_more = False
     except httpx.HTTPError as e:
-        logger.error(f"Failed to fetch Retell agents: {e}")
+        logger.error("Failed to fetch Retell agents: %s", safe_error_summary(e))
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to communicate with Retell API",
         )
+
+    results: list[RetellAgentResponse] = []
+    seen_agent_ids: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        agent_id = item.get("agent_id") or item.get("id")
+        if not agent_id:
+            continue
+        agent_id = str(agent_id)
+        if agent_id in seen_agent_ids:
+            continue
+        seen_agent_ids.add(agent_id)
+        results.append(
+            RetellAgentResponse(
+                agent_id=agent_id,
+                agent_name=item.get("agent_name") or item.get("name"),
+                channel=item.get("channel"),
+                version=item.get("version"),
+                is_published=item.get("is_published"),
+            )
+        )
+    return results
 
 
 @router.get("/retell/agents/{agent_id}")

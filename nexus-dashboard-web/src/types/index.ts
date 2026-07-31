@@ -451,6 +451,14 @@ export interface RetellPhoneNumber {
     outbound_agents: unknown[] | null;
 }
 
+export interface RetellAgent {
+    agent_id: string;
+    agent_name: string | null;
+    channel: string | null;
+    version: number | null;
+    is_published: boolean | null;
+}
+
 export interface SendSmsRequest {
     from_number: string;
     to_number: string;

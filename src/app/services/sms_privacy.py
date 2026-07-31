@@ -85,7 +85,7 @@ _REDACTION_ALLOWLIST_KEYS = {
 }
 
 
-def normalize_phone(phone: str | None, *, default_region: str = "CA") -> str:
+def normalize_phone(phone: str | None, *, default_region: str | None = "CA") -> str:
     """Normalize a phone number for hashing and comparison."""
     if not phone:
         return ""

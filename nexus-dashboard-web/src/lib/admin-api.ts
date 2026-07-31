@@ -4,6 +4,7 @@ import type {
     SmsLocation,
     SmsSuppression,
     TwilioPhoneNumber,
+    RetellAgent,
     RetellPhoneNumber,
     SendSmsRequest,
     SendSmsResponse,
@@ -18,6 +19,11 @@ export async function listInstitutionsDetailed(): Promise<InstitutionDetail[]> {
 
 export async function verifyRetellAgent(agentId: string): Promise<unknown> {
     const { data } = await api.get(`/admin/institutions/retell/agents/${agentId}`)
+    return data
+}
+
+export async function listRetellAgents(): Promise<RetellAgent[]> {
+    const { data } = await api.get<RetellAgent[]>("/admin/institutions/retell/agents")
     return data
 }
 

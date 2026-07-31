@@ -250,6 +250,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/automation/templates/{template_id}/instantiate",
         "POST /api/automation/workflows/{workflow_id}/bulk-enroll",
         "POST /api/automation/workflows/validate",
+        "GET /api/automation/workflows/phone-country-regions",
         "POST /api/automation/workflows/dry-run",
         "GET /api/automation/workflows/channel-readiness",
         "POST /api/automation/workflows/{workflow_id}/launch-checklist/preview",

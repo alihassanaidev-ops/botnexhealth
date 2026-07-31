@@ -76,6 +76,28 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.message.includes("Max attempts"))).toBe(true)
     })
 
+    it("flags a voice phone country override without a valid country", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "voice-1",
+            nodes: [
+                {
+                    type: "send_voice",
+                    id: "voice-1",
+                    retell_agent_id: "",
+                    voice_profile_id: "profile-1",
+                    next_node_id: "exit-1",
+                    phone_country_code_enabled: true,
+                    phone_country_region: "",
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+        }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("Phone country override"))).toBe(true)
+    })
+
     it("flags duplicate ids", () => {
         const def = base()
         def.nodes.push({ type: "exit", id: "sms-1", outcome: null })

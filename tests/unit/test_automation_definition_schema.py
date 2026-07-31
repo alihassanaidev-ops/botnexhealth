@@ -168,12 +168,36 @@ def test_voice_node() -> None:
                 "id": "voice-1",
                 "retell_agent_id": "agent-abc",
                 "next_node_id": "exit-1",
+                "phone_country_code_enabled": True,
+                "phone_country_region": "GB",
             },
             {"type": "exit", "id": "exit-1"},
         ],
     }
     d = WorkflowDefinition.model_validate(defn)
     assert d.nodes[0].retell_agent_id == "agent-abc"
+    assert d.nodes[0].phone_country_code_enabled is True
+    assert d.nodes[0].phone_country_region == "GB"
+
+
+def test_voice_node_rejects_invalid_phone_country_region() -> None:
+    defn = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "voice-1",
+        "nodes": [
+            {
+                "type": "send_voice",
+                "id": "voice-1",
+                "retell_agent_id": "agent-abc",
+                "next_node_id": "exit-1",
+                "phone_country_code_enabled": True,
+                "phone_country_region": "USA",
+            },
+            {"type": "exit", "id": "exit-1"},
+        ],
+    }
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
 
 
 def test_email_node() -> None:

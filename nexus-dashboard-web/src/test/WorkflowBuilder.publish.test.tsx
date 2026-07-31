@@ -18,6 +18,7 @@ vi.mock("@/lib/workflow-api", () => ({
     resumeWorkflow: vi.fn(),
     deleteWorkflow: vi.fn(),
     validateDefinition: vi.fn(),
+    listPhoneCountryRegions: vi.fn().mockResolvedValue([]),
     getChannelReadiness: vi.fn(),
     previewLaunchChecklist: vi.fn(),
     listMergeFields: vi.fn().mockResolvedValue([]),

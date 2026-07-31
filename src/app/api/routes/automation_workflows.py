@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Annotated, Any, Literal
 
+import phonenumbers
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError
 
@@ -209,6 +210,11 @@ class ValidationIssueResponse(BaseModel):
 class ValidateDefinitionResponse(BaseModel):
     valid: bool
     issues: list[ValidationIssueResponse] = Field(default_factory=list)
+
+
+class PhoneCountryRegionResponse(BaseModel):
+    region: str
+    calling_code: str
 
 
 class MergeFieldResponse(BaseModel):
@@ -683,6 +689,20 @@ async def validate_definition(
     ]
     valid = not any(i.severity == "error" for i in issues)
     return ValidateDefinitionResponse(valid=valid, issues=responses)
+
+
+@router.get("/phone-country-regions", response_model=list[PhoneCountryRegionResponse])
+async def list_phone_country_regions(
+    current_user: _InstitutionAdmin,
+) -> list[PhoneCountryRegionResponse]:
+    _institution_id(current_user)
+    return [
+        PhoneCountryRegionResponse(
+            region=region,
+            calling_code=f"+{phonenumbers.country_code_for_region(region)}",
+        )
+        for region in sorted(phonenumbers.SUPPORTED_REGIONS)
+    ]
 
 
 @router.post("/dry-run", response_model=DryRunResultResponse)

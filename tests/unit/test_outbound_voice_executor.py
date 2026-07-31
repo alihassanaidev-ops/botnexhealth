@@ -39,6 +39,8 @@ def _make_node(
     max_attempts=1,
     wait_for_outcome=False,
     voice_profile_id=None,
+    phone_country_code_enabled=False,
+    phone_country_region=None,
 ):
     return SendVoiceNode(
         id="node-1",
@@ -47,6 +49,8 @@ def _make_node(
         next_node_id=next_id,
         max_attempts=max_attempts,
         wait_for_outcome=wait_for_outcome,
+        phone_country_code_enabled=phone_country_code_enabled,
+        phone_country_region=phone_country_region,
     )
 
 
@@ -240,7 +244,17 @@ def test_executor_normalizes_display_formatted_numbers_before_retell():
         location=_make_location(retell_from_number="(548) 708-8349"),
     )
     with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
-        asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_xyz"), {}))
+        asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(
+                    agent_id="agent_xyz",
+                    phone_country_code_enabled=True,
+                    phone_country_region="CA",
+                ),
+                {},
+            )
+        )
 
     kw = call_mock.call_args.kwargs
     assert kw["from_number"] == "+15487088349"
@@ -250,6 +264,46 @@ def test_executor_normalizes_display_formatted_numbers_before_retell():
     assert result_metadata["retell_from_number_masked"] == "+*******8349"
     assert result_metadata["to_number_masked"] == "+*******0843"
     assert result_metadata["retell_from_number_normalized"] is True
+    assert result_metadata["to_number_normalized"] is True
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_rejects_local_patient_number_when_phone_country_override_disabled():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(phone="2363140843"),
+        location=_make_location(retell_from_number="+15487088349"),
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_xyz"), {}))
+
+    call_mock.assert_not_called()
+    runtime.fail_step.assert_called()
+    result_metadata = runtime.fail_step.call_args.kwargs["result_metadata"]
+    assert result_metadata["phone_country_code_enabled"] is False
+    assert result_metadata["phone_country_region"] is None
+    assert result_metadata["to_number_normalized"] is False
+    assert "invalid" in _fail_reason(runtime)
+
+
+def test_executor_uses_voice_node_phone_country_override_for_local_patient_number():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(phone="07123456789"),
+        location=_make_location(retell_from_number="+15487088349"),
+    )
+    node = _make_node(
+        agent_id="agent_xyz",
+        phone_country_code_enabled=True,
+        phone_country_region="GB",
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), node, {}))
+
+    kw = call_mock.call_args.kwargs
+    assert kw["to_number"] == "+447123456789"
+    assert kw["dynamic_variables"]["user_number"] == "+447123456789"
+    result_metadata = _result_metadata(runtime.complete_step)
+    assert result_metadata["phone_country_code_enabled"] is True
+    assert result_metadata["phone_country_region"] == "GB"
     assert result_metadata["to_number_normalized"] is True
     runtime.fail_run.assert_not_called()
 

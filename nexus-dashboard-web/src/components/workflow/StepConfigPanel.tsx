@@ -8,8 +8,8 @@
  * source of truth). Edges are authored via the next-step selectors here — not by
  * dragging on the canvas (Plan 02 architecture decision).
  */
-import { useEffect, useState } from "react"
-import { Trash2, Flag, Plus, GitBranch } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import { Check, ChevronsUpDown, GitBranch, Flag, Plus, Search, Trash2 } from "lucide-react"
 import {
     Sheet,
     SheetContent,
@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -34,6 +35,7 @@ import {
 } from "@/components/ui/select"
 import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
 import { listAppointmentTypes } from "@/lib/tenant-api"
+import { listPhoneCountryRegions, type PhoneCountryRegion } from "@/lib/workflow-api"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
 import { addVoiceOutcomeBranch, TRIGGER_NODE_ID, VOICE_OUTCOME_BRANCH_VALUES } from "@/lib/workflow/graph"
@@ -57,6 +59,19 @@ import type {
 const NONE = "__none__"
 const CONDITION_OPS: ConditionOp[] = ["eq", "neq", "in", "not_in", "is_null", "is_not_null", "contains", "not_contains"]
 const CUSTOM_RELATIVE_WAIT = "__custom__"
+const FALLBACK_PHONE_COUNTRIES: PhoneCountryRegion[] = [
+    { region: "US", calling_code: "+1" },
+    { region: "GB", calling_code: "+44" },
+    { region: "CA", calling_code: "+1" },
+]
+const REGION_DISPLAY_NAMES = typeof Intl !== "undefined" && "DisplayNames" in Intl
+    ? new Intl.DisplayNames(["en"], { type: "region" })
+    : null
+
+function phoneCountryLabel(country: PhoneCountryRegion): string {
+    const name = REGION_DISPLAY_NAMES?.of(country.region) || country.region
+    return `${name} (${country.calling_code})`
+}
 
 export interface StepConfigPanelProps {
     open: boolean
@@ -468,6 +483,45 @@ function VoiceFields({
 }) {
     const hasLegacyAgent = Boolean(node.retell_agent_id?.trim() && !node.voice_profile_id)
     const hasProfiles = voiceProfiles.length > 0
+    const [phoneCountryOpen, setPhoneCountryOpen] = useState(false)
+    const [phoneCountrySearch, setPhoneCountrySearch] = useState("")
+    const [phoneCountries, setPhoneCountries] = useState<PhoneCountryRegion[]>(FALLBACK_PHONE_COUNTRIES)
+    const [phoneCountriesLoaded, setPhoneCountriesLoaded] = useState(false)
+    const selectedPhoneCountry = useMemo(
+        () => phoneCountries.find((country) => country.region === (node.phone_country_region || "US")),
+        [node.phone_country_region, phoneCountries],
+    )
+    const filteredPhoneCountries = useMemo(() => {
+        const query = phoneCountrySearch.trim().toLowerCase()
+        const sorted = [...phoneCountries].sort((a, b) =>
+            phoneCountryLabel(a).localeCompare(phoneCountryLabel(b)),
+        )
+        if (!query) return sorted
+        return sorted.filter((country) =>
+            [phoneCountryLabel(country), country.region, country.calling_code]
+                .join(" ")
+                .toLowerCase()
+                .includes(query),
+        )
+    }, [phoneCountries, phoneCountrySearch])
+
+    useEffect(() => {
+        if (!node.phone_country_code_enabled || phoneCountriesLoaded) return
+        let cancelled = false
+        listPhoneCountryRegions()
+            .then((countries) => {
+                if (!cancelled) setPhoneCountries(countries)
+            })
+            .catch(() => {
+                if (!cancelled) setPhoneCountries(FALLBACK_PHONE_COUNTRIES)
+            })
+            .finally(() => {
+                if (!cancelled) setPhoneCountriesLoaded(true)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [node.phone_country_code_enabled, phoneCountriesLoaded])
 
     return (
         <>
@@ -511,6 +565,102 @@ function VoiceFields({
                     This workflow has an older voice agent configured. Switch it to a named profile when one is available.
                 </p>
             )}
+            <div className="space-y-3 rounded-md border border-border px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <Label className="text-sm">Phone country override</Label>
+                        <p className="text-xs text-muted-foreground">
+                            Use this when patient numbers arrive without a country code.
+                        </p>
+                    </div>
+                    <Switch
+                        checked={node.phone_country_code_enabled ?? false}
+                        disabled={readOnly}
+                        onCheckedChange={(checked) =>
+                            onChange({
+                                ...node,
+                                phone_country_code_enabled: checked,
+                                phone_country_region: node.phone_country_region || "US",
+                            })
+                        }
+                    />
+                </div>
+                {(node.phone_country_code_enabled ?? false) && (
+                    <Popover open={phoneCountryOpen} onOpenChange={setPhoneCountryOpen}>
+                        <PopoverTrigger asChild>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                disabled={readOnly}
+                                className="h-10 w-full justify-between px-3 text-left font-normal"
+                            >
+                                <span className="min-w-0 truncate">
+                                    {selectedPhoneCountry
+                                        ? phoneCountryLabel(selectedPhoneCountry)
+                                        : node.phone_country_region || "Select phone country"}
+                                </span>
+                                <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+                            <div className="border-b border-border p-2">
+                                <div className="relative">
+                                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                    <Input
+                                        value={phoneCountrySearch}
+                                        onChange={(event) => setPhoneCountrySearch(event.target.value)}
+                                        placeholder="Search countries"
+                                        className="h-9 pl-8"
+                                    />
+                                </div>
+                            </div>
+                            <div className="max-h-64 overflow-y-auto p-1">
+                                {!phoneCountriesLoaded ? (
+                                    <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                                        Loading countries...
+                                    </div>
+                                ) : filteredPhoneCountries.length === 0 ? (
+                                    <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                                        No countries match your search.
+                                    </div>
+                                ) : (
+                                    filteredPhoneCountries.map((country) => (
+                                        <button
+                                            type="button"
+                                            key={country.region}
+                                            className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-2 text-left text-sm hover:bg-accent"
+                                            onClick={() => {
+                                                onChange({
+                                                    ...node,
+                                                    phone_country_code_enabled: true,
+                                                    phone_country_region: country.region,
+                                                })
+                                                setPhoneCountrySearch("")
+                                                setPhoneCountryOpen(false)
+                                            }}
+                                        >
+                                            <span className="min-w-0">
+                                                <span className="block truncate">{phoneCountryLabel(country)}</span>
+                                                <span className="block truncate font-mono text-xs text-muted-foreground">
+                                                    {country.region}
+                                                </span>
+                                            </span>
+                                            {(node.phone_country_region || "US") === country.region && (
+                                                <Check className="h-4 w-4 shrink-0" />
+                                            )}
+                                        </button>
+                                    ))
+                                )}
+                            </div>
+                        </PopoverContent>
+                    </Popover>
+                )}
+                {!(node.phone_country_code_enabled ?? false) && (
+                    <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-200">
+                        Local-format patient numbers will not be called unless this is enabled. Numbers already saved with +country code can still be called.
+                    </p>
+                )}
+            </div>
             <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
                 <div>
                     <Label className="text-sm">Wait for voice outcome</Label>

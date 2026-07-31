@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
+import { fireEvent, render, screen } from "@testing-library/react"
 import StepConfigPanel from "@/components/workflow/StepConfigPanel"
 import type { WorkflowDefinition } from "@/types/workflow"
+
+vi.mock("@/lib/workflow-api", () => ({
+    listPhoneCountryRegions: vi.fn().mockResolvedValue([]),
+}))
 
 const DEF: WorkflowDefinition = {
     schema_version: "1.0",
@@ -22,8 +25,7 @@ const DEF: WorkflowDefinition = {
 }
 
 describe("StepConfigPanel voice outcome controls", () => {
-    it("exposes wait_for_outcome and inserts a call_outcome branch", async () => {
-        const user = userEvent.setup()
+    it("exposes wait_for_outcome and inserts a call_outcome branch", () => {
         const onDefinitionChange = vi.fn()
 
         render(
@@ -44,7 +46,7 @@ describe("StepConfigPanel voice outcome controls", () => {
         expect(screen.getAllByText(/call_outcome/).length).toBeGreaterThan(0)
         expect(screen.getByText("do_not_call")).toBeInTheDocument()
 
-        await user.click(screen.getByRole("button", { name: /add outcome branch/i }))
+        fireEvent.click(screen.getByRole("button", { name: /add outcome branch/i }))
 
         const next = onDefinitionChange.mock.calls[0][0] as WorkflowDefinition
         const condition = next.nodes.find((node) => node.type === "condition")

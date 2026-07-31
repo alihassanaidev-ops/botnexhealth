@@ -81,6 +81,11 @@ export interface CampaignTemplate {
     metadata: CampaignTemplateMetadata
 }
 
+export interface PhoneCountryRegion {
+    region: string
+    calling_code: string
+}
+
 // ---- Workflows ----
 export async function listWorkflows(): Promise<AutomationWorkflow[]> {
     const { data } = await api.get<AutomationWorkflow[]>("/automation/workflows")
@@ -157,6 +162,11 @@ export async function validateDefinition(
         "/automation/workflows/validate",
         { definition },
     )
+    return data
+}
+
+export async function listPhoneCountryRegions(): Promise<PhoneCountryRegion[]> {
+    const { data } = await api.get<PhoneCountryRegion[]>("/automation/workflows/phone-country-regions")
     return data
 }
 

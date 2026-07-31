@@ -152,7 +152,12 @@ describe("workflow graph — factories", () => {
         expect(createNode("wait", "w").type).toBe("wait")
         expect(createNode("drip", "d")).toMatchObject({ batch_size: 25, interval_seconds: 3600 })
         expect(createNode("send_sms", "s")).toMatchObject({ max_attempts: 1, body_template: "" })
-        expect(createNode("send_voice", "v")).toMatchObject({ wait_for_outcome: false, max_attempts: 1 })
+        expect(createNode("send_voice", "v")).toMatchObject({
+            wait_for_outcome: false,
+            max_attempts: 1,
+            phone_country_code_enabled: false,
+            phone_country_region: "US",
+        })
         expect(createNode("condition", "c")).toMatchObject({ logic: "AND" })
     })
     it("createTrigger yields sensible defaults", () => {

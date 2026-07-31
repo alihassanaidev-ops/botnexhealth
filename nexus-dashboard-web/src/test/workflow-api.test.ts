@@ -7,6 +7,7 @@ import {
     getChannelReadiness,
     getLaunchChecklist,
     getWorkflow,
+    listPhoneCountryRegions,
     listMergeFields,
     listTemplates,
     listVersions,
@@ -117,6 +118,13 @@ describe("workflow-api", () => {
         const res = await validateDefinition(DEF)
         expect(post).toHaveBeenCalledWith("/automation/workflows/validate", { definition: DEF })
         expect(res).toEqual({ valid: true, issues: [] })
+    })
+
+    it("listPhoneCountryRegions GETs supported dialing regions", async () => {
+        get.mockResolvedValue({ data: [{ region: "US", calling_code: "+1" }] })
+        const res = await listPhoneCountryRegions()
+        expect(get).toHaveBeenCalledWith("/automation/workflows/phone-country-regions")
+        expect(res).toEqual([{ region: "US", calling_code: "+1" }])
     })
 
     it("dryRun POSTs the definition + condition_choices to the dry-run endpoint", async () => {

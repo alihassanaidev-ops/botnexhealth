@@ -71,6 +71,10 @@ def _voice_config_metadata(
         "retell_from_number_masked": mask_phone(from_number or raw_from_number),
         "to_number_masked": mask_phone(to_number or raw_to_number),
         "to_number_normalized": bool(raw_to_number and to_number and raw_to_number != to_number),
+        "phone_country_code_enabled": node.phone_country_code_enabled,
+        "phone_country_region": node.phone_country_region
+        if node.phone_country_code_enabled
+        else None,
         "retell_from_number_normalized": bool(
             raw_from_number and from_number and raw_from_number != from_number
         ),
@@ -158,7 +162,12 @@ class VoiceNodeExecutor:
             await self.runtime.fail_step(step, result_code="no_phone")
             await self.runtime.fail_run(run, reason="send_voice: contact has no phone number")
             return node.next_node_id
-        to_number = normalize_phone(raw_to_number)
+        default_phone_region = (
+            node.phone_country_region
+            if node.phone_country_code_enabled and node.phone_country_region
+            else None
+        )
+        to_number = normalize_phone(raw_to_number, default_region=default_phone_region)
         if not to_number:
             await self.runtime.fail_step(
                 step,
@@ -166,6 +175,10 @@ class VoiceNodeExecutor:
                 result_metadata={
                     "to_number_masked": mask_phone(raw_to_number),
                     "to_number_normalized": False,
+                    "phone_country_code_enabled": node.phone_country_code_enabled,
+                    "phone_country_region": node.phone_country_region
+                    if node.phone_country_code_enabled
+                    else None,
                 },
             )
             await self.runtime.fail_run(run, reason="send_voice: contact phone number is invalid")
