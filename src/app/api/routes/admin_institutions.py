@@ -22,6 +22,10 @@ from src.app.models.gotracker_webhook_subscription import (
 from src.app.models.institution import DEFAULT_JURISDICTION, Jurisdiction
 from src.app.models.outbound_voice import OutboundVoiceProfile
 from src.app.models.user import User, UserRole
+from src.app.services.automation.gotracker_subscription_service import (
+    GoTrackerSubscriptionLifecycleService,
+    _location_callback_url,
+)
 from src.app.services.audit import log_audit
 from src.app.services.audit_decorator import audit
 from src.app.services.institution_service import InstitutionService
@@ -1058,6 +1062,49 @@ async def _upsert_gotracker_webhook_config(
     return row
 
 
+async def _ensure_gotracker_webhook_after_location_save(
+    session: Any,
+    *,
+    institution: Any,
+    location: Any,
+    provider_subscription_id: str | None = None,
+    webhook_secret: str | None = None,
+) -> GoTrackerWebhookSubscription | None:
+    """Persist manual webhook config, then immediately reconcile GoTracker webhooks.
+
+    The hourly Celery lifecycle task remains the backstop, but location create/update
+    should give admins the production flow: paste the GoTracker API key, save, and
+    see webhook status immediately.
+    """
+    row = await _upsert_gotracker_webhook_config(
+        session,
+        institution_id=str(institution.id),
+        location=location,
+        provider_subscription_id=provider_subscription_id,
+        webhook_secret=webhook_secret,
+    )
+    if getattr(institution, "pms_type", None) != "gotracker":
+        return row
+    if not getattr(location, "gotracker_product_key_encrypted", None):
+        return row
+
+    callback_url = (
+        _location_callback_url(
+            settings.gotracker_webhook_callback_base_url,
+            str(location.id),
+        )
+        if settings.gotracker_webhook_callback_base_url
+        else None
+    )
+    svc = GoTrackerSubscriptionLifecycleService(session)
+    row, _ = await svc.ensure_location_subscription(
+        institution=institution,
+        location=location,
+        callback_url=callback_url,
+    )
+    return row
+
+
 # =============================================================================
 # Location Routes
 # =============================================================================
@@ -1110,9 +1157,9 @@ async def create_location(
                 detail=f"Location with slug '{data.slug}' already exists (race condition)",
             )
 
-        gotracker_subscription = await _upsert_gotracker_webhook_config(
+        gotracker_subscription = await _ensure_gotracker_webhook_after_location_save(
             session,
-            institution_id=str(institution.id),
+            institution=institution,
             location=location,
             provider_subscription_id=data.gotracker_webhook_subscription_id,
             webhook_secret=data.gotracker_webhook_secret,
@@ -1375,9 +1422,9 @@ async def update_location(
             exclude={"gotracker_webhook_subscription_id", "gotracker_webhook_secret"},
         )
         location = await institution_service.update_location(location, **updates)
-        gotracker_subscription = await _upsert_gotracker_webhook_config(
+        gotracker_subscription = await _ensure_gotracker_webhook_after_location_save(
             session,
-            institution_id=str(institution.id),
+            institution=institution,
             location=location,
             provider_subscription_id=data.gotracker_webhook_subscription_id,
             webhook_secret=data.gotracker_webhook_secret,

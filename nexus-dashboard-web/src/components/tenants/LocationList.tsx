@@ -256,11 +256,33 @@ export function LocationList({ institutionSlug, hasPms = true, pmsType = "nexhea
                                     {hasPms && (
                                         <TableCell className="font-mono text-sm">
                                             {pmsType === "gotracker"
-                                                ? (
-                                                    loc.has_gotracker_product_key
-                                                        ? <span className="text-green-600 dark:text-green-400">Configured</span>
-                                                        : <span className="text-muted-foreground">Missing key</span>
-                                                )
+                                                ? (() => {
+                                                    const connected = loc.has_gotracker_product_key
+                                                        && loc.gotracker_webhook_status === "active"
+                                                        && !!loc.gotracker_webhook_subscription_id
+                                                        && loc.has_gotracker_webhook_secret;
+                                                    if (connected) {
+                                                        return (
+                                                            <div className="space-y-0.5">
+                                                                <span className="text-green-600 dark:text-green-400">Connected</span>
+                                                                <div className="text-xs text-muted-foreground">
+                                                                    Webhook #{loc.gotracker_webhook_subscription_id}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    }
+                                                    if (loc.has_gotracker_product_key) {
+                                                        return (
+                                                            <div className="space-y-0.5">
+                                                                <span className="text-amber-600 dark:text-amber-400">API key saved</span>
+                                                                <div className="text-xs text-muted-foreground">
+                                                                    Webhook {loc.gotracker_webhook_status || "pending"}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    }
+                                                    return <span className="text-muted-foreground">Missing API key</span>;
+                                                })()
                                                 : (loc.nexhealth_location_id || <span className="text-muted-foreground">-</span>)}
                                         </TableCell>
                                     )}

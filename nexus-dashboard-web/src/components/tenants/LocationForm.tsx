@@ -127,6 +127,48 @@ function FieldHint({ text }: { text: string }) {
     );
 }
 
+function GoTrackerWebhookStatus({ location }: { location?: Location }) {
+    if (!location) return null;
+    const hasApiKey = location.has_gotracker_product_key;
+    const status = location.gotracker_webhook_status;
+    const connected = hasApiKey && status === "active" && !!location.gotracker_webhook_subscription_id && location.has_gotracker_webhook_secret;
+    const failed = status === "failed";
+    const message = !hasApiKey
+        ? "Paste the GoTracker API key and save to connect this location."
+        : connected
+            ? "GoTracker API and webhooks are connected."
+            : failed
+                ? "GoTracker API key is saved, but webhook setup failed. Check the subscription status or use advanced adoption below."
+                : "GoTracker API key is saved. Webhook setup is pending or waiting for reconciliation.";
+
+    return (
+        <div className={cn(
+            "rounded-lg border p-3 text-sm",
+            connected
+                ? "border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-300"
+                : failed
+                    ? "border-destructive/30 bg-destructive/10 text-destructive"
+                    : "border-border bg-background/70 text-muted-foreground",
+        )}>
+            <div className="flex items-center justify-between gap-3">
+                <span>{message}</span>
+                <Badge variant="secondary" className={cn(
+                    "shrink-0 capitalize",
+                    connected && "bg-green-500/15 text-green-700 dark:text-green-300",
+                    failed && "bg-destructive/15 text-destructive",
+                )}>
+                    {connected ? "Connected" : status || "Not connected"}
+                </Badge>
+            </div>
+            {location.gotracker_webhook_subscription_id && (
+                <p className="mt-1 text-xs opacity-80">
+                    Subscription ID: {location.gotracker_webhook_subscription_id}
+                </p>
+            )}
+        </div>
+    );
+}
+
 export function LocationForm({ institutionSlug, location, hasPms = true, pmsType = "nexhealth", onSuccess, onCancel }: LocationFormProps) {
     const isEditing = !!location;
     const isNexHealth = hasPms && (pmsType ?? "nexhealth") === "nexhealth";
@@ -371,6 +413,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                     {/* Section: GoTracker Integration */}
                     {isGoTracker && (
                     <SectionCard title="GoTracker Integration" description="Connect this location to the ScaleNexus GoTracker Synchronizer.">
+                        <GoTrackerWebhookStatus location={location} />
                         <FormField
                             control={form.control}
                             name="gotracker_base_url"
@@ -393,13 +436,13 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                             render={({ field }) => (
                                 <FormItem>
                                     <FormLabel>
-                                        Product Key
-                                        <FieldHint text="Location-scoped x-api-key from the GoTracker Synchronizer admin panel. Stored encrypted and never shown again." />
+                                        GoTracker API Key
+                                        <FieldHint text="API key from the GoTracker Synchronizer admin panel. It must include the scopes needed for read, book, and webhooks. Stored encrypted and never shown again." />
                                     </FormLabel>
                                     <FormControl>
                                         <Input
                                             type="password"
-                                            placeholder={location?.has_gotracker_product_key ? "Configured — enter a new key to replace" : "Paste product key"}
+                                            placeholder={location?.has_gotracker_product_key ? "Configured — enter a new key to replace" : "Paste GoTracker API key"}
                                             autoComplete="off"
                                             {...field}
                                         />
@@ -409,10 +452,17 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                             )}
                         />
                         <p className="text-xs text-muted-foreground">
-                            Webhooks use a location-scoped callback URL and signing secret.
+                            Saving the API key automatically creates or updates this location's webhook subscription when the callback base URL is configured.
                         </p>
                         {isEditing && (
-                            <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-3">
+                                <div>
+                                    <h4 className="text-sm font-medium">Advanced webhook adoption</h4>
+                                    <p className="text-xs text-muted-foreground">
+                                        Leave these blank for normal setup. Use them only to adopt an existing Synchronizer webhook subscription.
+                                    </p>
+                                </div>
+                                <div className="grid gap-4 md:grid-cols-2">
                                 <FormField
                                     control={form.control}
                                     name="gotracker_webhook_subscription_id"
@@ -455,6 +505,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                                         </FormItem>
                                     )}
                                 />
+                                </div>
                             </div>
                         )}
                     </SectionCard>
