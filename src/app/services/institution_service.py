@@ -159,9 +159,25 @@ class InstitutionService:
             await self.session.delete(location)
             logger.info(f"Hard deleted location: {location.slug}")
         else:
+            from src.app.models.user import User, UserRole
+
             location.is_active = False
+            result = await self.session.execute(
+                select(User).where(
+                    User.location_id == location.id,
+                    User.role != UserRole.SUPER_ADMIN.value,
+                    User.deleted_at.is_(None),
+                )
+            )
+            users = result.scalars().all()
+            for user in users:
+                user.mark_deleted()
             await self.session.flush()
-            logger.info(f"Soft deleted location: {location.slug}")
+            logger.info(
+                "Soft deleted location: %s and removed %s scoped users",
+                location.slug,
+                len(users),
+            )
 
     async def list_locations(
         self, institution_id: str, include_inactive: bool = False

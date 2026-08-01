@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2, MailPlus, Pencil } from "lucide-react";
+import { ArrowLeft, Loader2, MailPlus, Pencil, Trash2 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -69,6 +69,8 @@ export default function InstitutionDetailPage() {
     const [inviteOpen, setInviteOpen] = useState(false);
     const [inviteEmail, setInviteEmail] = useState("");
     const [inviting, setInviting] = useState(false);
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const fetchInstitution = useCallback(async () => {
         setIsLoading(true);
@@ -209,6 +211,25 @@ export default function InstitutionDetailPage() {
         }
     }
 
+    async function handleDeleteInstitution() {
+        if (!institution || !slug) return;
+
+        setIsDeleting(true);
+        try {
+            await api.delete(`/admin/institutions/${slug}`, {
+                params: { hard: true },
+            });
+            toast.success(`Institution "${institution.name}" deleted`);
+            setDeleteOpen(false);
+            navigate("/institutions");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to delete institution");
+        } finally {
+            setIsDeleting(false);
+        }
+    }
+
     const IntegrationCard = ({
         name,
         description,
@@ -282,7 +303,7 @@ export default function InstitutionDetailPage() {
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             {/* Header */}
-            <div className="flex items-start gap-4">
+            <div className="flex flex-wrap items-start gap-4">
                 <Button variant="ghost" size="icon" onClick={() => navigate("/institutions")} className="mt-1">
                     <ArrowLeft className="h-4 w-4" />
                 </Button>
@@ -294,7 +315,55 @@ export default function InstitutionDetailPage() {
                     </div>
                     <p className="text-sm text-muted-foreground font-mono">{institution.slug}</p>
                 </div>
+                <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setDeleteOpen(true)}
+                    disabled={isDeleting}
+                    className="mt-1 shrink-0"
+                >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Institution
+                </Button>
             </div>
+
+            <Dialog
+                open={deleteOpen}
+                onOpenChange={(open) => {
+                    if (!isDeleting) setDeleteOpen(open);
+                }}
+            >
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Delete Institution</DialogTitle>
+                        <DialogDescription>
+                            This will permanently delete {institution.name}, its locations, and related location data.
+                            This action cannot be undone.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => setDeleteOpen(false)}
+                            disabled={isDeleting}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={handleDeleteInstitution}
+                            disabled={isDeleting}
+                        >
+                            {isDeleting ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <Trash2 className="mr-2 h-4 w-4" />
+                            )}
+                            {isDeleting ? "Deleting..." : "Delete Institution"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* Tabs */}
             <Tabs value={activeTab} onValueChange={setActiveTab}>
