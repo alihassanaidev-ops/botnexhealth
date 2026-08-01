@@ -38,6 +38,8 @@ from src.app.services.automation.definition_schema import (
     ConditionNode,
     DripNode,
     ExitNode,
+    JsonMapperNode,
+    LlmNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -1186,6 +1188,11 @@ def _step_output_snapshot(
         output["disconnection_reason"] = (run.trigger_metadata or {}).get("disconnection_reason")
     elif isinstance(node, UpdatePatientStatusNode):
         output["status_written"] = (step.result_metadata or {}).get("status") or node.status
+    elif isinstance(node, JsonMapperNode):
+        output["mapped_fields"] = list((step.result_metadata or {}).get("mapped_fields", {}).keys())
+    elif isinstance(node, LlmNode):
+        output["output_field"] = node.output_field
+        output["label"] = (step.result_metadata or {}).get("label")
     elif isinstance(node, ExitNode):
         output["outcome"] = node.outcome
     return output
@@ -1228,6 +1235,17 @@ def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
     elif isinstance(node, UpdatePatientStatusNode):
         base["status"] = node.status
         base["has_note_template"] = bool(node.note_template)
+        base["next_node_id"] = node.next_node_id
+    elif isinstance(node, JsonMapperNode):
+        base["mappings"] = [
+            {"source_path": mapping.source_path, "target_field": mapping.target_field}
+            for mapping in node.mappings
+        ]
+        base["next_node_id"] = node.next_node_id
+    elif isinstance(node, LlmNode):
+        base["source_field"] = node.source_field
+        base["output_field"] = node.output_field
+        base["labels"] = node.labels
         base["next_node_id"] = node.next_node_id
     elif isinstance(node, ExitNode):
         base["outcome"] = node.outcome

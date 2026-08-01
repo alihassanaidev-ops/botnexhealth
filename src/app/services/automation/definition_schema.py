@@ -4,12 +4,12 @@ Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, recall_scan, manual, bulk_import, callback_requested,
             patient_status_changed
   Nodes:    wait, drip, send_sms, send_voice, send_email, update_patient_status,
-            condition, exit
+            json_mapper, llm, condition, exit
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 import phonenumbers
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -26,6 +26,9 @@ class AppointmentOffsetTrigger(BaseModel):
 
     type: Literal["appointment_offset"] = "appointment_offset"
     offset_hours: int
+    # Legacy authoring field. Kept for backward compatibility with published
+    # definitions, but appointment-type filtering no longer happens at trigger
+    # selection time.
     appointment_type_ids: list[str] | None = None
 
 
@@ -264,6 +267,72 @@ class UpdatePatientStatusNode(BaseModel):
     note_template: str | None = None
 
 
+class JsonMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str = Field(min_length=1)
+    target_field: str = Field(min_length=1)
+    default_value: _RULE_VALUE = None
+
+
+class JsonMapperNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["json_mapper"] = "json_mapper"
+    mappings: list[JsonMapping] = Field(min_length=1)
+    next_node_id: str
+
+
+class LlmLabelRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    keywords: list[str] = Field(min_length=1)
+
+    @field_validator("keywords")
+    @classmethod
+    def validate_keywords(cls, values: list[str]) -> list[str]:
+        keywords = [keyword.strip() for keyword in values if keyword.strip()]
+        if not keywords:
+            raise ValueError("keywords must include at least one non-empty value")
+        return keywords
+
+
+class LlmNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["llm"] = "llm"
+    source_field: str = Field(min_length=1)
+    output_field: str = Field(min_length=1)
+    prompt_template: str = Field(min_length=1)
+    model: str | None = None
+    output_mode: Literal["label", "text", "json"] = "label"
+    max_output_tokens: int = Field(default=256, ge=1, le=4096)
+    include_context: bool = False
+    require_model: bool = True
+    allow_keyword_fallback: bool | None = None
+    json_schema: dict[str, Any] | None = None
+    labels: list[str] = Field(default_factory=list)
+    label_rules: list[LlmLabelRule] = Field(default_factory=list)
+    fallback_label: str | None = "unknown"
+    next_node_id: str
+
+    @field_validator("labels")
+    @classmethod
+    def validate_labels(cls, values: list[str]) -> list[str]:
+        return [label.strip() for label in values if label.strip()]
+
+    @field_validator("fallback_label")
+    @classmethod
+    def normalize_fallback_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 class ConditionNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -291,6 +360,8 @@ WorkflowNode = Annotated[
         SendVoiceNode,
         SendEmailNode,
         UpdatePatientStatusNode,
+        JsonMapperNode,
+        LlmNode,
         ConditionNode,
         ExitNode,
     ],
@@ -363,6 +434,8 @@ class WorkflowDefinition(BaseModel):
                     SendVoiceNode,
                     SendEmailNode,
                     UpdatePatientStatusNode,
+                    JsonMapperNode,
+                    LlmNode,
                 ),
             ):
                 if node.next_node_id not in node_ids:

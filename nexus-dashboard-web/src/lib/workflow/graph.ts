@@ -72,16 +72,20 @@ export type FlowEdge = Edge & {
 
 const EDGE_STYLE = {
     strokeWidth: 2,
+    stroke: "hsl(var(--muted-foreground))",
+    strokeOpacity: 0.75,
 }
 
 const EDGE_LABEL_STYLE = {
     fontSize: 11,
     fontWeight: 600,
+    fill: "hsl(var(--foreground))",
+    color: "hsl(var(--foreground))",
 }
 
 const EDGE_LABEL_BG_STYLE = {
-    fill: "hsl(var(--background))",
-    fillOpacity: 0.92,
+    fill: "hsl(var(--card))",
+    fillOpacity: 0.96,
 }
 
 function smartEdge(edge: Omit<FlowEdge, "type"> & { type?: FlowEdge["type"] }): FlowEdge {
@@ -90,9 +94,8 @@ function smartEdge(edge: Omit<FlowEdge, "type"> & { type?: FlowEdge["type"] }): 
     const isTrue = handle === "true"
     const isBranch = isFalse || isTrue
     return {
-        type: "smoothstep",
+        type: "step",
         pathOptions: {
-            borderRadius: 8,
             offset: isBranch ? (isFalse ? 30 : 22) : 14,
         },
         interactionWidth: 18,
@@ -124,6 +127,8 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
         case "send_voice":
         case "send_email":
         case "update_patient_status":
+        case "json_mapper":
+        case "llm":
             return [{ targetId: node.next_node_id }]
         case "condition":
             return [
@@ -167,7 +172,9 @@ function singleNext(node: WorkflowNode): string | undefined {
         node.type === "send_sms" ||
         node.type === "send_voice" ||
         node.type === "send_email" ||
-        node.type === "update_patient_status"
+        node.type === "update_patient_status" ||
+        node.type === "json_mapper" ||
+        node.type === "llm"
     ) {
         return node.next_node_id
     }
@@ -177,7 +184,7 @@ function singleNext(node: WorkflowNode): string | undefined {
 // ---------------------------------------------------------------------------
 // Layout — layered BFS from the trigger
 // ---------------------------------------------------------------------------
-/** Assign a column depth to every node id (trigger = 0, entry = 1, ...). */
+/** Assign a vertical depth to every node id (trigger = 0, entry = 1, ...). */
 export function computeDepths(def: WorkflowDefinition): Map<string, number> {
     const byId = new Map(def.nodes.map((n) => [n.id, n]))
     const depth = new Map<string, number>()
@@ -198,7 +205,7 @@ export function computeDepths(def: WorkflowDefinition): Map<string, number> {
         }
     }
 
-    // Unreachable nodes: place them in a trailing column so they still render.
+    // Unreachable nodes: place them in a trailing layer so they still render.
     const maxDepth = Math.max(1, ...Array.from(depth.values()))
     for (const n of def.nodes) {
         if (!depth.has(n.id)) depth.set(n.id, maxDepth + 1)
@@ -215,12 +222,12 @@ export function definitionToFlow(def: WorkflowDefinition): {
     // Manual positions (presentational) win over the auto-layout when present.
     const layout = def.layout ?? {}
 
-    // Order nodes within each column by definition order for determinism.
-    const rowByDepth = new Map<number, number>()
-    const nextRow = (d: number): number => {
-        const r = rowByDepth.get(d) ?? 0
-        rowByDepth.set(d, r + 1)
-        return r
+    // Order nodes within each vertical layer by definition order for determinism.
+    const slotByDepth = new Map<number, number>()
+    const nextSlot = (d: number): number => {
+        const slot = slotByDepth.get(d) ?? 0
+        slotByDepth.set(d, slot + 1)
+        return slot
     }
 
     const nodes: FlowNode[] = []
@@ -229,7 +236,7 @@ export function definitionToFlow(def: WorkflowDefinition): {
     nodes.push({
         id: TRIGGER_NODE_ID,
         type: "trigger",
-        position: layout[TRIGGER_NODE_ID] ?? { x: X0, y: Y0 + nextRow(0) * ROW_H },
+        position: layout[TRIGGER_NODE_ID] ?? { x: X0 + nextSlot(0) * COL_W, y: Y0 },
         data: { kind: "trigger", trigger: def.trigger },
         deletable: false,
     })
@@ -239,7 +246,7 @@ export function definitionToFlow(def: WorkflowDefinition): {
         nodes.push({
             id: n.id,
             type: "step",
-            position: layout[n.id] ?? { x: X0 + d * COL_W, y: Y0 + nextRow(d) * ROW_H },
+            position: layout[n.id] ?? { x: X0 + nextSlot(d) * COL_W, y: Y0 + d * ROW_H },
             data: { kind: "step", node: n, isEntry: n.id === def.entry_node_id },
         })
     }
@@ -352,12 +359,12 @@ export function autoLayoutDefinition(def: WorkflowDefinition): WorkflowDefinitio
     const layout: Record<string, NodePosition> = {}
     for (const d of sortedDepths) {
         const ids = layers.get(d) ?? []
-        const layerHeight = Math.max(0, (ids.length - 1) * AUTO_ROW_H)
-        const yOffset = Math.max(0, (AUTO_ROW_H * 1.1 - layerHeight) / 2)
+        const layerWidth = Math.max(0, (ids.length - 1) * AUTO_COL_W)
+        const xOffset = Math.max(0, (AUTO_COL_W * 1.1 - layerWidth) / 2)
         ids.forEach((id, index) => {
             layout[id] = {
-                x: X0 + d * AUTO_COL_W,
-                y: Y0 + yOffset + index * AUTO_ROW_H,
+                x: X0 + xOffset + index * AUTO_COL_W,
+                y: Y0 + d * AUTO_ROW_H,
             }
         })
     }
@@ -460,6 +467,42 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 note_template: "",
                 next_node_id: "",
             }
+        case "json_mapper":
+            return {
+                type,
+                id,
+                mappings: [
+                    {
+                        source_path: "gotracker_payload.appointment.reasons",
+                        target_field: "appointment_reasons",
+                        default_value: null,
+                    },
+                ],
+                next_node_id: "",
+            }
+        case "llm":
+            return {
+                type,
+                id,
+                source_field: "appointment_reasons",
+                output_field: "appointment_category",
+                prompt_template: "Classify the appointment reason into one of the configured labels.",
+                model: null,
+                output_mode: "label",
+                max_output_tokens: 256,
+                include_context: false,
+                require_model: true,
+                allow_keyword_fallback: null,
+                json_schema: null,
+                labels: ["hygiene", "implant", "emergency", "other"],
+                label_rules: [
+                    { label: "hygiene", keywords: ["cleaning", "hygiene", "prophy"] },
+                    { label: "implant", keywords: ["implant", "surgery"] },
+                    { label: "emergency", keywords: ["emergency", "pain", "urgent"] },
+                ],
+                fallback_label: "other",
+                next_node_id: "",
+            }
         case "condition":
             return {
                 type,
@@ -521,7 +564,7 @@ export function addVoiceOutcomeBranch(def: WorkflowDefinition, voiceNodeId: stri
 export function createTrigger(type: TriggerType): WorkflowTrigger {
     switch (type) {
         case "appointment_offset":
-            return { type, offset_hours: -24, appointment_type_ids: null }
+            return { type, offset_hours: -24 }
         case "recall_scan":
             return { type, recall_interval_months: 6 }
         case "manual":
@@ -585,6 +628,8 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
                 case "send_voice":
                 case "send_email":
                 case "update_patient_status":
+                case "json_mapper":
+                case "llm":
                     return { ...n, next_node_id: repoint(n.next_node_id) }
                 case "condition":
                     return {
@@ -632,6 +677,8 @@ export function connectNodes(
         case "send_voice":
         case "send_email":
         case "update_patient_status":
+        case "json_mapper":
+        case "llm":
             return updateNode(def, sourceId, { ...node, next_node_id: targetId })
         case "condition":
             return updateNode(

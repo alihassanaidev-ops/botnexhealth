@@ -119,17 +119,12 @@ def _apply_required_setup_fields(
     setup_options: dict[str, Any],
 ) -> None:
     """Apply setup fields that affect executable workflow behavior."""
+    _ = (definition, setup_options)
     fields = template.metadata.setup_fields
     for setup_field in fields:
         field_id = setup_field.get("id")
         if field_id == "appointment_type_ids":
-            raw = setup_options.get(field_id)
-            values = _string_list(raw)
-            if setup_field.get("required") and not values:
-                raise ValueError("appointment_type_ids is required for this template")
-            trigger = definition.get("trigger")
-            if isinstance(trigger, dict) and trigger.get("type") == "appointment_offset":
-                trigger["appointment_type_ids"] = values or None
+            continue
 
 
 def _string_list(value: Any) -> list[str]:
@@ -491,7 +486,6 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
     "trigger": {
         "type": "appointment_offset",
         "offset_hours": -24,
-        "appointment_type_ids": None,
     },
     "entry_node_id": "voice-preop-confirmation",
     "nodes": [
@@ -903,9 +897,9 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             required_readiness_checks=["location", "nexhealth_appointment_data", "voice", "consent", "quiet_hours"],
             required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time", "appointment_type"],
             content_class="transactional_care",
-            audience="Major/surgical appointment types selected by the clinic",
+            audience="Appointments whose GoTracker reason is routed by workflow nodes",
             eligibility=[
-                "appointment type is selected for this workflow",
+                "appointment reason matches the workflow's mapper/condition logic",
                 "future appointment still exists",
                 "patient is not suppressed",
                 "voice consent exists",
@@ -934,12 +928,6 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                     "type": "voice_profile_select",
                     "required": True,
                     "placeholder": "Choose outbound voice profile",
-                },
-                {
-                    "id": "appointment_type_ids",
-                    "label": "Major appointment types",
-                    "type": "appointment_type_multiselect",
-                    "required": True,
                 }
             ],
         ),

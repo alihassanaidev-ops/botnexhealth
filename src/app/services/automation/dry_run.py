@@ -14,6 +14,8 @@ from src.app.services.automation.definition_schema import (
     ConditionNode,
     DripNode,
     ExitNode,
+    JsonMapperNode,
+    LlmNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -21,6 +23,12 @@ from src.app.services.automation.definition_schema import (
     WorkflowDefinition,
 )
 from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG
+from src.app.services.automation.step_dispatcher import (
+    _assign_context_value,
+    _classify_with_label_rules,
+    _context_value,
+    _metadata_value,
+)
 from src.app.services.automation.template_renderer import render_sms_body
 
 _MAX_STEPS = 50
@@ -112,6 +120,25 @@ def simulate_run(
         elif isinstance(node, SendVoiceNode):
             result.steps.append(
                 DryRunStep(node.id, "send_voice", "Place AI voice call", f"agent {node.retell_agent_id}")
+            )
+            current = node.next_node_id
+        elif isinstance(node, JsonMapperNode):
+            mapped: dict[str, object] = {}
+            for mapping in node.mappings:
+                value = _context_value(ctx, mapping.source_path)
+                if value is None:
+                    value = mapping.default_value
+                _assign_context_value(ctx, mapping.target_field, value)
+                mapped[mapping.target_field] = _metadata_value(value)
+            detail = ", ".join(mapped.keys()) or None
+            result.steps.append(DryRunStep(node.id, "json_mapper", "Map JSON fields", detail))
+            current = node.next_node_id
+        elif isinstance(node, LlmNode):
+            source_value = _context_value(ctx, node.source_field)
+            label = _classify_with_label_rules(node, source_value)
+            _assign_context_value(ctx, node.output_field, label)
+            result.steps.append(
+                DryRunStep(node.id, "llm", f"Classify → {node.output_field}", label)
             )
             current = node.next_node_id
         elif isinstance(node, ConditionNode):

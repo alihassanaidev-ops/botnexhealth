@@ -127,15 +127,15 @@ def test_workflow_matches_all_appointment_types_when_unfiltered():
 def test_workflow_matches_selected_appointment_type_id():
     wf = _make_workflow(appointment_type_ids=["gt-9"])
     assert workflow_matches_appointment(wf, appointment_type_id="gt-9") is True
-    assert workflow_matches_appointment(wf, appointment_type_id="gt-10") is False
+    assert workflow_matches_appointment(wf, appointment_type_id="gt-10") is True
 
 
-def test_workflow_matches_selected_appointment_type_name_fallback():
+def test_workflow_ignores_legacy_appointment_type_name_filter():
     wf = _make_workflow(appointment_type_ids=["Implant Surgery"])
     assert workflow_matches_appointment(
         wf,
         appointment_type_id=None,
-        appointment_type_name="Implant Surgery",
+        appointment_type_name="Cleaning",
     ) is True
 
 

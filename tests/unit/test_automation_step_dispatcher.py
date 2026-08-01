@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
+from httpx import Response
 
+from src.app.config import settings
 from src.app.models.automation_workflow import (
     AutomationRunStatus,
     AutomationWorkflowDripState,
@@ -25,6 +29,10 @@ from src.app.services.automation.definition_schema import (
     DripNode,
     DurationDelay,
     ExitNode,
+    JsonMapperNode,
+    JsonMapping,
+    LlmLabelRule,
+    LlmNode,
     SendSmsNode,
     UpdatePatientStatusNode,
     WaitNode,
@@ -36,6 +44,7 @@ from src.app.services.automation.step_dispatcher import (
     _evaluate_condition,
     _evaluate_rule,
 )
+from src.app.services.automation.llm_node_executor import execute_llm_node
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
 
@@ -137,6 +146,154 @@ def test_advance_sms_to_exit_returns_completed() -> None:
     assert result.outcome == "sent"
     assert result.steps_advanced == 2
     rt.complete_run.assert_awaited_once()
+
+
+def test_advance_json_mapper_writes_context_for_condition() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run()
+    defn = _definition(
+        nodes=[
+            JsonMapperNode(
+                id="map-1",
+                mappings=[
+                    JsonMapping(
+                        source_path="gotracker_payload.appointment.reasons.0",
+                        target_field="appointment_reason",
+                    )
+                ],
+                next_node_id="cond-1",
+            ),
+            ConditionNode(
+                id="cond-1",
+                rules=[
+                    ConditionRule(
+                        field="appointment_reason",
+                        op="contains",
+                        value="implant",
+                    )
+                ],
+                true_next_node_id="exit-yes",
+                false_next_node_id="exit-no",
+            ),
+            ExitNode(id="exit-yes", outcome="implant"),
+            ExitNode(id="exit-no", outcome="other"),
+        ],
+        entry="map-1",
+    )
+
+    result = asyncio.run(
+        dispatcher.advance(
+            run,
+            defn,
+            context={"gotracker_payload": {"appointment": {"reasons": ["Implant surgery"]}}},
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.outcome == "implant"
+    rt.complete_step.assert_any_await(
+        rt.begin_step.return_value,
+        result_code="mapped",
+        result_metadata={"mapped_fields": {"appointment_reason": "Implant surgery"}},
+    )
+
+
+def test_advance_llm_node_classifies_with_keyword_rules() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run()
+    defn = _definition(
+        nodes=[
+            LlmNode(
+                id="llm-1",
+                source_field="appointment_reasons",
+                output_field="appointment_category",
+                prompt_template="Classify the appointment reason.",
+                labels=["implant", "hygiene", "other"],
+                label_rules=[LlmLabelRule(label="implant", keywords=["implant", "surgery"])],
+                fallback_label="other",
+                allow_keyword_fallback=True,
+                next_node_id="cond-1",
+            ),
+            ConditionNode(
+                id="cond-1",
+                rules=[ConditionRule(field="appointment_category", op="eq", value="implant")],
+                true_next_node_id="exit-yes",
+                false_next_node_id="exit-no",
+            ),
+            ExitNode(id="exit-yes", outcome="implant"),
+            ExitNode(id="exit-no", outcome="other"),
+        ],
+        entry="llm-1",
+    )
+
+    result = asyncio.run(
+        dispatcher.advance(
+            run,
+            defn,
+            context={"appointment_reasons": ["Surgical implant consult"]},
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.outcome == "implant"
+    rt.complete_step.assert_any_await(
+        rt.begin_step.return_value,
+        result_code="classified",
+        result_metadata={
+            "provider": "keyword_fallback",
+            "source_field": "appointment_reasons",
+            "output_field": "appointment_category",
+            "label": "implant",
+            "fallback_reason": "OPENAI_API_KEY is not configured",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_llm_node_calls_openai_and_writes_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(settings, "openai_base_url", "https://api.openai.test/v1")
+    monkeypatch.setattr(settings, "workflow_llm_default_model", "gpt-5.6-luna")
+
+    node = LlmNode(
+        id="llm-1",
+        source_field="appointment_reasons",
+        output_field="appointment_category",
+        prompt_template="Classify the appointment reason.",
+        labels=["implant", "hygiene", "other"],
+        next_node_id="exit-1",
+    )
+    context = {"appointment_reasons": ["Implant consult"]}
+
+    with respx.mock(base_url="https://api.openai.test") as router:
+        route = router.post("/v1/responses").mock(
+            return_value=Response(
+                200,
+                json={
+                    "id": "resp-1",
+                    "output_text": "{\"value\":\"implant\"}",
+                    "usage": {"input_tokens": 20, "output_tokens": 4},
+                },
+            )
+        )
+
+        result = await execute_llm_node(node, context)
+
+    assert route.called
+    request_body = json.loads(route.calls[0].request.content)
+    assert request_body["model"] == "gpt-5.6-luna"
+    assert context["appointment_category"] == "implant"
+    assert result.value == "implant"
+    assert result.metadata["provider"] == "openai"
+    assert result.metadata["response_id"] == "resp-1"
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 /**
  * Custom React Flow node renderers for the workflow canvas: a synthetic trigger node
  * and a step node with type-specific icon, label, and one-line summary. Layout is
- * left-to-right, so handles sit on the left (target) and right (source); condition
- * nodes expose two source handles (`true`/`false`) matching the derived edges.
+ * top-to-bottom, so handles sit on the top (target) and bottom (source); condition
+ * nodes expose two bottom source handles (`true`/`false`) matching the derived edges.
  */
 import { Handle, Position, type NodeProps } from "@xyflow/react"
 import { cn } from "@/lib/utils"
@@ -43,6 +43,10 @@ function stepSummary(node: WfNode): string {
                     : "No profile selected"
         case "update_patient_status":
             return `Status: ${truncate(node.status, 30)}`
+        case "json_mapper":
+            return `${node.mappings.length} mapping(s)`
+        case "llm":
+            return `${node.source_field} → ${node.output_field}`
         case "condition":
             return `${node.rules.length} rule(s) · ${node.logic ?? "AND"}`
         case "exit":
@@ -92,7 +96,7 @@ export function TriggerNodeCard({ data }: NodeProps<FlowNode>) {
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">{triggerSummary(data.trigger)}</p>
                 </div>
             </div>
-            <Handle type="source" position={Position.Right} className={HANDLE} />
+            <Handle type="source" position={Position.Bottom} className={HANDLE} />
         </div>
     )
 }
@@ -110,7 +114,7 @@ export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 issueRing(data.issueLevel),
             )}
         >
-            <Handle type="target" position={Position.Left} className={HANDLE} />
+            <Handle type="target" position={Position.Top} className={HANDLE} />
             <div className="flex items-start gap-2.5 p-3">
                 <div className={cn("grid size-8 shrink-0 place-items-center rounded-md", meta.accent)}>
                     <Icon className="h-4 w-4" />
@@ -130,11 +134,11 @@ export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
 
             {node.type === "condition" ? (
                 <>
-                    <Handle id="true" type="source" position={Position.Right} style={{ top: "34%" }} className={HANDLE} />
-                    <Handle id="false" type="source" position={Position.Right} style={{ top: "66%" }} className={HANDLE} />
+                    <Handle id="true" type="source" position={Position.Bottom} style={{ left: "38%" }} className={HANDLE} />
+                    <Handle id="false" type="source" position={Position.Bottom} style={{ left: "62%" }} className={HANDLE} />
                 </>
             ) : node.type !== "exit" ? (
-                <Handle type="source" position={Position.Right} className={HANDLE} />
+                <Handle type="source" position={Position.Bottom} className={HANDLE} />
             ) : null}
         </div>
     )

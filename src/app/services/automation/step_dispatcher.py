@@ -35,6 +35,8 @@ from src.app.services.automation.definition_schema import (
     DripNode,
     DurationDelay,
     ExitNode,
+    JsonMapperNode,
+    LlmNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -310,6 +312,50 @@ class WorkflowStepDispatcher:
                     run, node, context
                 )
                 patient_status_event_ids.append(event_id)
+
+            elif isinstance(node, JsonMapperNode):
+                step = await self.runtime.begin_step(run, step_id=node.id, step_type="json_mapper")
+                mapped: dict[str, object] = {}
+                for mapping in node.mappings:
+                    value = _context_value(context, mapping.source_path)
+                    if value is None:
+                        value = mapping.default_value
+                    _assign_context_value(context, mapping.target_field, value)
+                    mapped[mapping.target_field] = _metadata_value(value)
+                await self.runtime.complete_step(
+                    step,
+                    result_code="mapped",
+                    result_metadata={"mapped_fields": mapped},
+                )
+                current_node_id = node.next_node_id
+
+            elif isinstance(node, LlmNode):
+                from src.app.services.automation.llm_node_executor import (
+                    WorkflowLlmError,
+                    execute_llm_node,
+                )
+
+                step = await self.runtime.begin_step(run, step_id=node.id, step_type="llm")
+                try:
+                    llm_result = await execute_llm_node(node, context)
+                except WorkflowLlmError as exc:
+                    await self.runtime.fail_step(
+                        step,
+                        error_message=str(exc),
+                        result_code="llm_failed",
+                    )
+                    await self.runtime.fail_run(run, reason="llm_failed")
+                    return DispatchResult(
+                        status="failed",
+                        steps_advanced=steps_advanced,
+                        patient_status_event_ids=patient_status_event_ids,
+                    )
+                await self.runtime.complete_step(
+                    step,
+                    result_code="classified",
+                    result_metadata=llm_result.metadata,
+                )
+                current_node_id = node.next_node_id
 
             elif isinstance(node, ConditionNode):
                 branch = _evaluate_condition(node, context)
@@ -603,7 +649,7 @@ def _evaluate_condition(node: ConditionNode, context: dict) -> bool:
 
 
 def _evaluate_rule(rule: ConditionRule, context: dict) -> bool:
-    value = context.get(rule.field)
+    value = _context_value(context, rule.field)
     if rule.op == "eq":
         return value == rule.value
     if rule.op == "neq":
@@ -621,6 +667,83 @@ def _evaluate_rule(rule: ConditionRule, context: dict) -> bool:
     if rule.op == "not_contains":
         return not _contains(value, rule.value)
     return False
+
+
+def _context_value(context: dict, path: str) -> object:
+    if path in context:
+        return context.get(path)
+
+    current: object = context
+    for part in _path_parts(path):
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list) and part.isdigit():
+            index = int(part)
+            current = current[index] if 0 <= index < len(current) else None
+        else:
+            return None
+        if current is None:
+            return None
+    return current
+
+
+def _assign_context_value(context: dict, path: str, value: object) -> None:
+    parts = _path_parts(path)
+    if not parts:
+        return
+    if len(parts) == 1:
+        context[parts[0]] = value
+        return
+
+    current = context
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = value
+
+
+def _path_parts(path: str) -> list[str]:
+    return [
+        part.strip()
+        for part in path.replace("[", ".").replace("]", "").split(".")
+        if part.strip()
+    ]
+
+
+def _classify_with_label_rules(node: LlmNode, source_value: object) -> str:
+    source_text = _value_to_text(source_value).casefold()
+    for rule in node.label_rules:
+        if any(keyword.casefold() in source_text for keyword in rule.keywords):
+            return rule.label
+
+    for label in node.labels:
+        if label.casefold() in source_text:
+            return label
+
+    return node.fallback_label or "unknown"
+
+
+def _value_to_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return " ".join(_value_to_text(item) for item in value)
+    if isinstance(value, dict):
+        return " ".join(_value_to_text(item) for item in value.values())
+    return str(value)
+
+
+def _metadata_value(value: object) -> object:
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [_metadata_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _metadata_value(item) for key, item in value.items()}
+    return str(value)
 
 
 def _contains(value: object, expected: object) -> bool:

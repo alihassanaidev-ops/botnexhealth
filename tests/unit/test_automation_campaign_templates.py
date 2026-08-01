@@ -78,19 +78,15 @@ def test_surgery_confirmation_template_marks_confirmed_status() -> None:
     assert nodes["mark-confirmed"]["next_node_id"] == "exit-confirmed"
 
 
-def test_surgery_confirmation_template_requires_major_appointment_types() -> None:
+def test_surgery_confirmation_template_no_longer_requires_major_appointment_types() -> None:
     template = TEMPLATES["surgery-pre-appointment-confirmation"]
-
-    with pytest.raises(ValueError, match="appointment_type_ids is required"):
-        instantiate_definition(template, voice_profile_id="prof-surgery")
 
     definition = instantiate_definition(
         template,
         voice_profile_id="prof-surgery",
-        setup_options={"appointment_type_ids": ["surgery", "implant"]},
     )
 
-    assert definition["trigger"]["appointment_type_ids"] == ["surgery", "implant"]
+    assert "appointment_type_ids" not in definition["trigger"]
     nodes = {node["id"]: node for node in definition["nodes"]}
     assert nodes["voice-preop-confirmation"]["voice_profile_id"] == "prof-surgery"
     assert nodes["voice-preop-confirmation"]["retell_agent_id"] == ""
@@ -101,7 +97,6 @@ def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() ->
     definition = instantiate_definition(
         template,
         voice_profile_id="prof-surgery",
-        setup_options={"appointment_type_ids": ["surgery"]},
     )
     nodes = {node["id"]: node for node in definition["nodes"]}
 
@@ -283,7 +278,6 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
                         name="My Surgery Confirmation",
                         location_id="loc-1",
                         voice_profile_id="prof-surgery",
-                        setup_options={"appointment_type_ids": ["surgery"]},
                     ),
                 )
             )
@@ -302,7 +296,7 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
     # the template definition must be published as a version
     mock_svc.publish_version.assert_awaited_once()
     published_def = mock_svc.publish_version.call_args.args[1]
-    assert published_def["trigger"]["appointment_type_ids"] == ["surgery"]
+    assert "appointment_type_ids" not in published_def["trigger"]
     published_nodes = {node["id"]: node for node in published_def["nodes"]}
     assert published_nodes["voice-preop-confirmation"]["voice_profile_id"] == "prof-surgery"
     assert published_nodes["voice-preop-confirmation"]["retell_agent_id"] == ""

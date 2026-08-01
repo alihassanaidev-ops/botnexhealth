@@ -13,7 +13,7 @@ const NODE_H = 92
 const elk = new ELK({
     defaultLayoutOptions: {
         "elk.algorithm": "layered",
-        "elk.direction": "RIGHT",
+        "elk.direction": "DOWN",
         "elk.layered.spacing.nodeNodeBetweenLayers": "110",
         "elk.spacing.nodeNode": "70",
         "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",

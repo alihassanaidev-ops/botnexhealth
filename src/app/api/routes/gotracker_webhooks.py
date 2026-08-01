@@ -244,6 +244,7 @@ async def _process_appointment_event(
             "TypeId",
         )
     )
+    reasons = _appointment_reasons(appointment, payload)
     institution_id = str(location.institution_id)
     location_id = str(location.id)
 
@@ -376,17 +377,30 @@ async def _process_appointment_event(
         trigger_appointment_workflows,
     )
 
+    workflow_metadata = {
+        "event": event,
+        "source": "gotracker",
+        "gotracker_appointment_id": raw_appointment_id,
+        "appointment_reasons": reasons,
+        "gotracker_reasons": reasons,
+        "gotracker_payload": {
+            "event": event,
+            "appointment": {
+                "id": raw_appointment_id,
+                "reasons": reasons,
+            },
+        },
+    }
+    if reasons:
+        workflow_metadata["appointment_reason"] = reasons[0]
+
     trigger_appointment_workflows.delay(
         institution_id=institution_id,
         appointment_id=appointment_id,
         appointment_at_iso=start_time,
         contact_id=contact_id,
         location_id=location_id,
-        trigger_metadata={
-            "event": event,
-            "source": "gotracker",
-            "gotracker_appointment_id": raw_appointment_id,
-        },
+        trigger_metadata=workflow_metadata,
     )
     if contact_id:
         resume_reactivation_booking.delay(
@@ -755,6 +769,47 @@ def _patient_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if _first(data, "id", "ContactId", "contact_id", "patient_id") is not None:
         return [data]
     return []
+
+
+def _appointment_reasons(
+    appointment: dict[str, Any], payload: dict[str, Any]
+) -> list[str]:
+    raw = _first(
+        appointment,
+        "reasons",
+        "Reasons",
+        "reason",
+        "Reason",
+        "appointment_reasons",
+        "AppointmentReasons",
+        "appointment_reason",
+        "AppointmentReason",
+    )
+    if raw is None:
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        raw = _first(
+            data,
+            "reasons",
+            "Reasons",
+            "reason",
+            "Reason",
+            "appointment_reasons",
+            "AppointmentReasons",
+            "appointment_reason",
+            "AppointmentReason",
+        )
+    return _string_list(raw)
+
+
+def _string_list(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return [text for item in value if (text := _clean_str(item))]
+    if isinstance(value, dict):
+        return [text for item in value.values() if (text := _clean_str(item))]
+    text = _clean_str(value)
+    return [text] if text else []
 
 
 def _embedded_patient_payload(appointment: dict[str, Any]) -> dict[str, Any] | None:

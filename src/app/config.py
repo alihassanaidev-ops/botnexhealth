@@ -87,6 +87,14 @@ class Settings(BaseSettings):
     # configured. When set, a truthy value at this key writes a location-scoped DNC.
     retell_optout_analysis_key: str | None = None
 
+    # OpenAI workflow AI actions
+    openai_api_key: str | None = None
+    openai_api_key_file: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    workflow_llm_default_model: str = "gpt-5.6-luna"
+    workflow_llm_timeout_seconds: float = 20.0
+    workflow_llm_allow_keyword_fallback: bool = False
+
     # Resend (transactional email)
     resend_api_key: str | None = None
     resend_from_email: str | None = None
@@ -200,6 +208,9 @@ class Settings(BaseSettings):
         if secret := read_secret_file(self.retell_api_secret_file):
             object.__setattr__(self, "retell_api_secret", secret)
 
+        # OpenAI API key
+        if secret := read_secret_file(self.openai_api_key_file):
+            object.__setattr__(self, "openai_api_key", secret)
 
         # JWT Secret
         if secret := read_secret_file(self.jwt_secret_file):

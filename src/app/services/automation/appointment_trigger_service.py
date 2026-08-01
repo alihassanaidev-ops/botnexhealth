@@ -146,7 +146,15 @@ def workflow_matches_appointment(
     appointment_type_id: str | None = None,
     appointment_type_name: str | None = None,
 ) -> bool:
-    """Return whether an appointment workflow should receive this appointment."""
+    """Return whether an appointment workflow should receive this appointment.
+
+    Appointment type selection used to happen here through the trigger's
+    ``appointment_type_ids`` field. New definitions route appointment payloads
+    through workflow nodes (JSON mapper / LLM / condition) instead, because
+    GoTracker sends appointment reasons rather than our local appointment type
+    ids. The unused parameters remain for compatibility with older call sites.
+    """
+    _ = (appointment_type_id, appointment_type_name)
     if not workflow.definition:
         return False
 
@@ -158,12 +166,7 @@ def workflow_matches_appointment(
     if not isinstance(defn.trigger, AppointmentOffsetTrigger):
         return False
 
-    selected_ids = defn.trigger.appointment_type_ids or []
-    if not selected_ids:
-        return True
-
-    candidates = {value for value in (appointment_type_id, appointment_type_name) if value}
-    return any(selected in candidates for selected in selected_ids)
+    return True
 
 
 def make_appointment_idempotency_key(

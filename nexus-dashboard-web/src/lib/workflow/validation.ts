@@ -234,6 +234,83 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                 }
                 break
             }
+            case "json_mapper": {
+                refError(node, node.next_node_id, "JSON Mapper step")
+                if (node.mappings.length === 0) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "JSON Mapper has no mappings.",
+                    })
+                }
+                node.mappings.forEach((mapping, i) => {
+                    if (!mapping.source_path.trim()) {
+                        issues.push({
+                            node_id: node.id,
+                            severity: "error",
+                            message: `JSON mapping ${i + 1} has no source path.`,
+                        })
+                    }
+                    if (!mapping.target_field.trim()) {
+                        issues.push({
+                            node_id: node.id,
+                            severity: "error",
+                            message: `JSON mapping ${i + 1} has no target field.`,
+                        })
+                    }
+                })
+                break
+            }
+            case "llm": {
+                refError(node, node.next_node_id, "LLM step")
+                const outputMode = node.output_mode ?? "label"
+                if (!node.source_field.trim()) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "LLM step has no source field.",
+                    })
+                }
+                if (!node.output_field.trim()) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "LLM step has no output field.",
+                    })
+                }
+                if (!node.prompt_template.trim()) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "LLM step has no prompt.",
+                    })
+                }
+                if (!["label", "text", "json"].includes(outputMode)) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "LLM step has an invalid output mode.",
+                    })
+                }
+                if (outputMode === "label" && (node.labels ?? []).length === 0) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "LLM label mode needs at least one allowed label.",
+                    })
+                }
+                if (
+                    node.max_output_tokens !== undefined &&
+                    (node.max_output_tokens < 1 || node.max_output_tokens > 4096)
+                ) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "LLM max output tokens must be between 1 and 4,096.",
+                    })
+                }
+                break
+            }
             case "condition": {
                 refError(node, node.true_next_node_id, "Condition (Yes branch)")
                 refError(node, node.false_next_node_id, "Condition (No branch)")

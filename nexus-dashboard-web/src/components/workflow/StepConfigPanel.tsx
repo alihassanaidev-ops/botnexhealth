@@ -23,7 +23,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
     Select,
     SelectContent,
@@ -34,17 +33,18 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
-import { listAppointmentTypes } from "@/lib/tenant-api"
 import { listPhoneCountryRegions, type PhoneCountryRegion } from "@/lib/workflow-api"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
 import { addVoiceOutcomeBranch, TRIGGER_NODE_ID, VOICE_OUTCOME_BRANCH_VALUES } from "@/lib/workflow/graph"
-import type { CachedAppointmentType, OutboundVoiceProfile } from "@/types"
+import type { OutboundVoiceProfile } from "@/types"
 import type {
     ConditionNode,
     ConditionOp,
     ConditionRule,
     DripNode,
+    JsonMapperNode,
+    LlmNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -100,7 +100,6 @@ export default function StepConfigPanel(props: StepConfigPanelProps) {
                 {isTrigger ? (
                     <TriggerForm
                         trigger={def.trigger}
-                        locationId={props.locationId}
                         onChange={props.onTriggerChange}
                         readOnly={props.readOnly}
                     />
@@ -121,55 +120,14 @@ export default function StepConfigPanel(props: StepConfigPanelProps) {
 // ---------------------------------------------------------------------------
 function TriggerForm({
     trigger,
-    locationId,
     onChange,
     readOnly,
 }: {
     trigger: WorkflowTrigger
-    locationId?: string | null
     onChange: (t: WorkflowTrigger) => void
     readOnly?: boolean
 }) {
     const meta = TRIGGER_META[trigger.type]
-    const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
-    const [appointmentTypesLocationId, setAppointmentTypesLocationId] = useState<string | null>(null)
-    const shouldLoadAppointmentTypes = trigger.type === "appointment_offset" && Boolean(locationId)
-
-    useEffect(() => {
-        if (!shouldLoadAppointmentTypes || !locationId) return
-        let cancelled = false
-        listAppointmentTypes(locationId)
-            .then((types) => {
-                if (!cancelled) {
-                    setAppointmentTypes(types.filter((type) => type.is_active))
-                    setAppointmentTypesLocationId(locationId)
-                }
-            })
-            .catch(() => {
-                if (!cancelled) {
-                    setAppointmentTypes([])
-                    setAppointmentTypesLocationId(locationId)
-                }
-            })
-        return () => {
-            cancelled = true
-        }
-    }, [shouldLoadAppointmentTypes, locationId])
-
-    const selectedTypeIds = trigger.type === "appointment_offset"
-        ? trigger.appointment_type_ids ?? []
-        : []
-    const visibleAppointmentTypes = shouldLoadAppointmentTypes && appointmentTypesLocationId === locationId
-        ? appointmentTypes
-        : []
-    const typesLoading = shouldLoadAppointmentTypes && appointmentTypesLocationId !== locationId
-    const toggleAppointmentType = (sourceId: string, checked: boolean) => {
-        if (trigger.type !== "appointment_offset") return
-        const next = checked
-            ? [...selectedTypeIds, sourceId]
-            : selectedTypeIds.filter((id) => id !== sourceId)
-        onChange({ ...trigger, appointment_type_ids: next.length ? next : null })
-    }
     return (
         <>
             <SheetHeader>
@@ -195,41 +153,14 @@ function TriggerForm({
                 </Field>
 
                 {trigger.type === "appointment_offset" && (
-                    <>
-                        <Field label="Hours relative to appointment" hint="Negative = before (e.g. -24 = 24h before).">
-                            <Input
-                                type="number"
-                                value={trigger.offset_hours}
-                                disabled={readOnly}
-                                onChange={(e) => onChange({ ...trigger, offset_hours: toInt(e.target.value, 0) })}
-                            />
-                        </Field>
-                        <Field label="Appointment types" hint="Leave empty to match every appointment type.">
-                            <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border border-border p-2">
-                                {!locationId ? (
-                                    <p className="text-xs text-muted-foreground">Save this campaign to a location before selecting appointment types.</p>
-                                ) : typesLoading ? (
-                                    <p className="text-xs text-muted-foreground">Loading appointment types...</p>
-                                ) : visibleAppointmentTypes.length === 0 ? (
-                                    <p className="text-xs text-muted-foreground">No appointment types are available for this location yet.</p>
-                                ) : (
-                                    visibleAppointmentTypes.map((type) => (
-                                        <label key={type.source_id} className="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
-                                            <Checkbox
-                                                checked={selectedTypeIds.includes(type.source_id)}
-                                                disabled={readOnly}
-                                                onCheckedChange={(checked) => toggleAppointmentType(type.source_id, checked === true)}
-                                            />
-                                            <span className="min-w-0 flex-1 truncate">{type.name}</span>
-                                            {type.duration_minutes && (
-                                                <span className="shrink-0 text-xs text-muted-foreground">{type.duration_minutes}m</span>
-                                            )}
-                                        </label>
-                                    ))
-                                )}
-                            </div>
-                        </Field>
-                    </>
+                    <Field label="Hours relative to appointment" hint="Negative = before (e.g. -24 = 24h before).">
+                        <Input
+                            type="number"
+                            value={trigger.offset_hours}
+                            disabled={readOnly}
+                            onChange={(e) => onChange({ ...trigger, offset_hours: toInt(e.target.value, 0) })}
+                        />
+                    </Field>
                 )}
                 {trigger.type === "recall_scan" && (
                     <Field label="Recall interval (months)">
@@ -328,6 +259,12 @@ function NodeForm({
                 {node.type === "drip" && <DripFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "update_patient_status" && (
                     <UpdatePatientStatusFields node={node} onChange={onNodeChange} readOnly={readOnly} />
+                )}
+                {node.type === "json_mapper" && (
+                    <JsonMapperFields node={node} onChange={onNodeChange} readOnly={readOnly} />
+                )}
+                {node.type === "llm" && (
+                    <LlmFields node={node} onChange={onNodeChange} readOnly={readOnly} />
                 )}
                 {node.type === "condition" && (
                     <ConditionFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
@@ -913,6 +850,224 @@ function UpdatePatientStatusFields({
     )
 }
 
+function JsonMapperFields({
+    node,
+    onChange,
+    readOnly,
+}: {
+    node: JsonMapperNode
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    const updateMapping = (i: number, patch: Partial<JsonMapperNode["mappings"][number]>) => {
+        const mappings = node.mappings.map((mapping, idx) => (idx === i ? { ...mapping, ...patch } : mapping))
+        onChange({ ...node, mappings })
+    }
+    const addMapping = () => onChange({
+        ...node,
+        mappings: [...node.mappings, { source_path: "gotracker_payload.appointment.reasons", target_field: "appointment_reasons", default_value: null }],
+    })
+    const removeMapping = (i: number) => onChange({ ...node, mappings: node.mappings.filter((_, idx) => idx !== i) })
+
+    return (
+        <div className="space-y-2">
+            <Label className="text-sm">Mappings</Label>
+            {node.mappings.map((mapping, i) => (
+                <div key={i} className="space-y-2 rounded-md border border-border p-2">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                        <Field label="Source path">
+                            <Input
+                                value={mapping.source_path}
+                                disabled={readOnly}
+                                placeholder="gotracker_payload.appointment.reasons"
+                                onChange={(e) => updateMapping(i, { source_path: e.target.value })}
+                            />
+                        </Field>
+                        <Field label="Target field">
+                            <Input
+                                value={mapping.target_field}
+                                disabled={readOnly}
+                                placeholder="appointment_reasons"
+                                onChange={(e) => updateMapping(i, { target_field: e.target.value })}
+                            />
+                        </Field>
+                    </div>
+                    <Field label="Default value">
+                        <Input
+                            value={ruleValueToText(mapping.default_value)}
+                            disabled={readOnly}
+                            placeholder="unknown"
+                            onChange={(e) => updateMapping(i, { default_value: e.target.value || null })}
+                        />
+                    </Field>
+                    {!readOnly && node.mappings.length > 1 && (
+                        <Button variant="ghost" size="sm" className="gap-1.5 text-destructive hover:text-destructive" onClick={() => removeMapping(i)}>
+                            <Trash2 className="h-3.5 w-3.5" /> Remove mapping
+                        </Button>
+                    )}
+                </div>
+            ))}
+            {!readOnly && (
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={addMapping}>
+                    <Plus className="h-3.5 w-3.5" /> Add mapping
+                </Button>
+            )}
+        </div>
+    )
+}
+
+function LlmFields({
+    node,
+    onChange,
+    readOnly,
+}: {
+    node: LlmNode
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    const outputMode = node.output_mode ?? "label"
+    const rulesText = (node.label_rules ?? [])
+        .map((rule) => `${rule.label}: ${rule.keywords.join(", ")}`)
+        .join("\n")
+
+    return (
+        <>
+            <Field label="Model" hint="Blank uses the backend default model.">
+                <Input
+                    value={node.model ?? ""}
+                    disabled={readOnly}
+                    placeholder="gpt-5.6-luna"
+                    onChange={(e) => onChange({ ...node, model: e.target.value.trim() || null })}
+                />
+            </Field>
+            <Field label="Output mode">
+                <Select
+                    value={outputMode}
+                    disabled={readOnly}
+                    onValueChange={(value) => onChange({ ...node, output_mode: value as LlmNode["output_mode"] })}
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="label">Label</SelectItem>
+                        <SelectItem value="text">Text</SelectItem>
+                        <SelectItem value="json">JSON</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+            <Field label="Source field">
+                <Input
+                    value={node.source_field}
+                    disabled={readOnly}
+                    placeholder="appointment_reasons"
+                    onChange={(e) => onChange({ ...node, source_field: e.target.value })}
+                />
+            </Field>
+            <Field label="Output field">
+                <Input
+                    value={node.output_field}
+                    disabled={readOnly}
+                    placeholder="appointment_category"
+                    onChange={(e) => onChange({ ...node, output_field: e.target.value })}
+                />
+            </Field>
+            <Field label="Prompt">
+                <Textarea
+                    rows={4}
+                    value={node.prompt_template}
+                    disabled={readOnly}
+                    placeholder="Classify the appointment reason into one of the configured labels."
+                    onChange={(e) => onChange({ ...node, prompt_template: e.target.value })}
+                />
+            </Field>
+            {outputMode === "label" && (
+                <>
+                    <Field label="Allowed labels" hint="Comma separated labels used by the following Condition node.">
+                        <Input
+                            value={(node.labels ?? []).join(", ")}
+                            disabled={readOnly}
+                            placeholder="hygiene, implant, emergency"
+                            onChange={(e) => onChange({ ...node, labels: splitList(e.target.value) })}
+                        />
+                    </Field>
+                    <Field label="Keyword fallback rules" hint="One per line: label: keyword, keyword. Used only when fallback is enabled.">
+                        <Textarea
+                            rows={4}
+                            value={rulesText}
+                            disabled={readOnly}
+                            placeholder={"hygiene: cleaning, prophy\nimplant: implant, surgery"}
+                            onChange={(e) => onChange({ ...node, label_rules: parseLabelRules(e.target.value) })}
+                        />
+                    </Field>
+                </>
+            )}
+            {outputMode === "json" && (
+                <Field label="JSON schema" hint="Optional JSON Schema object. Leave blank for free-form JSON.">
+                    <Textarea
+                        rows={5}
+                        value={node.json_schema ? JSON.stringify(node.json_schema, null, 2) : ""}
+                        disabled={readOnly}
+                        placeholder={'{"type":"object","properties":{"appointment_category":{"type":"string"}}}'}
+                        onChange={(e) => onChange({ ...node, json_schema: parseJsonSchema(e.target.value) })}
+                    />
+                </Field>
+            )}
+            <Field label="Fallback label">
+                <Input
+                    value={node.fallback_label ?? ""}
+                    disabled={readOnly}
+                    placeholder="unknown"
+                    onChange={(e) => onChange({ ...node, fallback_label: e.target.value.trim() || null })}
+                />
+            </Field>
+            <Field label="Max output tokens">
+                <Input
+                    type="number"
+                    min={1}
+                    max={4096}
+                    value={node.max_output_tokens ?? 256}
+                    disabled={readOnly}
+                    onChange={(e) => onChange({ ...node, max_output_tokens: clamp(toInt(e.target.value, 256), 1, 4096) })}
+                />
+            </Field>
+            <div className="space-y-2 rounded-md border border-border px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <Label className="text-sm">Require model call</Label>
+                        <p className="text-xs text-muted-foreground">Fail the run if the LLM provider is unavailable.</p>
+                    </div>
+                    <Switch
+                        checked={node.require_model ?? true}
+                        disabled={readOnly}
+                        onCheckedChange={(checked) => onChange({ ...node, require_model: checked })}
+                    />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <Label className="text-sm">Keyword fallback</Label>
+                        <p className="text-xs text-muted-foreground">Use label keyword rules if the provider is unavailable.</p>
+                    </div>
+                    <Switch
+                        checked={node.allow_keyword_fallback ?? false}
+                        disabled={readOnly || outputMode !== "label"}
+                        onCheckedChange={(checked) => onChange({ ...node, allow_keyword_fallback: checked })}
+                    />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <Label className="text-sm">Include full context</Label>
+                        <p className="text-xs text-muted-foreground">Send all workflow context to the model, not just the source field.</p>
+                    </div>
+                    <Switch
+                        checked={node.include_context ?? false}
+                        disabled={readOnly}
+                        onCheckedChange={(checked) => onChange({ ...node, include_context: checked })}
+                    />
+                </div>
+            </div>
+        </>
+    )
+}
+
 function ConditionFields({
     node,
     def,
@@ -1150,7 +1305,7 @@ function NextStepField({
 function defaultTrigger(type: TriggerType): WorkflowTrigger {
     switch (type) {
         case "appointment_offset":
-            return { type, offset_hours: -24, appointment_type_ids: null }
+            return { type, offset_hours: -24 }
         case "recall_scan":
             return { type, recall_interval_months: 6 }
         case "manual":
@@ -1195,4 +1350,35 @@ function textToRuleValue(text: string, op: ConditionOp): ConditionRule["value"] 
             .filter(Boolean)
     }
     return text
+}
+
+function splitList(text: string): string[] {
+    return text
+        .split(/[,\n]/)
+        .map((value) => value.trim())
+        .filter(Boolean)
+}
+
+function parseLabelRules(text: string): LlmNode["label_rules"] {
+    return text
+        .split("\n")
+        .map((line) => {
+            const [label, ...rest] = line.split(":")
+            const keywords = splitList(rest.join(":"))
+            return { label: label.trim(), keywords }
+        })
+        .filter((rule) => rule.label && rule.keywords.length)
+}
+
+function parseJsonSchema(text: string): Record<string, unknown> | null {
+    const trimmed = text.trim()
+    if (!trimmed) return null
+    try {
+        const parsed = JSON.parse(trimmed)
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : null
+    } catch {
+        return null
+    }
 }

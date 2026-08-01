@@ -99,6 +99,8 @@ export type NodeType =
     | "send_voice"
     | "send_email"
     | "update_patient_status"
+    | "json_mapper"
+    | "llm"
     | "condition"
     | "exit"
 
@@ -153,6 +155,39 @@ export interface UpdatePatientStatusNode {
     next_node_id: string
     note_template?: string | null
 }
+export interface JsonMapping {
+    source_path: string
+    target_field: string
+    default_value?: boolean | number | string | string[] | null
+}
+export interface JsonMapperNode {
+    type: "json_mapper"
+    id: string
+    mappings: JsonMapping[]
+    next_node_id: string
+}
+export interface LlmLabelRule {
+    label: string
+    keywords: string[]
+}
+export interface LlmNode {
+    type: "llm"
+    id: string
+    source_field: string
+    output_field: string
+    prompt_template: string
+    model?: string | null
+    output_mode?: "label" | "text" | "json"
+    max_output_tokens?: number
+    include_context?: boolean
+    require_model?: boolean
+    allow_keyword_fallback?: boolean | null
+    json_schema?: Record<string, unknown> | null
+    labels?: string[]
+    label_rules?: LlmLabelRule[]
+    fallback_label?: string | null
+    next_node_id: string
+}
 export interface ConditionNode {
     type: "condition"
     id: string
@@ -174,6 +209,8 @@ export type WorkflowNode =
     | SendVoiceNode
     | SendEmailNode
     | UpdatePatientStatusNode
+    | JsonMapperNode
+    | LlmNode
     | ConditionNode
     | ExitNode
 
@@ -212,7 +249,7 @@ export interface WorkflowDefinition {
 }
 
 /** Node types that carry exactly one forward pointer (`next_node_id`). */
-export type LinearNode = WaitNode | DripNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode
+export type LinearNode = WaitNode | DripNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode | JsonMapperNode | LlmNode
 /** Node types that place a message/call on a channel. */
 export type SendNode = SendSmsNode | SendVoiceNode | SendEmailNode
 

@@ -128,6 +128,26 @@ function describe(
                 },
                 next: node.next_node_id,
             }
+        case "json_mapper":
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "json_mapper",
+                    summary: "Map JSON fields",
+                    detail: node.mappings.map((mapping) => mapping.target_field).join(", "),
+                },
+                next: node.next_node_id,
+            }
+        case "llm":
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "llm",
+                    summary: `Classify → ${node.output_field}`,
+                    detail: `Source: ${node.source_field}`,
+                },
+                next: node.next_node_id,
+            }
         case "condition": {
             const takeTrue = choices[node.id] ?? true
             const branch = takeTrue ? "Yes" : "No"

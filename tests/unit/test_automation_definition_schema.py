@@ -235,6 +235,43 @@ def test_condition_is_null_operator_no_value() -> None:
     assert d.nodes[1].rules[0].op == "is_null"
 
 
+def test_json_mapper_and_llm_nodes() -> None:
+    defn = {
+        "trigger": {"type": "appointment_offset", "offset_hours": -24},
+        "entry_node_id": "map-1",
+        "nodes": [
+            {
+                "type": "json_mapper",
+                "id": "map-1",
+                "mappings": [
+                    {
+                        "source_path": "gotracker_payload.appointment.reasons",
+                        "target_field": "appointment_reasons",
+                    }
+                ],
+                "next_node_id": "llm-1",
+            },
+            {
+                "type": "llm",
+                "id": "llm-1",
+                "source_field": "appointment_reasons",
+                "output_field": "appointment_category",
+                "prompt_template": "Classify the appointment reason.",
+                "labels": ["implant", "hygiene"],
+                "label_rules": [{"label": "implant", "keywords": ["implant", "surgery"]}],
+                "fallback_label": "other",
+                "next_node_id": "exit-1",
+            },
+            {"type": "exit", "id": "exit-1"},
+        ],
+    }
+
+    d = WorkflowDefinition.model_validate(defn)
+
+    assert d.nodes[0].type == "json_mapper"
+    assert d.nodes[1].type == "llm"
+
+
 def test_max_attempts_on_action_node() -> None:
     defn = _sms_to_exit()
     defn["nodes"][0]["max_attempts"] = 3

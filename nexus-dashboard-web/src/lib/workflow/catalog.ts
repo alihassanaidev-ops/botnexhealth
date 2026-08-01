@@ -17,6 +17,8 @@ import {
     Upload,
     PhoneIncoming,
     ClipboardList,
+    Braces,
+    Sparkles,
     type LucideIcon,
 } from "lucide-react"
 import type { ConditionOp, NodeType, TriggerType } from "@/types/workflow"
@@ -58,6 +60,20 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         icon: ClipboardCheck,
         group: "action",
         accent: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
+    },
+    json_mapper: {
+        label: "JSON Mapper",
+        description: "Extract request JSON into workflow fields.",
+        icon: Braces,
+        group: "action",
+        accent: "bg-teal-100 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300",
+    },
+    llm: {
+        label: "LLM",
+        description: "Classify text into a workflow field.",
+        icon: Sparkles,
+        group: "action",
+        accent: "bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-950/50 dark:text-fuchsia-300",
     },
     drip: {
         label: "Drip",
@@ -131,7 +147,7 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
     { title: "Channels", group: "channel", types: ["send_sms", "send_voice", "send_email"] },
-    { title: "Actions", group: "action", types: ["drip", "update_patient_status"] },
+    { title: "Actions", group: "action", types: ["drip", "json_mapper", "llm", "update_patient_status"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
 ]
 

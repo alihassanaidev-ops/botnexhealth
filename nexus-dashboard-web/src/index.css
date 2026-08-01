@@ -266,3 +266,12 @@
   max-width: 14px;
   max-height: 14px;
 }
+
+.react-flow__edge-text {
+  fill: hsl(var(--foreground)) !important;
+}
+
+.react-flow__edge-textbg {
+  fill: hsl(var(--card)) !important;
+  fill-opacity: 0.96 !important;
+}

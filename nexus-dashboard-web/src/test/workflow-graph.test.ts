@@ -76,18 +76,17 @@ describe("workflow graph — derivation", () => {
         expect(edges.some((e) => e.source === "wait-1" && e.target === "exit-1")).toBe(true)
     })
 
-    it("uses compact smoothstep routing for linear and branch edges", () => {
+    it("uses straight step routing for linear and branch edges", () => {
         const { edges } = definitionToFlow(LINEAR)
-        expect(edges.every((e) => e.type === "smoothstep")).toBe(true)
+        expect(edges.every((e) => e.type === "step")).toBe(true)
         expect(edges.every((e) => e.pathOptions && typeof e.pathOptions === "object")).toBe(true)
-        expect(edges.every((e) => e.pathOptions?.borderRadius === 8)).toBe(true)
         expect(edges.every((e) => e.pathOptions?.offset === 14)).toBe(true)
         expect(edges.every((e) => e.interactionWidth === 18)).toBe(true)
+        expect(edges.every((e) => e.labelStyle?.fill === "hsl(var(--foreground))")).toBe(true)
 
         const branched = definitionToFlow(BRANCHED).edges.filter((e) => e.source === "cond-1")
-        expect(branched.every((e) => e.type === "smoothstep")).toBe(true)
+        expect(branched.every((e) => e.type === "step")).toBe(true)
         expect(branched.every((e) => e.pathOptions && typeof e.pathOptions === "object")).toBe(true)
-        expect(branched.every((e) => e.pathOptions?.borderRadius === 8)).toBe(true)
         expect(branched.some((e) => e.sourceHandle === "true" && e.pathOptions?.offset === 22)).toBe(true)
         expect(branched.some((e) => e.sourceHandle === "false" && e.pathOptions?.offset === 30)).toBe(true)
     })
@@ -101,7 +100,7 @@ describe("workflow graph — derivation", () => {
         expect(out.every((e) => e.labelShowBg)).toBe(true)
     })
 
-    it("lays out nodes in columns by depth (trigger=0, entry=1)", () => {
+    it("lays out nodes top-to-bottom by depth (trigger=0, entry=1)", () => {
         const depths = computeDepths(LINEAR)
         expect(depths.get(TRIGGER_NODE_ID)).toBe(0)
         expect(depths.get("sms-1")).toBe(1)
@@ -110,7 +109,7 @@ describe("workflow graph — derivation", () => {
         const { nodes } = definitionToFlow(LINEAR)
         const sms = nodes.find((n) => n.id === "sms-1")!
         const wait = nodes.find((n) => n.id === "wait-1")!
-        expect(wait.position.x).toBeGreaterThan(sms.position.x)
+        expect(wait.position.y).toBeGreaterThan(sms.position.y)
     })
 
     it("flags the entry node in flow data", () => {
@@ -119,7 +118,7 @@ describe("workflow graph — derivation", () => {
         expect(sms.data.kind === "step" && sms.data.isEntry).toBe(true)
     })
 
-    it("places unreachable nodes in a trailing column instead of dropping them", () => {
+    it("places unreachable nodes in a trailing layer instead of dropping them", () => {
         const withOrphan: WorkflowDefinition = {
             ...LINEAR,
             nodes: [...LINEAR.nodes, { type: "exit", id: "orphan", outcome: null }],
@@ -347,9 +346,9 @@ describe("workflow graph — presentational layout (Phase 4)", () => {
         expect(laidOut.entry_node_id).toBe(withPos.entry_node_id)
     })
 
-    it("autoLayoutDefinition keeps true branches above false branches when possible", () => {
+    it("autoLayoutDefinition keeps true branches left of false branches when possible", () => {
         const laidOut = autoLayoutDefinition(BRANCHED)
-        expect(laidOut.layout?.["exit-yes"].y).toBeLessThan(laidOut.layout?.["exit-no"].y ?? 0)
+        expect(laidOut.layout?.["exit-yes"].x).toBeLessThan(laidOut.layout?.["exit-no"].x ?? 0)
     })
 
     it("layout is purely presentational — it never changes derived edges/semantics", () => {
