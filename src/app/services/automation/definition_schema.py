@@ -1,8 +1,8 @@
 """Pydantic schema for workflow definition JSON stored in AutomationWorkflowVersion.definition.
 
 Definitions are immutable once published. Schema version "1.0" supports:
-  Triggers: appointment_offset, recall_scan, manual, bulk_import, callback_requested,
-            patient_status_changed
+  Triggers: appointment_offset, appointment_state_changed, recall_scan, manual,
+            bulk_import, callback_requested, patient_status_changed
   Nodes:    wait, drip, send_sms, send_voice, send_email, update_patient_status,
             update_gotracker_appointment, json_mapper, llm, condition, exit
 """
@@ -30,6 +30,43 @@ class AppointmentOffsetTrigger(BaseModel):
     # definitions, but appointment-type filtering no longer happens at trigger
     # selection time.
     appointment_type_ids: list[str] | None = None
+
+
+class AppointmentStateChangedTrigger(BaseModel):
+    """Enroll when cached GoTracker appointment state matches configured values."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["appointment_state_changed"] = "appointment_state_changed"
+    status_ids: list[int] = Field(default_factory=list)
+    confirmed: bool | None = None
+    preconfirmed: bool | None = None
+    campaign_goal: str | None = None
+
+    @field_validator("status_ids")
+    @classmethod
+    def validate_status_ids(cls, values: list[int]) -> list[int]:
+        unique: list[int] = []
+        for value in values:
+            if value < 1 or value > 9:
+                raise ValueError("status_ids must be between 1 and 9")
+            if value not in unique:
+                unique.append(value)
+        return unique
+
+    @model_validator(mode="after")
+    def require_matcher(self) -> "AppointmentStateChangedTrigger":
+        if not self.status_ids and self.confirmed is None and self.preconfirmed is None:
+            raise ValueError("appointment_state_changed needs at least one matcher")
+        return self
+
+    @field_validator("campaign_goal")
+    @classmethod
+    def normalize_campaign_goal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class RecallScanTrigger(BaseModel):
@@ -92,6 +129,7 @@ class PatientStatusChangedTrigger(BaseModel):
 WorkflowTrigger = Annotated[
     Union[
         AppointmentOffsetTrigger,
+        AppointmentStateChangedTrigger,
         RecallScanTrigger,
         ManualTrigger,
         BulkImportTrigger,

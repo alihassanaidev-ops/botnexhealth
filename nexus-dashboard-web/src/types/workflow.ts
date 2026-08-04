@@ -15,6 +15,7 @@ export const SCHEMA_VERSION = "1.0" as const
 // ---------------------------------------------------------------------------
 export type TriggerType =
     | "appointment_offset"
+    | "appointment_state_changed"
     | "recall_scan"
     | "manual"
     | "bulk_import"
@@ -26,6 +27,13 @@ export interface AppointmentOffsetTrigger {
     /** Hours relative to the appointment (negative = before, e.g. -24). */
     offset_hours: number
     appointment_type_ids?: string[] | null
+}
+export interface AppointmentStateChangedTrigger {
+    type: "appointment_state_changed"
+    status_ids: number[]
+    confirmed?: boolean | null
+    preconfirmed?: boolean | null
+    campaign_goal?: string | null
 }
 export interface RecallScanTrigger {
     type: "recall_scan"
@@ -49,6 +57,7 @@ export interface PatientStatusChangedTrigger {
 
 export type WorkflowTrigger =
     | AppointmentOffsetTrigger
+    | AppointmentStateChangedTrigger
     | RecallScanTrigger
     | ManualTrigger
     | BulkImportTrigger

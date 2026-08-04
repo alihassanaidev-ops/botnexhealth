@@ -17,6 +17,7 @@ import {
     Upload,
     PhoneIncoming,
     ClipboardList,
+    Stethoscope,
     Braces,
     Sparkles,
     type LucideIcon,
@@ -55,10 +56,10 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         accent: "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
     },
     update_patient_status: {
-        label: "Update Status",
-        description: "Record a patient workflow status.",
+        label: "Update Internal Status",
+        description: "Record an internal ScaleNexus workflow status.",
         icon: ClipboardCheck,
-        group: "action",
+        group: "advanced",
         accent: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
     },
     update_gotracker_appointment: {
@@ -124,6 +125,11 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
         description: "Enroll a set time before/after an appointment.",
         icon: CalendarClock,
     },
+    appointment_state_changed: {
+        label: "Appointment state",
+        description: "Enroll when GoTracker appointment state changes.",
+        icon: Stethoscope,
+    },
     recall_scan: {
         label: "Recall scan",
         description: "Enroll patients due for recall on a schedule.",
@@ -145,8 +151,8 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
         icon: PhoneIncoming,
     },
     patient_status_changed: {
-        label: "Patient status",
-        description: "Enroll when a workflow records a patient status.",
+        label: "Internal status",
+        description: "Enroll when a workflow records an internal status.",
         icon: ClipboardList,
     },
 }
@@ -154,9 +160,9 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
     { title: "Channels", group: "channel", types: ["send_sms", "send_voice", "send_email"] },
-    { title: "Actions", group: "action", types: ["drip", "llm", "update_patient_status", "update_gotracker_appointment"] },
+    { title: "Actions", group: "action", types: ["drip", "llm", "update_gotracker_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
-    { title: "Advanced", group: "advanced", types: ["json_mapper"] },
+    { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },
 ]
 
 /** DataTransfer MIME used to drag a palette node type onto the canvas. */

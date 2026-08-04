@@ -66,6 +66,55 @@ def _same_instant(a: datetime | None, b: datetime | None) -> bool:
     return abs((a - b).total_seconds()) < 1.0
 
 
+def _has_status_snapshot(
+    gotracker_status_id: int | None,
+    is_confirmed: bool | None,
+    is_preconfirmed: bool | None,
+) -> bool:
+    return (
+        gotracker_status_id is not None
+        or is_confirmed is not None
+        or is_preconfirmed is not None
+    )
+
+
+def _gotracker_status_label(status_id: int | None) -> str | None:
+    if status_id is None:
+        return None
+    return {
+        1: "booked",
+        2: "booked_waiting",
+        3: "cancelled",
+        4: "late",
+        5: "no_show",
+        6: "office_cancel",
+        7: "pending",
+        8: "short_cancel",
+        9: "waiting",
+    }.get(status_id, str(status_id))
+
+
+def _apply_gotracker_status_snapshot(
+    row: AppointmentWorkingSet,
+    *,
+    gotracker_status_id: int | None,
+    is_confirmed: bool | None,
+    is_preconfirmed: bool | None,
+    source: str | None,
+    synced_at: datetime,
+) -> None:
+    if gotracker_status_id is not None:
+        row.gotracker_status_id = gotracker_status_id
+        row.gotracker_status_label = _gotracker_status_label(gotracker_status_id)
+    if is_confirmed is not None:
+        row.is_confirmed = is_confirmed
+    if is_preconfirmed is not None:
+        row.is_preconfirmed = is_preconfirmed
+    if _has_status_snapshot(gotracker_status_id, is_confirmed, is_preconfirmed):
+        row.last_status_source = source
+        row.last_status_synced_at = synced_at
+
+
 def _refresh_event_payload(
     row: NexHealthWebhookEvent,
     *,
@@ -212,6 +261,10 @@ class NexHealthProjectionService:
         cancelled: bool,
         provider_id: str | None = None,
         appointment_type_id: str | None = None,
+        gotracker_status_id: int | None = None,
+        is_confirmed: bool | None = None,
+        is_preconfirmed: bool | None = None,
+        status_source: str | None = None,
     ) -> UpsertResult:
         """UPSERT the projection row and classify the change vs the stored state."""
         incoming_start = _parse_dt(start_time)
@@ -240,6 +293,12 @@ class NexHealthProjectionService:
                 appointment_type_id=appointment_type_id,
                 start_time=incoming_start,
                 status=new_status,
+                gotracker_status_id=gotracker_status_id,
+                gotracker_status_label=_gotracker_status_label(gotracker_status_id),
+                is_confirmed=is_confirmed,
+                is_preconfirmed=is_preconfirmed,
+                last_status_source=status_source,
+                last_status_synced_at=now if _has_status_snapshot(gotracker_status_id, is_confirmed, is_preconfirmed) else None,
                 last_event=event,
                 last_synced_at=now,
             )
@@ -256,6 +315,14 @@ class NexHealthProjectionService:
         row.contact_id = contact_id or row.contact_id
         row.provider_id = provider_id or getattr(row, "provider_id", None)
         row.appointment_type_id = appointment_type_id or getattr(row, "appointment_type_id", None)
+        _apply_gotracker_status_snapshot(
+            row,
+            gotracker_status_id=gotracker_status_id,
+            is_confirmed=is_confirmed,
+            is_preconfirmed=is_preconfirmed,
+            source=status_source,
+            synced_at=now,
+        )
         row.last_event = event
         row.last_synced_at = now
         row.updated_at = now
@@ -274,6 +341,63 @@ class NexHealthProjectionService:
             change = "unchanged"
 
         return UpsertResult(row=row, change=change, previous_start_time=prev_start)
+
+    async def record_gotracker_writeback(
+        self,
+        *,
+        institution_id: str,
+        appointment_id: str,
+        location_id: str | None,
+        status_id: int | None = None,
+        confirmed: bool | None = None,
+        preconfirmed: bool | None = None,
+        start_time: str | None = None,
+        provider_id: str | None = None,
+    ) -> AppointmentWorkingSet:
+        """Reflect a successful GoTracker writeback in the local projection."""
+        incoming_start = _parse_dt(start_time)
+        now = datetime.now(timezone.utc)
+        row = (
+            await self.session.execute(
+                select(AppointmentWorkingSet).where(
+                    AppointmentWorkingSet.institution_id == institution_id,
+                    AppointmentWorkingSet.nexhealth_appointment_id == appointment_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = AppointmentWorkingSet(
+                id=str(uuid4()),
+                institution_id=institution_id,
+                location_id=location_id,
+                nexhealth_appointment_id=appointment_id,
+                provider_id=provider_id,
+                start_time=incoming_start,
+                status="cancelled" if status_id == 3 else "scheduled",
+                last_event="workflow.writeback",
+                last_synced_at=now,
+            )
+            self.session.add(row)
+
+        row.location_id = location_id or row.location_id
+        row.provider_id = provider_id or row.provider_id
+        if incoming_start is not None:
+            row.start_time = incoming_start
+        if status_id == 3:
+            row.status = "cancelled"
+        elif status_id is not None:
+            row.status = "scheduled"
+        _apply_gotracker_status_snapshot(
+            row,
+            gotracker_status_id=status_id,
+            is_confirmed=confirmed,
+            is_preconfirmed=preconfirmed,
+            source="workflow_writeback",
+            synced_at=now,
+        )
+        row.last_writeback_at = now
+        row.updated_at = now
+        return row
 
     async def upsert_patient(
         self,

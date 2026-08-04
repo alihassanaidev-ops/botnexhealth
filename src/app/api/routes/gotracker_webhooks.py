@@ -258,6 +258,7 @@ async def _process_appointment_event(
         _first(appointment, "appointment_time", "AppointmentTime", "time", "Time")
     )
     raw_status_id = _clean_str(_first(appointment, "status_id", "StatusId", "statusId"))
+    status_id = _clean_int(raw_status_id)
     duration = _clean_str(_first(appointment, "duration", "Duration"))
     booked_user_id = _clean_str(_first(appointment, "booked_user_id", "BookedUserId"))
     booked_timestamp = _clean_str(
@@ -409,6 +410,14 @@ async def _process_appointment_event(
                 cancelled=is_cancelled,
                 provider_id=provider_id,
                 appointment_type_id=appointment_type_id,
+                gotracker_status_id=status_id,
+                is_confirmed=raw_appointment_context["is_confirmed"]
+                if isinstance(raw_appointment_context["is_confirmed"], bool)
+                else None,
+                is_preconfirmed=raw_appointment_context["is_preconfirmed"]
+                if isinstance(raw_appointment_context["is_preconfirmed"], bool)
+                else None,
+                status_source="webhook",
             )
         except Exception as exc:  # noqa: BLE001
             return await _dead_letter_claimed_webhook(
@@ -449,6 +458,7 @@ async def _process_appointment_event(
         )
 
     from src.app.tasks.automation_workflow import (
+        trigger_appointment_state_workflows,
         resume_reactivation_booking,
         trigger_appointment_workflows,
     )
@@ -514,6 +524,23 @@ async def _process_appointment_event(
             location_id=location_id,
             contact_id=contact_id,
             appointment_id=appointment_id,
+        )
+    confirmed_state = raw_appointment_context["is_confirmed"]
+    preconfirmed_state = raw_appointment_context["is_preconfirmed"]
+    if (
+        status_id is not None
+        or isinstance(confirmed_state, bool)
+        or isinstance(preconfirmed_state, bool)
+    ):
+        trigger_appointment_state_workflows.delay(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            contact_id=contact_id,
+            location_id=location_id,
+            status_id=status_id,
+            confirmed=confirmed_state if isinstance(confirmed_state, bool) else None,
+            preconfirmed=preconfirmed_state if isinstance(preconfirmed_state, bool) else None,
+            trigger_metadata=workflow_metadata,
         )
 
     return {
@@ -991,6 +1018,15 @@ def _clean_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _clean_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _join_name(first_name: str | None, last_name: str | None) -> str | None:

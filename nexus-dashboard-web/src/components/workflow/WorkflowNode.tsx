@@ -42,7 +42,7 @@ function stepSummary(node: WfNode): string {
                     ? "Legacy voice agent"
                     : "No profile selected"
         case "update_patient_status":
-            return `Status: ${truncate(node.status, 30)}`
+            return `Internal: ${truncate(node.status, 30)}`
         case "update_gotracker_appointment":
             return node.status_id ? `GoTracker StatusId: ${node.status_id}` : "GoTracker writeback"
         case "json_mapper":
@@ -63,6 +63,14 @@ function triggerSummary(t: WorkflowTrigger): string {
             const h = Math.abs(t.offset_hours)
             return `${h}h ${t.offset_hours < 0 ? "before" : "after"} appointment`
         }
+        case "appointment_state_changed":
+            return t.confirmed !== null && t.confirmed !== undefined
+                ? `Confirmed: ${t.confirmed ? "yes" : "no"}`
+                : t.preconfirmed !== null && t.preconfirmed !== undefined
+                    ? `Preconfirmed: ${t.preconfirmed ? "yes" : "no"}`
+                    : t.status_ids.length
+                        ? `StatusId: ${t.status_ids.join(", ")}`
+                        : "Appointment state"
         case "recall_scan":
             return `Every ${t.recall_interval_months} month(s)`
         case "manual":
@@ -72,7 +80,7 @@ function triggerSummary(t: WorkflowTrigger): string {
         case "callback_requested":
             return "Callback request"
         case "patient_status_changed":
-            return `Patient status: ${t.statuses.join(", ")}`
+            return `Internal status: ${t.statuses.join(", ")}`
     }
 }
 

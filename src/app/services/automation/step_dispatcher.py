@@ -636,6 +636,9 @@ class WorkflowStepDispatcher:
         from src.app.models.institution import Institution
         from src.app.pms.factory import get_adapter_for_institution_location
         from src.app.services.audit import log_audit
+        from src.app.services.automation.nexhealth_projection_service import (
+            NexHealthProjectionService,
+        )
 
         step = await self.runtime.begin_step(
             run, step_id=node.id, step_type=node.type
@@ -713,6 +716,28 @@ class WorkflowStepDispatcher:
                         {"operations": operations},
                     )
                     raise WorkflowGoTrackerWritebackError("status update failed")
+                await NexHealthProjectionService(self.session).record_gotracker_writeback(
+                    institution_id=str(run.institution_id),
+                    appointment_id=str(run.trigger_ref_id),
+                    location_id=str(run.location_id),
+                    status_id=node.status_id,
+                    confirmed=node.confirmed,
+                    preconfirmed=node.preconfirmed,
+                )
+                from src.app.tasks.automation_workflow import (
+                    trigger_appointment_state_workflows,
+                )
+
+                trigger_appointment_state_workflows.delay(
+                    institution_id=str(run.institution_id),
+                    appointment_id=str(run.trigger_ref_id),
+                    contact_id=str(run.contact_id) if run.contact_id else None,
+                    location_id=str(run.location_id),
+                    status_id=node.status_id,
+                    confirmed=node.confirmed,
+                    preconfirmed=node.preconfirmed,
+                    trigger_metadata=context,
+                )
 
             update_payload = {
                 "start_time": _render_gotracker_update_value(node.start_time, context),
@@ -764,6 +789,17 @@ class WorkflowStepDispatcher:
                         {"operations": operations},
                     )
                     raise WorkflowGoTrackerWritebackError("appointment update failed")
+                await NexHealthProjectionService(self.session).record_gotracker_writeback(
+                    institution_id=str(run.institution_id),
+                    appointment_id=str(run.trigger_ref_id),
+                    location_id=str(run.location_id),
+                    start_time=update_payload.get("start_time")
+                    if isinstance(update_payload.get("start_time"), str)
+                    else None,
+                    provider_id=update_payload.get("provider_id")
+                    if isinstance(update_payload.get("provider_id"), str)
+                    else None,
+                )
 
             await self.runtime.complete_step(
                 step,

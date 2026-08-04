@@ -15,6 +15,7 @@ import {
     Users,
     Building2,
     CalendarCheck,
+    CalendarClock,
     UserCog,
     Armchair,
     LayoutDashboard,
@@ -111,6 +112,11 @@ const institutionAdminNav: NavItemDef[] = [
         icon: Megaphone,
     },
     {
+        title: "Appointment Sync",
+        url: "/institution-admin/appointment-sync",
+        icon: CalendarClock,
+    },
+    {
         title: "Do Not Contact",
         url: "/institution-admin/do-not-contact",
         icon: ShieldOff,
@@ -143,6 +149,11 @@ const locationAdminNav: NavItemDef[] = [
         title: "Call Statuses",
         url: "/institution-admin/call-statuses",
         icon: Tag,
+    },
+    {
+        title: "Appointment Sync",
+        url: "/institution-admin/appointment-sync",
+        icon: CalendarClock,
     },
 ]
 

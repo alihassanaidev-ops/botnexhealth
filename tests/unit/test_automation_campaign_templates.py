@@ -73,9 +73,10 @@ def test_surgery_confirmation_template_marks_confirmed_status() -> None:
     t = TEMPLATES["surgery-pre-appointment-confirmation"]
     nodes = {node["id"]: node for node in t.definition["nodes"]}
 
-    assert nodes["mark-confirmed"]["type"] == "update_patient_status"
-    assert nodes["mark-confirmed"]["status"] == "appointment_confirmed"
-    assert nodes["mark-confirmed"]["next_node_id"] == "exit-confirmed"
+    assert nodes["write-gotracker-confirmed"]["type"] == "update_gotracker_appointment"
+    assert nodes["write-gotracker-confirmed"]["confirmed"] is True
+    assert nodes["write-gotracker-confirmed"]["preconfirmed"] is False
+    assert nodes["write-gotracker-confirmed"]["next_node_id"] == "exit-confirmed"
 
 
 def test_surgery_confirmation_template_no_longer_requires_major_appointment_types() -> None:
@@ -107,7 +108,9 @@ def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() ->
         "value": "confirmed",
     }
     assert "answered" not in str(nodes["check-preop-outcome"]["rules"])
-    assert nodes["check-cancelled"]["true_next_node_id"] == "mark-cancelled"
+    assert nodes["check-cancelled"]["true_next_node_id"] == "write-gotracker-cancelled"
+    assert nodes["write-gotracker-cancelled"]["type"] == "update_gotracker_appointment"
+    assert nodes["write-gotracker-cancelled"]["status_id"] == 3
     assert nodes["check-reschedule"]["true_next_node_id"] == "mark-reschedule"
     assert nodes["check-unreachable"]["true_next_node_id"] == "mark-no-answer"
 
@@ -117,8 +120,10 @@ def test_post_op_template_starts_from_confirmed_status_and_waits_one_day() -> No
     nodes = {node["id"]: node for node in t.definition["nodes"]}
 
     assert t.definition["trigger"] == {
-        "type": "patient_status_changed",
-        "statuses": ["appointment_confirmed"],
+        "type": "appointment_state_changed",
+        "status_ids": [],
+        "confirmed": True,
+        "preconfirmed": None,
         "campaign_goal": "post_op_followup",
     }
     assert nodes["wait-post-op"]["delay"] == {

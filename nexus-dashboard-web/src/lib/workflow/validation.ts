@@ -64,11 +64,23 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
             message: "Recall interval must be at least 1 month.",
         })
     }
+    if (
+        def.trigger.type === "appointment_state_changed" &&
+        def.trigger.status_ids.length === 0 &&
+        (def.trigger.confirmed === null || def.trigger.confirmed === undefined) &&
+        (def.trigger.preconfirmed === null || def.trigger.preconfirmed === undefined)
+    ) {
+        issues.push({
+            node_id: TRIGGER_NODE_ID,
+            severity: "error",
+            message: "Appointment state trigger needs at least one matcher.",
+        })
+    }
     if (def.trigger.type === "patient_status_changed" && def.trigger.statuses.length === 0) {
         issues.push({
             node_id: TRIGGER_NODE_ID,
             severity: "error",
-            message: "Patient status trigger needs at least one status.",
+            message: "Internal status trigger needs at least one status.",
         })
     }
 
@@ -224,12 +236,12 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                 break
             }
             case "update_patient_status": {
-                refError(node, node.next_node_id, "Status update step")
+                refError(node, node.next_node_id, "Internal status update step")
                 if (!node.status.trim()) {
                     issues.push({
                         node_id: node.id,
                         severity: "error",
-                        message: "Status update step has no status.",
+                        message: "Internal status update step has no status.",
                     })
                 }
                 break

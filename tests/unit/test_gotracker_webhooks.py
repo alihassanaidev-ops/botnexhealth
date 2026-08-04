@@ -161,11 +161,14 @@ async def test_appointment_created_updates_projection_and_queues_workflow():
     ), projection_patch, lifecycle_patch, patch(
         "src.app.tasks.automation_workflow.trigger_appointment_workflows"
     ) as trigger_task, patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+    ) as state_task, patch(
         "src.app.tasks.automation_workflow.resume_reactivation_booking"
     ) as reactivation_task:
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         trigger_task.delay = MagicMock()
+        state_task.delay = MagicMock()
         reactivation_task.delay = MagicMock()
         result = await gotracker_webhook("loc-1", request)
 
@@ -182,6 +185,7 @@ async def test_appointment_created_updates_projection_and_queues_workflow():
     )
     trigger_task.delay.assert_called_once()
     assert trigger_task.delay.call_args.kwargs["appointment_id"] == "gt-55"
+    state_task.delay.assert_not_called()
     reactivation_task.delay.assert_called_once()
 
 
@@ -222,11 +226,14 @@ async def test_appointment_created_upserts_embedded_patient_when_contact_missing
     ), projection_patch, lifecycle_patch, patch(
         "src.app.tasks.automation_workflow.trigger_appointment_workflows"
     ) as trigger_task, patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+    ) as state_task, patch(
         "src.app.tasks.automation_workflow.resume_reactivation_booking"
     ) as reactivation_task:
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         trigger_task.delay = MagicMock()
+        state_task.delay = MagicMock()
         reactivation_task.delay = MagicMock()
         result = await gotracker_webhook("loc-1", request)
 
@@ -240,6 +247,7 @@ async def test_appointment_created_upserts_embedded_patient_when_contact_missing
     assert appointment_kwargs["contact_id"] == "contact-from-patient"
     trigger_task.delay.assert_called_once()
     assert trigger_task.delay.call_args.kwargs["contact_id"] == "contact-from-patient"
+    state_task.delay.assert_not_called()
     reactivation_task.delay.assert_called_once()
 
 
@@ -312,11 +320,14 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     ), projection_patch, lifecycle_patch, patch(
         "src.app.tasks.automation_workflow.trigger_appointment_workflows"
     ) as trigger_task, patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+    ) as state_task, patch(
         "src.app.tasks.automation_workflow.resume_reactivation_booking"
     ) as reactivation_task:
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         trigger_task.delay = MagicMock()
+        state_task.delay = MagicMock()
         reactivation_task.delay = MagicMock()
         result = await gotracker_webhook("loc-1", request)
 
@@ -325,6 +336,10 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     upsert_kwargs = projection.upsert_appointment.await_args.kwargs
     assert upsert_kwargs["appointment_id"] == "gt-900000004"
     assert upsert_kwargs["start_time"] == "2026-07-28T10:00:00Z"
+    assert upsert_kwargs["gotracker_status_id"] == 1
+    assert upsert_kwargs["is_confirmed"] is False
+    assert upsert_kwargs["is_preconfirmed"] is False
+    assert upsert_kwargs["status_source"] == "webhook"
     trigger_task.delay.assert_called_once()
     metadata = trigger_task.delay.call_args.kwargs["trigger_metadata"]
     assert metadata["appointment_reason"] == "bridge prep"
@@ -339,6 +354,12 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     assert metadata["appointment_date"] == "2026-07-28T00:00:00.000Z"
     assert metadata["appointment_time"] == "10:00:00"
     assert metadata["appointment_datetime"] == "2026-07-28T10:00:00Z"
+    state_task.delay.assert_called_once()
+    state_kwargs = state_task.delay.call_args.kwargs
+    assert state_kwargs["appointment_id"] == "gt-900000004"
+    assert state_kwargs["status_id"] == 1
+    assert state_kwargs["confirmed"] is False
+    assert state_kwargs["preconfirmed"] is False
     assert metadata["appointment_duration"] == "00:15:00"
     assert metadata["is_preconfirmed"] is False
     assert metadata["is_confirmed"] is False

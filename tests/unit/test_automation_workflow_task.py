@@ -26,6 +26,7 @@ from src.app.tasks.automation_workflow import (
     _poll_retell_voice_outcomes_async,
     _retell_call_details_outcome,
     _retell_call_details_ready_for_resume,
+    _trigger_appointment_state_async,
     _trigger_patient_status_async,
     _waiting_step_targets_field,
     _retry_countdown,
@@ -278,6 +279,95 @@ async def test_trigger_patient_status_schedules_matching_independent_workflow() 
         "source_workflow_step_id": "mark-confirmed",
         "campaign_goal": "post_op_followup",
     }
+
+
+@pytest.mark.asyncio
+async def test_trigger_appointment_state_schedules_matching_confirmed_workflow() -> None:
+    matching_workflow = SimpleNamespace(
+        id="postop-wf",
+        current_version_id="postop-ver",
+        definition={
+            "trigger": {
+                "type": "appointment_state_changed",
+                "status_ids": [],
+                "confirmed": True,
+                "preconfirmed": None,
+                "campaign_goal": "post_op_followup",
+            },
+            "entry_node_id": "exit-1",
+            "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
+        },
+    )
+    nonmatching_workflow = SimpleNamespace(
+        id="other-wf",
+        current_version_id="other-ver",
+        definition={
+            "trigger": {
+                "type": "appointment_state_changed",
+                "status_ids": [3],
+                "confirmed": None,
+                "preconfirmed": None,
+            },
+            "entry_node_id": "exit-1",
+            "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
+        },
+    )
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+
+    trigger_service = AsyncMock()
+    trigger_service.find_active_appointment_state_workflows = AsyncMock(
+        return_value=[matching_workflow, nonmatching_workflow]
+    )
+    trigger_service.get_appointment_context = AsyncMock(
+        return_value={
+            "appointment_at": "2026-07-28T10:00:00+00:00",
+            "contact_id": "contact-from-projection",
+            "location_id": "loc-from-projection",
+            "appointment_status": "scheduled",
+        }
+    )
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            return_value=session,
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.AppointmentTriggerService",
+            return_value=trigger_service,
+        ),
+        patch("src.app.tasks.automation_workflow.enroll_and_start_workflow_run") as mock_enroll,
+    ):
+        result = await _trigger_appointment_state_async(
+            institution_id="inst-1",
+            appointment_id="gt-1343",
+            contact_id=None,
+            location_id=None,
+            status_id=1,
+            confirmed=True,
+            preconfirmed=False,
+            trigger_metadata={"source": "workflow_gotracker_writeback"},
+        )
+
+    assert result == {"appointment_id": "gt-1343", "scheduled": 1, "skipped": 1}
+    mock_enroll.apply_async.assert_called_once()
+    kwargs = mock_enroll.apply_async.call_args.kwargs["kwargs"]
+    assert kwargs["workflow_id"] == "postop-wf"
+    assert kwargs["workflow_version_id"] == "postop-ver"
+    assert kwargs["contact_id"] == "contact-from-projection"
+    assert kwargs["location_id"] == "loc-from-projection"
+    assert kwargs["trigger_type"] == "appointment_state_changed"
+    assert kwargs["trigger_ref_type"] == "appointment"
+    assert kwargs["trigger_ref_id"] == "gt-1343"
+    assert kwargs["idempotency_key"] == (
+        "appt-state:postop-ver:gt-1343:status=1:confirmed=True:preconfirmed=False"
+    )
+    assert kwargs["trigger_metadata"]["appointment_at"] == "2026-07-28T10:00:00+00:00"
+    assert kwargs["trigger_metadata"]["is_confirmed"] is True
+    assert kwargs["trigger_metadata"]["is_preconfirmed"] is False
+    assert kwargs["trigger_metadata"]["campaign_goal"] == "post_op_followup"
 
 
 @pytest.mark.asyncio

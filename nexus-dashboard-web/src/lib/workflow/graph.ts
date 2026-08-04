@@ -579,6 +579,14 @@ export function createTrigger(type: TriggerType): WorkflowTrigger {
     switch (type) {
         case "appointment_offset":
             return { type, offset_hours: -24 }
+        case "appointment_state_changed":
+            return {
+                type,
+                status_ids: [],
+                confirmed: true,
+                preconfirmed: null,
+                campaign_goal: "post_op_followup",
+            }
         case "recall_scan":
             return { type, recall_interval_months: 6 }
         case "manual":

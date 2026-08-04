@@ -123,7 +123,7 @@ function describe(
                 step: {
                     node_id: node.id,
                     node_type: "update_patient_status",
-                    summary: "Update status",
+                    summary: "Update internal status",
                     detail: node.status,
                 },
                 next: node.next_node_id,

@@ -17,6 +17,7 @@ from src.app.models.automation_workflow import AutomationWorkflow, AutomationWor
 from src.app.models.institution_appointment_type import InstitutionAppointmentType
 from src.app.services.automation.definition_schema import (
     AppointmentOffsetTrigger,
+    AppointmentStateChangedTrigger,
     WorkflowDefinition,
 )
 
@@ -111,6 +112,22 @@ class AppointmentTriggerService:
             if wf.trigger_type == "recall_scan"
         ]
 
+    async def find_active_appointment_state_workflows(
+        self, institution_id: str
+    ) -> list[AutomationWorkflow]:
+        """Return active workflows whose trigger type is 'appointment_state_changed'."""
+        result = await self.session.execute(
+            select(AutomationWorkflow).where(
+                AutomationWorkflow.institution_id == institution_id,
+                AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,
+                AutomationWorkflow.current_version_id.is_not(None),
+            )
+        )
+        return [
+            wf for wf in result.scalars().all()
+            if wf.trigger_type == "appointment_state_changed"
+        ]
+
 
 def compute_enrollment_eta(
     workflow: AutomationWorkflow, appointment_at: datetime
@@ -167,6 +184,48 @@ def workflow_matches_appointment(
         return False
 
     return True
+
+
+def workflow_matches_appointment_state(
+    workflow: AutomationWorkflow,
+    *,
+    status_id: int | None = None,
+    confirmed: bool | None = None,
+    preconfirmed: bool | None = None,
+) -> bool:
+    if not workflow.definition:
+        return False
+
+    try:
+        defn = WorkflowDefinition.model_validate(workflow.definition)
+    except Exception:
+        return False
+
+    if not isinstance(defn.trigger, AppointmentStateChangedTrigger):
+        return False
+
+    trigger = defn.trigger
+    if trigger.status_ids and status_id not in trigger.status_ids:
+        return False
+    if trigger.confirmed is not None and confirmed != trigger.confirmed:
+        return False
+    if trigger.preconfirmed is not None and preconfirmed != trigger.preconfirmed:
+        return False
+    return True
+
+
+def make_appointment_state_idempotency_key(
+    workflow_version_id: str,
+    appointment_id: str,
+    *,
+    status_id: int | None = None,
+    confirmed: bool | None = None,
+    preconfirmed: bool | None = None,
+) -> str:
+    return (
+        f"appt-state:{workflow_version_id}:{appointment_id}:"
+        f"status={status_id}:confirmed={confirmed}:preconfirmed={preconfirmed}"
+    )
 
 
 def make_appointment_idempotency_key(

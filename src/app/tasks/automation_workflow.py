@@ -21,8 +21,10 @@ from src.app.services.automation.appointment_trigger_service import (
     AppointmentTriggerService,
     compute_enrollment_eta,
     make_appointment_idempotency_key,
+    make_appointment_state_idempotency_key,
     make_recall_idempotency_key,
     workflow_matches_appointment,
+    workflow_matches_appointment_state,
 )
 from src.app.services.automation.callback_trigger_service import (
     CallbackTriggerService,
@@ -669,6 +671,139 @@ async def _trigger_appointment_async(
         "skipped": skipped,
         "skipped_type": skipped_type,
     }
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.trigger_appointment_state_workflows",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def trigger_appointment_state_workflows(
+    self,
+    *,
+    institution_id: str,
+    appointment_id: str,
+    contact_id: str | None = None,
+    location_id: str | None = None,
+    status_id: int | None = None,
+    confirmed: bool | None = None,
+    preconfirmed: bool | None = None,
+    trigger_metadata: dict | None = None,
+) -> dict:
+    """Enroll workflows that trigger from cached GoTracker appointment state."""
+    _ensure_db()
+    try:
+        return asyncio.run(
+            _trigger_appointment_state_async(
+                institution_id=institution_id,
+                appointment_id=appointment_id,
+                contact_id=contact_id,
+                location_id=location_id,
+                status_id=status_id,
+                confirmed=confirmed,
+                preconfirmed=preconfirmed,
+                trigger_metadata=trigger_metadata or {},
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "trigger_appointment_state_workflows failed: institution=%s appt=%s: %s",
+            institution_id,
+            appointment_id,
+            exc,
+        )
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _trigger_appointment_state_async(
+    *,
+    institution_id: str,
+    appointment_id: str,
+    contact_id: str | None,
+    location_id: str | None,
+    status_id: int | None,
+    confirmed: bool | None,
+    preconfirmed: bool | None,
+    trigger_metadata: dict,
+) -> dict:
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        external_id=f"appt_state_trigger:{appointment_id}",
+    ) as session:
+        svc = AppointmentTriggerService(session)
+        workflows = await svc.find_active_appointment_state_workflows(institution_id)
+        appointment_context = await svc.get_appointment_context(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            fallback_location_id=location_id,
+        )
+
+    enriched_metadata = {
+        **trigger_metadata,
+        **{k: v for k, v in appointment_context.items() if v is not None},
+        "appointment_id": appointment_id,
+        "appointment_status_id": status_id,
+        "gotracker_status_id": status_id,
+        "is_confirmed": confirmed,
+        "is_preconfirmed": preconfirmed,
+    }
+    effective_contact_id = contact_id or appointment_context.get("contact_id")
+    effective_location_id = location_id or appointment_context.get("location_id")
+    scheduled = 0
+    skipped = 0
+    for wf in workflows:
+        if not wf.current_version_id:
+            continue
+        if not workflow_matches_appointment_state(
+            wf,
+            status_id=status_id,
+            confirmed=confirmed,
+            preconfirmed=preconfirmed,
+        ):
+            skipped += 1
+            continue
+        idempotency_key = make_appointment_state_idempotency_key(
+            str(wf.current_version_id),
+            appointment_id,
+            status_id=status_id,
+            confirmed=confirmed,
+            preconfirmed=preconfirmed,
+        )
+        workflow_metadata = dict(enriched_metadata)
+        try:
+            trigger = WorkflowDefinition.model_validate(wf.definition).trigger
+            campaign_goal = getattr(trigger, "campaign_goal", None)
+            if campaign_goal:
+                workflow_metadata["campaign_goal"] = campaign_goal
+        except Exception:
+            pass
+        enroll_and_start_workflow_run.apply_async(
+            kwargs={
+                "institution_id": institution_id,
+                "workflow_id": str(wf.id),
+                "workflow_version_id": str(wf.current_version_id),
+                "contact_id": effective_contact_id,
+                "location_id": effective_location_id,
+                "trigger_type": "appointment_state_changed",
+                "trigger_ref_type": "appointment",
+                "trigger_ref_id": appointment_id,
+                "idempotency_key": idempotency_key,
+                "trigger_metadata": workflow_metadata,
+            },
+            queue="workflow",
+        )
+        scheduled += 1
+
+    logger.info(
+        "trigger_appointment_state: institution=%s appt=%s scheduled=%d skipped=%d",
+        institution_id,
+        appointment_id,
+        scheduled,
+        skipped,
+    )
+    return {"appointment_id": appointment_id, "scheduled": scheduled, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------

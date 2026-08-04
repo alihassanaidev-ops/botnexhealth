@@ -502,14 +502,22 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
             "type": "condition",
             "id": "check-preop-outcome",
             "rules": [{"field": "call_outcome", "op": "eq", "value": "confirmed"}],
-            "true_next_node_id": "mark-confirmed",
+            "true_next_node_id": "write-gotracker-confirmed",
             "false_next_node_id": "check-cancelled",
         },
         {
-            "type": "update_patient_status",
-            "id": "mark-confirmed",
-            "status": "appointment_confirmed",
-            "note_template": "Pre-appointment call outcome: {{call_outcome}}",
+            "type": "update_gotracker_appointment",
+            "id": "write-gotracker-confirmed",
+            "status_id": None,
+            "confirmed": True,
+            "preconfirmed": False,
+            "start_time": None,
+            "end_time": None,
+            "duration_min": None,
+            "provider_id": None,
+            "operatory_id": None,
+            "patient_id": None,
+            "reason": None,
             "next_node_id": "exit-confirmed",
         },
         {
@@ -519,14 +527,22 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
             "rules": [
                 {"field": "call_outcome", "op": "in", "value": ["cancelled", "appointment_cancelled"]}
             ],
-            "true_next_node_id": "mark-cancelled",
+            "true_next_node_id": "write-gotracker-cancelled",
             "false_next_node_id": "check-reschedule",
         },
         {
-            "type": "update_patient_status",
-            "id": "mark-cancelled",
-            "status": "appointment_cancelled",
-            "note_template": "Pre-appointment call outcome: {{call_outcome}}",
+            "type": "update_gotracker_appointment",
+            "id": "write-gotracker-cancelled",
+            "status_id": 3,
+            "confirmed": None,
+            "preconfirmed": None,
+            "start_time": None,
+            "end_time": None,
+            "duration_min": None,
+            "provider_id": None,
+            "operatory_id": None,
+            "patient_id": None,
+            "reason": None,
             "next_node_id": "exit-cancelled",
         },
         {
@@ -605,8 +621,10 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
 _POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
     "schema_version": "1.0",
     "trigger": {
-        "type": "patient_status_changed",
-        "statuses": ["appointment_confirmed"],
+        "type": "appointment_state_changed",
+        "status_ids": [],
+        "confirmed": True,
+        "preconfirmed": None,
         "campaign_goal": "post_op_followup",
     },
     "entry_node_id": "wait-post-op",
@@ -884,7 +902,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         definition=_SURGERY_PRE_APPOINTMENT_CONFIRMATION,
         metadata=_metadata(
             category="appointment_ops",
-            goal="Confirm major appointments before the visit and record the outcome for follow-up workflows.",
+            goal="Confirm major appointments before the visit and write confirmed or cancelled outcomes back to GoTracker.",
             outcome_labels=[
                 "appointment_confirmed",
                 "appointment_cancelled",
@@ -895,7 +913,13 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             ],
             supported_channels=["voice"],
             required_readiness_checks=["location", "nexhealth_appointment_data", "voice", "consent", "quiet_hours"],
-            required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time", "appointment_type"],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "appointment_date",
+                "appointment_time",
+                "appointment_reason",
+            ],
             content_class="transactional_care",
             audience="Appointments whose GoTracker reason is routed by workflow nodes",
             eligibility=[
@@ -918,7 +942,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 "clinic_name": "Riverside Dental",
                 "appointment_date": "July 22, 2026",
                 "appointment_time": "2:00 PM",
-                "appointment_type": "Implant Surgery",
+                "appointment_reason": "implant surgery",
                 "call_outcome": "confirmed",
             },
             setup_fields=[
@@ -940,23 +964,23 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             "Call patients one day after a confirmed surgical/major appointment "
             "to check whether staff follow-up is needed."
         ),
-        trigger_type="patient_status_changed",
-        definition=_POST_OP_FOLLOWUP_AFTER_CONFIRMATION,
-        metadata=_metadata(
-            category="appointment_ops",
-            goal="Complete next-day post-op follow-up for patients who confirmed their appointment.",
+            trigger_type="appointment_state_changed",
+            definition=_POST_OP_FOLLOWUP_AFTER_CONFIRMATION,
+            metadata=_metadata(
+                category="appointment_ops",
+                goal="Complete next-day post-op follow-up for appointments whose cached GoTracker state is confirmed.",
             outcome_labels=["post_op_complete", "staff_handoff", "do_not_call"],
             supported_channels=["voice"],
             required_readiness_checks=["location", "voice", "consent", "quiet_hours"],
             required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time"],
             content_class="transactional_care",
-            audience="Patients marked appointment_confirmed by a pre-appointment workflow",
-            eligibility=[
-                "patient has an appointment_confirmed workflow status",
-                "source status event includes appointment time",
-                "voice consent exists",
-                "patient is not suppressed",
-            ],
+                audience="Appointments with confirmed=true in the cached GoTracker state",
+                eligibility=[
+                    "cached GoTracker appointment state is confirmed",
+                    "source appointment state includes appointment time",
+                    "voice consent exists",
+                    "patient is not suppressed",
+                ],
             handoff_reason="post_op_followup_needed",
             analytics={
                 "post_op_complete": "completed",
@@ -969,7 +993,8 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 "appointment_date": "July 22, 2026",
                 "appointment_time": "2:00 PM",
                 "call_outcome": "post_op_ok",
-                "patient_workflow_status": "appointment_confirmed",
+                "is_confirmed": True,
+                "gotracker_status_id": 1,
             },
             setup_fields=[
                 {

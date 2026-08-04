@@ -228,6 +228,8 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
     sched = _make_scheduler()
     dispatcher = WorkflowStepDispatcher(session, rt, sched)
     adapter = _FakeGoTrackerWritebackAdapter()
+    projection = MagicMock()
+    projection.record_gotracker_writeback = AsyncMock()
 
     run = _make_run()
     run.id = "run-1"
@@ -255,7 +257,13 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
             new=AsyncMock(return_value=adapter),
         ),
         patch("src.app.services.audit.log_audit", new=AsyncMock()) as mock_audit,
+        patch(
+            "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+            return_value=projection,
+        ),
+        patch("src.app.tasks.automation_workflow.trigger_appointment_state_workflows") as state_task,
     ):
+        state_task.delay = MagicMock()
         result = asyncio.run(
             dispatcher.advance(
                 run,
@@ -285,6 +293,28 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
         reason=None,
     )
     adapter.close.assert_awaited_once()
+    assert projection.record_gotracker_writeback.await_count == 2
+    projection.record_gotracker_writeback.assert_any_await(
+        institution_id="inst-1",
+        appointment_id="gt-1343",
+        location_id="loc-1",
+        status_id=5,
+        confirmed=None,
+        preconfirmed=None,
+    )
+    projection.record_gotracker_writeback.assert_any_await(
+        institution_id="inst-1",
+        appointment_id="gt-1343",
+        location_id="loc-1",
+        start_time="2026-08-12T14:30",
+        provider_id="gt-2",
+    )
+    state_task.delay.assert_called_once()
+    state_kwargs = state_task.delay.call_args.kwargs
+    assert state_kwargs["appointment_id"] == "gt-1343"
+    assert state_kwargs["status_id"] == 5
+    assert state_kwargs["confirmed"] is None
+    assert state_kwargs["preconfirmed"] is None
     assert mock_audit.await_count == 2
 
 

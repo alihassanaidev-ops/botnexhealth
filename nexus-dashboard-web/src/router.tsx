@@ -39,6 +39,7 @@ const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
 const Security = lazy(() => import("./pages/Security"));
 const Patients = lazy(() => import("./pages/Patients"));
+const AppointmentSync = lazy(() => import("./pages/AppointmentSync"));
 const GroupDashboard = lazy(() => import("./pages/GroupDashboard"));
 const Groups = lazy(() => import("./pages/Groups"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
@@ -311,6 +312,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <S><WorkflowVersions /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/appointment-sync",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <PmsGuard><S><AppointmentSync /></S></PmsGuard>
                             </RoleGuard>
                         ),
                     },

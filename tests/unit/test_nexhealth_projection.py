@@ -61,6 +61,25 @@ def test_upsert_new_when_no_existing_row():
     assert res.change == "new"
 
 
+def test_upsert_new_stores_gotracker_status_snapshot():
+    session = _session(existing=None)
+    res = _upsert(
+        session,
+        gotracker_status_id=5,
+        is_confirmed=True,
+        is_preconfirmed=False,
+        status_source="webhook",
+    )
+    assert res.change == "new"
+    row = session.add.call_args.args[0]
+    assert row.gotracker_status_id == 5
+    assert row.gotracker_status_label == "no_show"
+    assert row.is_confirmed is True
+    assert row.is_preconfirmed is False
+    assert row.last_status_source == "webhook"
+    assert row.last_status_synced_at is not None
+
+
 def test_upsert_unchanged_when_same_start_time():
     existing = SimpleNamespace(
         start_time=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
@@ -86,6 +105,43 @@ def test_upsert_cancelled():
     )
     res = _upsert(_session(existing=existing), cancelled=True)
     assert res.change == "cancelled"
+
+
+def test_record_gotracker_writeback_updates_existing_snapshot():
+    existing = SimpleNamespace(
+        location_id="loc-1",
+        provider_id=None,
+        start_time=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        status="scheduled",
+        gotracker_status_id=1,
+        gotracker_status_label="booked",
+        is_confirmed=False,
+        is_preconfirmed=False,
+        last_status_source="webhook",
+        last_status_synced_at=None,
+        last_writeback_at=None,
+        updated_at=None,
+    )
+    session = _session(existing=existing)
+    row = asyncio.run(
+        NexHealthProjectionService(session).record_gotracker_writeback(
+            institution_id="inst-1",
+            appointment_id="a-1",
+            location_id="loc-1",
+            status_id=3,
+            confirmed=True,
+            preconfirmed=False,
+        )
+    )
+    assert row is existing
+    assert existing.gotracker_status_id == 3
+    assert existing.gotracker_status_label == "cancelled"
+    assert existing.is_confirmed is True
+    assert existing.is_preconfirmed is False
+    assert existing.status == "cancelled"
+    assert existing.last_status_source == "workflow_writeback"
+    assert existing.last_status_synced_at is not None
+    assert existing.last_writeback_at is not None
 
 
 # ── claim_event idempotency ──────────────────────────────────────────────────

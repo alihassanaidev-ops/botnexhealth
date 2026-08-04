@@ -186,6 +186,62 @@ function TriggerForm({
                         <ContextPreview triggerType={trigger.type} />
                     </>
                 )}
+                {trigger.type === "appointment_state_changed" && (
+                    <>
+                        <Field label="GoTracker status">
+                            <Select
+                                value={trigger.status_ids[0] ? String(trigger.status_ids[0]) : NONE}
+                                disabled={readOnly}
+                                onValueChange={(value) => onChange({
+                                    ...trigger,
+                                    status_ids: value === NONE ? [] : [toInt(value, 1)],
+                                })}
+                            >
+                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={NONE}>Any status</SelectItem>
+                                    {GOTRACKER_STATUS_OPTIONS.map((status) => (
+                                        <SelectItem key={status.id} value={String(status.id)}>
+                                            {status.id} · {status.label}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </Field>
+                        <div className="grid grid-cols-2 gap-2">
+                            <Field label="Confirmed">
+                                <TriStateBooleanSelect
+                                    value={trigger.confirmed}
+                                    disabled={readOnly}
+                                    trueLabel="Is true"
+                                    falseLabel="Is false"
+                                    onChange={(value) => onChange({ ...trigger, confirmed: value })}
+                                />
+                            </Field>
+                            <Field label="Preconfirmed">
+                                <TriStateBooleanSelect
+                                    value={trigger.preconfirmed}
+                                    disabled={readOnly}
+                                    trueLabel="Is true"
+                                    falseLabel="Is false"
+                                    onChange={(value) => onChange({ ...trigger, preconfirmed: value })}
+                                />
+                            </Field>
+                        </div>
+                        <Field label="Campaign goal">
+                            <Input
+                                value={trigger.campaign_goal ?? ""}
+                                disabled={readOnly}
+                                placeholder="post_op_followup"
+                                onChange={(e) => onChange({
+                                    ...trigger,
+                                    campaign_goal: e.target.value.trim() || null,
+                                })}
+                            />
+                        </Field>
+                        <ContextPreview triggerType={trigger.type} />
+                    </>
+                )}
                 {trigger.type === "recall_scan" && (
                     <Field label="Recall interval (months)">
                         <Input
@@ -847,7 +903,7 @@ function UpdatePatientStatusFields({
 }) {
     return (
         <>
-            <Field label="Status">
+            <Field label="Internal status">
                 <Select
                     value={node.status}
                     disabled={readOnly}
@@ -855,14 +911,24 @@ function UpdatePatientStatusFields({
                 >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                        <SelectItem value="appointment_confirmed">Appointment confirmed</SelectItem>
-                        <SelectItem value="appointment_cancelled">Appointment cancelled</SelectItem>
-                        <SelectItem value="reschedule_requested">Reschedule requested</SelectItem>
-                        <SelectItem value="reschedule_or_followup_needed">Reschedule/follow-up needed</SelectItem>
-                        <SelectItem value="do_not_call_requested">Do not call requested</SelectItem>
-                        <SelectItem value="no_answer">No answer</SelectItem>
-                        <SelectItem value="post_op_followup_needed">Post-op follow-up needed</SelectItem>
-                        <SelectItem value="post_op_complete">Post-op complete</SelectItem>
+                        <SelectGroup>
+                            <SelectLabel>Internal outcomes</SelectLabel>
+                            <SelectItem value="needs_staff_followup">Needs staff follow-up</SelectItem>
+                            <SelectItem value="patient_asked_question">Patient asked question</SelectItem>
+                            <SelectItem value="callback_requested">Callback requested</SelectItem>
+                            <SelectItem value="reschedule_or_followup_needed">Reschedule/follow-up needed</SelectItem>
+                            <SelectItem value="do_not_call_requested">Do not call requested</SelectItem>
+                            <SelectItem value="no_answer">No answer</SelectItem>
+                            <SelectItem value="ai_call_failed">AI call failed</SelectItem>
+                            <SelectItem value="post_op_followup_needed">Post-op follow-up needed</SelectItem>
+                            <SelectItem value="post_op_complete">Post-op complete</SelectItem>
+                        </SelectGroup>
+                        <SelectGroup>
+                            <SelectLabel>Legacy appointment labels</SelectLabel>
+                            <SelectItem value="appointment_confirmed">Appointment confirmed</SelectItem>
+                            <SelectItem value="appointment_cancelled">Appointment cancelled</SelectItem>
+                            <SelectItem value="reschedule_requested">Reschedule requested</SelectItem>
+                        </SelectGroup>
                     </SelectContent>
                 </Select>
             </Field>
@@ -1541,6 +1607,8 @@ function defaultTrigger(type: TriggerType): WorkflowTrigger {
     switch (type) {
         case "appointment_offset":
             return { type, offset_hours: -24 }
+        case "appointment_state_changed":
+            return { type, status_ids: [], confirmed: true, preconfirmed: null, campaign_goal: "post_op_followup" }
         case "recall_scan":
             return { type, recall_interval_months: 6 }
         case "manual":

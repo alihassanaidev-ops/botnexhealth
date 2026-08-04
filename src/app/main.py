@@ -18,6 +18,7 @@ from src.app.api.routes.institution_portal import router as institution_portal_r
 from src.app.api.routes.institution_setup import router as institution_setup_router
 from src.app.api.routes.calls import router as calls_router
 from src.app.api.routes.contacts import router as contacts_router
+from src.app.api.routes.appointment_sync import router as appointment_sync_router
 from src.app.api.routes.dashboard import router as dashboard_router
 from src.app.api.routes.usage_reporting import router as usage_reporting_router
 from src.app.api.routes.do_not_contact import router as do_not_contact_router
@@ -263,6 +264,7 @@ def create_app() -> FastAPI:
     app.include_router(institution_setup_router, prefix="/api")
     app.include_router(calls_router, prefix="/api")
     app.include_router(contacts_router, prefix="/api")
+    app.include_router(appointment_sync_router, prefix="/api")
     app.include_router(dashboard_router, prefix="/api")
     app.include_router(usage_reporting_router, prefix="/api")
     app.include_router(do_not_contact_router, prefix="/api")

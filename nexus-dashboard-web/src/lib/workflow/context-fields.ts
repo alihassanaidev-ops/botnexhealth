@@ -10,6 +10,7 @@ export interface WorkflowContextField {
 
 export const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = [
     "appointment_offset",
+    "appointment_state_changed",
     "patient_status_changed",
 ]
 
