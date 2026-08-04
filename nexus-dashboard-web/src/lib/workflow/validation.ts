@@ -234,6 +234,35 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                 }
                 break
             }
+            case "update_gotracker_appointment": {
+                refError(node, node.next_node_id, "GoTracker appointment update step")
+                const hasWriteback =
+                    node.status_id !== null && node.status_id !== undefined ||
+                    node.confirmed !== null && node.confirmed !== undefined ||
+                    node.preconfirmed !== null && node.preconfirmed !== undefined ||
+                    Boolean(node.start_time?.trim()) ||
+                    Boolean(node.end_time?.trim()) ||
+                    node.duration_min !== null && node.duration_min !== undefined ||
+                    Boolean(node.provider_id?.trim()) ||
+                    Boolean(node.operatory_id?.trim()) ||
+                    Boolean(node.patient_id?.trim()) ||
+                    Boolean(node.reason?.trim())
+                if (!hasWriteback) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "GoTracker appointment update has no fields selected.",
+                    })
+                }
+                if (node.status_id !== null && node.status_id !== undefined && (node.status_id < 1 || node.status_id > 9)) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "GoTracker status ID must be between 1 and 9.",
+                    })
+                }
+                break
+            }
             case "json_mapper": {
                 refError(node, node.next_node_id, "JSON Mapper step")
                 if (node.mappings.length === 0) {

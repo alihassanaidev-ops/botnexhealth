@@ -27,7 +27,7 @@ export interface NodeMeta {
     label: string
     description: string
     icon: LucideIcon
-    group: "channel" | "control" | "action"
+    group: "channel" | "control" | "action" | "advanced"
     /** Tailwind classes for the node's icon chip (light + dark). */
     accent: string
 }
@@ -61,16 +61,23 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         group: "action",
         accent: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
     },
+    update_gotracker_appointment: {
+        label: "Update GoTracker Appointment",
+        description: "Write status, confirmation, or timing to GoTracker.",
+        icon: ClipboardList,
+        group: "action",
+        accent: "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
+    },
     json_mapper: {
         label: "JSON Mapper",
-        description: "Extract request JSON into workflow fields.",
+        description: "Advanced JSON path mapping.",
         icon: Braces,
-        group: "action",
+        group: "advanced",
         accent: "bg-teal-100 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300",
     },
     llm: {
-        label: "LLM",
-        description: "Classify text into a workflow field.",
+        label: "AI Action",
+        description: "Run an OpenAI prompt.",
         icon: Sparkles,
         group: "action",
         accent: "bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-950/50 dark:text-fuchsia-300",
@@ -147,8 +154,9 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
     { title: "Channels", group: "channel", types: ["send_sms", "send_voice", "send_email"] },
-    { title: "Actions", group: "action", types: ["drip", "json_mapper", "llm", "update_patient_status"] },
+    { title: "Actions", group: "action", types: ["drip", "llm", "update_patient_status", "update_gotracker_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
+    { title: "Advanced", group: "advanced", types: ["json_mapper"] },
 ]
 
 /** DataTransfer MIME used to drag a palette node type onto the canvas. */

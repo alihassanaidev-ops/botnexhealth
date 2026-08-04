@@ -63,18 +63,18 @@ def test_render_context_passthrough():
 
 def test_render_nested_appointment_context():
     result = render_sms_body(
-        "Hi {{patient_first_name}}, {{provider_name}} sees you {{appointment_date}} at {{appointment_time}}.",
+        "Hi {{patient_first_name}}, provider {{provider_id}} sees you {{appointment_date}} at {{appointment_time}}.",
         None,
         None,
         {
             "patient_first_name": "Sam",
             "appointment": {
                 "start_time": "2026-07-22T14:00:00+00:00",
-                "provider_name": "Dr. Smith",
+                "provider_id": "gt-2",
             },
         },
     )
-    assert result == "Hi Sam, Dr. Smith sees you July 22, 2026 at 2:00 PM."
+    assert result == "Hi Sam, provider gt-2 sees you July 22, 2026 at 2:00 PM."
 
 
 def test_render_unknown_var_becomes_blank():

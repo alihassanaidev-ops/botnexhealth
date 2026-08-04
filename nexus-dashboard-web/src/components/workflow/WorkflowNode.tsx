@@ -43,6 +43,8 @@ function stepSummary(node: WfNode): string {
                     : "No profile selected"
         case "update_patient_status":
             return `Status: ${truncate(node.status, 30)}`
+        case "update_gotracker_appointment":
+            return node.status_id ? `GoTracker StatusId: ${node.status_id}` : "GoTracker writeback"
         case "json_mapper":
             return `${node.mappings.length} mapping(s)`
         case "llm":

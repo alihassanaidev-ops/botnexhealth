@@ -127,6 +127,7 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
         case "send_voice":
         case "send_email":
         case "update_patient_status":
+        case "update_gotracker_appointment":
         case "json_mapper":
         case "llm":
             return [{ targetId: node.next_node_id }]
@@ -173,6 +174,7 @@ function singleNext(node: WorkflowNode): string | undefined {
         node.type === "send_voice" ||
         node.type === "send_email" ||
         node.type === "update_patient_status" ||
+        node.type === "update_gotracker_appointment" ||
         node.type === "json_mapper" ||
         node.type === "llm"
     ) {
@@ -467,6 +469,22 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 note_template: "",
                 next_node_id: "",
             }
+        case "update_gotracker_appointment":
+            return {
+                type,
+                id,
+                next_node_id: "",
+                status_id: null,
+                confirmed: true,
+                preconfirmed: false,
+                start_time: null,
+                end_time: null,
+                duration_min: null,
+                provider_id: null,
+                operatory_id: null,
+                patient_id: null,
+                reason: null,
+            }
         case "json_mapper":
             return {
                 type,
@@ -484,23 +502,19 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
             return {
                 type,
                 id,
-                source_field: "appointment_reasons",
-                output_field: "appointment_category",
-                prompt_template: "Classify the appointment reason into one of the configured labels.",
+                source_field: "appointment_reason",
+                output_field: "llm_result",
+                prompt_template: "Write the instruction for the AI action.",
                 model: null,
-                output_mode: "label",
-                max_output_tokens: 256,
-                include_context: false,
+                output_mode: "text",
+                max_output_tokens: 512,
+                include_context: true,
                 require_model: true,
-                allow_keyword_fallback: null,
+                allow_keyword_fallback: false,
                 json_schema: null,
-                labels: ["hygiene", "implant", "emergency", "other"],
-                label_rules: [
-                    { label: "hygiene", keywords: ["cleaning", "hygiene", "prophy"] },
-                    { label: "implant", keywords: ["implant", "surgery"] },
-                    { label: "emergency", keywords: ["emergency", "pain", "urgent"] },
-                ],
-                fallback_label: "other",
+                labels: [],
+                label_rules: [],
+                fallback_label: null,
                 next_node_id: "",
             }
         case "condition":
@@ -628,6 +642,7 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
                 case "send_voice":
                 case "send_email":
                 case "update_patient_status":
+                case "update_gotracker_appointment":
                 case "json_mapper":
                 case "llm":
                     return { ...n, next_node_id: repoint(n.next_node_id) }
@@ -677,6 +692,7 @@ export function connectNodes(
         case "send_voice":
         case "send_email":
         case "update_patient_status":
+        case "update_gotracker_appointment":
         case "json_mapper":
         case "llm":
             return updateNode(def, sourceId, { ...node, next_node_id: targetId })

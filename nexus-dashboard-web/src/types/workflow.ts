@@ -99,6 +99,7 @@ export type NodeType =
     | "send_voice"
     | "send_email"
     | "update_patient_status"
+    | "update_gotracker_appointment"
     | "json_mapper"
     | "llm"
     | "condition"
@@ -155,6 +156,21 @@ export interface UpdatePatientStatusNode {
     next_node_id: string
     note_template?: string | null
 }
+export interface UpdateGoTrackerAppointmentNode {
+    type: "update_gotracker_appointment"
+    id: string
+    next_node_id: string
+    status_id?: number | null
+    confirmed?: boolean | null
+    preconfirmed?: boolean | null
+    start_time?: string | null
+    end_time?: string | null
+    duration_min?: number | null
+    provider_id?: string | null
+    operatory_id?: string | null
+    patient_id?: string | null
+    reason?: string | null
+}
 export interface JsonMapping {
     source_path: string
     target_field: string
@@ -209,6 +225,7 @@ export type WorkflowNode =
     | SendVoiceNode
     | SendEmailNode
     | UpdatePatientStatusNode
+    | UpdateGoTrackerAppointmentNode
     | JsonMapperNode
     | LlmNode
     | ConditionNode
@@ -249,7 +266,7 @@ export interface WorkflowDefinition {
 }
 
 /** Node types that carry exactly one forward pointer (`next_node_id`). */
-export type LinearNode = WaitNode | DripNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode | JsonMapperNode | LlmNode
+export type LinearNode = WaitNode | DripNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode | UpdateGoTrackerAppointmentNode | JsonMapperNode | LlmNode
 /** Node types that place a message/call on a channel. */
 export type SendNode = SendSmsNode | SendVoiceNode | SendEmailNode
 
@@ -381,6 +398,21 @@ export interface MergeFieldCatalogItem {
     phi_level: "none" | "low" | "medium" | "high"
     channels: Array<"sms" | "email" | "voice">
     trigger_types: TriggerType[]
+}
+
+// ---------------------------------------------------------------------------
+// Workflow LLM models — `GET /automation/workflows/llm-models`.
+// ---------------------------------------------------------------------------
+export interface WorkflowLlmModel {
+    id: string
+    label: string
+    owned_by?: string | null
+}
+
+export interface WorkflowLlmModelsResponse {
+    default_model: string
+    configured: boolean
+    models: WorkflowLlmModel[]
 }
 
 // ---------------------------------------------------------------------------

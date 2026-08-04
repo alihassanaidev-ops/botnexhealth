@@ -361,6 +361,57 @@ def test_unknown_trigger_type_raises() -> None:
         WorkflowDefinition.model_validate(defn)
 
 
+def test_gotracker_appointment_update_node_accepts_status_and_reschedule_fields() -> None:
+    defn = _sms_to_exit()
+    defn["entry_node_id"] = "gt-write"
+    defn["nodes"] = [
+        {
+            "type": "update_gotracker_appointment",
+            "id": "gt-write",
+            "next_node_id": "exit-1",
+            "status_id": 5,
+            "start_time": "{{new_start_time}}",
+            "duration_min": 45,
+        },
+        {"type": "exit", "id": "exit-1", "outcome": "updated"},
+    ]
+
+    parsed = WorkflowDefinition.model_validate(defn)
+
+    assert parsed.nodes[0].type == "update_gotracker_appointment"
+
+
+def test_gotracker_appointment_update_rejects_blank_update() -> None:
+    defn = _sms_to_exit()
+    defn["entry_node_id"] = "gt-write"
+    defn["nodes"] = [
+        {
+            "type": "update_gotracker_appointment",
+            "id": "gt-write",
+            "next_node_id": "exit-1",
+        },
+        {"type": "exit", "id": "exit-1", "outcome": "updated"},
+    ]
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
+def test_gotracker_appointment_update_rejects_out_of_range_status() -> None:
+    defn = _sms_to_exit()
+    defn["entry_node_id"] = "gt-write"
+    defn["nodes"] = [
+        {
+            "type": "update_gotracker_appointment",
+            "id": "gt-write",
+            "next_node_id": "exit-1",
+            "status_id": 10,
+        },
+        {"type": "exit", "id": "exit-1", "outcome": "updated"},
+    ]
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
 def test_invalid_time_of_day_format_raises() -> None:
     defn = _with_wait()
     defn["nodes"][0]["delay"]["time_of_day"] = "9:00 AM"

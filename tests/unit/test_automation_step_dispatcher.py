@@ -34,6 +34,7 @@ from src.app.services.automation.definition_schema import (
     LlmLabelRule,
     LlmNode,
     SendSmsNode,
+    UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
@@ -91,6 +92,19 @@ def _make_runtime() -> AsyncMock:
     rt.fail_run = AsyncMock()
     rt.resume_run = AsyncMock()
     return rt
+
+
+class _FakeGoTrackerWritebackAdapter:
+    source = "gotracker"
+
+    def __init__(self) -> None:
+        self.set_appointment_status_id = AsyncMock(
+            return_value=SimpleNamespace(success=True, status="status_updated", error=None)
+        )
+        self.update_appointment = AsyncMock(
+            return_value=SimpleNamespace(success=True, status="appointment_updated", error=None)
+        )
+        self.close = AsyncMock()
 
 
 def _make_scheduler() -> AsyncMock:
@@ -200,6 +214,78 @@ def test_advance_json_mapper_writes_context_for_condition() -> None:
         result_code="mapped",
         result_metadata={"mapped_fields": {"appointment_reason": "Implant surgery"}},
     )
+
+
+def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
+    session = _make_session()
+    session.get = AsyncMock(
+        side_effect=[
+            SimpleNamespace(id="inst-1", pms_type="gotracker", slug="clinic"),
+            SimpleNamespace(id="loc-1", slug="downtown"),
+        ]
+    )
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+    adapter = _FakeGoTrackerWritebackAdapter()
+
+    run = _make_run()
+    run.id = "run-1"
+    run.location_id = "loc-1"
+    run.trigger_ref_type = "appointment"
+    run.trigger_ref_id = "gt-1343"
+    defn = _definition(
+        nodes=[
+            UpdateGoTrackerAppointmentNode(
+                id="gt-write",
+                next_node_id="exit-1",
+                status_id=5,
+                start_time="{{new_start_time}}",
+                duration_min=45,
+                provider_id="{{provider_id}}",
+            ),
+            ExitNode(id="exit-1", outcome="updated"),
+        ],
+        entry="gt-write",
+    )
+
+    with (
+        patch(
+            "src.app.pms.factory.get_adapter_for_institution_location",
+            new=AsyncMock(return_value=adapter),
+        ),
+        patch("src.app.services.audit.log_audit", new=AsyncMock()) as mock_audit,
+    ):
+        result = asyncio.run(
+            dispatcher.advance(
+                run,
+                defn,
+                context={
+                    "new_start_time": "2026-08-12T14:30",
+                    "provider_id": "gt-2",
+                },
+            )
+        )
+
+    assert result.status == "completed"
+    adapter.set_appointment_status_id.assert_awaited_once_with(
+        "gt-1343",
+        status_id=5,
+        confirmed=None,
+        preconfirmed=None,
+    )
+    adapter.update_appointment.assert_awaited_once_with(
+        "gt-1343",
+        start_time="2026-08-12T14:30",
+        end_time=None,
+        duration_min=45,
+        provider_id="gt-2",
+        operatory_id=None,
+        patient_id=None,
+        reason=None,
+    )
+    adapter.close.assert_awaited_once()
+    assert mock_audit.await_count == 2
 
 
 def test_advance_llm_node_classifies_with_keyword_rules() -> None:

@@ -128,6 +128,16 @@ function describe(
                 },
                 next: node.next_node_id,
             }
+        case "update_gotracker_appointment":
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "update_gotracker_appointment",
+                    summary: "Update GoTracker appointment",
+                    detail: node.status_id ? `StatusId ${node.status_id}` : "Writeback configured",
+                },
+                next: node.next_node_id,
+            }
         case "json_mapper":
             return {
                 step: {

@@ -4,7 +4,7 @@ Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, recall_scan, manual, bulk_import, callback_requested,
             patient_status_changed
   Nodes:    wait, drip, send_sms, send_voice, send_email, update_patient_status,
-            json_mapper, llm, condition, exit
+            update_gotracker_appointment, json_mapper, llm, condition, exit
 """
 
 from __future__ import annotations
@@ -267,6 +267,56 @@ class UpdatePatientStatusNode(BaseModel):
     note_template: str | None = None
 
 
+class UpdateGoTrackerAppointmentNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["update_gotracker_appointment"] = "update_gotracker_appointment"
+    next_node_id: str
+    status_id: int | None = Field(default=None, ge=1, le=9)
+    confirmed: bool | None = None
+    preconfirmed: bool | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    duration_min: int | None = Field(default=None, ge=1)
+    provider_id: str | None = None
+    operatory_id: str | None = None
+    patient_id: str | None = None
+    reason: str | None = None
+
+    @field_validator(
+        "start_time",
+        "end_time",
+        "provider_id",
+        "operatory_id",
+        "patient_id",
+        "reason",
+    )
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def require_update(self) -> "UpdateGoTrackerAppointmentNode":
+        if (
+            self.status_id is None
+            and self.confirmed is None
+            and self.preconfirmed is None
+            and self.start_time is None
+            and self.end_time is None
+            and self.duration_min is None
+            and self.provider_id is None
+            and self.operatory_id is None
+            and self.patient_id is None
+            and self.reason is None
+        ):
+            raise ValueError("at least one GoTracker appointment update field is required")
+        return self
+
+
 class JsonMapping(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -360,6 +410,7 @@ WorkflowNode = Annotated[
         SendVoiceNode,
         SendEmailNode,
         UpdatePatientStatusNode,
+        UpdateGoTrackerAppointmentNode,
         JsonMapperNode,
         LlmNode,
         ConditionNode,

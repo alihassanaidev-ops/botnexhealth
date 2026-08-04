@@ -18,9 +18,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     UniqueConstraint,
     func,
@@ -79,6 +81,17 @@ class AppointmentWorkingSet(Base):
     # 'scheduled' | 'cancelled' — mirrors the appointment's live disposition.
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="scheduled", server_default=text("'scheduled'")
+    )
+    gotracker_status_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gotracker_status_label: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    is_confirmed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_preconfirmed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_status_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_status_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_writeback_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     last_event: Mapped[str | None] = mapped_column(String(64), nullable=True)
 

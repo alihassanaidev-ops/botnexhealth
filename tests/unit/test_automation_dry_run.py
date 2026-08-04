@@ -32,7 +32,7 @@ def test_dry_run_renders_dental_sample_merge_fields() -> None:
             {
                 "type": "send_sms",
                 "id": "s1",
-                "body_template": "Visit {{appointment_date}} at {{appointment_time}} with {{provider_name}}",
+                "body_template": "Visit {{appointment_date}} at {{appointment_time}} for {{appointment_reason}}",
                 "next_node_id": "x1",
             },
             {"type": "exit", "id": "x1", "outcome": "sent"},
@@ -40,7 +40,7 @@ def test_dry_run_renders_dental_sample_merge_fields() -> None:
         "s1",
     )
     r = simulate_run(d)
-    assert r.steps[0].detail == "Visit July 22, 2026 at 2:00 PM with Dr. Smith"
+    assert r.steps[0].detail == "Visit July 22, 2026 at 2:00 PM for bridge prep"
 
 
 def test_dry_run_condition_follows_choice() -> None:

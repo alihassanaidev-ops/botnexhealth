@@ -16,9 +16,11 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowTimer,
     AutomationWorkflowVersion,
 )
+from src.app.pms.base import SupportsAppointmentConfirmation
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.tasks.automation_workflow import (
     _claim_and_enqueue_async,
+    _confirm_appointments_for_runs,
     _dispatch_timer_async,
     _dial_outcome_for_attempt,
     _poll_retell_voice_outcomes_async,
@@ -30,6 +32,19 @@ from src.app.tasks.automation_workflow import (
 )
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
+
+
+class _FakeConfirmAdapter(SupportsAppointmentConfirmation):
+    def __init__(self) -> None:
+        self.confirmed: list[str] = []
+        self.closed = False
+
+    async def confirm_appointment(self, appointment_id: str):
+        self.confirmed.append(appointment_id)
+        return SimpleNamespace(success=True, status="confirmed", error=None)
+
+    async def close(self) -> None:
+        self.closed = True
 
 _VALID_DEFINITION = {
     "trigger": {"type": "manual"},
@@ -603,6 +618,46 @@ async def test_dispatch_timer_defers_when_workflow_paused() -> None:
     assert result.get("deferred") is True
     mock_build.assert_not_called()
     assert timer.status == AutomationTimerStatus.PENDING.value  # re-armed, not fired
+
+
+@pytest.mark.asyncio
+async def test_confirm_appointments_uses_pms_factory_for_gotracker() -> None:
+    from src.app.models.institution import Institution
+    from src.app.models.institution_location import InstitutionLocation
+
+    institution = SimpleNamespace(id="inst-1", pms_type="gotracker", slug="clinic")
+    location = SimpleNamespace(id="loc-1", slug="downtown")
+    run = SimpleNamespace(
+        id="run-1",
+        trigger_ref_type="appointment",
+        trigger_ref_id="gt-1343",
+    )
+    adapter = _FakeConfirmAdapter()
+    session = _mock_session_get(
+        {
+            (Institution, "inst-1"): institution,
+            (InstitutionLocation, "loc-1"): location,
+        }
+    )
+
+    with (
+        patch(
+            "src.app.pms.factory.get_adapter_for_institution_location",
+            new=AsyncMock(return_value=adapter),
+        ) as mock_factory,
+        patch("src.app.services.audit.log_audit", new=AsyncMock()) as mock_audit,
+    ):
+        await _confirm_appointments_for_runs(
+            session,
+            institution_id="inst-1",
+            location_id="loc-1",
+            runs=[run],
+        )
+
+    mock_factory.assert_awaited_once_with(institution, location)
+    assert adapter.confirmed == ["gt-1343"]
+    assert adapter.closed is True
+    mock_audit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

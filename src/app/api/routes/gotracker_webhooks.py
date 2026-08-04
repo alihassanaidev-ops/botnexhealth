@@ -231,10 +231,11 @@ async def _process_appointment_event(
 
     appointment_id = gotracker_id(raw_appointment_id)
     patient_id = gotracker_id(raw_patient_id) if raw_patient_id else None
-    provider_id = _prefixed_optional(
+    raw_provider_id = _clean_str(
         _first(appointment, "provider_id", "ProviderId", "providerId")
     )
-    appointment_type_id = _prefixed_optional(
+    provider_id = gotracker_id(raw_provider_id) if raw_provider_id else None
+    raw_appointment_type_id = _clean_str(
         _first(
             appointment,
             "appointment_type_id",
@@ -244,6 +245,81 @@ async def _process_appointment_event(
             "TypeId",
         )
     )
+    appointment_type_id = (
+        gotracker_id(raw_appointment_type_id) if raw_appointment_type_id else None
+    )
+    raw_schedule_column_id = _clean_str(
+        _first(appointment, "schedule_column_id", "ScheduleColumnId", "scheduleColumnId")
+    )
+    raw_appointment_date = _clean_str(
+        _first(appointment, "appointment_date", "AppointmentDate", "date", "Date")
+    )
+    raw_appointment_time = _clean_str(
+        _first(appointment, "appointment_time", "AppointmentTime", "time", "Time")
+    )
+    raw_status_id = _clean_str(_first(appointment, "status_id", "StatusId", "statusId"))
+    duration = _clean_str(_first(appointment, "duration", "Duration"))
+    booked_user_id = _clean_str(_first(appointment, "booked_user_id", "BookedUserId"))
+    booked_timestamp = _clean_str(
+        _first(appointment, "booked_timestamp", "BookedTimeStamp", "bookedTimeStamp")
+    )
+    created_machine_name = _clean_str(
+        _first(appointment, "created_machine_name", "CreatedMachineName", "createdMachineName")
+    )
+    raw_appointment_context = {
+        "is_preconfirmed": _first(appointment, "is_preconfirmed", "IsPreconfirmed"),
+        "is_confirmed": _first(appointment, "is_confirmed", "IsConfirmed"),
+        "master_id": _first(appointment, "master_id", "MasterId"),
+        "original_date": _first(appointment, "original_date", "OriginalDate"),
+        "detail": _first(appointment, "detail", "Detail"),
+        "appointment_amount": _first(appointment, "appointment_amount", "AppointmentAmount"),
+        "is_recall": _first(appointment, "is_recall", "IsRecall"),
+        "is_personal": _first(appointment, "is_personal", "IsPersonal"),
+        "is_all_day_appointment": _first(
+            appointment, "is_all_day_appointment", "IsAllDayAppointment"
+        ),
+        "has_alarm": _first(appointment, "has_alarm", "HasAlarm"),
+        "notify_time": _first(appointment, "notify_time", "NotifyTime"),
+        "check_in": _first(appointment, "check_in", "CheckIn"),
+        "in_chair": _first(appointment, "in_chair", "InChair"),
+        "out_chair": _first(appointment, "out_chair", "OutChair"),
+        "check_out": _first(appointment, "check_out", "CheckOut"),
+        "flow_state": _first(appointment, "flow_state", "FlowState"),
+        "flow_change": _first(appointment, "flow_change", "FlowChange"),
+        "comments": _first(appointment, "comments", "Comments"),
+        "booked_machine_name": _first(
+            appointment, "booked_machine_name", "BookedMachineName"
+        ),
+        "created_user_id": _first(appointment, "created_user_id", "CreatedUserId"),
+        "created_timestamp": _first(
+            appointment, "created_timestamp", "CreatedTimeStamp"
+        ),
+        "modified_user_id": _first(appointment, "modified_user_id", "ModifiedUserId"),
+        "modified_timestamp": _first(
+            appointment, "modified_timestamp", "ModifiedTimeStamp"
+        ),
+        "modified_machine_name": _first(
+            appointment, "modified_machine_name", "ModifiedMachineName"
+        ),
+        "rebook_info": _first(appointment, "rebook_info", "RebookInfo"),
+        "confirmed_timestamp": _first(
+            appointment, "confirmed_timestamp", "ConfirmedTimeStamp"
+        ),
+        "confirmed_user_id": _first(appointment, "confirmed_user_id", "ConfirmedUserId"),
+        "confirmed_machine_name": _first(
+            appointment, "confirmed_machine_name", "ConfirmedMachineName"
+        ),
+        "rebook_id": _first(appointment, "rebook_id", "RebookId"),
+        "cancelled_timestamp": _first(
+            appointment, "cancelled_timestamp", "CancelledTimeStamp"
+        ),
+        "cancelled_user_id": _first(
+            appointment, "cancelled_user_id", "CancelledUserId"
+        ),
+        "cancelled_machine_name": _first(
+            appointment, "cancelled_machine_name", "CancelledMachineName"
+        ),
+    }
     reasons = _appointment_reasons(appointment, payload)
     institution_id = str(location.institution_id)
     location_id = str(location.id)
@@ -381,18 +457,48 @@ async def _process_appointment_event(
         "event": event,
         "source": "gotracker",
         "gotracker_appointment_id": raw_appointment_id,
+        "gotracker_contact_id": raw_patient_id,
+        "contact_source_id": patient_id,
+        "appointment_reason": reasons[0] if reasons else None,
         "appointment_reasons": reasons,
         "gotracker_reasons": reasons,
+        "provider_id": provider_id,
+        "gotracker_provider_id": raw_provider_id,
+        "schedule_column_id": raw_schedule_column_id,
+        "gotracker_schedule_column_id": raw_schedule_column_id,
+        "appointment_status_id": raw_status_id,
+        "gotracker_status_id": raw_status_id,
+        "appointment_status": _gotracker_status_label(raw_status_id),
+        "appointment_date": raw_appointment_date,
+        "appointment_time": raw_appointment_time,
+        "appointment_datetime": start_time,
+        "appointment_duration": duration,
+        "booked_user_id": booked_user_id,
+        "booked_timestamp": booked_timestamp,
+        "created_machine_name": created_machine_name,
+        **raw_appointment_context,
         "gotracker_payload": {
             "event": event,
+            "data": dict(appointment),
             "appointment": {
                 "id": raw_appointment_id,
+                "contact_id": raw_patient_id,
+                "date": raw_appointment_date,
+                "time": raw_appointment_time,
+                "datetime": start_time,
                 "reasons": reasons,
+                "provider_id": raw_provider_id,
+                "schedule_column_id": raw_schedule_column_id,
+                "status_id": raw_status_id,
+                "status": _gotracker_status_label(raw_status_id),
+                "duration": duration,
+                "booked_user_id": booked_user_id,
+                "booked_timestamp": booked_timestamp,
+                "created_machine_name": created_machine_name,
+                **raw_appointment_context,
             },
         },
     }
-    if reasons:
-        workflow_metadata["appointment_reason"] = reasons[0]
 
     trigger_appointment_workflows.delay(
         institution_id=institution_id,
@@ -801,6 +907,22 @@ def _appointment_reasons(
     return _string_list(raw)
 
 
+def _gotracker_status_label(status_id: str | None) -> str | None:
+    if not status_id:
+        return None
+    return {
+        "1": "booked",
+        "2": "booked_waiting",
+        "3": "cancelled",
+        "4": "late",
+        "5": "no_show",
+        "6": "office_cancel",
+        "7": "pending",
+        "8": "short_cancel",
+        "9": "waiting",
+    }.get(str(status_id), str(status_id))
+
+
 def _string_list(value: Any) -> list[str]:
     if value in (None, ""):
         return []
@@ -862,12 +984,6 @@ def _first(raw: dict[str, Any], *keys: str, default: Any = None) -> Any:
         if value is not None:
             return value
     return default
-
-
-def _prefixed_optional(value: Any) -> str | None:
-    if value in (None, ""):
-        return None
-    return gotracker_id(value)
 
 
 def _clean_str(value: Any) -> str | None:

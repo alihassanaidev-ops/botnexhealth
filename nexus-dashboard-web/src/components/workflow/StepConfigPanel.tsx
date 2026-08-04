@@ -9,7 +9,7 @@
  * dragging on the canvas (Plan 02 architecture decision).
  */
 import { useEffect, useMemo, useState } from "react"
-import { Check, ChevronsUpDown, GitBranch, Flag, Plus, Search, Trash2 } from "lucide-react"
+import { Check, ChevronDown, ChevronsUpDown, GitBranch, Flag, Plus, Search, Trash2 } from "lucide-react"
 import {
     Sheet,
     SheetContent,
@@ -33,10 +33,17 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
-import { listPhoneCountryRegions, type PhoneCountryRegion } from "@/lib/workflow-api"
+import { listPhoneCountryRegions, listWorkflowLlmModels, type PhoneCountryRegion } from "@/lib/workflow-api"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
 import { addVoiceOutcomeBranch, TRIGGER_NODE_ID, VOICE_OUTCOME_BRANCH_VALUES } from "@/lib/workflow/graph"
+import {
+    contextFieldsForTrigger,
+    contextValueAtPath,
+    formatContextValue,
+    GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE,
+    SAMPLE_WORKFLOW_CONTEXT,
+} from "@/lib/workflow/context-fields"
 import type { OutboundVoiceProfile } from "@/types"
 import type {
     ConditionNode,
@@ -49,16 +56,30 @@ import type {
     SendSmsNode,
     SendVoiceNode,
     TriggerType,
+    UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
+    WorkflowLlmModel,
     WorkflowNode,
     WorkflowTrigger,
 } from "@/types/workflow"
 
 const NONE = "__none__"
 const CONDITION_OPS: ConditionOp[] = ["eq", "neq", "in", "not_in", "is_null", "is_not_null", "contains", "not_contains"]
+const CUSTOM_CONDITION_FIELD = "__custom_field__"
 const CUSTOM_RELATIVE_WAIT = "__custom__"
+const GOTRACKER_STATUS_OPTIONS = [
+    { id: 1, label: "Booked" },
+    { id: 2, label: "Booked + Waiting" },
+    { id: 3, label: "Cancelled" },
+    { id: 4, label: "Late" },
+    { id: 5, label: "No Show" },
+    { id: 6, label: "Office Cancel" },
+    { id: 7, label: "Pending" },
+    { id: 8, label: "Short Cancel" },
+    { id: 9, label: "Waiting" },
+]
 const FALLBACK_PHONE_COUNTRIES: PhoneCountryRegion[] = [
     { region: "US", calling_code: "+1" },
     { region: "GB", calling_code: "+44" },
@@ -153,14 +174,17 @@ function TriggerForm({
                 </Field>
 
                 {trigger.type === "appointment_offset" && (
-                    <Field label="Hours relative to appointment" hint="Negative = before (e.g. -24 = 24h before).">
-                        <Input
-                            type="number"
-                            value={trigger.offset_hours}
-                            disabled={readOnly}
-                            onChange={(e) => onChange({ ...trigger, offset_hours: toInt(e.target.value, 0) })}
-                        />
-                    </Field>
+                    <>
+                        <Field label="Hours relative to appointment" hint="Negative = before (e.g. -24 = 24h before).">
+                            <Input
+                                type="number"
+                                value={trigger.offset_hours}
+                                disabled={readOnly}
+                                onChange={(e) => onChange({ ...trigger, offset_hours: toInt(e.target.value, 0) })}
+                            />
+                        </Field>
+                        <ContextPreview triggerType={trigger.type} />
+                    </>
                 )}
                 {trigger.type === "recall_scan" && (
                     <Field label="Recall interval (months)">
@@ -210,6 +234,7 @@ function TriggerForm({
                                 })}
                             />
                         </Field>
+                        <ContextPreview triggerType={trigger.type} />
                     </>
                 )}
             </div>
@@ -260,11 +285,14 @@ function NodeForm({
                 {node.type === "update_patient_status" && (
                     <UpdatePatientStatusFields node={node} onChange={onNodeChange} readOnly={readOnly} />
                 )}
+                {node.type === "update_gotracker_appointment" && (
+                    <UpdateGoTrackerAppointmentFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
+                )}
                 {node.type === "json_mapper" && (
                     <JsonMapperFields node={node} onChange={onNodeChange} readOnly={readOnly} />
                 )}
                 {node.type === "llm" && (
-                    <LlmFields node={node} onChange={onNodeChange} readOnly={readOnly} />
+                    <LlmFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
                 )}
                 {node.type === "condition" && (
                     <ConditionFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
@@ -850,6 +878,130 @@ function UpdatePatientStatusFields({
     )
 }
 
+function UpdateGoTrackerAppointmentFields({
+    node,
+    def,
+    onChange,
+    readOnly,
+}: {
+    node: UpdateGoTrackerAppointmentNode
+    def: WorkflowDefinition
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    const update = (patch: Partial<UpdateGoTrackerAppointmentNode>) => onChange({ ...node, ...patch })
+    return (
+        <>
+            <Field label="Status">
+                <Select
+                    value={node.status_id ? String(node.status_id) : NONE}
+                    disabled={readOnly}
+                    onValueChange={(value) => update({ status_id: value === NONE ? null : toInt(value, 1) })}
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE}>Do not change</SelectItem>
+                        {GOTRACKER_STATUS_OPTIONS.map((status) => (
+                            <SelectItem key={status.id} value={String(status.id)}>
+                                {status.id} · {status.label}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </Field>
+
+            <div className="grid grid-cols-2 gap-2">
+                <Field label="Confirmed">
+                    <TriStateBooleanSelect
+                        value={node.confirmed}
+                        disabled={readOnly}
+                        trueLabel="Set true"
+                        falseLabel="Set false"
+                        onChange={(value) => update({ confirmed: value })}
+                    />
+                </Field>
+                <Field label="Preconfirmed">
+                    <TriStateBooleanSelect
+                        value={node.preconfirmed}
+                        disabled={readOnly}
+                        trueLabel="Set true"
+                        falseLabel="Set false"
+                        onChange={(value) => update({ preconfirmed: value })}
+                    />
+                </Field>
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border p-3">
+                <Label className="text-sm">Appointment update</Label>
+                <Field label="Start time">
+                    <Input
+                        value={node.start_time ?? ""}
+                        disabled={readOnly}
+                        placeholder="2026-08-12T14:30 or {{new_start_time}}"
+                        onChange={(e) => update({ start_time: e.target.value.trim() || null })}
+                    />
+                </Field>
+                <div className="grid grid-cols-2 gap-2">
+                    <Field label="End time">
+                        <Input
+                            value={node.end_time ?? ""}
+                            disabled={readOnly}
+                            placeholder="optional"
+                            onChange={(e) => update({ end_time: e.target.value.trim() || null })}
+                        />
+                    </Field>
+                    <Field label="Duration minutes">
+                        <Input
+                            type="number"
+                            min={1}
+                            value={node.duration_min ?? ""}
+                            disabled={readOnly}
+                            placeholder="45"
+                            onChange={(e) => update({ duration_min: e.target.value ? Math.max(1, toInt(e.target.value, 1)) : null })}
+                        />
+                    </Field>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                    <Field label="Provider ID">
+                        <Input
+                            value={node.provider_id ?? ""}
+                            disabled={readOnly}
+                            placeholder="{{ProviderId}}"
+                            onChange={(e) => update({ provider_id: e.target.value.trim() || null })}
+                        />
+                    </Field>
+                    <Field label="Operatory ID">
+                        <Input
+                            value={node.operatory_id ?? ""}
+                            disabled={readOnly}
+                            placeholder="optional"
+                            onChange={(e) => update({ operatory_id: e.target.value.trim() || null })}
+                        />
+                    </Field>
+                </div>
+                <Field label="Patient ID">
+                    <Input
+                        value={node.patient_id ?? ""}
+                        disabled={readOnly}
+                        placeholder="{{ContactId}}"
+                        onChange={(e) => update({ patient_id: e.target.value.trim() || null })}
+                    />
+                </Field>
+                <Field label="Reason">
+                    <Input
+                        value={node.reason ?? ""}
+                        disabled={readOnly}
+                        placeholder="{{Reason}}"
+                        onChange={(e) => update({ reason: e.target.value.trim() || null })}
+                    />
+                </Field>
+            </div>
+
+            <ContextPreview triggerType={def.trigger.type} />
+        </>
+    )
+}
+
 function JsonMapperFields({
     node,
     onChange,
@@ -892,6 +1044,16 @@ function JsonMapperFields({
                             />
                         </Field>
                     </div>
+                    {contextValueAtPath(SAMPLE_WORKFLOW_CONTEXT, mapping.source_path) === undefined && (
+                        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-700 dark:text-amber-300">
+                            Path not found in sample context.
+                        </p>
+                    )}
+                    {contextValueAtPath(SAMPLE_WORKFLOW_CONTEXT, mapping.source_path) !== undefined && (
+                        <p className="rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
+                            {formatContextValue(contextValueAtPath(SAMPLE_WORKFLOW_CONTEXT, mapping.source_path))}
+                        </p>
+                    )}
                     <Field label="Default value">
                         <Input
                             value={ruleValueToText(mapping.default_value)}
@@ -916,154 +1078,162 @@ function JsonMapperFields({
     )
 }
 
+function ContextPreview({ triggerType }: { triggerType: TriggerType }) {
+    const [open, setOpen] = useState(false)
+    const fields = contextFieldsForTrigger(triggerType)
+    if (fields.length === 0) return null
+    const entries = Object.entries(GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE.data)
+    return (
+        <div className="rounded-md border border-border">
+            <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+                onClick={() => setOpen((value) => !value)}
+            >
+                <div>
+                    <Label className="text-sm">Context preview</Label>
+                    <p className="text-xs text-muted-foreground">Incoming GoTracker appointment webhook.</p>
+                </div>
+                <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+            </button>
+            {open && (
+                <div className="max-h-80 space-y-1 overflow-y-auto border-t border-border p-3">
+                    {entries.map(([key, value]) => (
+                        <div key={key} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2 text-xs">
+                            <span className="truncate text-muted-foreground">{key}</span>
+                            <span className="truncate font-mono">{formatContextValue(value)}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    )
+}
+
 function LlmFields({
     node,
+    def,
     onChange,
     readOnly,
 }: {
     node: LlmNode
+    def: WorkflowDefinition
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
-    const outputMode = node.output_mode ?? "label"
-    const rulesText = (node.label_rules ?? [])
-        .map((rule) => `${rule.label}: ${rule.keywords.join(", ")}`)
-        .join("\n")
+    const [models, setModels] = useState<WorkflowLlmModel[]>([])
+    const [defaultModel, setDefaultModel] = useState(node.model ?? "")
+    const [modelLoadFailed, setModelLoadFailed] = useState(false)
+    const [variableOpen, setVariableOpen] = useState(false)
+    const variables = contextFieldsForTrigger(def.trigger.type)
+    useEffect(() => {
+        let active = true
+        listWorkflowLlmModels()
+            .then((result) => {
+                if (!active) return
+                setModels(result.models)
+                setDefaultModel(result.default_model)
+                setModelLoadFailed(false)
+            })
+            .catch(() => {
+                if (!active) return
+                setModelLoadFailed(true)
+            })
+        return () => {
+            active = false
+        }
+    }, [])
+
+    const selectedModel = node.model ?? defaultModel
+    const modelChoices = ensureModelChoice(models, selectedModel)
+    const update = (patch: Partial<LlmNode>) => {
+        onChange({
+            ...node,
+            source_field: node.source_field || "appointment_reason",
+            output_field: node.output_field || "llm_result",
+            output_mode: "text",
+            max_output_tokens: node.max_output_tokens ?? 512,
+            include_context: true,
+            require_model: true,
+            allow_keyword_fallback: false,
+            labels: node.labels ?? [],
+            label_rules: node.label_rules ?? [],
+            fallback_label: node.fallback_label ?? null,
+            json_schema: node.json_schema ?? null,
+            ...patch,
+        })
+    }
+    const insertVariable = (name: string) => {
+        const token = `{{${name}}}`
+        const base = node.prompt_template.trimEnd()
+        update({ prompt_template: base ? `${base} ${token}` : token })
+        setVariableOpen(false)
+    }
 
     return (
         <>
-            <Field label="Model" hint="Blank uses the backend default model.">
-                <Input
-                    value={node.model ?? ""}
-                    disabled={readOnly}
-                    placeholder="gpt-5.6-luna"
-                    onChange={(e) => onChange({ ...node, model: e.target.value.trim() || null })}
-                />
-            </Field>
-            <Field label="Output mode">
+            <Field label="Model">
                 <Select
-                    value={outputMode}
-                    disabled={readOnly}
-                    onValueChange={(value) => onChange({ ...node, output_mode: value as LlmNode["output_mode"] })}
+                    value={selectedModel || undefined}
+                    disabled={readOnly || modelChoices.length === 0}
+                    onValueChange={(value) => update({ model: value })}
                 >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                        <SelectItem value="label">Label</SelectItem>
-                        <SelectItem value="text">Text</SelectItem>
-                        <SelectItem value="json">JSON</SelectItem>
+                        {modelChoices.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>{model.label}</SelectItem>
+                        ))}
                     </SelectContent>
                 </Select>
-            </Field>
-            <Field label="Source field">
-                <Input
-                    value={node.source_field}
-                    disabled={readOnly}
-                    placeholder="appointment_reasons"
-                    onChange={(e) => onChange({ ...node, source_field: e.target.value })}
-                />
-            </Field>
-            <Field label="Output field">
-                <Input
-                    value={node.output_field}
-                    disabled={readOnly}
-                    placeholder="appointment_category"
-                    onChange={(e) => onChange({ ...node, output_field: e.target.value })}
-                />
+                {modelLoadFailed && (
+                    <p className="text-xs text-muted-foreground">Model list unavailable.</p>
+                )}
             </Field>
             <Field label="Prompt">
+                <div className="mb-2 flex justify-end">
+                    <Popover open={variableOpen} onOpenChange={setVariableOpen}>
+                        <PopoverTrigger asChild>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={readOnly || variables.length === 0}
+                                className="h-8 gap-2"
+                            >
+                                <Plus className="h-3.5 w-3.5" />
+                                Insert variable
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="w-80 p-0">
+                            <div className="border-b border-border px-3 py-2 text-sm font-medium">
+                                GoTracker appointment payload
+                            </div>
+                            <div className="max-h-72 overflow-y-auto p-1">
+                                {variables.map((field) => (
+                                    <button
+                                        key={field.name}
+                                        type="button"
+                                        className="flex w-full items-center justify-between gap-3 rounded-sm px-2 py-2 text-left text-sm hover:bg-accent"
+                                        onClick={() => insertVariable(field.name)}
+                                    >
+                                        <span>{field.label}</span>
+                                        <span className="truncate font-mono text-xs text-muted-foreground">
+                                            {formatContextValue(field.sample)}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        </PopoverContent>
+                    </Popover>
+                </div>
                 <Textarea
-                    rows={4}
+                    rows={8}
                     value={node.prompt_template}
                     disabled={readOnly}
-                    placeholder="Classify the appointment reason into one of the configured labels."
-                    onChange={(e) => onChange({ ...node, prompt_template: e.target.value })}
+                    placeholder="Write the instruction for the AI action."
+                    onChange={(e) => update({ prompt_template: e.target.value })}
                 />
             </Field>
-            {outputMode === "label" && (
-                <>
-                    <Field label="Allowed labels" hint="Comma separated labels used by the following Condition node.">
-                        <Input
-                            value={(node.labels ?? []).join(", ")}
-                            disabled={readOnly}
-                            placeholder="hygiene, implant, emergency"
-                            onChange={(e) => onChange({ ...node, labels: splitList(e.target.value) })}
-                        />
-                    </Field>
-                    <Field label="Keyword fallback rules" hint="One per line: label: keyword, keyword. Used only when fallback is enabled.">
-                        <Textarea
-                            rows={4}
-                            value={rulesText}
-                            disabled={readOnly}
-                            placeholder={"hygiene: cleaning, prophy\nimplant: implant, surgery"}
-                            onChange={(e) => onChange({ ...node, label_rules: parseLabelRules(e.target.value) })}
-                        />
-                    </Field>
-                </>
-            )}
-            {outputMode === "json" && (
-                <Field label="JSON schema" hint="Optional JSON Schema object. Leave blank for free-form JSON.">
-                    <Textarea
-                        rows={5}
-                        value={node.json_schema ? JSON.stringify(node.json_schema, null, 2) : ""}
-                        disabled={readOnly}
-                        placeholder={'{"type":"object","properties":{"appointment_category":{"type":"string"}}}'}
-                        onChange={(e) => onChange({ ...node, json_schema: parseJsonSchema(e.target.value) })}
-                    />
-                </Field>
-            )}
-            <Field label="Fallback label">
-                <Input
-                    value={node.fallback_label ?? ""}
-                    disabled={readOnly}
-                    placeholder="unknown"
-                    onChange={(e) => onChange({ ...node, fallback_label: e.target.value.trim() || null })}
-                />
-            </Field>
-            <Field label="Max output tokens">
-                <Input
-                    type="number"
-                    min={1}
-                    max={4096}
-                    value={node.max_output_tokens ?? 256}
-                    disabled={readOnly}
-                    onChange={(e) => onChange({ ...node, max_output_tokens: clamp(toInt(e.target.value, 256), 1, 4096) })}
-                />
-            </Field>
-            <div className="space-y-2 rounded-md border border-border px-3 py-2">
-                <div className="flex items-center justify-between gap-3">
-                    <div>
-                        <Label className="text-sm">Require model call</Label>
-                        <p className="text-xs text-muted-foreground">Fail the run if the LLM provider is unavailable.</p>
-                    </div>
-                    <Switch
-                        checked={node.require_model ?? true}
-                        disabled={readOnly}
-                        onCheckedChange={(checked) => onChange({ ...node, require_model: checked })}
-                    />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                    <div>
-                        <Label className="text-sm">Keyword fallback</Label>
-                        <p className="text-xs text-muted-foreground">Use label keyword rules if the provider is unavailable.</p>
-                    </div>
-                    <Switch
-                        checked={node.allow_keyword_fallback ?? false}
-                        disabled={readOnly || outputMode !== "label"}
-                        onCheckedChange={(checked) => onChange({ ...node, allow_keyword_fallback: checked })}
-                    />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                    <div>
-                        <Label className="text-sm">Include full context</Label>
-                        <p className="text-xs text-muted-foreground">Send all workflow context to the model, not just the source field.</p>
-                    </div>
-                    <Switch
-                        checked={node.include_context ?? false}
-                        disabled={readOnly}
-                        onCheckedChange={(checked) => onChange({ ...node, include_context: checked })}
-                    />
-                </div>
-            </div>
         </>
     )
 }
@@ -1079,6 +1249,8 @@ function ConditionFields({
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
+    const contextFields = contextFieldsForTrigger(def.trigger.type)
+    const contextFieldNames = new Set(contextFields.map((field) => field.name))
     const updateRule = (i: number, patch: Partial<ConditionRule>) => {
         const rules = node.rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r))
         onChange({ ...node, rules })
@@ -1106,22 +1278,56 @@ function ConditionFields({
                 <Label className="text-sm">Rules</Label>
                 {node.rules.map((rule, i) => {
                     const needsValue = rule.op !== "is_null" && rule.op !== "is_not_null"
+                    const selectedKnownField = contextFieldNames.has(rule.field) ? rule.field : CUSTOM_CONDITION_FIELD
                     return (
                         <div key={i} className="space-y-2 rounded-md border border-border p-2">
                             <div className="flex gap-2">
-                                <Input
-                                    className="flex-1"
-                                    placeholder="field (e.g. appointment_status)"
-                                    value={rule.field}
+                                <Select
+                                    value={selectedKnownField}
                                     disabled={readOnly}
-                                    onChange={(e) => updateRule(i, { field: e.target.value })}
-                                />
+                                    onValueChange={(value) => {
+                                        if (value === CUSTOM_CONDITION_FIELD) {
+                                            updateRule(i, { field: "" })
+                                        } else {
+                                            updateRule(i, { field: value })
+                                        }
+                                    }}
+                                >
+                                    <SelectTrigger className="flex-1">
+                                        <SelectValue placeholder="Select field" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectGroup>
+                                            <SelectLabel>GoTracker appointment payload</SelectLabel>
+                                            {contextFields.map((field) => (
+                                                <SelectItem key={field.name} value={field.name}>{field.label}</SelectItem>
+                                            ))}
+                                        </SelectGroup>
+                                        <SelectGroup>
+                                            <SelectLabel>Other</SelectLabel>
+                                            <SelectItem value={CUSTOM_CONDITION_FIELD}>Custom field/path</SelectItem>
+                                        </SelectGroup>
+                                    </SelectContent>
+                                </Select>
                                 {!readOnly && node.rules.length > 1 && (
                                     <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => removeRule(i)}>
                                         <Trash2 className="h-3.5 w-3.5" />
                                     </Button>
                                 )}
                             </div>
+                            {selectedKnownField === CUSTOM_CONDITION_FIELD && (
+                                <Input
+                                    placeholder="custom field or JSON path"
+                                    value={rule.field}
+                                    disabled={readOnly}
+                                    onChange={(e) => updateRule(i, { field: e.target.value })}
+                                />
+                            )}
+                            {selectedKnownField !== CUSTOM_CONDITION_FIELD && (
+                                <p className="rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
+                                    {formatContextValue(contextFields.find((field) => field.name === rule.field)?.sample)}
+                                </p>
+                            )}
                             <div className="flex gap-2">
                                 <Select
                                     value={rule.op}
@@ -1299,6 +1505,35 @@ function NextStepField({
     )
 }
 
+function TriStateBooleanSelect({
+    value,
+    disabled,
+    trueLabel,
+    falseLabel,
+    onChange,
+}: {
+    value?: boolean | null
+    disabled?: boolean
+    trueLabel: string
+    falseLabel: string
+    onChange: (value: boolean | null) => void
+}) {
+    return (
+        <Select
+            value={value === null || value === undefined ? NONE : value ? "true" : "false"}
+            disabled={disabled}
+            onValueChange={(next) => onChange(next === NONE ? null : next === "true")}
+        >
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+                <SelectItem value={NONE}>Do not change</SelectItem>
+                <SelectItem value="true">{trueLabel}</SelectItem>
+                <SelectItem value="false">{falseLabel}</SelectItem>
+            </SelectContent>
+        </Select>
+    )
+}
+
 // ---------------------------------------------------------------------------
 // value helpers
 // ---------------------------------------------------------------------------
@@ -1352,33 +1587,7 @@ function textToRuleValue(text: string, op: ConditionOp): ConditionRule["value"] 
     return text
 }
 
-function splitList(text: string): string[] {
-    return text
-        .split(/[,\n]/)
-        .map((value) => value.trim())
-        .filter(Boolean)
-}
-
-function parseLabelRules(text: string): LlmNode["label_rules"] {
-    return text
-        .split("\n")
-        .map((line) => {
-            const [label, ...rest] = line.split(":")
-            const keywords = splitList(rest.join(":"))
-            return { label: label.trim(), keywords }
-        })
-        .filter((rule) => rule.label && rule.keywords.length)
-}
-
-function parseJsonSchema(text: string): Record<string, unknown> | null {
-    const trimmed = text.trim()
-    if (!trimmed) return null
-    try {
-        const parsed = JSON.parse(trimmed)
-        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-            ? parsed as Record<string, unknown>
-            : null
-    } catch {
-        return null
-    }
+function ensureModelChoice(models: WorkflowLlmModel[], selectedModel: string): WorkflowLlmModel[] {
+    if (!selectedModel || models.some((model) => model.id === selectedModel)) return models
+    return [{ id: selectedModel, label: selectedModel, owned_by: null }, ...models]
 }

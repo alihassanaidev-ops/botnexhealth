@@ -12,6 +12,7 @@ import type {
     TestRunResult,
     ValidateDefinitionResponse,
     WorkflowDefinition,
+    WorkflowLlmModelsResponse,
     WorkflowVersion,
 } from "@/types/workflow"
 
@@ -246,6 +247,12 @@ export async function listMergeFields(opts?: {
     const { data } = await api.get<MergeFieldCatalogItem[]>(
         `/automation/workflows/merge-fields${query ? `?${query}` : ""}`,
     )
+    return data
+}
+
+/** OpenAI model choices for workflow LLM nodes (`GET .../llm-models`). */
+export async function listWorkflowLlmModels(): Promise<WorkflowLlmModelsResponse> {
+    const { data } = await api.get<WorkflowLlmModelsResponse>("/automation/workflows/llm-models")
     return data
 }
 

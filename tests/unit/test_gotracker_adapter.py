@@ -297,6 +297,77 @@ async def test_book_and_cancel_use_documented_endpoints() -> None:
 
 
 @pytest.mark.asyncio
+async def test_confirm_appointment_sets_confirmed_and_clears_preconfirmed() -> None:
+    client = FakeGoTrackerClient()
+    adapter = _adapter(client)
+
+    result = await adapter.confirm_appointment("gt-900000001")
+
+    assert result.success is True
+    assert result.status == "confirmed"
+    assert client.calls[0]["method"] == "PATCH"
+    assert client.calls[0]["path"] == "/api/appointments/900000001/status"
+    assert client.calls[0]["json"] == {"confirmed": True, "preconfirmed": False}
+
+
+@pytest.mark.asyncio
+async def test_preconfirm_appointment_only_sets_preconfirmed() -> None:
+    client = FakeGoTrackerClient()
+    adapter = _adapter(client)
+
+    result = await adapter.preconfirm_appointment("gt-900000001")
+
+    assert result.success is True
+    assert result.status == "preconfirmed"
+    assert client.calls[0]["method"] == "PATCH"
+    assert client.calls[0]["path"] == "/api/appointments/900000001/status"
+    assert client.calls[0]["json"] == {"preconfirmed": True}
+
+
+@pytest.mark.asyncio
+async def test_set_appointment_status_id_uses_status_endpoint() -> None:
+    client = FakeGoTrackerClient()
+    adapter = _adapter(client)
+
+    result = await adapter.set_appointment_status_id("gt-900000001", status_id=5)
+
+    assert result.success is True
+    assert result.status == "status_updated"
+    assert client.calls[0]["method"] == "PATCH"
+    assert client.calls[0]["path"] == "/api/appointments/900000001/status"
+    assert client.calls[0]["json"] == {"status_id": 5}
+
+
+@pytest.mark.asyncio
+async def test_update_appointment_uses_snake_case_consumer_endpoint() -> None:
+    client = FakeGoTrackerClient()
+    adapter = _adapter(client)
+
+    result = await adapter.update_appointment(
+        "gt-900000001",
+        start_time="2026-08-12T14:30",
+        duration_min=45,
+        provider_id="gt-2",
+        operatory_id="gt-1",
+        patient_id="gt-583",
+        reason="bridge prep",
+    )
+
+    assert result.success is True
+    assert result.status == "appointment_updated"
+    assert client.calls[0]["method"] == "PATCH"
+    assert client.calls[0]["path"] == "/api/appointments/900000001"
+    assert client.calls[0]["json"] == {
+        "start_time": "2026-08-12T14:30",
+        "duration_min": 45,
+        "provider_id": "2",
+        "operatory_id": "1",
+        "patient_id": "583",
+        "reason": "bridge prep",
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_appointment_type_uses_gotracker_body() -> None:
     client = FakeGoTrackerClient()
     client.responses.append(

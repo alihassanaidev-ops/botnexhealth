@@ -40,6 +40,7 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
@@ -61,6 +62,10 @@ _MAX_STEPS = 50
 # "9 AM reminder" batch doesn't hit the vendor in one burst. Full budget-aware
 # pacing across NexHealth/Retell/Twilio is coordinated with Plans 09/11.
 _DEFAULT_CALENDAR_JITTER_SECONDS = 300
+
+
+class WorkflowGoTrackerWritebackError(RuntimeError):
+    """Raised when an explicit GoTracker appointment writeback node fails."""
 
 
 @dataclass
@@ -312,6 +317,18 @@ class WorkflowStepDispatcher:
                     run, node, context
                 )
                 patient_status_event_ids.append(event_id)
+
+            elif isinstance(node, UpdateGoTrackerAppointmentNode):
+                try:
+                    current_node_id = await self._update_gotracker_appointment(
+                        run, node, context
+                    )
+                except WorkflowGoTrackerWritebackError:
+                    return DispatchResult(
+                        status="failed",
+                        steps_advanced=steps_advanced,
+                        patient_status_event_ids=patient_status_event_ids,
+                    )
 
             elif isinstance(node, JsonMapperNode):
                 step = await self.runtime.begin_step(run, step_id=node.id, step_type="json_mapper")
@@ -609,6 +626,155 @@ class WorkflowStepDispatcher:
         await self.session.flush()
         return node.next_node_id, str(event.id)
 
+    async def _update_gotracker_appointment(
+        self,
+        run: AutomationWorkflowRun,
+        node: UpdateGoTrackerAppointmentNode,
+        context: dict,
+    ) -> str:
+        from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+        from src.app.models.institution import Institution
+        from src.app.pms.factory import get_adapter_for_institution_location
+        from src.app.services.audit import log_audit
+
+        step = await self.runtime.begin_step(
+            run, step_id=node.id, step_type=node.type
+        )
+
+        async def fail(reason: str, metadata: dict | None = None) -> None:
+            await self.runtime.fail_step(
+                step,
+                error_message=reason,
+                result_code="gotracker_writeback_failed",
+                result_metadata=metadata or {},
+            )
+            await self.runtime.fail_run(run, reason="gotracker_writeback_failed")
+
+        if run.trigger_ref_type != "appointment" or not run.trigger_ref_id:
+            await fail("GoTracker writeback requires an appointment-triggered run")
+            raise WorkflowGoTrackerWritebackError("missing appointment reference")
+        if not run.location_id:
+            await fail("GoTracker writeback requires a location-scoped run")
+            raise WorkflowGoTrackerWritebackError("missing location")
+
+        institution = await self.session.get(Institution, run.institution_id)
+        location = await self.session.get(InstitutionLocation, run.location_id)
+        if institution is None or location is None:
+            await fail("GoTracker writeback could not resolve institution/location")
+            raise WorkflowGoTrackerWritebackError("missing institution/location")
+
+        adapter = None
+        operations: list[dict[str, object]] = []
+        try:
+            adapter = await get_adapter_for_institution_location(institution, location)
+            if getattr(adapter, "source", None) != "gotracker":
+                await fail("GoTracker writeback can only run for GoTracker locations")
+                raise WorkflowGoTrackerWritebackError("non-gotracker adapter")
+
+            status_payload = _gotracker_status_payload(node)
+            if status_payload:
+                if node.status_id is not None:
+                    result = await adapter.set_appointment_status_id(
+                        str(run.trigger_ref_id),
+                        status_id=node.status_id,
+                        confirmed=node.confirmed,
+                        preconfirmed=node.preconfirmed,
+                    )
+                else:
+                    result = await adapter.set_appointment_confirmation(
+                        str(run.trigger_ref_id),
+                        confirmed=node.confirmed,
+                        preconfirmed=node.preconfirmed,
+                    )
+                operations.append({"endpoint": "status", "payload": status_payload})
+                await log_audit(
+                    actor=AuditActor.SYSTEM,
+                    action=_gotracker_status_audit_action(node),
+                    target_resource=f"appointment:{run.trigger_ref_id}",
+                    outcome=(
+                        AuditOutcome.SUCCESS
+                        if result.success
+                        else AuditOutcome.FAILURE_EXTERNAL_API
+                    ),
+                    metadata={
+                        "source": "workflow_gotracker_writeback",
+                        "workflow_run_id": str(run.id),
+                        "step_id": node.id,
+                        "payload": status_payload,
+                        "pms_status": result.status,
+                        "error": result.error,
+                    },
+                    institution_id=str(run.institution_id),
+                    location_id=str(run.location_id),
+                )
+                if not result.success:
+                    await fail(
+                        result.error or "GoTracker status update failed",
+                        {"operations": operations},
+                    )
+                    raise WorkflowGoTrackerWritebackError("status update failed")
+
+            update_payload = {
+                "start_time": _render_gotracker_update_value(node.start_time, context),
+                "end_time": _render_gotracker_update_value(node.end_time, context),
+                "duration_min": node.duration_min,
+                "provider_id": _render_gotracker_update_value(node.provider_id, context),
+                "operatory_id": _render_gotracker_update_value(node.operatory_id, context),
+                "patient_id": _render_gotracker_update_value(node.patient_id, context),
+                "reason": _render_gotracker_update_value(node.reason, context),
+            }
+            update_payload = {
+                key: value for key, value in update_payload.items() if value is not None
+            }
+            if update_payload:
+                result = await adapter.update_appointment(
+                    str(run.trigger_ref_id),
+                    start_time=update_payload.get("start_time"),
+                    end_time=update_payload.get("end_time"),
+                    duration_min=update_payload.get("duration_min"),
+                    provider_id=update_payload.get("provider_id"),
+                    operatory_id=update_payload.get("operatory_id"),
+                    patient_id=update_payload.get("patient_id"),
+                    reason=update_payload.get("reason"),
+                )
+                operations.append({"endpoint": "appointment", "payload": update_payload})
+                await log_audit(
+                    actor=AuditActor.SYSTEM,
+                    action=AuditAction.RESCHEDULE_APPOINTMENT,
+                    target_resource=f"appointment:{run.trigger_ref_id}",
+                    outcome=(
+                        AuditOutcome.SUCCESS
+                        if result.success
+                        else AuditOutcome.FAILURE_EXTERNAL_API
+                    ),
+                    metadata={
+                        "source": "workflow_gotracker_writeback",
+                        "workflow_run_id": str(run.id),
+                        "step_id": node.id,
+                        "payload": update_payload,
+                        "pms_status": result.status,
+                        "error": result.error,
+                    },
+                    institution_id=str(run.institution_id),
+                    location_id=str(run.location_id),
+                )
+                if not result.success:
+                    await fail(
+                        result.error or "GoTracker appointment update failed",
+                        {"operations": operations},
+                    )
+                    raise WorkflowGoTrackerWritebackError("appointment update failed")
+
+            await self.runtime.complete_step(
+                step,
+                result_code="gotracker_updated",
+                result_metadata={"operations": operations},
+            )
+            return node.next_node_id
+        finally:
+            if adapter is not None:
+                await adapter.close()
+
     async def _apply_status_side_effects(
         self,
         run: AutomationWorkflowRun,
@@ -744,6 +910,36 @@ def _metadata_value(value: object) -> object:
     if isinstance(value, dict):
         return {str(key): _metadata_value(item) for key, item in value.items()}
     return str(value)
+
+
+def _render_gotracker_update_value(value: str | None, context: dict) -> str | None:
+    if value is None:
+        return None
+    from src.app.services.automation.template_renderer import render_sms_body
+
+    rendered = render_sms_body(value, None, None, context).strip()
+    return rendered or None
+
+
+def _gotracker_status_payload(node: UpdateGoTrackerAppointmentNode) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    if node.status_id is not None:
+        payload["status_id"] = node.status_id
+    if node.confirmed is not None:
+        payload["confirmed"] = node.confirmed
+    if node.preconfirmed is not None:
+        payload["preconfirmed"] = node.preconfirmed
+    return payload
+
+
+def _gotracker_status_audit_action(node: UpdateGoTrackerAppointmentNode):
+    from src.app.models.audit_log import AuditAction
+
+    if node.status_id == 3:
+        return AuditAction.CANCEL_APPOINTMENT
+    if node.confirmed is True:
+        return AuditAction.CONFIRM_APPOINTMENT
+    return AuditAction.UPDATE_APPOINTMENT
 
 
 def _contains(value: object, expected: object) -> bool:

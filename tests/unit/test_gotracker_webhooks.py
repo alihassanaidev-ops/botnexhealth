@@ -13,6 +13,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.app.api.routes.gotracker_webhooks import (
+    _gotracker_status_label,
     _verify_signature,
     gotracker_webhook,
 )
@@ -116,6 +117,18 @@ def test_verify_signature_accepts_current_signature():
         mock_settings.gotracker_webhook_secret = "testsecret"
         mock_settings.is_production = False
         _verify_signature(body, _sign(body, timestamp))
+
+
+def test_gotracker_status_id_labels_match_tracker_dropdown_order():
+    assert _gotracker_status_label("1") == "booked"
+    assert _gotracker_status_label("2") == "booked_waiting"
+    assert _gotracker_status_label("3") == "cancelled"
+    assert _gotracker_status_label("4") == "late"
+    assert _gotracker_status_label("5") == "no_show"
+    assert _gotracker_status_label("6") == "office_cancel"
+    assert _gotracker_status_label("7") == "pending"
+    assert _gotracker_status_label("8") == "short_cancel"
+    assert _gotracker_status_label("9") == "waiting"
 
 
 @pytest.mark.asyncio
@@ -241,6 +254,45 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
                 "AppointmentDate": "2026-07-28T00:00:00.000Z",
                 "AppointmentTime": "10:00:00",
                 "ProviderId": 2,
+                "ScheduleColumnId": 1,
+                "IsPreconfirmed": False,
+                "IsConfirmed": False,
+                "MasterId": None,
+                "Duration": "00:15:00",
+                "OriginalDate": "2026-07-28T00:00:00.000Z",
+                "Reason": "bridge prep",
+                "Detail": None,
+                "AppointmentAmount": 0.0,
+                "IsRecall": False,
+                "IsPersonal": False,
+                "IsAllDayAppointment": False,
+                "HasAlarm": False,
+                "NotifyTime": None,
+                "StatusId": 1,
+                "CheckIn": None,
+                "InChair": None,
+                "OutChair": None,
+                "CheckOut": None,
+                "FlowState": None,
+                "FlowChange": None,
+                "Comments": None,
+                "BookedUserId": "Admin",
+                "BookedTimeStamp": "2026-07-29T20:32:00.81",
+                "BookedMachineName": "EC2AMAZ-QKGJ1Q1",
+                "CreatedUserId": "Admin",
+                "CreatedTimeStamp": "2026-07-29T20:32:00.807",
+                "ModifiedUserId": "Admin",
+                "ModifiedTimeStamp": "2026-07-29T20:32:00.807",
+                "ModifiedMachineName": "EC2AMAZ-QKGJ1Q1",
+                "CreatedMachineName": "EC2AMAZ-QKGJ1Q1",
+                "RebookInfo": None,
+                "ConfirmedTimeStamp": None,
+                "ConfirmedUserId": None,
+                "ConfirmedMachineName": None,
+                "RebookId": None,
+                "CancelledTimeStamp": None,
+                "CancelledUserId": None,
+                "CancelledMachineName": None,
             }
         },
     }
@@ -274,6 +326,41 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     assert upsert_kwargs["appointment_id"] == "gt-900000004"
     assert upsert_kwargs["start_time"] == "2026-07-28T10:00:00Z"
     trigger_task.delay.assert_called_once()
+    metadata = trigger_task.delay.call_args.kwargs["trigger_metadata"]
+    assert metadata["appointment_reason"] == "bridge prep"
+    assert metadata["appointment_reasons"] == ["bridge prep"]
+    assert metadata["gotracker_contact_id"] == "900000001"
+    assert metadata["contact_source_id"] == "gt-900000001"
+    assert metadata["provider_id"] == "gt-2"
+    assert metadata["gotracker_provider_id"] == "2"
+    assert metadata["schedule_column_id"] == "1"
+    assert metadata["appointment_status"] == "booked"
+    assert metadata["appointment_status_id"] == "1"
+    assert metadata["appointment_date"] == "2026-07-28T00:00:00.000Z"
+    assert metadata["appointment_time"] == "10:00:00"
+    assert metadata["appointment_datetime"] == "2026-07-28T10:00:00Z"
+    assert metadata["appointment_duration"] == "00:15:00"
+    assert metadata["is_preconfirmed"] is False
+    assert metadata["is_confirmed"] is False
+    assert metadata["original_date"] == "2026-07-28T00:00:00.000Z"
+    assert metadata["appointment_amount"] == 0.0
+    assert metadata["booked_machine_name"] == "EC2AMAZ-QKGJ1Q1"
+    assert metadata["created_user_id"] == "Admin"
+    assert metadata["modified_machine_name"] == "EC2AMAZ-QKGJ1Q1"
+    assert metadata["booked_user_id"] == "Admin"
+    assert metadata["booked_timestamp"] == "2026-07-29T20:32:00.81"
+    assert metadata["created_machine_name"] == "EC2AMAZ-QKGJ1Q1"
+    assert metadata["gotracker_payload"]["appointment"]["contact_id"] == "900000001"
+    assert metadata["gotracker_payload"]["appointment"]["date"] == "2026-07-28T00:00:00.000Z"
+    assert metadata["gotracker_payload"]["appointment"]["time"] == "10:00:00"
+    assert metadata["gotracker_payload"]["appointment"]["datetime"] == "2026-07-28T10:00:00Z"
+    assert metadata["gotracker_payload"]["appointment"]["status_id"] == "1"
+    assert metadata["gotracker_payload"]["appointment"]["is_confirmed"] is False
+    assert metadata["gotracker_payload"]["appointment"]["booked_machine_name"] == "EC2AMAZ-QKGJ1Q1"
+    assert metadata["gotracker_payload"]["data"]["AppointmentId"] == 900000004
+    assert metadata["gotracker_payload"]["data"]["AppointmentDate"] == "2026-07-28T00:00:00.000Z"
+    assert metadata["gotracker_payload"]["data"]["AppointmentTime"] == "10:00:00"
+    assert metadata["gotracker_payload"]["data"]["Reason"] == "bridge prep"
 
 
 @pytest.mark.asyncio

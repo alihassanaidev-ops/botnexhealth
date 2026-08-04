@@ -19,6 +19,7 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    UpdateGoTrackerAppointmentNode,
     WaitNode,
     WorkflowDefinition,
 )
@@ -138,7 +139,13 @@ def simulate_run(
             label = _classify_with_label_rules(node, source_value)
             _assign_context_value(ctx, node.output_field, label)
             result.steps.append(
-                DryRunStep(node.id, "llm", f"Classify → {node.output_field}", label)
+                DryRunStep(node.id, "llm", f"AI action → {node.output_field}", label)
+            )
+            current = node.next_node_id
+        elif isinstance(node, UpdateGoTrackerAppointmentNode):
+            detail = f"StatusId {node.status_id}" if node.status_id else "Writeback configured"
+            result.steps.append(
+                DryRunStep(node.id, "update_gotracker_appointment", "Update GoTracker appointment", detail)
             )
             current = node.next_node_id
         elif isinstance(node, ConditionNode):

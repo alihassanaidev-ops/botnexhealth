@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Annotated, Any, Literal
 
+import httpx
 import phonenumbers
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError
 
+from src.app.config import settings
 from src.app.api.deps import (
     get_current_institution_or_location_admin,
     get_current_institution_user,
@@ -53,6 +55,20 @@ from src.app.services.automation.enrollment_service import AutomationWorkflowEnr
 from src.app.services.automation.step_dispatcher import build_dispatcher
 
 router = APIRouter(prefix="/automation/workflows", tags=["Automation Workflows"])
+_OPENAI_MODELS_CACHE: tuple[datetime, list["WorkflowLlmModelResponse"]] | None = None
+_OPENAI_MODELS_CACHE_SECONDS = 300
+_MODEL_EXCLUDE_MARKERS = (
+    "audio",
+    "dall-e",
+    "embedding",
+    "image",
+    "moderation",
+    "realtime",
+    "search",
+    "tts",
+    "transcribe",
+    "whisper",
+)
 
 # Workflow configuration (create/update/lifecycle) is institution-scoped;
 # location admins should not reconfigure institution-level workflows.
@@ -139,6 +155,18 @@ class WorkflowRunResponse(BaseModel):
             completed_at=run.completed_at,
             created_at=run.created_at,
         )
+
+
+class WorkflowLlmModelResponse(BaseModel):
+    id: str
+    label: str
+    owned_by: str | None = None
+
+
+class WorkflowLlmModelsResponse(BaseModel):
+    default_model: str
+    configured: bool
+    models: list[WorkflowLlmModelResponse]
 
 
 class CampaignRunListItemResponse(BaseModel):
@@ -781,6 +809,84 @@ async def list_merge_fields(
             include_unavailable=include_unavailable,
         )
     ]
+
+
+@router.get("/llm-models", response_model=WorkflowLlmModelsResponse)
+async def list_llm_models(
+    current_user: _InstitutionOrLocationAdmin,
+) -> WorkflowLlmModelsResponse:
+    """Return OpenAI text model choices without exposing the backend API key."""
+    del current_user
+    default = settings.workflow_llm_default_model
+    if not settings.openai_api_key:
+        return WorkflowLlmModelsResponse(
+            default_model=default,
+            configured=False,
+            models=[WorkflowLlmModelResponse(id=default, label=default)],
+        )
+
+    models = await _openai_workflow_models()
+    if not any(model.id == default for model in models):
+        models.insert(0, WorkflowLlmModelResponse(id=default, label=default))
+    return WorkflowLlmModelsResponse(
+        default_model=default,
+        configured=True,
+        models=models,
+    )
+
+
+async def _openai_workflow_models() -> list[WorkflowLlmModelResponse]:
+    global _OPENAI_MODELS_CACHE
+
+    now = datetime.now(timezone.utc)
+    if _OPENAI_MODELS_CACHE is not None:
+        cached_at, cached_models = _OPENAI_MODELS_CACHE
+        age = (now - cached_at).total_seconds()
+        if age < _OPENAI_MODELS_CACHE_SECONDS:
+            return list(cached_models)
+
+    base_url = settings.openai_base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=settings.workflow_llm_timeout_seconds) as client:
+            response = await client.get(
+                f"{base_url}/models",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            )
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="OpenAI models could not be loaded",
+        ) from exc
+
+    data = response.json().get("data")
+    if not isinstance(data, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="OpenAI models response was invalid",
+        )
+
+    models = [
+        WorkflowLlmModelResponse(
+            id=str(item["id"]),
+            label=str(item["id"]),
+            owned_by=str(item["owned_by"]) if item.get("owned_by") else None,
+        )
+        for item in data
+        if isinstance(item, dict) and item.get("id")
+    ]
+    compatible = [model for model in models if _is_workflow_llm_model(model.id)]
+    selected = compatible or models
+    selected.sort(key=lambda model: model.id)
+    _OPENAI_MODELS_CACHE = (now, selected)
+    return list(selected)
+
+
+def _is_workflow_llm_model(model_id: str) -> bool:
+    lowered = model_id.lower()
+    if any(marker in lowered for marker in _MODEL_EXCLUDE_MARKERS):
+        return False
+    return lowered.startswith("gpt-") or lowered.startswith("o")
 
 
 @router.get("/channel-readiness", response_model=ChannelReadinessResponse)

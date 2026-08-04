@@ -30,6 +30,7 @@ from src.app.api.routes.automation_workflows import (
     get_run_timeline,
     get_launch_checklist,
     get_workflow,
+    list_llm_models,
     list_merge_fields,
     list_runs,
     list_workflow_versions,
@@ -952,9 +953,16 @@ def test_list_merge_fields_filters_by_trigger_and_channel():
     names = {f.name for f in result}
 
     assert "appointment_date" in names
-    assert "provider_name" in names
+    assert "appointment_reason" in names
+    assert "appointment_status_id" in names
+    assert "appointment_duration" in names
+    assert "schedule_column_id" in names
+    assert "provider_id" in names
+    assert "booked_timestamp" in names
+    assert "created_machine_name" in names
     assert "recall_due_date" not in names
-    assert "appointment_type" not in names  # high-PHI appointment type is email-only
+    assert "appointment_type" not in names  # not present in GoTracker appointment-created payload
+    assert "provider_name" not in names  # enriched reference data, not webhook payload
 
 
 def test_merge_field_catalog_does_not_drift_from_renderer():
@@ -981,6 +989,30 @@ def test_merge_field_catalog_does_not_drift_from_renderer():
     assert "Jordan" in rendered and "Riverside Dental" in rendered
 
 
+def test_list_llm_models_returns_backend_default_without_openai_key(monkeypatch):
+    from src.app.api.routes import automation_workflows as routes
+
+    routes._OPENAI_MODELS_CACHE = None
+    monkeypatch.setattr(routes.settings, "openai_api_key", None)
+    monkeypatch.setattr(routes.settings, "workflow_llm_default_model", "gpt-test-default")
+
+    result = asyncio.run(list_llm_models(_make_user()))
+
+    assert result.configured is False
+    assert result.default_model == "gpt-test-default"
+    assert [model.id for model in result.models] == ["gpt-test-default"]
+
+
+def test_workflow_llm_model_filter_keeps_text_models_only():
+    from src.app.api.routes.automation_workflows import _is_workflow_llm_model
+
+    assert _is_workflow_llm_model("gpt-5.6-luna") is True
+    assert _is_workflow_llm_model("o4-mini") is True
+    assert _is_workflow_llm_model("text-embedding-3-large") is False
+    assert _is_workflow_llm_model("gpt-image-2") is False
+    assert _is_workflow_llm_model("whisper-1") is False
+
+
 def test_merge_fields_route_declared_before_workflow_id():
     """Guard the route-shadowing trap: the literal /merge-fields path must be
     matched before the parameterised /{workflow_id} route."""
@@ -988,3 +1020,10 @@ def test_merge_fields_route_declared_before_workflow_id():
     mf = paths.index("/automation/workflows/merge-fields")
     wid = paths.index("/automation/workflows/{workflow_id}")
     assert mf < wid
+
+
+def test_llm_models_route_declared_before_workflow_id():
+    paths = [getattr(r, "path", "") for r in workflows_router.routes]
+    llm_models = paths.index("/automation/workflows/llm-models")
+    wid = paths.index("/automation/workflows/{workflow_id}")
+    assert llm_models < wid

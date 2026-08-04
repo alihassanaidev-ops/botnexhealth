@@ -43,6 +43,7 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
@@ -1188,6 +1189,8 @@ def _step_output_snapshot(
         output["disconnection_reason"] = (run.trigger_metadata or {}).get("disconnection_reason")
     elif isinstance(node, UpdatePatientStatusNode):
         output["status_written"] = (step.result_metadata or {}).get("status") or node.status
+    elif isinstance(node, UpdateGoTrackerAppointmentNode):
+        output["gotracker_operations"] = (step.result_metadata or {}).get("operations", [])
     elif isinstance(node, JsonMapperNode):
         output["mapped_fields"] = list((step.result_metadata or {}).get("mapped_fields", {}).keys())
     elif isinstance(node, LlmNode):
@@ -1235,6 +1238,22 @@ def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
     elif isinstance(node, UpdatePatientStatusNode):
         base["status"] = node.status
         base["has_note_template"] = bool(node.note_template)
+        base["next_node_id"] = node.next_node_id
+    elif isinstance(node, UpdateGoTrackerAppointmentNode):
+        base["status_id"] = node.status_id
+        base["updates_status"] = node.status_id is not None or node.confirmed is not None or node.preconfirmed is not None
+        base["updates_appointment"] = any(
+            value is not None
+            for value in (
+                node.start_time,
+                node.end_time,
+                node.duration_min,
+                node.provider_id,
+                node.operatory_id,
+                node.patient_id,
+                node.reason,
+            )
+        )
         base["next_node_id"] = node.next_node_id
     elif isinstance(node, JsonMapperNode):
         base["mappings"] = [

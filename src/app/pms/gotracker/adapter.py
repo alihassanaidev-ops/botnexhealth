@@ -363,12 +363,124 @@ class GoTrackerAdapter(
         )
 
     async def confirm_appointment(self, appointment_id: str) -> BookingResult:
-        return await self._set_appointment_status(
+        return await self.set_appointment_confirmation(
             appointment_id,
-            {"confirmed": True},
+            confirmed=True,
+            preconfirmed=False,
             success_status="confirmed",
             success_message="Appointment confirmed successfully.",
         )
+
+    async def preconfirm_appointment(self, appointment_id: str) -> BookingResult:
+        return await self.set_appointment_confirmation(
+            appointment_id,
+            preconfirmed=True,
+            success_status="preconfirmed",
+            success_message="Appointment pre-confirmed successfully.",
+        )
+
+    async def set_appointment_confirmation(
+        self,
+        appointment_id: str,
+        *,
+        confirmed: bool | None = None,
+        preconfirmed: bool | None = None,
+        success_status: str = "updated",
+        success_message: str = "Appointment confirmation status updated.",
+    ) -> BookingResult:
+        body: dict[str, Any] = {}
+        if confirmed is not None:
+            body["confirmed"] = confirmed
+        if preconfirmed is not None:
+            body["preconfirmed"] = preconfirmed
+        if not body:
+            return BookingResult(
+                success=False,
+                source="gotracker",
+                status="error",
+                error="At least one confirmation flag is required.",
+            )
+        return await self._set_appointment_status(
+            appointment_id,
+            body,
+            success_status=success_status,
+            success_message=success_message,
+        )
+
+    async def set_appointment_status_id(
+        self,
+        appointment_id: str,
+        *,
+        status_id: int,
+        confirmed: bool | None = None,
+        preconfirmed: bool | None = None,
+    ) -> BookingResult:
+        body: dict[str, Any] = {"status_id": status_id}
+        if confirmed is not None:
+            body["confirmed"] = confirmed
+        if preconfirmed is not None:
+            body["preconfirmed"] = preconfirmed
+        return await self._set_appointment_status(
+            appointment_id,
+            body,
+            success_status="status_updated",
+            success_message="Appointment status updated successfully.",
+        )
+
+    async def update_appointment(
+        self,
+        appointment_id: str,
+        *,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        duration_min: int | None = None,
+        provider_id: str | None = None,
+        operatory_id: str | None = None,
+        patient_id: str | None = None,
+        reason: str | None = None,
+    ) -> BookingResult:
+        body: dict[str, Any] = {}
+        if start_time:
+            body["start_time"] = start_time
+        if end_time:
+            body["end_time"] = end_time
+        if duration_min is not None:
+            body["duration_min"] = duration_min
+        if provider_id:
+            body["provider_id"] = mappers.strip(provider_id)
+        if operatory_id:
+            body["operatory_id"] = mappers.strip(operatory_id)
+        if patient_id:
+            body["patient_id"] = mappers.strip(patient_id)
+        if reason:
+            body["reason"] = reason
+        if not body:
+            return BookingResult(
+                success=False,
+                source="gotracker",
+                status="error",
+                error="At least one appointment update field is required.",
+            )
+
+        try:
+            await self._client.request(
+                "PATCH",
+                f"/api/appointments/{mappers.strip(appointment_id)}",
+                json=body,
+            )
+            return BookingResult(
+                success=True,
+                source="gotracker",
+                status="appointment_updated",
+                message="Appointment updated successfully.",
+            )
+        except GoTrackerAPIError as exc:
+            return BookingResult(
+                success=False,
+                source="gotracker",
+                status="error",
+                error=str(exc),
+            )
 
     async def reschedule_appointment(
         self, old_appointment_id: str, new_booking: BookingRequest
