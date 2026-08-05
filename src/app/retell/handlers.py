@@ -639,6 +639,31 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
             "Failed to create patient: %s",
             safe_error_summary(e),
         )
+        # The dominant create failure is a duplicate: NexHealth rejects a patient
+        # that already exists (e.g. "A patient with that information already
+        # exists - id=..."). The exact upstream message is redacted before it
+        # reaches here (it can echo patient fields), so rather than return a
+        # dead-end "Failed to create patient", look the patient up — if they
+        # already exist, hand the agent that existing record so it proceeds.
+        try:
+            existing = await ctx.adapter.search_patients(
+                f"{args['first_name']} {args['last_name']}",
+                date_of_birth=args["date_of_birth"],
+                phone_number=args["phone_number"],
+            )
+        except Exception:
+            existing = []
+        if existing:
+            p = existing[0]
+            return {
+                "success": True,
+                "already_existed": True,
+                "patient_id": p.id,
+                "message": (
+                    f"{p.first_name} {p.last_name} is already in our system — "
+                    "using their existing record."
+                ),
+            }
         return {"success": False, "error": "Failed to create patient"}
 
 
