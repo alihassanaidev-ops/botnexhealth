@@ -220,6 +220,25 @@ class NexHealthAdapter(
 
         raw = await handle_nexhealth_request(self._client, "GET", "/patients", params=params)
         patients = raw.get("data", {}).get("patients", [])
+
+        # Phone fallback: callers often dial from a number that isn't on their
+        # record. NexHealth AND-combines criteria, so a mismatched phone excludes
+        # an otherwise-correct name+DOB match, returning zero results. When the
+        # phone was combined with a stronger identifier (name/email/DOB) and the
+        # narrowed search found nothing, retry once without the phone so the real
+        # patient is still found. Phone still narrows the happy path; the extra
+        # request only happens on a miss.
+        if (
+            not patients
+            and "phone_number" in params
+            and any(k in params for k in ("name", "email", "date_of_birth"))
+        ):
+            retry_params = {k: v for k, v in params.items() if k != "phone_number"}
+            raw = await handle_nexhealth_request(
+                self._client, "GET", "/patients", params=retry_params
+            )
+            patients = raw.get("data", {}).get("patients", [])
+
         return [mappers.to_patient(p) for p in patients]
 
     async def get_patient(self, patient_id: str) -> UniversalPatient | None:
