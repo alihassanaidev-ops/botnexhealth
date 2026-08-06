@@ -176,7 +176,7 @@ async def test_helper_returns_success_and_finalizes_completed_when_no_institutio
     with (
         patch.object(
             webhooks,
-            "_resolve_institution_location_from_agent",
+            "_resolve_institution_location_from_call",
             new=AsyncMock(return_value=(None, None)),
         ),
         patch.object(webhooks, "_finish_webhook_processing", new=finish),
@@ -211,7 +211,7 @@ async def test_helper_marks_failed_and_reraises_on_lookup_error():
     with (
         patch.object(
             webhooks,
-            "_resolve_institution_location_from_agent",
+            "_resolve_institution_location_from_call",
             new=AsyncMock(side_effect=lookup_err),
         ),
         patch.object(webhooks, "_finish_webhook_processing", new=finish),
@@ -231,3 +231,70 @@ async def test_helper_marks_failed_and_reraises_on_lookup_error():
     assert finish.await_args.kwargs["status"] == "FAILED"
     assert "Retell agent lookup failed" in finish.await_args.kwargs["error"]
     capture_dead_letter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_outbound_call_resolution_prefers_voice_attempt_over_agent_mapping():
+    """Outbound profiles must not require a duplicate location agent mapping."""
+    location = object()
+    institution = object()
+    attempt_lookup = AsyncMock(return_value=(location, institution))
+    agent_lookup = AsyncMock(return_value=(None, None))
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-outbound-1",
+            "agent_id": "agent-profile-only",
+            "direction": "outbound",
+        }
+    )
+
+    with (
+        patch.object(
+            webhooks,
+            "_resolve_institution_location_from_outbound_attempt",
+            new=attempt_lookup,
+        ),
+        patch.object(
+            webhooks,
+            "_resolve_institution_location_from_agent",
+            new=agent_lookup,
+        ),
+    ):
+        result = await webhooks._resolve_institution_location_from_call(call)
+
+    assert result == (location, institution)
+    attempt_lookup.assert_awaited_once_with("call-outbound-1")
+    agent_lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_inbound_call_resolution_uses_agent_mapping_directly():
+    location = object()
+    institution = object()
+    attempt_lookup = AsyncMock()
+    agent_lookup = AsyncMock(return_value=(location, institution))
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-inbound-1",
+            "agent_id": "agent-inbound",
+            "direction": "inbound",
+        }
+    )
+
+    with (
+        patch.object(
+            webhooks,
+            "_resolve_institution_location_from_outbound_attempt",
+            new=attempt_lookup,
+        ),
+        patch.object(
+            webhooks,
+            "_resolve_institution_location_from_agent",
+            new=agent_lookup,
+        ),
+    ):
+        result = await webhooks._resolve_institution_location_from_call(call)
+
+    assert result == (location, institution)
+    attempt_lookup.assert_not_awaited()
+    agent_lookup.assert_awaited_once_with("agent-inbound")

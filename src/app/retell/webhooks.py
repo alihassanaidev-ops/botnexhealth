@@ -167,6 +167,62 @@ async def _resolve_institution_location_from_agent(agent_id: str | None):
     return None, None
 
 
+async def _resolve_institution_location_from_outbound_attempt(call_id: str):
+    """Resolve an outbound workflow call from its durable provider correlation key."""
+    try:
+        from src.app.database import get_system_db_session
+        from src.app.models.institution import Institution
+        from src.app.models.institution_location import InstitutionLocation
+        from src.app.models.outbound_voice import WorkflowVoiceAttempt
+
+        async with get_system_db_session(
+            "retell_lookup",
+            external_id=call_id,
+        ) as session:
+            result = await session.execute(
+                select(InstitutionLocation, Institution)
+                .select_from(WorkflowVoiceAttempt)
+                .join(
+                    InstitutionLocation,
+                    WorkflowVoiceAttempt.location_id == InstitutionLocation.id,
+                )
+                .join(
+                    Institution,
+                    Institution.id == WorkflowVoiceAttempt.institution_id,
+                )
+                .where(
+                    WorkflowVoiceAttempt.retell_call_id == call_id,
+                    InstitutionLocation.institution_id == Institution.id,
+                )
+            )
+            row = result.first()
+            if row:
+                return row[0], row[1]
+    except Exception as exc:
+        logger.error(
+            "Retell outbound call lookup failed; webhook will be marked retryable: "
+            "call_hash=%s error=%s",
+            hash_for_logging(call_id),
+            safe_error_summary(exc),
+        )
+        raise RetellAgentLookupError(
+            "Retell outbound call lookup failed; retry webhook"
+        ) from exc
+
+    return None, None
+
+
+async def _resolve_institution_location_from_call(call: RetellCallWebhook):
+    """Resolve outbound workflow calls by call ID, then fall back to agent routing."""
+    if (call.direction or "").lower() == "outbound":
+        location, institution = (
+            await _resolve_institution_location_from_outbound_attempt(call.call_id)
+        )
+        if location and institution:
+            return location, institution
+    return await _resolve_institution_location_from_agent(call.agent_id)
+
+
 async def _begin_webhook_processing(call_id: str, event_type: str) -> tuple[bool, str]:
     """Create or claim idempotency record for a webhook event.
 
@@ -297,11 +353,9 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
                 safe_error_summary(exc),
             )
 
-    # Agent-lookup infra failures must stay retryable (raise); a missing mapping
-    # is a terminal no-op.
-    location, institution = await _resolve_institution_location_from_agent(
-        call.agent_id
-    )
+    # Outbound workflow attempts are authoritative for tenancy. Agent mapping is
+    # retained only as the fallback for inbound and non-workflow calls.
+    location, institution = await _resolve_institution_location_from_call(call)
     if not location or not institution:
         await _finish("COMPLETED")
         return {"status": "ignored", "reason": "no_agent_mapping"}
@@ -586,7 +640,8 @@ async def process_retell_call_analyzed_event(
     ``asyncio.run``) AND directly from tests. Mirrors the legacy inline
     behaviour exactly:
 
-      1. Resolve institution + location from ``agent_id``.
+      1. Resolve outbound workflow calls by ``retell_call_id``; otherwise use
+         the inbound agent-to-location mapping.
       2. ``PostCallService`` writes the contact + call rows.
       3. Enqueue downstream tasks (recording upload, notification email,
          in-app notification, auto-SMS) — same pattern as before, the
@@ -613,11 +668,10 @@ async def process_retell_call_analyzed_event(
         processing_call_id = event.call.call_id
         processing_event_type = event.event
 
-        # Resolve institution + location from agent_id. A no-match is a
-        # configuration no-op; lookup exceptions are retryable and must not be
-        # converted into a COMPLETED idempotency row.
-        location, institution = await _resolve_institution_location_from_agent(
-            event.call.agent_id
+        # The stored voice attempt is authoritative for outbound calls. Agent
+        # mapping remains the fallback for inbound and non-workflow calls.
+        location, institution = await _resolve_institution_location_from_call(
+            event.call
         )
 
         # NOTE: the audit row for this webhook is written ONCE at the bottom
