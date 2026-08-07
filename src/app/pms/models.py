@@ -6,6 +6,7 @@ Each adapter translates PMS-specific responses into these models.
 
 from __future__ import annotations
 
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -121,7 +122,7 @@ class PatientCreateRequest(BaseModel):
     phone: str
     date_of_birth: str  # YYYY-MM-DD
     provider_id: str
-    gender: str = "Female"
+    gender: Literal["Female", "Male", "Other"]
 
 
 class SetupStep(BaseModel):

@@ -16,6 +16,7 @@ async def test_create_patient_success():
         "phone_number": "555-0123",
         "date_of_birth": "1990-01-01",
         "provider_id": "456",
+        "gender": "Other",
     }
 
     mock_response = {
@@ -46,6 +47,7 @@ async def test_create_patient_success():
     assert req.phone == "555-0123"
     assert req.date_of_birth == "1990-01-01"
     assert req.provider_id == "456"
+    assert req.gender == "Other"
 
 @pytest.mark.asyncio
 async def test_create_patient_missing_fields():
@@ -70,6 +72,7 @@ async def test_create_patient_api_failure():
         "phone_number": "555-0123",
         "date_of_birth": "1990-01-01",
         "provider_id": "456",
+        "gender": "Female",
     }
 
     mock_adapter = SimpleNamespace(create_patient=AsyncMock(side_effect=Exception("API Error")))
@@ -83,6 +86,39 @@ async def test_create_patient_api_failure():
     assert result["success"] is False
     assert result["error"] == "Failed to create patient"
     assert "API Error" not in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_create_patient_requires_gender():
+    result = await create_patient(
+        {
+            "first_name": "John",
+            "last_name": "Doe",
+            "email": "john.doe@example.com",
+            "phone_number": "555-0123",
+            "date_of_birth": "1990-01-01",
+            "provider_id": "456",
+        }
+    )
+
+    assert result == {"error": "gender is required."}
+
+
+@pytest.mark.asyncio
+async def test_create_patient_rejects_unsupported_gender():
+    result = await create_patient(
+        {
+            "first_name": "John",
+            "last_name": "Doe",
+            "email": "john.doe@example.com",
+            "phone_number": "555-0123",
+            "date_of_birth": "1990-01-01",
+            "provider_id": "456",
+            "gender": "Unknown",
+        }
+    )
+
+    assert result == {"error": "gender must be one of: Female, Male, Other."}
 
 
 @pytest.mark.asyncio

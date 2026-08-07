@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -480,7 +480,7 @@ class CreatePatientBio(BaseModel):
     """Patient bio info for creation."""
     date_of_birth: str | None = None
     phone_number: str | None = None
-    gender: str | None = "Female"
+    gender: Literal["Female", "Male", "Other"]
 
 
 class CreatePatientData(BaseModel):
