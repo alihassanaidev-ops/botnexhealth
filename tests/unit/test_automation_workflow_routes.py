@@ -37,6 +37,7 @@ from src.app.api.routes.automation_workflows import (
     list_workflows,
     preview_launch_checklist,
     publish_workflow,
+    resume_workflow,
     router as workflows_router,
     validate_definition,
 )
@@ -442,6 +443,77 @@ def test_preview_launch_checklist_uses_unsaved_definition():
         definition_dict=draft,
         location_id="loc-1",
     )
+
+
+def test_resume_workflow_rejects_launch_checklist_blockers():
+    user = _make_user()
+    wf = _make_workflow(status="paused", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    mock_svc.resume_workflow = AsyncMock()
+    checklist_svc = AsyncMock()
+    blocker = MagicMock(id="gotracker_readiness", status="blocked")
+    checklist_svc.build = AsyncMock(
+        return_value=MagicMock(blockers_count=1, items=[blocker])
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignLaunchChecklistService",
+            return_value=checklist_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(resume_workflow("wf-1", user))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "message": "Launch checklist has blockers; workflow cannot be resumed.",
+        "blockers": ["gotracker_readiness"],
+    }
+    checklist_svc.build.assert_awaited_once_with(wf, institution_id="inst-1")
+    mock_svc.resume_workflow.assert_not_awaited()
+
+
+def test_resume_workflow_allows_warning_only_checklist():
+    user = _make_user()
+    wf = _make_workflow(status="paused", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+
+    async def _resume(workflow):
+        workflow.status = "active"
+        return workflow
+
+    mock_svc.resume_workflow = AsyncMock(side_effect=_resume)
+    checklist_svc = AsyncMock()
+    checklist_svc.build = AsyncMock(
+        return_value=MagicMock(blockers_count=0, warnings_count=1, items=[])
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignLaunchChecklistService",
+            return_value=checklist_svc,
+        ),
+    ):
+        result = asyncio.run(resume_workflow("wf-1", user))
+
+    assert result.status == "active"
+    checklist_svc.build.assert_awaited_once_with(wf, institution_id="inst-1")
+    mock_svc.resume_workflow.assert_awaited_once_with(wf)
 
 
 # ---------------------------------------------------------------------------

@@ -368,6 +368,26 @@ async def get_system_db_session(
             yield session
 
 
+@asynccontextmanager
+async def get_superadmin_system_db_session(
+    external_id: str,
+) -> AsyncGenerator[AsyncSession, None]:
+    """Open a cross-tenant session for trusted global background scans.
+
+    Tenant-scoped system contexts intentionally cannot see rows belonging to
+    other institutions. Global schedulers and health scans therefore use the
+    same explicit SUPER_ADMIN RLS identity instead of depending on a database
+    role having BYPASSRLS privileges.
+    """
+    async with get_system_db_session(
+        "user",
+        role="SUPER_ADMIN",
+        user_id="00000000-0000-0000-0000-000000000000",
+        external_id=external_id,
+    ) as session:
+        yield session
+
+
 async def create_tables() -> None:
     """Create all tables in the database if they don't exist."""
     if not _engine:

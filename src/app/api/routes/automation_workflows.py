@@ -1387,6 +1387,19 @@ async def resume_workflow(
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        checklist = await CampaignLaunchChecklistService(session).build(
+            wf,
+            institution_id=inst_id,
+        )
+        if checklist.blockers_count:
+            blockers = [item.id for item in checklist.items if item.status == "blocked"]
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": "Launch checklist has blockers; workflow cannot be resumed.",
+                    "blockers": blockers,
+                },
+            )
         await svc.resume_workflow(wf)
         return WorkflowResponse.from_model(wf)
 

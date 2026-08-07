@@ -7,7 +7,12 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 
-from src.app.database import get_system_db_session, init_database, is_database_initialized
+from src.app.database import (
+    get_superadmin_system_db_session,
+    get_system_db_session,
+    init_database,
+    is_database_initialized,
+)
 from src.app.models.automation_workflow import (
     AutomationRunStatus,
     AutomationTimerStatus,
@@ -77,25 +82,10 @@ _RETELL_OUTCOME_POLL_BATCH = 25
 _RETELL_OUTCOME_MIN_AGE_SECONDS = 30
 _RETELL_TERMINAL_CALL_STATUSES = frozenset({"ended", "not_connected", "error"})
 
-# System SUPER_ADMIN identity for background tasks that scan across *all*
-# institutions (webhook-subscription + sync-status lifecycle). The tenant-scoped
-# 'celery' RLS context can only see rows for a single institution_id, so a
-# cross-institution scan under it (institutions/institution_locations) matches
-# zero rows and silently creates nothing. These lifecycle tasks therefore run as
-# SUPER_ADMIN — context_type='user' + role='SUPER_ADMIN', which
-# app_rls_is_super_admin() recognizes — mirroring the invite bootstrap identity.
-# Per-institution tasks keep the scoped 'celery' context.
-_SYSTEM_SUPER_ADMIN_ID = "00000000-0000-0000-0000-000000000000"
-
 
 def _superadmin_system_session(external_id: str):
-    """DB session that can see every institution (cross-tenant lifecycle scans)."""
-    return get_system_db_session(
-        "user",
-        role="SUPER_ADMIN",
-        user_id=_SYSTEM_SUPER_ADMIN_ID,
-        external_id=external_id,
-    )
+    """DB session that can see every institution for trusted global scans."""
+    return get_superadmin_system_db_session(external_id)
 
 
 def _ensure_db() -> None:
@@ -143,11 +133,7 @@ def poll_workflow_timers(self) -> dict:
 
 async def _claim_and_enqueue_async() -> dict:
     now = datetime.now(tz=timezone.utc)
-    # NOTE: The Celery DB role must have cross-institution visibility on
-    # automation_workflow_timers (BYPASSRLS or a scheduler-specific policy).
-    async with get_system_db_session(
-        "celery", external_id="workflow_scheduler_poll"
-    ) as session:
+    async with _superadmin_system_session("workflow_scheduler_poll") as session:
         svc = AutomationWorkflowSchedulerService(session)
         timers = await svc.claim_due_timers(
             now=now, limit=_CLAIM_BATCH, claim_ttl_seconds=_CLAIM_TTL_SECONDS
@@ -341,9 +327,7 @@ def recover_stale_workflow_timers(self) -> dict:
 
 
 async def _recover_stale_async() -> dict:
-    async with get_system_db_session(
-        "celery", external_id="workflow_stale_recovery"
-    ) as session:
+    async with _superadmin_system_session("workflow_stale_recovery") as session:
         svc = AutomationWorkflowSchedulerService(session)
         count = await svc.recover_stale_claims()
         await session.commit()

@@ -22,7 +22,7 @@ import boto3
 from sqlalchemy import func, select
 
 from src.app.database import (
-    get_system_db_session,
+    get_superadmin_system_db_session,
     init_database,
     is_database_initialized,
 )
@@ -52,10 +52,7 @@ def _ensure_db() -> None:
 async def collect_workflow_metrics() -> dict[str, int]:
     """Count workflow-engine health signals via grouped SQL COUNT queries."""
     now = datetime.now(tz=timezone.utc)
-    # NOTE: The Celery DB role must have cross-institution visibility on the
-    # automation_workflow_* tables (BYPASSRLS or a scheduler-specific policy),
-    # otherwise these counts are silently scoped to one tenant.
-    async with get_system_db_session("celery", external_id="workflow_metrics") as session:
+    async with get_superadmin_system_db_session("workflow_metrics") as session:
         due_timer_backlog = (
             await session.execute(
                 select(func.count())

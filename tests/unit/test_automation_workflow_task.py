@@ -452,9 +452,9 @@ async def test_claim_and_enqueue_no_timers() -> None:
             return_value=mock_svc,
         ),
         patch(
-            "src.app.tasks.automation_workflow.get_system_db_session",
+            "src.app.tasks.automation_workflow._superadmin_system_session",
             return_value=mock_session,
-        ),
+        ) as superadmin_session,
         patch(
             "src.app.tasks.automation_workflow.dispatch_workflow_timer",
         ) as mock_dispatch,
@@ -462,6 +462,7 @@ async def test_claim_and_enqueue_no_timers() -> None:
         result = await _claim_and_enqueue_async()
 
     assert result == {"claimed": 0}
+    superadmin_session.assert_called_once_with("workflow_scheduler_poll")
     mock_dispatch.apply_async.assert_not_called()
 
 
@@ -484,9 +485,9 @@ async def test_claim_and_enqueue_enqueues_per_timer() -> None:
             return_value=mock_svc,
         ),
         patch(
-            "src.app.tasks.automation_workflow.get_system_db_session",
+            "src.app.tasks.automation_workflow._superadmin_system_session",
             return_value=mock_session,
-        ),
+        ) as superadmin_session,
         patch(
             "src.app.tasks.automation_workflow.dispatch_workflow_timer",
         ) as mock_dispatch,
@@ -494,6 +495,7 @@ async def test_claim_and_enqueue_enqueues_per_timer() -> None:
         result = await _claim_and_enqueue_async()
 
     assert result == {"claimed": 2}
+    superadmin_session.assert_called_once_with("workflow_scheduler_poll")
     assert mock_dispatch.apply_async.call_count == 2
 
 
@@ -763,9 +765,9 @@ async def test_recover_stale_async_returns_count() -> None:
     session = _mock_session_get({})
     with (
         patch(
-            "src.app.tasks.automation_workflow.get_system_db_session",
+            "src.app.tasks.automation_workflow._superadmin_system_session",
             return_value=session,
-        ),
+        ) as superadmin_session,
         patch(
             "src.app.tasks.automation_workflow.AutomationWorkflowSchedulerService"
         ) as mock_cls,
@@ -774,4 +776,5 @@ async def test_recover_stale_async_returns_count() -> None:
         result = await _recover_stale_async()
 
     assert result["recovered"] == 3
+    superadmin_session.assert_called_once_with("workflow_stale_recovery")
     mock_cls.return_value.recover_stale_claims.assert_awaited_once()

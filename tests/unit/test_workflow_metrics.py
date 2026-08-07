@@ -44,8 +44,8 @@ async def test_publish_workflow_metrics_emits_all_signals(monkeypatch) -> None:
     fake_session = _FakeSession([7, 2, 5, 3, 4])
 
     @contextlib.asynccontextmanager
-    async def fake_get_system_db_session(context_type: str, **kwargs):
-        assert context_type == "celery"
+    async def fake_superadmin_session(external_id: str):
+        assert external_id == "workflow_metrics"
         yield fake_session
 
     monkeypatch.setenv("APP_NAME", "nex-health")
@@ -54,7 +54,7 @@ async def test_publish_workflow_metrics_emits_all_signals(monkeypatch) -> None:
     # Keep _ensure_db a no-op — the DB session is fully mocked below.
     monkeypatch.setattr(publish_workflow_metrics, "is_database_initialized", lambda: True)
     monkeypatch.setattr(
-        publish_workflow_metrics, "get_system_db_session", fake_get_system_db_session
+        publish_workflow_metrics, "get_superadmin_system_db_session", fake_superadmin_session
     )
     monkeypatch.setattr(publish_workflow_metrics.boto3, "client", fake_client)
 
@@ -85,8 +85,8 @@ async def test_publish_workflow_metrics_skips_cloudwatch_in_local_env(
     fake_session = _FakeSession([1, 0, 2, 0, 0])
 
     @contextlib.asynccontextmanager
-    async def fake_get_system_db_session(context_type: str, **kwargs):
-        assert context_type == "celery"
+    async def fake_superadmin_session(external_id: str):
+        assert external_id == "workflow_metrics"
         yield fake_session
 
     def fake_client(*_args, **_kwargs):
@@ -95,7 +95,7 @@ async def test_publish_workflow_metrics_skips_cloudwatch_in_local_env(
     monkeypatch.setenv("APP_ENV", "local")
     monkeypatch.setattr(publish_workflow_metrics, "is_database_initialized", lambda: True)
     monkeypatch.setattr(
-        publish_workflow_metrics, "get_system_db_session", fake_get_system_db_session
+        publish_workflow_metrics, "get_superadmin_system_db_session", fake_superadmin_session
     )
     monkeypatch.setattr(publish_workflow_metrics.boto3, "client", fake_client)
 

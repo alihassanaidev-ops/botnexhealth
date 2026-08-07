@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,6 +10,7 @@ from src.app.database import (
     RlsContext,
     apply_rls_context,
     current_rls_context,
+    get_superadmin_system_db_session,
     use_rls_context,
 )
 
@@ -98,4 +100,32 @@ def test_use_rls_context_resets_previous_context() -> None:
             "audit",
             institution_id="inst-1",
         )
+    assert current_rls_context() is None
+
+
+@pytest.mark.asyncio
+async def test_superadmin_system_session_sets_explicit_cross_tenant_context(
+    monkeypatch,
+) -> None:
+    observed_contexts: list[RlsContext | None] = []
+    fake_session = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_db_session():
+        observed_contexts.append(current_rls_context())
+        yield fake_session
+
+    monkeypatch.setattr("src.app.database.get_db_session", fake_db_session)
+
+    async with get_superadmin_system_db_session("workflow_scheduler_poll") as session:
+        assert session is fake_session
+
+    assert observed_contexts == [
+        RlsContext(
+            context_type="user",
+            user_id="00000000-0000-0000-0000-000000000000",
+            role="SUPER_ADMIN",
+            external_id="workflow_scheduler_poll",
+        )
+    ]
     assert current_rls_context() is None
