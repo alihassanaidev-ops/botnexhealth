@@ -269,6 +269,36 @@ async def test_outbound_call_resolution_prefers_voice_attempt_over_agent_mapping
 
 
 @pytest.mark.asyncio
+async def test_outbound_attempt_lookup_uses_tenant_scoped_worker_context():
+    """The signed outbound metadata supplies the tenant boundary, while the
+    Retell call id identifies the exact workflow attempt inside that tenant."""
+    location = object()
+    institution = object()
+    result_proxy = MagicMock()
+    result_proxy.first.return_value = (location, institution)
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute = AsyncMock(return_value=result_proxy)
+
+    with patch(
+        "src.app.database.get_system_db_session",
+        return_value=mock_session,
+    ) as get_session:
+        result = await webhooks._resolve_institution_location_from_outbound_attempt(
+            "call-outbound-1",
+            "institution-1",
+        )
+
+    assert result == (location, institution)
+    get_session.assert_called_once_with(
+        "celery",
+        institution_id="institution-1",
+        external_id="call-outbound-1",
+    )
+
+
+@pytest.mark.asyncio
 async def test_inbound_call_resolution_uses_agent_mapping_directly():
     location = object()
     institution = object()

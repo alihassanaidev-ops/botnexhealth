@@ -394,8 +394,12 @@ async def test_poll_retell_voice_outcomes_enqueues_resume_for_completed_call() -
 
     with (
         patch(
-            "src.app.tasks.automation_workflow.get_system_db_session",
+            "src.app.tasks.automation_workflow._superadmin_system_session",
             return_value=mock_session,
+        ) as superadmin_session,
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=AssertionError("cross-tenant poll must not use an unscoped session"),
         ),
         patch(
             "src.app.services.automation.retell_outbound_client.RetellOutboundClient",
@@ -407,6 +411,7 @@ async def test_poll_retell_voice_outcomes_enqueues_resume_for_completed_call() -
         result = await _poll_retell_voice_outcomes_async()
 
     assert result == {"scanned": 1, "enqueued": 1, "pending": 0, "failed": 0}
+    superadmin_session.assert_called_once_with("retell_voice_outcome_poll")
     mock_resume.apply_async.assert_called_once_with(
         kwargs={
             "institution_id": "inst-1",

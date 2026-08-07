@@ -179,7 +179,7 @@ async def _resolve_institution_location_from_outbound_attempt(
         from src.app.models.outbound_voice import WorkflowVoiceAttempt
 
         async with get_system_db_session(
-            "retell_lookup",
+            "celery",
             institution_id=institution_id,
             external_id=call_id,
         ) as session:

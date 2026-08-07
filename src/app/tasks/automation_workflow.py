@@ -1439,9 +1439,7 @@ async def _poll_retell_voice_outcomes_async() -> dict:
         }
 
     cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=_RETELL_OUTCOME_MIN_AGE_SECONDS)
-    async with get_system_db_session(
-        "celery", external_id="retell_voice_outcome_poll"
-    ) as session:
+    async with _superadmin_system_session("retell_voice_outcome_poll") as session:
         result = await session.execute(
             select(WorkflowVoiceAttempt)
             .where(

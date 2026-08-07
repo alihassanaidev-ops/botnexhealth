@@ -699,6 +699,132 @@ async def test_rls_institution_locations_branches(rls_engine) -> None:
         ) == 1
 
 
+@pytest.mark.asyncio
+async def test_outbound_voice_attempt_visibility_for_webhook_and_poller_contexts(
+    rls_engine,
+) -> None:
+    """Outbound correlation is tenant-scoped; the repair poller is a privileged
+    cross-tenant reader. An unscoped Celery session must remain unable to read
+    voice attempts."""
+    workflow_id = "91000000-0000-0000-0000-000000000001"
+    version_id = "91000000-0000-0000-0000-000000000002"
+    run_id = "91000000-0000-0000-0000-000000000003"
+    attempt_id = "91000000-0000-0000-0000-000000000004"
+    retell_call_id = "call-outbound-rls-proof"
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflows
+                  (id, institution_id, location_id, name, status, is_template)
+                VALUES (
+                  :workflow_id, :inst_a, :loc_a1, 'RLS voice proof', 'active', false
+                )
+                """
+            ),
+            {"workflow_id": workflow_id, "inst_a": INST_A, "loc_a1": LOC_A1},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_versions
+                  (id, institution_id, location_id, workflow_id, version_number, definition)
+                VALUES (:version_id, :inst_a, :loc_a1, :workflow_id, 1, '{}'::jsonb)
+                """
+            ),
+            {
+                "version_id": version_id,
+                "workflow_id": workflow_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE automation_workflows
+                SET current_version_id = :version_id
+                WHERE id = :workflow_id
+                """
+            ),
+            {"version_id": version_id, "workflow_id": workflow_id},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_runs
+                  (id, institution_id, location_id, workflow_id, workflow_version_id, status)
+                VALUES (:run_id, :inst_a, :loc_a1, :workflow_id, :version_id, 'waiting')
+                """
+            ),
+            {
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "version_id": version_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO workflow_voice_attempts
+                  (id, institution_id, location_id, workflow_run_id, step_id,
+                   retell_call_id, status)
+                VALUES (:attempt_id, :inst_a, :loc_a1, :run_id, 'voice-step',
+                        :retell_call_id, 'awaiting_outcome')
+                """
+            ),
+            {
+                "run_id": run_id,
+                "attempt_id": attempt_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+                "retell_call_id": retell_call_id,
+            },
+        )
+
+    # Real-time webhook worker: exact tenant + exact call can see the attempt.
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="celery",
+            institution_id=INST_A,
+            external_id=retell_call_id,
+        )
+        assert await conn.scalar(
+            text(
+                "SELECT count(*) FROM workflow_voice_attempts "
+                "WHERE retell_call_id = :call_id"
+            ),
+            {"call_id": retell_call_id},
+        ) == 1
+
+    # Tenant isolation remains closed when the institution boundary is absent.
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="celery",
+            external_id="retell_voice_outcome_poll",
+        )
+        assert await conn.scalar(
+            text("SELECT count(*) FROM workflow_voice_attempts")
+        ) == 0
+
+    # The scheduled repair scan intentionally uses the existing super-admin context.
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        assert await conn.scalar(
+            text(
+                "SELECT count(*) FROM workflow_voice_attempts "
+                "WHERE retell_call_id = :call_id"
+            ),
+            {"call_id": retell_call_id},
+        ) == 1
+
+
 # ── Institution-group (DSO oversight) isolation ─────────────────────────────────
 
 GRP_1 = "c1111111-1111-1111-1111-111111111111"
