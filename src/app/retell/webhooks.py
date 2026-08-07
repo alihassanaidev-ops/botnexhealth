@@ -167,7 +167,10 @@ async def _resolve_institution_location_from_agent(agent_id: str | None):
     return None, None
 
 
-async def _resolve_institution_location_from_outbound_attempt(call_id: str):
+async def _resolve_institution_location_from_outbound_attempt(
+    call_id: str,
+    institution_id: str,
+):
     """Resolve an outbound workflow call from its durable provider correlation key."""
     try:
         from src.app.database import get_system_db_session
@@ -177,6 +180,7 @@ async def _resolve_institution_location_from_outbound_attempt(call_id: str):
 
         async with get_system_db_session(
             "retell_lookup",
+            institution_id=institution_id,
             external_id=call_id,
         ) as session:
             result = await session.execute(
@@ -192,6 +196,7 @@ async def _resolve_institution_location_from_outbound_attempt(call_id: str):
                 )
                 .where(
                     WorkflowVoiceAttempt.retell_call_id == call_id,
+                    WorkflowVoiceAttempt.institution_id == institution_id,
                     InstitutionLocation.institution_id == Institution.id,
                 )
             )
@@ -215,11 +220,16 @@ async def _resolve_institution_location_from_outbound_attempt(call_id: str):
 async def _resolve_institution_location_from_call(call: RetellCallWebhook):
     """Resolve outbound workflow calls by call ID, then fall back to agent routing."""
     if (call.direction or "").lower() == "outbound":
-        location, institution = (
-            await _resolve_institution_location_from_outbound_attempt(call.call_id)
-        )
-        if location and institution:
-            return location, institution
+        institution_id = call.effective_metadata.get("institution_id")
+        if isinstance(institution_id, str) and institution_id:
+            location, institution = (
+                await _resolve_institution_location_from_outbound_attempt(
+                    call.call_id,
+                    institution_id,
+                )
+            )
+            if location and institution:
+                return location, institution
     return await _resolve_institution_location_from_agent(call.agent_id)
 
 

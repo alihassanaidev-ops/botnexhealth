@@ -245,6 +245,7 @@ async def test_outbound_call_resolution_prefers_voice_attempt_over_agent_mapping
             "call_id": "call-outbound-1",
             "agent_id": "agent-profile-only",
             "direction": "outbound",
+            "scrubbed_metadata": {"institution_id": "institution-1"},
         }
     )
 
@@ -263,7 +264,7 @@ async def test_outbound_call_resolution_prefers_voice_attempt_over_agent_mapping
         result = await webhooks._resolve_institution_location_from_call(call)
 
     assert result == (location, institution)
-    attempt_lookup.assert_awaited_once_with("call-outbound-1")
+    attempt_lookup.assert_awaited_once_with("call-outbound-1", "institution-1")
     agent_lookup.assert_not_awaited()
 
 
