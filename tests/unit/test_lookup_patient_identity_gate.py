@@ -2,8 +2,8 @@
 
 The Retell prompt's identity check is treated as advisory only — the
 server must independently verify the caller-supplied DOB matches the
-matched patient and that a second factor (email exact match or last-4 of
-phone) corroborates. Otherwise the response is downgraded to ``basic``.
+matched patient and that a second factor (exact email or full phone number)
+corroborates. Otherwise the response is downgraded to ``basic``.
 """
 
 from __future__ import annotations
@@ -45,6 +45,24 @@ def _patient(
     )
 
 
+def test_full_patient_payload_excludes_procedures_and_insurance():
+    patient = _patient()
+    patient.extra.update(
+        {
+            "recent_procedures": [{"id": "procedure-1"}],
+            "insurance_coverages": [{"id": "coverage-1"}],
+            "last_visit": {"id": "appointment-previous"},
+        }
+    )
+
+    payload = handlers._to_full_patient_payload(patient)
+
+    assert payload["upcoming_appointments"] == [{"id": "appt-1"}]
+    assert payload["last_visit"] == {"id": "appointment-previous"}
+    assert "recent_procedures" not in payload
+    assert "insurance_coverages" not in payload
+
+
 @pytest.mark.asyncio
 async def test_identity_gate_allows_full_when_dob_and_email_match(monkeypatch):
     p = _patient()
@@ -72,7 +90,7 @@ async def test_identity_gate_allows_full_when_dob_and_email_match(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_identity_gate_allows_full_with_phone_last4(monkeypatch):
+async def test_identity_gate_allows_full_with_matching_phone(monkeypatch):
     p = _patient()
     ctx = _ctx(p)
 
@@ -86,12 +104,59 @@ async def test_identity_gate_allows_full_with_phone_last4(monkeypatch):
         {
             "name": "Alice",
             "date_of_birth": "1990-01-01",
-            "phone_number": "(415) 555-4567",  # only last-4 must match
+            "phone_number": "(555) 123-4567",
             "detail_level": "full",
         }
     )
 
     assert result["detail_level"] == "full"
+
+
+@pytest.mark.asyncio
+async def test_identity_gate_rejects_phone_with_only_matching_last4(monkeypatch):
+    p = _patient()
+    ctx = _ctx(p)
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+    target = handlers.lookup_patient.__wrapped__
+
+    result = await target(
+        {
+            "name": "Alice",
+            "date_of_birth": "1990-01-01",
+            "phone_number": "(415) 555-4567",
+            "detail_level": "full",
+        }
+    )
+
+    assert result["detail_level"] == "basic"
+    assert result["identity_gate"] == "second_factor_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_identity_gate_demotes_to_basic_when_name_missing(monkeypatch):
+    p = _patient()
+    ctx = _ctx(p)
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+    target = handlers.lookup_patient.__wrapped__
+
+    result = await target(
+        {
+            "date_of_birth": "1990-01-01",
+            "phone_number": "+15551234567",
+            "detail_level": "full",
+        }
+    )
+
+    assert result["detail_level"] == "basic"
+    assert result["identity_gate"] == "missing_name"
 
 
 @pytest.mark.asyncio

@@ -198,6 +198,12 @@ def _to_basic_patient_payload(patient: Any) -> dict[str, Any]:
 
 def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
     """Return richer payload for explicitly requested full detail lookups."""
+    patient_extra = patient.extra if isinstance(patient.extra, dict) else {}
+    scheduling_details = {
+        key: patient_extra[key]
+        for key in ("upcoming_appointments", "last_visit")
+        if key in patient_extra
+    }
     return {
         "id": patient.id,
         "first_name": patient.first_name,
@@ -205,7 +211,7 @@ def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
         "email": patient.email,
         "phone_number": patient.phone,
         "date_of_birth": patient.date_of_birth,
-        **patient.extra,
+        **scheduling_details,
     }
 
 
@@ -354,41 +360,51 @@ def _normalize_dob(value: Any) -> str | None:
     return None
 
 
+def _normalize_phone_for_identity(value: Any) -> str | None:
+    """Normalize a full phone number for identity comparison."""
+    if not value:
+        return None
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits or None
+
+
 def _identity_gate_passes(
     patient: Any, args: dict[str, Any]
 ) -> tuple[bool, str | None]:
     """Confirm caller identity before releasing full PHI.
 
-    Single-factor, front-desk style: the caller must confirm ANY ONE of the
-    patient's date of birth, the last 4 digits of the phone on file, or the
-    email on file. Previously two factors were required (DOB *and* email/phone),
-    which blocked legitimate callers — especially records with no email on file.
+    The caller must supply a name, confirm the patient's date of birth, and
+    provide a second matching factor: the full phone number or exact email on
+    file. Email is optional when the phone number matches.
 
     Returns (passed, reason_if_failed).
     """
-    # Factor 1: date of birth.
+    if not str(args.get("name") or "").strip():
+        return False, "missing_name"
+
     supplied_dob = _normalize_dob(args.get("date_of_birth"))
+    if not supplied_dob:
+        return False, "missing_dob"
+
     actual_dob = _normalize_dob(getattr(patient, "date_of_birth", None))
-    if supplied_dob and actual_dob and supplied_dob == actual_dob:
+    if not actual_dob or supplied_dob != actual_dob:
+        return False, "dob_mismatch"
+
+    supplied_phone = _normalize_phone_for_identity(args.get("phone_number"))
+    actual_phone = _normalize_phone_for_identity(getattr(patient, "phone", None))
+    if supplied_phone and actual_phone and supplied_phone == actual_phone:
         return True, None
 
-    # Factor 2: last 4 digits of the phone on file.
-    actual_phone_digits = "".join(
-        ch for ch in (getattr(patient, "phone", None) or "") if ch.isdigit()
-    )
-    supplied_phone = args.get("phone_number")
-    if supplied_phone and len(actual_phone_digits) >= 4:
-        supplied_digits = "".join(ch for ch in str(supplied_phone) if ch.isdigit())
-        if len(supplied_digits) >= 4 and supplied_digits[-4:] == actual_phone_digits[-4:]:
-            return True, None
-
-    # Factor 3: exact email on file.
     supplied_email = (args.get("email") or "").strip().lower() or None
     actual_email = (getattr(patient, "email", None) or "").strip().lower() or None
     if supplied_email and actual_email and supplied_email == actual_email:
         return True, None
 
-    return False, "verification_needed"
+    if not supplied_phone and not supplied_email:
+        return False, "second_factor_missing"
+    return False, "second_factor_mismatch"
 
 
 @register_function("lookup_patient")
@@ -412,8 +428,9 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     """Lookup a patient by name, email, phone, or date of birth.
 
     Detail-level escalation: ``detail_level='full'`` returns full PHI only
-    after the caller-supplied DOB matches the matched patient's DOB *and* a
-    second factor (exact email match or last-4 digits of phone) verifies.
+    after the caller supplies a name, the supplied DOB matches the matched
+    patient's DOB, and a second factor (exact email or full phone number)
+    verifies.
     A mismatched DOB or missing second factor demotes the response to
     ``basic`` even when a single patient matched. The Retell prompt's
     identity gate is treated as advisory only — server-side verification is
@@ -439,8 +456,6 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     full_detail_include = [
         "upcoming_appts",
         "last_visited_appointment",
-        "procedures",
-        "insurance_coverages",
     ]
 
     try:
@@ -590,8 +605,8 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
         response["identity_gate"] = identity_failure_reason
         response["message"] = (
             "I can confirm a record exists. To share full appointment details, please "
-            "confirm the patient's date of birth or the last four digits of the phone "
-            "number on file."
+            "confirm the patient's name and date of birth, plus the full phone number "
+            "on file or the exact email address."
         )
     else:
         response["message"] = f"Found {len(simplified)} patient(s)."
@@ -612,10 +627,15 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
         "phone_number",
         "date_of_birth",
         "provider_id",
+        "gender",
     ]
     for field in required:
         if not args.get(field):
             return {"error": f"{field} is required."}
+
+    gender = str(args["gender"]).strip()
+    if gender not in {"Female", "Male", "Other"}:
+        return {"error": "gender must be one of: Female, Male, Other."}
 
     try:
         ctx = await _resolve_context()
@@ -631,7 +651,7 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
                 phone=args["phone_number"],
                 date_of_birth=args["date_of_birth"],
                 provider_id=args["provider_id"],
-                gender=args.get("gender", "Female"),
+                gender=gender,
             )
         )
     except Exception as e:
