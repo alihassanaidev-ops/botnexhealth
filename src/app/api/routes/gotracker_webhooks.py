@@ -43,8 +43,9 @@ _PATIENT_EVENTS = frozenset({"patient.created", "patient.updated"})
 _HANDLED_EVENTS = _APPOINTMENT_EVENTS | _PATIENT_EVENTS
 _PROCESSING_TTL_SECONDS = 300
 _SIGNATURE_TOLERANCE_SECONDS = 300
-_HUMAN_FOREIGN_ID_TYPE = "tracker-1"
+_PMS_FOREIGN_ID_PREFIX = "tracker-"
 _API_FOREIGN_ID_TYPE = "tracker-cloud-booked"
+_WRITEBACK_FOREIGN_ID_TYPE = "tracker"
 
 
 def _raw_payload_text(raw_body: bytes) -> str:
@@ -325,7 +326,7 @@ async def _process_appointment_event(
     }
     reasons = _appointment_reasons(appointment, payload)
     foreign_id_type = _foreign_id_type(payload, appointment)
-    should_react = foreign_id_type == _HUMAN_FOREIGN_ID_TYPE
+    should_react = _is_pms_origin(foreign_id_type)
     institution_id = str(location.institution_id)
     location_id = str(location.id)
 
@@ -443,12 +444,15 @@ async def _process_appointment_event(
         await session.commit()
 
     if not should_react:
-        reason = (
-            "api_origin"
-            if foreign_id_type == _API_FOREIGN_ID_TYPE
-            else "unrecognized_origin"
-        )
-        logger.info(
+        if foreign_id_type == _API_FOREIGN_ID_TYPE:
+            reason = "api_origin"
+        elif foreign_id_type == _WRITEBACK_FOREIGN_ID_TYPE:
+            reason = "writeback_confirmation"
+        else:
+            reason = "unrecognized_origin"
+
+        log = logger.info if reason != "unrecognized_origin" else logger.warning
+        log(
             "gotracker_webhook: projection-only event=%s appointment=%s "
             "foreign_id_type=%s",
             event,
@@ -932,6 +936,21 @@ def _foreign_id_type(
         if cleaned:
             return cleaned.casefold()
     return None
+
+
+def _is_pms_origin(foreign_id_type: str | None) -> bool:
+    """Whether an appointment event came from a human using Tracker PMS.
+
+    Legacy installed agents omit ``foreign_id_type`` entirely. Newer agents use
+    ``tracker-<PracticeId>``; the PracticeId is installation-local and is only an
+    origin marker, never a tenant identifier.
+    """
+    if foreign_id_type is None:
+        return True
+    if not foreign_id_type.startswith(_PMS_FOREIGN_ID_PREFIX):
+        return False
+    practice_id = foreign_id_type.removeprefix(_PMS_FOREIGN_ID_PREFIX)
+    return bool(practice_id) and practice_id.isdigit()
 
 
 def _appointment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:

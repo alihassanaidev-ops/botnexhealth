@@ -16,6 +16,7 @@ from src.app.api.routes.gotracker_webhooks import (
     _event_dedup_key,
     _foreign_id_type,
     _gotracker_status_label,
+    _is_pms_origin,
     _source_event_id,
     _verify_signature,
     gotracker_webhook,
@@ -168,12 +169,27 @@ def test_foreign_id_type_is_normalized_from_supported_webhook_shapes():
     )
 
 
+@pytest.mark.parametrize(
+    ("foreign_id_type", "expected"),
+    [
+        (None, True),
+        ("tracker-1", True),
+        ("tracker-42", True),
+        ("tracker-cloud-booked", False),
+        ("tracker", False),
+        ("another-system", False),
+        ("tracker-clinic-a", False),
+    ],
+)
+def test_pms_origin_classification(foreign_id_type, expected):
+    assert _is_pms_origin(foreign_id_type) is expected
+
+
 @pytest.mark.asyncio
-async def test_appointment_created_updates_projection_and_queues_workflow():
+async def test_legacy_null_origin_appointment_queues_workflow():
     payload = {
         "id": "webhook-created-55",
         "event": "appointment.created",
-        "foreign_id_type": "tracker-1",
         "data": {
             "appointment": {
                 "AppointmentId": 55,
@@ -465,12 +481,24 @@ async def test_appointment_cancelled_cancels_existing_runs():
     )
 
 
+@pytest.mark.parametrize(
+    ("foreign_id_type", "expected_reason"),
+    [
+        ("tracker-cloud-booked", "api_origin"),
+        ("tracker", "writeback_confirmation"),
+        ("another-system", "unrecognized_origin"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_api_originated_appointment_updates_projection_without_reacting():
+async def test_non_pms_appointment_updates_projection_without_reacting(
+    foreign_id_type,
+    expected_reason,
+):
+    source_event_id = f"webhook-{foreign_id_type}-created-55"
     payload = {
-        "id": "webhook-cloud-created-55",
+        "id": source_event_id,
         "event": "appointment.created",
-        "foreign_id_type": "tracker-cloud-booked",
+        "foreign_id_type": foreign_id_type,
         "data": {
             "appointment": {
                 "AppointmentId": 55,
@@ -509,11 +537,11 @@ async def test_api_originated_appointment_updates_projection_without_reacting():
 
     item = result["results"][0]
     assert item["status"] == "projection_only"
-    assert item["reason"] == "api_origin"
+    assert item["reason"] == expected_reason
     projection.upsert_appointment.assert_awaited_once()
     claim_kwargs = claim_event.await_args.kwargs
-    assert claim_kwargs["source_event_id"] == "webhook-cloud-created-55"
-    assert claim_kwargs["dedup_key"].startswith("source:webhook-cloud-created-55:")
+    assert claim_kwargs["source_event_id"] == source_event_id
+    assert claim_kwargs["dedup_key"].startswith(f"source:{source_event_id}:")
     trigger_task.delay.assert_not_called()
     state_task.delay.assert_not_called()
     reactivation_task.delay.assert_not_called()
