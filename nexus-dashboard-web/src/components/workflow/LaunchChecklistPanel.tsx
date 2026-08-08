@@ -54,6 +54,10 @@ export default function LaunchChecklistPanel({
     const allItems = Array.isArray(checklist.items) ? checklist.items : []
     const items = compact ? allItems.filter((item) => item.status !== "pass") : allItems
     const grouped = groupItems(items.length ? items : allItems)
+    const overallStatus = checklist.overall_status ?? "unknown"
+    const audience = typeof checklist.estimated_audience === "number"
+        ? checklist.estimated_audience.toLocaleString()
+        : "Unknown"
 
     return (
         <div className="space-y-3">
@@ -61,17 +65,21 @@ export default function LaunchChecklistPanel({
                 <div className="min-w-0">
                     <div className="text-sm font-semibold text-foreground">Launch checklist</div>
                     <div className="text-xs text-muted-foreground">
-                        {checklist.blockers_count} blockers · {checklist.warnings_count} warnings · {checklist.unknown_count} unknown
+                        {checklist.blockers_count ?? 0} blockers · {checklist.warnings_count ?? 0} warnings · {checklist.unknown_count ?? 0} unknown
                     </div>
                 </div>
-                <StatusPill status={checklist.overall_status} />
+                <StatusPill status={overallStatus} />
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
-                <Metric label="Audience" value={checklist.estimated_audience === null ? "Unknown" : checklist.estimated_audience.toLocaleString()} />
+                <Metric label="Audience" value={audience} />
                 <Metric label="Volume" value={formatVolume(checklist.estimated_send_volume)} />
             </div>
-            {!compact && <p className="text-xs text-muted-foreground">{checklist.estimate_basis}</p>}
+            {!compact && (
+                <p className="text-xs text-muted-foreground">
+                    {checklist.estimate_basis ?? "Launch checklist details are unavailable."}
+                </p>
+            )}
 
             <div className="space-y-3">
                 {Array.from(grouped.entries()).map(([section, sectionItems]) => (
@@ -146,7 +154,7 @@ function statusIcon(status: LaunchChecklistStatus) {
     return <CircleHelp className={className} />
 }
 
-function formatVolume(volume: Record<string, number> | null): string {
+function formatVolume(volume: Record<string, number> | null | undefined): string {
     if (!volume) return "Unknown"
     const entries = Object.entries(volume).filter(([, value]) => value > 0)
     if (!entries.length) return "0"

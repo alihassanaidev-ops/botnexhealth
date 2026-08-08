@@ -128,12 +128,6 @@ describe("WorkflowBuilder page (smoke)", () => {
             workflow_version_id: "v-1",
             location_id: null,
             overall_status: "unknown",
-            blockers_count: 0,
-            warnings_count: 0,
-            unknown_count: 1,
-            estimated_audience: null,
-            estimated_send_volume: null,
-            estimated_cost_cents: null,
             estimate_basis: "Checklist details are unavailable.",
             generated_at: "2026-08-09T00:00:00Z",
         })
