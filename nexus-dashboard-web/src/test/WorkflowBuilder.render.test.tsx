@@ -120,4 +120,27 @@ describe("WorkflowBuilder page (smoke)", () => {
         renderBuilder()
         expect(await screen.findByText(/at least one Exit step/i)).toBeInTheDocument()
     })
+
+    it("keeps the builder usable when an older launch-checklist response omits items", async () => {
+        get.mockResolvedValue(WORKFLOW)
+        previewChecklist.mockResolvedValue({
+            workflow_id: "wf-1",
+            workflow_version_id: "v-1",
+            location_id: null,
+            overall_status: "unknown",
+            blockers_count: 0,
+            warnings_count: 0,
+            unknown_count: 1,
+            estimated_audience: null,
+            estimated_send_volume: null,
+            estimated_cost_cents: null,
+            estimate_basis: "Checklist details are unavailable.",
+            generated_at: "2026-08-09T00:00:00Z",
+        })
+
+        renderBuilder()
+
+        expect(await screen.findByDisplayValue("My Reminder Campaign")).toBeInTheDocument()
+        expect(await screen.findByText("Checklist details are unavailable.")).toBeInTheDocument()
+    })
 })

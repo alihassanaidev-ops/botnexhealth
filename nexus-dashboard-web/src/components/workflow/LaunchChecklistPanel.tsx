@@ -48,8 +48,12 @@ export default function LaunchChecklistPanel({
         )
     }
 
-    const items = compact ? checklist.items.filter((item) => item.status !== "pass") : checklist.items
-    const grouped = groupItems(items.length ? items : checklist.items)
+    // Staging can briefly serve an older checklist response while the API and web
+    // deployments roll independently. Keep the workflow builder usable when that
+    // response does not contain the newer `items` collection.
+    const allItems = Array.isArray(checklist.items) ? checklist.items : []
+    const items = compact ? allItems.filter((item) => item.status !== "pass") : allItems
+    const grouped = groupItems(items.length ? items : allItems)
 
     return (
         <div className="space-y-3">
