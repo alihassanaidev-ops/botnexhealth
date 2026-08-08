@@ -321,7 +321,7 @@ class WorkflowStepDispatcher:
             elif isinstance(node, UpdateGoTrackerAppointmentNode):
                 try:
                     current_node_id = await self._update_gotracker_appointment(
-                        run, node, context
+                        run, node, context, location_timezone=location_timezone
                     )
                 except WorkflowGoTrackerWritebackError:
                     return DispatchResult(
@@ -631,6 +631,8 @@ class WorkflowStepDispatcher:
         run: AutomationWorkflowRun,
         node: UpdateGoTrackerAppointmentNode,
         context: dict,
+        *,
+        location_timezone: str = "UTC",
     ) -> str:
         from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
         from src.app.models.institution import Institution
@@ -751,6 +753,18 @@ class WorkflowStepDispatcher:
             update_payload = {
                 key: value for key, value in update_payload.items() if value is not None
             }
+            normalized_start_time: str | None = None
+            if isinstance(update_payload.get("start_time"), str):
+                parsed_start = _parse_context_datetime(
+                    update_payload["start_time"], location_timezone
+                )
+                if parsed_start is None:
+                    await fail(
+                        "GoTracker appointment start_time is not a valid ISO datetime",
+                        {"operations": operations},
+                    )
+                    raise WorkflowGoTrackerWritebackError("invalid appointment start_time")
+                normalized_start_time = parsed_start.isoformat()
             if update_payload:
                 result = await adapter.update_appointment(
                     str(run.trigger_ref_id),
@@ -793,13 +807,35 @@ class WorkflowStepDispatcher:
                     institution_id=str(run.institution_id),
                     appointment_id=str(run.trigger_ref_id),
                     location_id=str(run.location_id),
-                    start_time=update_payload.get("start_time")
-                    if isinstance(update_payload.get("start_time"), str)
-                    else None,
+                    start_time=normalized_start_time,
                     provider_id=update_payload.get("provider_id")
                     if isinstance(update_payload.get("provider_id"), str)
                     else None,
                 )
+                if normalized_start_time is not None:
+                    # The projection write above can make the returning GoTracker
+                    # webhook appear unchanged. Explicitly emit the time-aware,
+                    # idempotent appointment trigger so a real reschedule gets one
+                    # fresh confirmation cycle for its new start time.
+                    from src.app.tasks.automation_workflow import (
+                        trigger_appointment_workflows,
+                    )
+
+                    reschedule_context = {
+                        **context,
+                        "appointment_at": normalized_start_time,
+                        "appointment_datetime": normalized_start_time,
+                        "source": "workflow_gotracker_reschedule",
+                        "origin_workflow_run_id": str(run.id),
+                    }
+                    trigger_appointment_workflows.delay(
+                        institution_id=str(run.institution_id),
+                        appointment_id=str(run.trigger_ref_id),
+                        appointment_at_iso=normalized_start_time,
+                        contact_id=str(run.contact_id) if run.contact_id else None,
+                        location_id=str(run.location_id),
+                        trigger_metadata=reschedule_context,
+                    )
 
             await self.runtime.complete_step(
                 step,
@@ -858,6 +894,11 @@ def _evaluate_rule(rule: ConditionRule, context: dict) -> bool:
         return value != rule.value
     if rule.op == "in":
         return value in (rule.value or [])
+    if rule.op == "in_case_insensitive":
+        if value is None or not isinstance(rule.value, list):
+            return False
+        normalized = str(value).strip().casefold()
+        return any(normalized == str(item).strip().casefold() for item in rule.value)
     if rule.op == "not_in":
         return value not in (rule.value or [])
     if rule.op == "is_null":
@@ -997,7 +1038,7 @@ def _compute_due_at(
         return now + timedelta(seconds=delay.duration_seconds)
     if isinstance(delay, AppointmentRelativeDelay):
         raw_anchor = (context or {}).get(delay.anchor_field)
-        anchor = _parse_context_datetime(raw_anchor)
+        anchor = _parse_context_datetime(raw_anchor, location_timezone)
         if anchor is None:
             logger.warning(
                 "appointment-relative wait missing/invalid anchor '%s'",
@@ -1022,7 +1063,7 @@ def _compute_due_at(
     return local_target.astimezone(timezone.utc)
 
 
-def _parse_context_datetime(value: object) -> datetime | None:
+def _parse_context_datetime(value: object, location_timezone: str = "UTC") -> datetime | None:
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, str) and value:
@@ -1033,7 +1074,12 @@ def _parse_context_datetime(value: object) -> datetime | None:
     else:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        try:
+            tz = ZoneInfo(location_timezone)
+        except (ZoneInfoNotFoundError, KeyError):
+            logger.warning("unknown timezone '%s', falling back to UTC", location_timezone)
+            tz = ZoneInfo("UTC")
+        dt = dt.replace(tzinfo=tz)
     return dt.astimezone(timezone.utc)
 
 

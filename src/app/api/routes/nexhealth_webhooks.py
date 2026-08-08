@@ -122,7 +122,11 @@ def _patient_location_ids(patient: dict[str, Any]) -> list[str]:
 
 
 async def _cancel_runs_for_appointment(
-    institution_id: str, appointment_id: str, *, reason: str
+    institution_id: str,
+    appointment_id: str,
+    *,
+    reason: str,
+    include_running: bool = True,
 ) -> int:
     """Cancel active workflow runs + their pending timers for an appointment.
 
@@ -142,16 +146,18 @@ async def _cancel_runs_for_appointment(
     async with get_system_db_session(
         "nexhealth_webhooks", institution_id=institution_id, external_id=appointment_id
     ) as session:
+        cancellable_statuses = [
+            AutomationRunStatus.PENDING.value,
+            AutomationRunStatus.WAITING.value,
+        ]
+        if include_running:
+            cancellable_statuses.append(AutomationRunStatus.RUNNING.value)
         result = await session.execute(
             select(AutomationWorkflowRun).where(
                 AutomationWorkflowRun.institution_id == institution_id,
                 AutomationWorkflowRun.trigger_ref_type == "appointment",
                 AutomationWorkflowRun.trigger_ref_id == appointment_id,
-                AutomationWorkflowRun.status.in_([
-                    AutomationRunStatus.PENDING.value,
-                    AutomationRunStatus.RUNNING.value,
-                    AutomationRunStatus.WAITING.value,
-                ]),
+                AutomationWorkflowRun.status.in_(cancellable_statuses),
             )
         )
         runs = list(result.scalars().all())

@@ -35,6 +35,8 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    UpdateGoTrackerAppointmentNode,
+    UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
 )
@@ -171,7 +173,18 @@ class WorkflowValidationService:
             node = node_map[nid]
             if isinstance(node, ConditionNode):
                 stack.extend([node.true_next_node_id, node.false_next_node_id])
-            elif isinstance(node, (WaitNode, DripNode, JsonMapperNode, LlmNode, *_SEND_NODE_TYPES)):
+            elif isinstance(
+                node,
+                (
+                    WaitNode,
+                    DripNode,
+                    UpdatePatientStatusNode,
+                    UpdateGoTrackerAppointmentNode,
+                    JsonMapperNode,
+                    LlmNode,
+                    *_SEND_NODE_TYPES,
+                ),
+            ):
                 stack.append(node.next_node_id)
         return [
             ValidationIssue(

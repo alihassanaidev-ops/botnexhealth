@@ -75,22 +75,77 @@ def test_surgery_confirmation_template_marks_confirmed_status() -> None:
 
     assert nodes["write-gotracker-confirmed"]["type"] == "update_gotracker_appointment"
     assert nodes["write-gotracker-confirmed"]["confirmed"] is True
-    assert nodes["write-gotracker-confirmed"]["preconfirmed"] is False
+    assert nodes["write-gotracker-confirmed"]["preconfirmed"] is None
     assert nodes["write-gotracker-confirmed"]["next_node_id"] == "exit-confirmed"
 
 
-def test_surgery_confirmation_template_no_longer_requires_major_appointment_types() -> None:
+def test_surgery_confirmation_template_configures_reasons_and_retry_timing() -> None:
     template = TEMPLATES["surgery-pre-appointment-confirmation"]
 
     definition = instantiate_definition(
         template,
         voice_profile_id="prof-surgery",
+        setup_options={
+            "appointment_reasons": ["Bridge Prep", "Implant Surgery"],
+            "call_offset_hours_before": 36,
+            "retry_delay_1_hours": 4,
+            "retry_delay_2_hours": 7.5,
+        },
     )
 
     assert "appointment_type_ids" not in definition["trigger"]
+    assert definition["trigger"]["offset_hours"] == -36
     nodes = {node["id"]: node for node in definition["nodes"]}
-    assert nodes["voice-preop-confirmation"]["voice_profile_id"] == "prof-surgery"
-    assert nodes["voice-preop-confirmation"]["retell_agent_id"] == ""
+    assert nodes["check-eligible-reason"]["rules"] == [
+        {
+            "field": "appointment_status_id",
+            "op": "in_case_insensitive",
+            "value": ["1"],
+        },
+        {
+            "field": "appointment_reason",
+            "op": "in_case_insensitive",
+            "value": ["Bridge Prep", "Implant Surgery"],
+        },
+    ]
+    assert nodes["wait-retry-1"]["delay"]["duration_seconds"] == 4 * 60 * 60
+    assert nodes["wait-retry-2"]["delay"]["duration_seconds"] == int(7.5 * 60 * 60)
+    for node_id in ("voice-preop-attempt-1", "voice-preop-attempt-2", "voice-preop-attempt-3"):
+        assert nodes[node_id]["voice_profile_id"] == "prof-surgery"
+        assert nodes[node_id]["retell_agent_id"] == ""
+
+
+def test_surgery_confirmation_template_requires_at_least_one_reason() -> None:
+    template = TEMPLATES["surgery-pre-appointment-confirmation"]
+
+    with pytest.raises(ValueError, match="appointment_reasons"):
+        instantiate_definition(
+            template,
+            voice_profile_id="prof-surgery",
+            setup_options={"appointment_reasons": []},
+        )
+
+
+def test_surgery_confirmation_template_has_three_business_attempts_and_dynamic_callbacks() -> None:
+    definition = instantiate_definition(
+        TEMPLATES["surgery-pre-appointment-confirmation"],
+        voice_profile_id="prof-surgery",
+        setup_options={"appointment_reasons": ["bridge prep"]},
+    )
+    nodes = {node["id"]: node for node in definition["nodes"]}
+
+    assert nodes["check-eligible-reason"]["true_next_node_id"] == "voice-preop-attempt-1"
+    assert nodes["wait-retry-1"]["next_node_id"] == "voice-preop-attempt-2"
+    assert nodes["wait-retry-2"]["next_node_id"] == "voice-preop-attempt-3"
+    assert nodes["wait-callback-1"]["delay"] == {
+        "delay_type": "appointment_relative",
+        "offset_seconds": 0,
+        "anchor_field": "callback_at",
+    }
+    assert nodes["wait-callback-1"]["next_node_id"] == "voice-preop-attempt-2"
+    assert nodes["wait-callback-2"]["next_node_id"] == "voice-preop-attempt-3"
+    assert nodes["mark-max-attempts"]["status"] == "unreachable_after_max_attempts"
+    assert nodes["write-gotracker-rescheduled"]["start_time"] == "{{reschedule_start_time}}"
 
 
 def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() -> None:
@@ -98,21 +153,22 @@ def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() ->
     definition = instantiate_definition(
         template,
         voice_profile_id="prof-surgery",
+        setup_options={"appointment_reasons": ["bridge prep"]},
     )
     nodes = {node["id"]: node for node in definition["nodes"]}
 
-    confirmed_rule = nodes["check-preop-outcome"]["rules"][0]
+    confirmed_rule = nodes["attempt-1-confirmed"]["rules"][0]
     assert confirmed_rule == {
         "field": "call_outcome",
         "op": "eq",
         "value": "confirmed",
     }
-    assert "answered" not in str(nodes["check-preop-outcome"]["rules"])
-    assert nodes["check-cancelled"]["true_next_node_id"] == "write-gotracker-cancelled"
+    assert "answered" not in str(nodes["attempt-1-confirmed"]["rules"])
+    assert nodes["attempt-1-cancelled"]["true_next_node_id"] == "write-gotracker-cancelled"
     assert nodes["write-gotracker-cancelled"]["type"] == "update_gotracker_appointment"
     assert nodes["write-gotracker-cancelled"]["status_id"] == 3
-    assert nodes["check-reschedule"]["true_next_node_id"] == "mark-reschedule"
-    assert nodes["check-unreachable"]["true_next_node_id"] == "mark-no-answer"
+    assert nodes["attempt-1-reschedule"]["true_next_node_id"] == "check-reschedule-time"
+    assert nodes["attempt-1-unreachable"]["true_next_node_id"] == "wait-retry-1"
 
 
 def test_post_op_template_starts_from_confirmed_status_and_waits_one_day() -> None:
@@ -155,7 +211,8 @@ def test_template_metadata_has_required_dental_contract() -> None:
             "sales",
             "marketing",
         }
-        assert metadata.default_frequency_cap.max_per_day == 1
+        expected_daily_cap = 3 if template.id == "surgery-pre-appointment-confirmation" else 1
+        assert metadata.default_frequency_cap.max_per_day == expected_daily_cap
         assert metadata.default_frequency_cap.max_per_rolling_7_days == 3
         assert metadata.analytics_outcome_map
         assert metadata.sample_preview_context
@@ -283,6 +340,7 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
                         name="My Surgery Confirmation",
                         location_id="loc-1",
                         voice_profile_id="prof-surgery",
+                        setup_options={"appointment_reasons": ["bridge prep"]},
                     ),
                 )
             )
@@ -303,8 +361,14 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
     published_def = mock_svc.publish_version.call_args.args[1]
     assert "appointment_type_ids" not in published_def["trigger"]
     published_nodes = {node["id"]: node for node in published_def["nodes"]}
-    assert published_nodes["voice-preop-confirmation"]["voice_profile_id"] == "prof-surgery"
-    assert published_nodes["voice-preop-confirmation"]["retell_agent_id"] == ""
+    assert published_nodes["voice-preop-attempt-1"]["voice_profile_id"] == "prof-surgery"
+    assert published_nodes["voice-preop-attempt-1"]["retell_agent_id"] == ""
+    reason_rule = next(
+        rule
+        for rule in published_nodes["check-eligible-reason"]["rules"]
+        if rule["field"] == "appointment_reason"
+    )
+    assert reason_rule["value"] == ["bridge prep"]
     assert mock_svc.publish_version.call_args.kwargs["content_classification"] == "transactional_care"
     mock_svc.pause_workflow.assert_awaited_once_with(wf)
 

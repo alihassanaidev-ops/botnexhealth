@@ -66,7 +66,7 @@ import type {
 } from "@/types/workflow"
 
 const NONE = "__none__"
-const CONDITION_OPS: ConditionOp[] = ["eq", "neq", "in", "not_in", "is_null", "is_not_null", "contains", "not_contains"]
+const CONDITION_OPS: ConditionOp[] = ["eq", "neq", "in", "in_case_insensitive", "not_in", "is_null", "is_not_null", "contains", "not_contains"]
 const CUSTOM_CONDITION_FIELD = "__custom_field__"
 const CUSTOM_RELATIVE_WAIT = "__custom__"
 const GOTRACKER_STATUS_OPTIONS = [
@@ -1410,7 +1410,7 @@ function ConditionFields({
                                 {needsValue && (
                                     <Input
                                         className="flex-1"
-                                        placeholder={rule.op === "in" || rule.op === "not_in" ? "a, b, c" : "value"}
+                                        placeholder={rule.op === "in" || rule.op === "in_case_insensitive" || rule.op === "not_in" ? "a, b, c" : "value"}
                                         value={ruleValueToText(rule.value)}
                                         disabled={readOnly}
                                         onChange={(e) => updateRule(i, { value: textToRuleValue(e.target.value, rule.op) })}
@@ -1646,7 +1646,7 @@ function ruleValueToText(value: ConditionRule["value"]): string {
     return String(value)
 }
 function textToRuleValue(text: string, op: ConditionOp): ConditionRule["value"] {
-    if (op === "in" || op === "not_in") {
+    if (op === "in" || op === "in_case_insensitive" || op === "not_in") {
         return text
             .split(",")
             .map((s) => s.trim())

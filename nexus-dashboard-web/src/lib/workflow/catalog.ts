@@ -172,6 +172,7 @@ export const CONDITION_OP_LABELS: Record<ConditionOp, string> = {
     eq: "equals",
     neq: "does not equal",
     in: "is one of",
+    in_case_insensitive: "is one of (ignore case)",
     not_in: "is not one of",
     is_null: "is empty",
     is_not_null: "is not empty",

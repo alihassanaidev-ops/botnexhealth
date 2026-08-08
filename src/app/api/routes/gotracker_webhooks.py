@@ -43,6 +43,8 @@ _PATIENT_EVENTS = frozenset({"patient.created", "patient.updated"})
 _HANDLED_EVENTS = _APPOINTMENT_EVENTS | _PATIENT_EVENTS
 _PROCESSING_TTL_SECONDS = 300
 _SIGNATURE_TOLERANCE_SECONDS = 300
+_HUMAN_FOREIGN_ID_TYPE = "tracker-1"
+_API_FOREIGN_ID_TYPE = "tracker-cloud-booked"
 
 
 def _raw_payload_text(raw_body: bytes) -> str:
@@ -322,6 +324,8 @@ async def _process_appointment_event(
         ),
     }
     reasons = _appointment_reasons(appointment, payload)
+    foreign_id_type = _foreign_id_type(payload, appointment)
+    should_react = foreign_id_type == _HUMAN_FOREIGN_ID_TYPE
     institution_id = str(location.institution_id)
     location_id = str(location.id)
 
@@ -347,7 +351,12 @@ async def _process_appointment_event(
         or _clean_str(_first(appointment, "updated_at", "UpdatedAt"))
         or _dedup_fallback(payload)
     )
-    dedup_key = f"{event}:{appointment_id}:{dedup_basis}"
+    source_event_id = _source_event_id(payload)
+    dedup_key = _event_dedup_key(
+        source_event_id=source_event_id,
+        item_key=f"{event}:appointment:{appointment_id}",
+        fallback=f"{event}:{appointment_id}:{dedup_basis}",
+    )
 
     from src.app.services.automation.nexhealth_projection_service import (
         NexHealthProjectionService,
@@ -370,7 +379,7 @@ async def _process_appointment_event(
             patient_id=patient_id,
             event_type=event,
             dedup_key=dedup_key,
-            source_event_id=_source_event_id(payload),
+            source_event_id=source_event_id,
             payload=payload,
             raw_payload=raw_payload,
         )
@@ -433,6 +442,27 @@ async def _process_appointment_event(
         await _complete_event(session, institution_id=institution_id, dedup_key=dedup_key)
         await session.commit()
 
+    if not should_react:
+        reason = (
+            "api_origin"
+            if foreign_id_type == _API_FOREIGN_ID_TYPE
+            else "unrecognized_origin"
+        )
+        logger.info(
+            "gotracker_webhook: projection-only event=%s appointment=%s "
+            "foreign_id_type=%s",
+            event,
+            appointment_id,
+            foreign_id_type or "missing",
+        )
+        return {
+            "status": "projection_only",
+            "reason": reason,
+            "change": upsert.change,
+            "appointment_id": appointment_id,
+            "institution_id": institution_id,
+        }
+
     if is_cancelled:
         from src.app.api.routes.nexhealth_webhooks import _cancel_runs_for_appointment
 
@@ -454,7 +484,13 @@ async def _process_appointment_event(
         from src.app.api.routes.nexhealth_webhooks import _cancel_runs_for_appointment
 
         runs_cancelled = await _cancel_runs_for_appointment(
-            institution_id, appointment_id, reason="gotracker_appointment_rescheduled"
+            institution_id,
+            appointment_id,
+            reason="gotracker_appointment_rescheduled",
+            # A workflow-originated reschedule can race its returning webhook.
+            # Keep the currently executing writeback run alive so it can finish;
+            # pending/waiting runs for the old time are still cancelled.
+            include_running=False,
         )
 
     from src.app.tasks.automation_workflow import (
@@ -466,6 +502,7 @@ async def _process_appointment_event(
     workflow_metadata = {
         "event": event,
         "source": "gotracker",
+        "foreign_id_type": foreign_id_type,
         "gotracker_appointment_id": raw_appointment_id,
         "gotracker_contact_id": raw_patient_id,
         "contact_source_id": patient_id,
@@ -608,7 +645,12 @@ async def _process_patient_event(
         or _clean_str(payload.get("event_time"))
         or _dedup_fallback(payload)
     )
-    dedup_key = f"{event}:{patient_id}:{dedup_basis}"
+    source_event_id = _source_event_id(payload)
+    dedup_key = _event_dedup_key(
+        source_event_id=source_event_id,
+        item_key=f"{event}:patient:{patient_id}",
+        fallback=f"{event}:{patient_id}:{dedup_basis}",
+    )
 
     from src.app.services.automation.nexhealth_projection_service import (
         NexHealthProjectionService,
@@ -630,7 +672,7 @@ async def _process_patient_event(
             patient_id=patient_id,
             event_type=event,
             dedup_key=dedup_key,
-            source_event_id=_source_event_id(payload),
+            source_event_id=source_event_id,
             payload=payload,
             raw_payload=raw_payload,
         )
@@ -846,10 +888,49 @@ def _source_event_id(payload: dict[str, Any]) -> str | None:
             return str(value)
     data = payload.get("data")
     if isinstance(data, dict):
-        for key in ("id", "event_id", "webhook_event_id", "delivery_id"):
+        # A nested `data.id` is commonly the appointment/patient ID, not the
+        # webhook delivery ID. Only explicit event-ID fields are safe here.
+        for key in ("event_id", "webhook_event_id", "delivery_id"):
             value = data.get(key)
             if value not in (None, ""):
                 return str(value)
+    return None
+
+
+def _event_dedup_key(
+    *,
+    source_event_id: str | None,
+    item_key: str,
+    fallback: str,
+) -> str:
+    """Prefer GoTracker's delivery ID while remaining safe for batch payloads."""
+    if not source_event_id:
+        return fallback
+    item_digest = hashlib.sha256(item_key.encode("utf-8")).hexdigest()[:16]
+    return f"source:{source_event_id}:{item_digest}"
+
+
+def _foreign_id_type(
+    payload: dict[str, Any], entity: dict[str, Any] | None = None
+) -> str | None:
+    """Read the GoTracker mutation origin from supported webhook shapes."""
+    candidates: list[dict[str, Any]] = [payload]
+    data = payload.get("data")
+    if isinstance(data, dict):
+        candidates.append(data)
+    if entity is not None:
+        candidates.append(entity)
+
+    for candidate in candidates:
+        value = _first(
+            candidate,
+            "foreign_id_type",
+            "foreignIdType",
+            "ForeignIdType",
+        )
+        cleaned = _clean_str(value)
+        if cleaned:
+            return cleaned.casefold()
     return None
 
 

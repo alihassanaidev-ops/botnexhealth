@@ -149,7 +149,13 @@ def test_retell_call_details_outcome_prefers_custom_analysis() -> None:
     details = SimpleNamespace(
         call_status="ended",
         disconnection_reason="agent_hangup",
-        call_analysis={"custom_analysis_data": {"call_outcome": "confirmed"}},
+        call_analysis={
+            "custom_analysis_data": {
+                "call_outcome": "confirmed",
+                "callback_at": "2026-07-02T15:00:00",
+                "ignored": "value",
+            }
+        },
         scrubbed_call_analysis=None,
     )
 
@@ -379,7 +385,12 @@ async def test_poll_retell_voice_outcomes_enqueues_resume_for_completed_call() -
     details = SimpleNamespace(
         call_status="ended",
         disconnection_reason="agent_hangup",
-        call_analysis={"custom_analysis_data": {"call_outcome": "confirmed"}},
+        call_analysis={
+            "custom_analysis_data": {
+                "call_outcome": "confirmed",
+                "callback_at": "2026-07-02T15:00:00",
+            }
+        },
         scrubbed_call_analysis=None,
     )
 
@@ -418,6 +429,7 @@ async def test_poll_retell_voice_outcomes_enqueues_resume_for_completed_call() -
             "retell_call_id": "call_abc",
             "call_outcome": "confirmed",
             "disconnection_reason": "agent_hangup",
+            "outcome_context": {"callback_at": "2026-07-02T15:00:00"},
         },
         queue="workflow",
     )

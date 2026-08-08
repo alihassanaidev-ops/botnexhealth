@@ -11,11 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import copy
+import math
 import re
 from typing import Any
 
 VOICE_AGENT_PLACEHOLDER = "__SELECT_OUTBOUND_VOICE_AGENT__"
 VOICE_PROFILE_PLACEHOLDER = "__SELECT_OUTBOUND_VOICE_PROFILE__"
+APPOINTMENT_REASONS_PLACEHOLDER = "__SELECT_APPOINTMENT_REASONS__"
 _TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
 
@@ -119,12 +121,63 @@ def _apply_required_setup_fields(
     setup_options: dict[str, Any],
 ) -> None:
     """Apply setup fields that affect executable workflow behavior."""
-    _ = (definition, setup_options)
     fields = template.metadata.setup_fields
     for setup_field in fields:
         field_id = setup_field.get("id")
         if field_id == "appointment_type_ids":
             continue
+        if field_id == "appointment_reasons":
+            reasons = _string_list(setup_options.get(field_id))
+            if setup_field.get("required") and not reasons:
+                raise ValueError("appointment_reasons must contain at least one GoTracker reason")
+            node = _node_by_id(definition, "check-eligible-reason")
+            if reasons and node:
+                for rule in node.get("rules", []):
+                    if isinstance(rule, dict) and rule.get("field") == "appointment_reason":
+                        rule["value"] = reasons
+            continue
+        if field_id == "call_offset_hours_before":
+            hours = _positive_number(
+                setup_options.get(field_id, setup_field.get("default", 24)),
+                field_id,
+                integer=True,
+            )
+            definition["trigger"]["offset_hours"] = -int(hours)
+            continue
+        if field_id in {"retry_delay_1_hours", "retry_delay_2_hours"}:
+            hours = _positive_number(
+                setup_options.get(field_id, setup_field.get("default", 5)),
+                field_id,
+            )
+            wait_id = "wait-retry-1" if field_id == "retry_delay_1_hours" else "wait-retry-2"
+            node = _node_by_id(definition, wait_id)
+            if node:
+                node["delay"] = {
+                    "delay_type": "duration",
+                    "duration_seconds": int(hours * 60 * 60),
+                }
+
+
+def _node_by_id(definition: dict[str, Any], node_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            node
+            for node in definition.get("nodes", [])
+            if isinstance(node, dict) and node.get("id") == node_id
+        ),
+        None,
+    )
+
+
+def _positive_number(value: Any, field_id: str, *, integer: bool = False) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_id} must be a positive number") from exc
+    if not math.isfinite(parsed) or parsed <= 0 or (integer and not parsed.is_integer()):
+        qualifier = "positive whole number" if integer else "positive number"
+        raise ValueError(f"{field_id} must be a {qualifier}")
+    return parsed
 
 
 def _string_list(value: Any) -> list[str]:
@@ -156,6 +209,7 @@ def _metadata(
     setup_fields: list[dict[str, Any]] | None = None,
     copy_variants: list[dict[str, str]] | None = None,
     pms_capabilities: list[str] | None = None,
+    frequency_cap: TemplateFrequencyCap = _STANDARD_FREQUENCY_CAP,
 ) -> CampaignTemplateMetadata:
     base_setup = [
         {
@@ -202,7 +256,7 @@ def _metadata(
         default_compliance_content_class=content_class,
         default_audience=audience,
         default_eligibility_rules=eligibility,
-        default_frequency_cap=_STANDARD_FREQUENCY_CAP,
+        default_frequency_cap=frequency_cap,
         default_staff_handoff_reason=handoff_reason,
         analytics_outcome_map=analytics,
         sample_preview_context=sample_context,
@@ -481,74 +535,49 @@ _UNSCHEDULED_TREATMENT_FOLLOWUP: dict[str, Any] = {
     "compliance": {"content_class": "sales", "consent_required": True},
 }
 
-_SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
-    "schema_version": "1.0",
-    "trigger": {
-        "type": "appointment_offset",
-        "offset_hours": -24,
-    },
-    "entry_node_id": "voice-preop-confirmation",
-    "nodes": [
+def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
+    """Build one explicit patient-contact attempt and its outcome router."""
+    final_attempt = attempt == 3
+    suffix = str(attempt)
+    callback_target = (
+        "mark-callback-after-max" if final_attempt else f"check-callback-time-{suffix}"
+    )
+    unreachable_target = "mark-max-attempts" if final_attempt else f"wait-retry-{suffix}"
+    nodes: list[dict[str, Any]] = [
         {
             "type": "send_voice",
-            "id": "voice-preop-confirmation",
+            "id": f"voice-preop-attempt-{suffix}",
             "retell_agent_id": "",
             "voice_profile_id": VOICE_PROFILE_PLACEHOLDER,
             "wait_for_outcome": True,
+            # Vendor-placement retries are deliberately separate from the three
+            # patient-contact attempts represented by these distinct nodes.
             "max_attempts": 1,
-            "next_node_id": "check-preop-outcome",
+            "next_node_id": f"attempt-{suffix}-confirmed",
         },
         {
             "type": "condition",
-            "id": "check-preop-outcome",
+            "id": f"attempt-{suffix}-confirmed",
             "rules": [{"field": "call_outcome", "op": "eq", "value": "confirmed"}],
             "true_next_node_id": "write-gotracker-confirmed",
-            "false_next_node_id": "check-cancelled",
-        },
-        {
-            "type": "update_gotracker_appointment",
-            "id": "write-gotracker-confirmed",
-            "status_id": None,
-            "confirmed": True,
-            "preconfirmed": False,
-            "start_time": None,
-            "end_time": None,
-            "duration_min": None,
-            "provider_id": None,
-            "operatory_id": None,
-            "patient_id": None,
-            "reason": None,
-            "next_node_id": "exit-confirmed",
+            "false_next_node_id": f"attempt-{suffix}-cancelled",
         },
         {
             "type": "condition",
-            "id": "check-cancelled",
-            "logic": "OR",
+            "id": f"attempt-{suffix}-cancelled",
             "rules": [
-                {"field": "call_outcome", "op": "in", "value": ["cancelled", "appointment_cancelled"]}
+                {
+                    "field": "call_outcome",
+                    "op": "in",
+                    "value": ["cancelled", "appointment_cancelled"],
+                }
             ],
             "true_next_node_id": "write-gotracker-cancelled",
-            "false_next_node_id": "check-reschedule",
-        },
-        {
-            "type": "update_gotracker_appointment",
-            "id": "write-gotracker-cancelled",
-            "status_id": 3,
-            "confirmed": None,
-            "preconfirmed": None,
-            "start_time": None,
-            "end_time": None,
-            "duration_min": None,
-            "provider_id": None,
-            "operatory_id": None,
-            "patient_id": None,
-            "reason": None,
-            "next_node_id": "exit-cancelled",
+            "false_next_node_id": f"attempt-{suffix}-reschedule",
         },
         {
             "type": "condition",
-            "id": "check-reschedule",
-            "logic": "OR",
+            "id": f"attempt-{suffix}-reschedule",
             "rules": [
                 {
                     "field": "call_outcome",
@@ -556,22 +585,155 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
                     "value": ["reschedule_requested", "reschedule", "appointment_requested"],
                 }
             ],
-            "true_next_node_id": "mark-reschedule",
-            "false_next_node_id": "check-dnc",
-        },
-        {
-            "type": "update_patient_status",
-            "id": "mark-reschedule",
-            "status": "reschedule_requested",
-            "note_template": "Pre-appointment call outcome: {{call_outcome}}",
-            "next_node_id": "exit-reschedule",
+            "true_next_node_id": "check-reschedule-time",
+            "false_next_node_id": f"attempt-{suffix}-callback",
         },
         {
             "type": "condition",
-            "id": "check-dnc",
+            "id": f"attempt-{suffix}-callback",
+            "rules": [
+                {"field": "call_outcome", "op": "eq", "value": "callback_requested"}
+            ],
+            "true_next_node_id": callback_target,
+            "false_next_node_id": f"attempt-{suffix}-dnc",
+        },
+        {
+            "type": "condition",
+            "id": f"attempt-{suffix}-dnc",
             "rules": [{"field": "call_outcome", "op": "eq", "value": "do_not_call"}],
             "true_next_node_id": "mark-dnc",
-            "false_next_node_id": "check-unreachable",
+            "false_next_node_id": f"attempt-{suffix}-unreachable",
+        },
+        {
+            "type": "condition",
+            "id": f"attempt-{suffix}-unreachable",
+            "rules": [
+                {
+                    "field": "call_outcome",
+                    "op": "in",
+                    "value": ["no_answer", "voicemail", "busy", "timeout", "declined"],
+                }
+            ],
+            "true_next_node_id": unreachable_target,
+            "false_next_node_id": "mark-followup",
+        },
+    ]
+    if not final_attempt:
+        nodes.extend(
+            [
+                {
+                    "type": "condition",
+                    "id": f"check-callback-time-{suffix}",
+                    "logic": "AND",
+                    "rules": [
+                        {"field": "callback_at", "op": "is_not_null", "value": None},
+                        {"field": "callback_at", "op": "neq", "value": ""},
+                    ],
+                    "true_next_node_id": f"wait-callback-{suffix}",
+                    "false_next_node_id": "mark-callback-time-missing",
+                },
+                {
+                    "type": "wait",
+                    "id": f"wait-callback-{suffix}",
+                    "delay": {
+                        "delay_type": "appointment_relative",
+                        "offset_seconds": 0,
+                        "anchor_field": "callback_at",
+                    },
+                    "next_node_id": f"voice-preop-attempt-{attempt + 1}",
+                },
+                {
+                    "type": "wait",
+                    "id": f"wait-retry-{suffix}",
+                    "delay": {"delay_type": "duration", "duration_seconds": 18000},
+                    "next_node_id": f"voice-preop-attempt-{attempt + 1}",
+                },
+            ]
+        )
+    return nodes
+
+
+_SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
+    "schema_version": "1.0",
+    "trigger": {"type": "appointment_offset", "offset_hours": -24},
+    "entry_node_id": "check-eligible-reason",
+    "nodes": [
+        {
+            "type": "condition",
+            "id": "check-eligible-reason",
+            "logic": "AND",
+            "rules": [
+                {
+                    "field": "appointment_status_id",
+                    "op": "in_case_insensitive",
+                    "value": ["1"],
+                },
+                {
+                    "field": "appointment_reason",
+                    "op": "in_case_insensitive",
+                    "value": [APPOINTMENT_REASONS_PLACEHOLDER],
+                }
+            ],
+            "true_next_node_id": "voice-preop-attempt-1",
+            "false_next_node_id": "exit-ineligible-reason",
+        },
+        *_preappointment_attempt_nodes(1),
+        *_preappointment_attempt_nodes(2),
+        *_preappointment_attempt_nodes(3),
+        {
+            "type": "condition",
+            "id": "check-reschedule-time",
+            "logic": "AND",
+            "rules": [
+                {"field": "reschedule_start_time", "op": "is_not_null", "value": None},
+                {"field": "reschedule_start_time", "op": "neq", "value": ""},
+            ],
+            "true_next_node_id": "write-gotracker-rescheduled",
+            "false_next_node_id": "mark-reschedule-time-missing",
+        },
+        {
+            "type": "update_gotracker_appointment",
+            "id": "write-gotracker-rescheduled",
+            "start_time": "{{reschedule_start_time}}",
+            "next_node_id": "exit-rescheduled",
+        },
+        {
+            "type": "update_gotracker_appointment",
+            "id": "write-gotracker-confirmed",
+            "confirmed": True,
+            "preconfirmed": None,
+            "next_node_id": "exit-confirmed",
+        },
+        {
+            "type": "update_gotracker_appointment",
+            "id": "write-gotracker-cancelled",
+            "status_id": 3,
+            "next_node_id": "exit-cancelled",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-max-attempts",
+            "status": "unreachable_after_max_attempts",
+            "note_template": "Pre-appointment call exhausted three attempts. Last outcome: {{call_outcome}}",
+            "next_node_id": "exit-max-attempts",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-callback-after-max",
+            "status": "callback_requested_after_max_attempts",
+            "next_node_id": "exit-callback-after-max",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-callback-time-missing",
+            "status": "callback_time_missing",
+            "next_node_id": "exit-callback-time-missing",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-reschedule-time-missing",
+            "status": "reschedule_time_missing",
+            "next_node_id": "exit-reschedule-time-missing",
         },
         {
             "type": "update_patient_status",
@@ -581,37 +743,20 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
             "next_node_id": "exit-dnc",
         },
         {
-            "type": "condition",
-            "id": "check-unreachable",
-            "logic": "OR",
-            "rules": [
-                {
-                    "field": "call_outcome",
-                    "op": "in",
-                    "value": ["no_answer", "busy", "voicemail", "timeout", "declined"],
-                }
-            ],
-            "true_next_node_id": "mark-no-answer",
-            "false_next_node_id": "mark-followup",
-        },
-        {
-            "type": "update_patient_status",
-            "id": "mark-no-answer",
-            "status": "no_answer",
-            "note_template": "Pre-appointment call could not reach patient. Outcome: {{call_outcome}}",
-            "next_node_id": "exit-no-answer",
-        },
-        {
             "type": "update_patient_status",
             "id": "mark-followup",
-            "status": "reschedule_or_followup_needed",
-            "note_template": "Pre-appointment call needs staff review. Outcome: {{call_outcome}}",
+            "status": "pre_appointment_followup_needed",
+            "note_template": "Pre-appointment call needs review. Outcome: {{call_outcome}}",
             "next_node_id": "exit-handoff",
         },
+        {"type": "exit", "id": "exit-ineligible-reason", "outcome": "ineligible_reason"},
         {"type": "exit", "id": "exit-confirmed", "outcome": "appointment_confirmed"},
         {"type": "exit", "id": "exit-cancelled", "outcome": "appointment_cancelled"},
-        {"type": "exit", "id": "exit-reschedule", "outcome": "reschedule_requested"},
-        {"type": "exit", "id": "exit-no-answer", "outcome": "no_answer"},
+        {"type": "exit", "id": "exit-rescheduled", "outcome": "appointment_rescheduled"},
+        {"type": "exit", "id": "exit-max-attempts", "outcome": "unreachable_after_max_attempts"},
+        {"type": "exit", "id": "exit-callback-after-max", "outcome": "callback_requested_after_max_attempts"},
+        {"type": "exit", "id": "exit-callback-time-missing", "outcome": "callback_time_missing"},
+        {"type": "exit", "id": "exit-reschedule-time-missing", "outcome": "reschedule_time_missing"},
         {"type": "exit", "id": "exit-handoff", "outcome": "staff_handoff"},
         {"type": "exit", "id": "exit-dnc", "outcome": "do_not_call"},
     ],
@@ -906,8 +1051,11 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             outcome_labels=[
                 "appointment_confirmed",
                 "appointment_cancelled",
-                "reschedule_requested",
-                "no_answer",
+                "appointment_rescheduled",
+                "unreachable_after_max_attempts",
+                "callback_requested_after_max_attempts",
+                "callback_time_missing",
+                "reschedule_time_missing",
                 "staff_handoff",
                 "do_not_call",
             ],
@@ -932,8 +1080,11 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             analytics={
                 "appointment_confirmed": "confirmed",
                 "appointment_cancelled": "cancelled",
-                "reschedule_requested": "reschedule",
-                "no_answer": "unreachable",
+                "appointment_rescheduled": "reschedule",
+                "unreachable_after_max_attempts": "unreachable",
+                "callback_requested_after_max_attempts": "handoff",
+                "callback_time_missing": "handoff",
+                "reschedule_time_missing": "handoff",
                 "staff_handoff": "handoff",
                 "do_not_call": "opt_out",
             },
@@ -952,8 +1103,40 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                     "type": "voice_profile_select",
                     "required": True,
                     "placeholder": "Choose outbound voice profile",
-                }
+                },
+                {
+                    "id": "appointment_reasons",
+                    "label": "Eligible GoTracker reasons",
+                    "type": "string_list",
+                    "required": True,
+                    "placeholder": "bridge prep, implant surgery",
+                },
+                {
+                    "id": "call_offset_hours_before",
+                    "label": "Initial call hours before appointment",
+                    "type": "number",
+                    "required": True,
+                    "default": 24,
+                },
+                {
+                    "id": "retry_delay_1_hours",
+                    "label": "Delay before second attempt (hours)",
+                    "type": "number",
+                    "required": True,
+                    "default": 5,
+                },
+                {
+                    "id": "retry_delay_2_hours",
+                    "label": "Delay before third attempt (hours)",
+                    "type": "number",
+                    "required": True,
+                    "default": 5,
+                },
             ],
+            frequency_cap=TemplateFrequencyCap(
+                max_per_day=3,
+                max_per_rolling_7_days=3,
+            ),
         ),
         tags=["appointment", "surgery", "voice", "confirmation"],
     ),

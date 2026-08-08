@@ -58,6 +58,10 @@ function requiresAppointmentTypes(template: CampaignTemplate) {
     )
 }
 
+function hasSetupField(template: CampaignTemplate, fieldId: string) {
+    return template.metadata.setup_fields.some((field) => field.id === fieldId)
+}
+
 function pmsCapabilityStatus(template: CampaignTemplate) {
     return template.metadata.pms_capability_evaluation
 }
@@ -106,6 +110,10 @@ export default function WorkflowTemplates() {
     const [handoffBehavior, setHandoffBehavior] = useState("")
     const [voiceProfileId, setVoiceProfileId] = useState("")
     const [appointmentTypeIds, setAppointmentTypeIds] = useState<string[]>([])
+    const [appointmentReasons, setAppointmentReasons] = useState("")
+    const [callOffsetHoursBefore, setCallOffsetHoursBefore] = useState("24")
+    const [retryDelay1Hours, setRetryDelay1Hours] = useState("5")
+    const [retryDelay2Hours, setRetryDelay2Hours] = useState("5")
     const [activeCategory, setActiveCategory] = useState<string>("all")
     const [creating, setCreating] = useState(false)
 
@@ -248,6 +256,10 @@ export default function WorkflowTemplates() {
         setAppointmentTypeIds([])
         setAppointmentTypes([])
         setAppointmentTypesLocationId(null)
+        setAppointmentReasons("")
+        setCallOffsetHoursBefore(setupFieldDefault(t, "call_offset_hours_before", "24"))
+        setRetryDelay1Hours(setupFieldDefault(t, "retry_delay_1_hours", "5"))
+        setRetryDelay2Hours(setupFieldDefault(t, "retry_delay_2_hours", "5"))
     }
 
     async function handleCreate() {
@@ -262,6 +274,21 @@ export default function WorkflowTemplates() {
             }
             if (requiresAppointmentTypes(picked)) {
                 setupOptions.appointment_type_ids = appointmentTypeIds
+            }
+            if (hasSetupField(picked, "appointment_reasons")) {
+                setupOptions.appointment_reasons = appointmentReasons
+                    .split(",")
+                    .map((reason) => reason.trim())
+                    .filter(Boolean)
+            }
+            if (hasSetupField(picked, "call_offset_hours_before")) {
+                setupOptions.call_offset_hours_before = Number(callOffsetHoursBefore)
+            }
+            if (hasSetupField(picked, "retry_delay_1_hours")) {
+                setupOptions.retry_delay_1_hours = Number(retryDelay1Hours)
+            }
+            if (hasSetupField(picked, "retry_delay_2_hours")) {
+                setupOptions.retry_delay_2_hours = Number(retryDelay2Hours)
             }
             const wf = await createWorkflowFromTemplate(picked.id, name, {
                 locationId: selectedLocationId || null,
@@ -278,6 +305,7 @@ export default function WorkflowTemplates() {
 
     const voiceRequired = picked ? requiresVoiceProfile(picked) : false
     const appointmentTypesRequired = picked ? requiresAppointmentTypes(picked) : false
+    const appointmentReasonsRequired = picked ? hasSetupField(picked, "appointment_reasons") : false
     const pickedCapability = picked ? pmsCapabilityStatus(picked) : null
     const audienceSourceOptions = picked
         ? setupFieldOptions(picked, "audience_source", picked.metadata.default_audience)
@@ -316,6 +344,10 @@ export default function WorkflowTemplates() {
         !selectedLocationId ||
         (voiceRequired && !voiceProfileId.trim()) ||
         (appointmentTypesRequired && appointmentTypeIds.length === 0) ||
+        (appointmentReasonsRequired && appointmentReasons.split(",").every((reason) => !reason.trim())) ||
+        (picked && hasSetupField(picked, "call_offset_hours_before") && !(Number(callOffsetHoursBefore) > 0)) ||
+        (picked && hasSetupField(picked, "retry_delay_1_hours") && !(Number(retryDelay1Hours) > 0)) ||
+        (picked && hasSetupField(picked, "retry_delay_2_hours") && !(Number(retryDelay2Hours) > 0)) ||
         pickedCapability?.supported === false
 
     return (
@@ -557,6 +589,65 @@ export default function WorkflowTemplates() {
                                             <p className="text-xs text-muted-foreground">
                                                 No outbound voice profiles are configured for this location. Ask a platform admin to add one.
                                             </p>
+                                        )}
+                                    </div>
+                                )}
+                                {hasSetupField(picked, "appointment_reasons") && (
+                                    <div className="space-y-2">
+                                        <Label htmlFor="appointment-reasons">Eligible GoTracker reasons</Label>
+                                        <Input
+                                            id="appointment-reasons"
+                                            value={appointmentReasons}
+                                            onChange={(event) => setAppointmentReasons(event.target.value)}
+                                            placeholder="bridge prep, implant surgery"
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            Comma-separated. Matching is exact and ignores capitalization.
+                                        </p>
+                                    </div>
+                                )}
+                                {(hasSetupField(picked, "call_offset_hours_before") ||
+                                    hasSetupField(picked, "retry_delay_1_hours") ||
+                                    hasSetupField(picked, "retry_delay_2_hours")) && (
+                                    <div className="grid gap-4 sm:grid-cols-3">
+                                        {hasSetupField(picked, "call_offset_hours_before") && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="call-offset-hours">Call hours before</Label>
+                                                <Input
+                                                    id="call-offset-hours"
+                                                    type="number"
+                                                    min="1"
+                                                    step="1"
+                                                    value={callOffsetHoursBefore}
+                                                    onChange={(event) => setCallOffsetHoursBefore(event.target.value)}
+                                                />
+                                            </div>
+                                        )}
+                                        {hasSetupField(picked, "retry_delay_1_hours") && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="retry-delay-1">Retry 1 delay (hours)</Label>
+                                                <Input
+                                                    id="retry-delay-1"
+                                                    type="number"
+                                                    min="0.25"
+                                                    step="0.25"
+                                                    value={retryDelay1Hours}
+                                                    onChange={(event) => setRetryDelay1Hours(event.target.value)}
+                                                />
+                                            </div>
+                                        )}
+                                        {hasSetupField(picked, "retry_delay_2_hours") && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="retry-delay-2">Retry 2 delay (hours)</Label>
+                                                <Input
+                                                    id="retry-delay-2"
+                                                    type="number"
+                                                    min="0.25"
+                                                    step="0.25"
+                                                    value={retryDelay2Hours}
+                                                    onChange={(event) => setRetryDelay2Hours(event.target.value)}
+                                                />
+                                            </div>
                                         )}
                                     </div>
                                 )}

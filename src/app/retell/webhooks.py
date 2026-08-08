@@ -126,6 +126,15 @@ def _campaign_voice_outcome(call: RetellCallWebhook) -> str:
     return map_disconnection_reason(call.disconnection_reason, call.call_status)
 
 
+def _campaign_voice_context(call: RetellCallWebhook) -> dict[str, str]:
+    """Return only custom analysis fields approved as workflow action inputs."""
+    from src.app.services.automation.voice_outcome import extract_workflow_outcome_context
+
+    analysis = call.call_analysis or call.scrubbed_call_analysis
+    custom = analysis.custom_analysis_data if analysis else {}
+    return extract_workflow_outcome_context(custom)
+
+
 async def _resolve_institution_location_from_agent(agent_id: str | None):
     """Resolve the active location/institution pair for a Retell agent.
 
@@ -913,6 +922,7 @@ async def process_retell_call_analyzed_event(
                             "institution_id": institution.id,
                             "retell_call_id": saved_call.retell_call_id,
                             "call_outcome": outcome,
+                            "outcome_context": _campaign_voice_context(event.call),
                             # Raw provider signal, recorded on the attempt row for the
                             # UI/debugging (already persisted on the Call row too).
                             "disconnection_reason": event.call.disconnection_reason,

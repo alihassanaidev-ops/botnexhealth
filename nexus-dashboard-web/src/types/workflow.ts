@@ -90,7 +90,7 @@ export type WaitDelay = DurationDelay | CalendarDelay | AppointmentRelativeDelay
 // ---------------------------------------------------------------------------
 // Condition rule
 // ---------------------------------------------------------------------------
-export type ConditionOp = "eq" | "neq" | "in" | "not_in" | "is_null" | "is_not_null" | "contains" | "not_contains"
+export type ConditionOp = "eq" | "neq" | "in" | "in_case_insensitive" | "not_in" | "is_null" | "is_not_null" | "contains" | "not_contains"
 
 export interface ConditionRule {
     field: string

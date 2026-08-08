@@ -78,6 +78,23 @@ const UNSUPPORTED_TEMPLATE = {
         },
     },
 }
+const PRE_APPOINTMENT_TEMPLATE = {
+    ...TEMPLATES[0],
+    id: "surgery-pre-appointment-confirmation",
+    name: "Surgery Pre-Appointment Confirmation",
+    metadata: {
+        ...TEMPLATES[0].metadata,
+        supported_channels: ["voice"],
+        default_frequency_cap: { max_per_day: 3, max_per_rolling_7_days: 3 },
+        setup_fields: [
+            { id: "voice_profile_id", label: "Voice profile", type: "voice_profile_select", required: true },
+            { id: "appointment_reasons", label: "Eligible reasons", type: "string_list", required: true },
+            { id: "call_offset_hours_before", label: "Call hours before", type: "number", required: true, default: 24 },
+            { id: "retry_delay_1_hours", label: "Retry 1", type: "number", required: true, default: 5 },
+            { id: "retry_delay_2_hours", label: "Retry 2", type: "number", required: true, default: 5 },
+        ],
+    },
+}
 const LOCATIONS = [{ id: "loc-1", name: "Downtown", slug: "downtown" }]
 
 beforeEach(() => {
@@ -150,6 +167,47 @@ describe("WorkflowTemplates page", () => {
         )
         expect(await screen.findByText("No templates available")).toBeInTheDocument()
     })
+
+    it("configures GoTracker reasons and independent voice retry delays", async () => {
+        list.mockResolvedValue([PRE_APPOINTMENT_TEMPLATE])
+        voiceProfiles.mockResolvedValue([
+            { id: "profile-preop", display_name: "Pre-appointment", purpose: "reminder" },
+        ])
+        create.mockResolvedValue({ id: "wf-preop", name: PRE_APPOINTMENT_TEMPLATE.name })
+        const user = userEvent.setup()
+        render(
+            <MemoryRouter>
+                <WorkflowTemplates />
+            </MemoryRouter>,
+        )
+
+        await screen.findByText(PRE_APPOINTMENT_TEMPLATE.name)
+        await user.click(screen.getByRole("button", { name: /use template/i }))
+        await user.click(await screen.findByRole("combobox", { name: "Voice profile" }))
+        await user.click(screen.getByRole("option", { name: "Pre-appointment" }))
+        await user.type(screen.getByLabelText("Eligible GoTracker reasons"), "Bridge Prep, Implant Surgery")
+        await user.clear(screen.getByLabelText("Retry 1 delay (hours)"))
+        await user.type(screen.getByLabelText("Retry 1 delay (hours)"), "4")
+        await user.clear(screen.getByLabelText("Retry 2 delay (hours)"))
+        await user.type(screen.getByLabelText("Retry 2 delay (hours)"), "7.5")
+        await user.click(screen.getByRole("button", { name: /create & open builder/i }))
+
+        await waitFor(() => {
+            expect(create).toHaveBeenCalledWith(
+                PRE_APPOINTMENT_TEMPLATE.id,
+                PRE_APPOINTMENT_TEMPLATE.name,
+                expect.objectContaining({
+                    voiceProfileId: "profile-preop",
+                    setupOptions: expect.objectContaining({
+                        appointment_reasons: ["Bridge Prep", "Implant Surgery"],
+                        call_offset_hours_before: 24,
+                        retry_delay_1_hours: 4,
+                        retry_delay_2_hours: 7.5,
+                    }),
+                }),
+            )
+        })
+    }, 10_000)
 
     it("disables templates when the selected location PMS does not support them", async () => {
         list.mockResolvedValue([UNSUPPORTED_TEMPLATE])

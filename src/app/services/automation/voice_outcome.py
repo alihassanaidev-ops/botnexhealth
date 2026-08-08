@@ -34,6 +34,28 @@ _REASON_MAP: dict[str, str] = {
 # The full set of normalized outcomes a ConditionNode may branch on.
 VOICE_OUTCOMES = frozenset(_REASON_MAP.values()) | {"unknown", "timeout"}
 
+# Canonical Retell post-call analysis fields that may drive executable workflow
+# behavior. Keep this allowlist narrow: arbitrary custom analysis must never be
+# copied into a run definition's context and accidentally become an action input.
+WORKFLOW_OUTCOME_CONTEXT_FIELDS = frozenset(
+    {
+        "callback_at",
+        "reschedule_start_time",
+        "reschedule_end_time",
+    }
+)
+
+
+def extract_workflow_outcome_context(custom_analysis: object) -> dict[str, str]:
+    if not isinstance(custom_analysis, dict):
+        return {}
+    context: dict[str, str] = {}
+    for field in WORKFLOW_OUTCOME_CONTEXT_FIELDS:
+        value = custom_analysis.get(field)
+        if isinstance(value, str) and value.strip():
+            context[field] = value.strip()
+    return context
+
 
 def map_disconnection_reason(
     disconnection_reason: str | None, call_status: str | None = None

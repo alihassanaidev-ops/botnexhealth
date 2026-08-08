@@ -13,7 +13,10 @@ import pytest
 from fastapi import HTTPException
 
 from src.app.api.routes.gotracker_webhooks import (
+    _event_dedup_key,
+    _foreign_id_type,
     _gotracker_status_label,
+    _source_event_id,
     _verify_signature,
     gotracker_webhook,
 )
@@ -131,10 +134,46 @@ def test_gotracker_status_id_labels_match_tracker_dropdown_order():
     assert _gotracker_status_label("9") == "waiting"
 
 
+def test_source_event_id_builds_stable_per_item_dedup_key():
+    payload = {"id": "delivery-123", "data": {"id": "appointment-55"}}
+
+    source_event_id = _source_event_id(payload)
+    first = _event_dedup_key(
+        source_event_id=source_event_id,
+        item_key="appointment.created:appointment:gt-55",
+        fallback="fallback-one",
+    )
+    repeated = _event_dedup_key(
+        source_event_id=source_event_id,
+        item_key="appointment.created:appointment:gt-55",
+        fallback="fallback-two",
+    )
+
+    assert source_event_id == "delivery-123"
+    assert first == repeated
+    assert first.startswith("source:delivery-123:")
+
+
+def test_nested_entity_id_is_not_mistaken_for_webhook_delivery_id():
+    assert _source_event_id({"data": {"id": "appointment-55"}}) is None
+
+
+def test_foreign_id_type_is_normalized_from_supported_webhook_shapes():
+    assert _foreign_id_type({"foreign_id_type": "TRACKER-1"}) == "tracker-1"
+    assert (
+        _foreign_id_type(
+            {"data": {"foreignIdType": "tracker-cloud-booked"}}
+        )
+        == "tracker-cloud-booked"
+    )
+
+
 @pytest.mark.asyncio
 async def test_appointment_created_updates_projection_and_queues_workflow():
     payload = {
+        "id": "webhook-created-55",
         "event": "appointment.created",
+        "foreign_id_type": "tracker-1",
         "data": {
             "appointment": {
                 "AppointmentId": 55,
@@ -192,7 +231,9 @@ async def test_appointment_created_updates_projection_and_queues_workflow():
 @pytest.mark.asyncio
 async def test_appointment_created_upserts_embedded_patient_when_contact_missing():
     payload = {
+        "id": "webhook-created-embedded-patient",
         "event": "appointment.created",
+        "foreign_id_type": "tracker-1",
         "data": {
             "appointment": {
                 "AppointmentId": 55,
@@ -254,7 +295,9 @@ async def test_appointment_created_upserts_embedded_patient_when_contact_missing
 @pytest.mark.asyncio
 async def test_appointment_created_accepts_tracker_date_and_time_fields():
     payload = {
+        "id": "webhook-created-900000004",
         "event": "appointment.created",
+        "foreign_id_type": "tracker-1",
         "data": {
             "appointment": {
                 "AppointmentId": 900000004,
@@ -387,7 +430,9 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
 @pytest.mark.asyncio
 async def test_appointment_cancelled_cancels_existing_runs():
     payload = {
+        "id": "webhook-cancelled-abc",
         "event": "appointment.cancelled",
+        "foreign_id_type": "tracker-1",
         "data": {"appointment": {"id": "abc", "patient_id": "pat"}},
     }
     request = _make_request(payload)
@@ -418,6 +463,100 @@ async def test_appointment_cancelled_cancels_existing_runs():
         institution_id="inst-1",
         location_id="loc-1",
     )
+
+
+@pytest.mark.asyncio
+async def test_api_originated_appointment_updates_projection_without_reacting():
+    payload = {
+        "id": "webhook-cloud-created-55",
+        "event": "appointment.created",
+        "foreign_id_type": "tracker-cloud-booked",
+        "data": {
+            "appointment": {
+                "AppointmentId": 55,
+                "ContactId": 42,
+                "StartTime": "2026-08-01T10:00:00Z",
+                "StatusId": 1,
+            }
+        },
+    }
+    request = _make_request(payload)
+    projection, projection_patch = _patch_projection(change="new")
+    lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
+    claim_event = AsyncMock(return_value=True)
+
+    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+        side_effect=[
+            _session_with_scalar(_location()),
+            _session_with_scalar(SimpleNamespace(id="contact-1")),
+            _processing_session(),
+        ],
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._claim_event", new=claim_event
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
+    ), projection_patch, lifecycle_patch, patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+    ) as trigger_task, patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+    ) as state_task, patch(
+        "src.app.tasks.automation_workflow.resume_reactivation_booking"
+    ) as reactivation_task:
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        result = await gotracker_webhook("loc-1", request)
+
+    item = result["results"][0]
+    assert item["status"] == "projection_only"
+    assert item["reason"] == "api_origin"
+    projection.upsert_appointment.assert_awaited_once()
+    claim_kwargs = claim_event.await_args.kwargs
+    assert claim_kwargs["source_event_id"] == "webhook-cloud-created-55"
+    assert claim_kwargs["dedup_key"].startswith("source:webhook-cloud-created-55:")
+    trigger_task.delay.assert_not_called()
+    state_task.delay.assert_not_called()
+    reactivation_task.delay.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_api_originated_cancellation_does_not_cancel_or_start_runs():
+    payload = {
+        "id": "webhook-cloud-cancelled-55",
+        "event": "appointment.cancelled",
+        "foreign_id_type": "tracker-cloud-booked",
+        "data": {"appointment": {"AppointmentId": 55, "ContactId": 42}},
+    }
+    request = _make_request(payload)
+    projection, projection_patch = _patch_projection(change="cancelled")
+    lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
+    cancel_runs = AsyncMock(return_value=2)
+
+    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+        side_effect=[
+            _session_with_scalar(_location()),
+            _session_with_scalar(SimpleNamespace(id="contact-1")),
+            _processing_session(),
+        ],
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._claim_event",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
+    ), projection_patch, lifecycle_patch, patch(
+        "src.app.api.routes.nexhealth_webhooks._cancel_runs_for_appointment",
+        new=cancel_runs,
+    ):
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        result = await gotracker_webhook("loc-1", request)
+
+    item = result["results"][0]
+    assert item["status"] == "projection_only"
+    assert item["reason"] == "api_origin"
+    projection.upsert_appointment.assert_awaited_once()
+    cancel_runs.assert_not_awaited()
 
 
 @pytest.mark.asyncio

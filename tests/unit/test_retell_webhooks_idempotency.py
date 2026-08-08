@@ -167,6 +167,29 @@ def test_campaign_voice_outcome_prefers_scrubbed_custom_call_outcome():
     assert webhooks._campaign_voice_outcome(call) == "confirmed"
 
 
+def test_campaign_voice_context_only_forwards_supported_workflow_fields():
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-callback",
+            "call_analysis": {
+                "custom_analysis_data": {
+                    "call_outcome": "callback_requested",
+                    "callback_at": "2026-08-08T15:00:00",
+                    "reschedule_start_time": "2026-08-12T14:30:00",
+                    "reschedule_end_time": "2026-08-12T14:45:00",
+                    "untrusted_extra": "must-not-enter-workflow-context",
+                }
+            },
+        }
+    )
+
+    assert webhooks._campaign_voice_context(call) == {
+        "callback_at": "2026-08-08T15:00:00",
+        "reschedule_start_time": "2026-08-12T14:30:00",
+        "reschedule_end_time": "2026-08-12T14:45:00",
+    }
+
+
 @pytest.mark.asyncio
 async def test_helper_returns_success_and_finalizes_completed_when_no_institution():
     """If the agent_id doesn't resolve to an institution, that's a

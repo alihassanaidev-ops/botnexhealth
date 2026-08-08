@@ -46,6 +46,7 @@ from src.app.services.automation.step_dispatcher import (
     _evaluate_rule,
 )
 from src.app.services.automation.llm_node_executor import execute_llm_node
+from src.app.services.automation.campaign_templates import TEMPLATES, instantiate_definition
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
 
@@ -262,8 +263,10 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
             return_value=projection,
         ),
         patch("src.app.tasks.automation_workflow.trigger_appointment_state_workflows") as state_task,
+        patch("src.app.tasks.automation_workflow.trigger_appointment_workflows") as appointment_task,
     ):
         state_task.delay = MagicMock()
+        appointment_task.delay = MagicMock()
         result = asyncio.run(
             dispatcher.advance(
                 run,
@@ -306,7 +309,7 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
         institution_id="inst-1",
         appointment_id="gt-1343",
         location_id="loc-1",
-        start_time="2026-08-12T14:30",
+        start_time="2026-08-12T14:30:00+00:00",
         provider_id="gt-2",
     )
     state_task.delay.assert_called_once()
@@ -315,6 +318,11 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
     assert state_kwargs["status_id"] == 5
     assert state_kwargs["confirmed"] is None
     assert state_kwargs["preconfirmed"] is None
+    appointment_task.delay.assert_called_once()
+    appointment_kwargs = appointment_task.delay.call_args.kwargs
+    assert appointment_kwargs["appointment_id"] == "gt-1343"
+    assert appointment_kwargs["appointment_at_iso"] == "2026-08-12T14:30:00+00:00"
+    assert appointment_kwargs["trigger_metadata"]["appointment_at"] == "2026-08-12T14:30:00+00:00"
     assert mock_audit.await_count == 2
 
 
@@ -878,12 +886,78 @@ def test_advance_missing_node_fails_run() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _preappointment_definition() -> WorkflowDefinition:
+    return WorkflowDefinition.model_validate(
+        instantiate_definition(
+            TEMPLATES["surgery-pre-appointment-confirmation"],
+            voice_profile_id="profile-preop",
+            setup_options={
+                "appointment_reasons": ["bridge prep"],
+                "retry_delay_1_hours": 4,
+                "retry_delay_2_hours": 7,
+            },
+        )
+    )
+
+
+def test_preappointment_no_answer_routes_to_configured_second_attempt_wait() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+    run = _make_run()
+    run.current_step_id = "attempt-1-confirmed"
+
+    result = asyncio.run(
+        dispatcher.advance(
+            run,
+            _preappointment_definition(),
+            context={"call_outcome": "no_answer"},
+            now=_NOW,
+        )
+    )
+
+    assert result.status == "waiting"
+    assert sched.create_timer.await_args.kwargs["due_at"] == _NOW + timedelta(hours=4)
+    assert any(call.kwargs.get("step_id") == "wait-retry-1" for call in rt.begin_step.await_args_list)
+
+
+def test_preappointment_callback_routes_to_patient_requested_clinic_time() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+    run = _make_run()
+    run.current_step_id = "attempt-1-confirmed"
+
+    result = asyncio.run(
+        dispatcher.advance(
+            run,
+            _preappointment_definition(),
+            context={
+                "call_outcome": "callback_requested",
+                "callback_at": "2026-07-02T15:00:00",
+            },
+            location_timezone="America/Toronto",
+            now=_NOW,
+        )
+    )
+
+    assert result.status == "waiting"
+    assert sched.create_timer.await_args.kwargs["due_at"] == datetime(
+        2026, 7, 2, 19, 0, tzinfo=timezone.utc
+    )
+    assert any(call.kwargs.get("step_id") == "wait-callback-1" for call in rt.begin_step.await_args_list)
+
+
 @pytest.mark.parametrize("op,field_val,rule_val,expected", [
     ("eq", "confirmed", "confirmed", True),
     ("eq", "confirmed", "pending", False),
     ("neq", "confirmed", "pending", True),
     ("in", "confirmed", ["confirmed", "pending"], True),
     ("in", "other", ["confirmed", "pending"], False),
+    ("in_case_insensitive", "Bridge Prep", ["bridge prep", "implant surgery"], True),
+    ("in_case_insensitive", "Bridge Prep Follow-up", ["bridge prep"], False),
     ("not_in", "other", ["confirmed"], True),
     ("is_null", None, None, True),
     ("is_null", "x", None, False),
@@ -984,3 +1058,16 @@ def test_compute_due_at_appointment_relative_past_returns_now() -> None:
         context={"appointment_at": "2026-07-02T14:30:00+00:00"},
     )
     assert result == _NOW
+
+
+def test_compute_due_at_context_anchor_interprets_naive_time_in_location_timezone() -> None:
+    delay = AppointmentRelativeDelay(offset_seconds=0, anchor_field="callback_at")
+
+    result = _compute_due_at(
+        delay,
+        "America/Toronto",
+        _NOW,
+        context={"callback_at": "2026-07-02T15:00:00"},
+    )
+
+    assert result == datetime(2026, 7, 2, 19, 0, tzinfo=timezone.utc)

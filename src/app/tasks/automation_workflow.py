@@ -1477,6 +1477,7 @@ async def _poll_retell_voice_outcomes_async() -> dict:
                 "retell_call_id": retell_call_id,
                 "call_outcome": call_outcome,
                 "disconnection_reason": details.disconnection_reason,
+                "outcome_context": _retell_call_details_context(details),
             },
             queue="workflow",
         )
@@ -1510,6 +1511,14 @@ def _retell_call_details_outcome(details) -> str:
     return map_disconnection_reason(details.disconnection_reason, details.call_status)
 
 
+def _retell_call_details_context(details) -> dict[str, str]:
+    from src.app.services.automation.voice_outcome import extract_workflow_outcome_context
+
+    analysis = details.call_analysis or details.scrubbed_call_analysis or {}
+    custom = analysis.get("custom_analysis_data") if isinstance(analysis, dict) else {}
+    return extract_workflow_outcome_context(custom)
+
+
 @celery_app.task(
     name="src.app.tasks.automation_workflow.resume_voice_outcome",
     bind=True,
@@ -1523,6 +1532,7 @@ def resume_voice_outcome(
     retell_call_id: str,
     call_outcome: str,
     disconnection_reason: str | None = None,
+    outcome_context: dict[str, str] | None = None,
 ) -> dict:
     """Resume a run parked WAITING for a voice-call outcome (Plan 03 §7.2).
 
@@ -1540,6 +1550,7 @@ def resume_voice_outcome(
                 retell_call_id=retell_call_id,
                 call_outcome=call_outcome,
                 disconnection_reason=disconnection_reason,
+                outcome_context=outcome_context,
             )
         )
     except Exception as exc:
@@ -1556,6 +1567,7 @@ async def _resume_voice_outcome_async(
     retell_call_id: str,
     call_outcome: str,
     disconnection_reason: str | None = None,
+    outcome_context: dict[str, str] | None = None,
 ) -> dict:
     from sqlalchemy import select
 
@@ -1607,8 +1619,11 @@ async def _resume_voice_outcome_async(
             call_outcome=call_outcome,
             disconnection_reason=disconnection_reason,
         )
+        from src.app.services.automation.voice_outcome import extract_workflow_outcome_context
+
         md = dict(run.trigger_metadata or {})
         md["call_outcome"] = call_outcome
+        md.update(extract_workflow_outcome_context(outcome_context or {}))
         run.trigger_metadata = md
         await session.flush()
 
