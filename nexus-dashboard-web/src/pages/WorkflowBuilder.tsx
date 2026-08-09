@@ -363,8 +363,12 @@ export default function WorkflowBuilder() {
         try {
             // Authoritative backend validation (consent/content-class + schema).
             const result = await validateDefinitionOnServer(payload)
-            setBackendIssues(result.issues)
-            const serverErrors = result.issues.filter((i) => i.severity === "error")
+            // Older API deployments returned only `{ valid }`. Publishing still
+            // performs authoritative validation, so an absent advisory issue list
+            // must not prevent the PATCH from reaching the backend.
+            const serverIssues = Array.isArray(result.issues) ? result.issues : []
+            setBackendIssues(serverIssues)
+            const serverErrors = serverIssues.filter((i) => i.severity === "error")
             if (serverErrors.length > 0) {
                 toast.error(
                     `Resolve ${serverErrors.length} server validation error${serverErrors.length > 1 ? "s" : ""} before publishing`,

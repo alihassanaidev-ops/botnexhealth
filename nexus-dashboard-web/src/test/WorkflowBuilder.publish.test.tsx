@@ -140,4 +140,16 @@ describe("WorkflowBuilder publish — authoritative backend validation", () => {
         await waitFor(() => expect(validate).toHaveBeenCalled())
         await waitFor(() => expect(patch).toHaveBeenCalled())
     }, 10000)
+
+    it("still publishes when an older validation response omits issues", async () => {
+        get.mockResolvedValue(WORKFLOW)
+        validate.mockResolvedValue({ valid: true })
+        patch.mockResolvedValue({ ...WORKFLOW, name: "My Reminder Campaign!" })
+        const user = userEvent.setup()
+        renderBuilder()
+        await makeDirtyAndOpenPublish(user)
+
+        await waitFor(() => expect(validate).toHaveBeenCalled())
+        await waitFor(() => expect(patch).toHaveBeenCalled())
+    }, 10000)
 })
