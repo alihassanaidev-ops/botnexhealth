@@ -102,4 +102,13 @@ describe("WorkflowVersions page", () => {
             expect(screen.getByText(/no published versions yet/i)).toBeInTheDocument(),
         )
     })
+
+    it("shows a load error instead of claiming a failed request has no versions", async () => {
+        getWf.mockResolvedValue(WF)
+        getVersions.mockRejectedValue(new Error("route failed"))
+        renderPage()
+
+        expect(await screen.findByText("Couldn't load version history")).toBeInTheDocument()
+        expect(screen.queryByText(/no published versions yet/i)).not.toBeInTheDocument()
+    })
 })

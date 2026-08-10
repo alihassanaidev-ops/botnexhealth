@@ -61,6 +61,10 @@ Thumbs.db
 # Secrets (never include in images)
 secrets/
 .env
+*-secrets.txt
+
+# Local QA tooling
+twilio_browser_phone/
 
 # Agent files
 .gemini/

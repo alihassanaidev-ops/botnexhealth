@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useState } from "react"
 import { Link, useParams } from "react-router-dom"
-import { ArrowLeft, History, PencilRuler, ShieldCheck } from "lucide-react"
+import { AlertCircle, ArrowLeft, History, PencilRuler, ShieldCheck } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -37,11 +37,17 @@ export default function WorkflowVersions() {
     const [versions, setVersions] = useState<WorkflowVersion[]>([])
     const [selectedId, setSelectedId] = useState<string | null>(null)
     const [loading, setLoading] = useState(true)
+    const [loadError, setLoadError] = useState<string | null>(null)
 
     useEffect(() => {
-        if (!id) return
+        if (!id || id === "undefined") {
+            setLoadError("The campaign link is missing a valid workflow ID.")
+            setLoading(false)
+            return
+        }
         ;(async () => {
             setLoading(true)
+            setLoadError(null)
             try {
                 const [wf, vers] = await Promise.all([getWorkflow(id), listVersions(id)])
                 setWorkflow(wf)
@@ -49,6 +55,7 @@ export default function WorkflowVersions() {
                 const current = vers.find((v) => v.is_current) ?? vers[0] ?? null
                 setSelectedId(current?.id ?? null)
             } catch {
+                setLoadError("Couldn't load version history. The server request failed.")
                 toast.error("Failed to load version history")
             } finally {
                 setLoading(false)
@@ -105,13 +112,23 @@ export default function WorkflowVersions() {
                 </div>
             )}
 
-            {!loading && versions.length === 0 && (
+            {!loading && loadError && (
+                <div className="flex items-start gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                        <p className="font-medium">Couldn't load version history</p>
+                        <p className="mt-1 text-muted-foreground">{loadError}</p>
+                    </div>
+                </div>
+            )}
+
+            {!loading && !loadError && versions.length === 0 && (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                     This workflow has no published versions yet.
                 </p>
             )}
 
-            {!loading && versions.length > 0 && (
+            {!loading && !loadError && versions.length > 0 && (
                 <div className="grid gap-6 lg:grid-cols-[minmax(0,340px)_1fr]">
                     {/* Version list */}
                     <ul className="space-y-2">

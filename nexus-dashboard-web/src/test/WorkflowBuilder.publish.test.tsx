@@ -6,18 +6,17 @@ import WorkflowBuilder from "@/pages/WorkflowBuilder"
 import {
     getWorkflow,
     previewLaunchChecklist,
-    updateWorkflow,
-    validateDefinition,
+    publishWorkflow,
 } from "@/lib/workflow-api"
+import { toast } from "sonner"
 import type { AutomationWorkflow } from "@/types"
 
 vi.mock("@/lib/workflow-api", () => ({
     getWorkflow: vi.fn(),
-    updateWorkflow: vi.fn(),
+    publishWorkflow: vi.fn(),
     pauseWorkflow: vi.fn(),
     resumeWorkflow: vi.fn(),
     deleteWorkflow: vi.fn(),
-    validateDefinition: vi.fn(),
     listPhoneCountryRegions: vi.fn().mockResolvedValue([]),
     getChannelReadiness: vi.fn(),
     previewLaunchChecklist: vi.fn(),
@@ -29,8 +28,7 @@ vi.mock("@/lib/outbound-voice-api", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
 
 const get = getWorkflow as ReturnType<typeof vi.fn>
-const patch = updateWorkflow as ReturnType<typeof vi.fn>
-const validate = validateDefinition as ReturnType<typeof vi.fn>
+const publish = publishWorkflow as ReturnType<typeof vi.fn>
 const previewChecklist = previewLaunchChecklist as ReturnType<typeof vi.fn>
 
 // A well-formed workflow: no client-side validation errors.
@@ -96,60 +94,66 @@ async function makeDirtyAndOpenPublish(user: ReturnType<typeof userEvent.setup>)
 }
 
 beforeEach(() => {
+    vi.clearAllMocks()
     get.mockReset()
-    patch.mockReset()
-    validate.mockReset()
+    publish.mockReset()
     previewChecklist.mockReset()
     previewChecklist.mockResolvedValue(LAUNCH_CHECKLIST)
     localStorage.clear()
 })
 
-describe("WorkflowBuilder publish — authoritative backend validation", () => {
-    it("blocks publish when the backend returns a severity=error issue", async () => {
+describe("WorkflowBuilder publish", () => {
+    it("publishes through one authoritative command and clears the draft on a new version", async () => {
         get.mockResolvedValue(WORKFLOW)
-        validate.mockResolvedValue({
-            valid: false,
-            issues: [
-                {
-                    node_id: "exit-1",
-                    severity: "error",
-                    message: "Consent is required for this channel.",
-                    code: "consent_required",
-                },
-            ],
+        publish.mockResolvedValue({
+            ...WORKFLOW,
+            name: "My Reminder Campaign!",
+            current_version_id: "v-2",
         })
         const user = userEvent.setup()
         renderBuilder()
         await makeDirtyAndOpenPublish(user)
 
-        await waitFor(() => expect(validate).toHaveBeenCalled())
-        // Publish is blocked — no PATCH — and the server issue is surfaced.
-        expect(patch).not.toHaveBeenCalled()
-        expect(await screen.findByText("Consent is required for this channel.")).toBeInTheDocument()
-        expect(screen.getByText(/server & compliance checks/i)).toBeInTheDocument()
+        await waitFor(() => expect(publish).toHaveBeenCalledTimes(1))
+        expect(get).toHaveBeenCalledTimes(1)
+        expect(toast.success).toHaveBeenCalledWith("Changes published")
+        expect(localStorage.getItem("nex.workflow-draft.wf-1")).toBeNull()
     }, 10000)
 
-    it("proceeds to publish when the backend validation passes", async () => {
+    it("surfaces the publish validation error and keeps the local draft", async () => {
         get.mockResolvedValue(WORKFLOW)
-        validate.mockResolvedValue({ valid: true, issues: [] })
-        patch.mockResolvedValue({ ...WORKFLOW, name: "My Reminder Campaign!" })
+        publish.mockRejectedValue({
+            response: { data: { detail: "Cannot publish: invalid condition." } },
+        })
         const user = userEvent.setup()
         renderBuilder()
         await makeDirtyAndOpenPublish(user)
 
-        await waitFor(() => expect(validate).toHaveBeenCalled())
-        await waitFor(() => expect(patch).toHaveBeenCalled())
+        await waitFor(() => expect(publish).toHaveBeenCalled())
+        expect(toast.error).toHaveBeenCalledWith(
+            "Couldn't publish: Cannot publish: invalid condition.",
+        )
+        expect(toast.success).not.toHaveBeenCalled()
+        expect(screen.getByText(/unsaved/i)).toBeInTheDocument()
     }, 10000)
 
-    it("still publishes when an older validation response omits issues", async () => {
+    it("does not report success or lose the route id when publish returns an invalid workflow", async () => {
         get.mockResolvedValue(WORKFLOW)
-        validate.mockResolvedValue({ valid: true })
-        patch.mockResolvedValue({ ...WORKFLOW, name: "My Reminder Campaign!" })
+        publish.mockResolvedValue({
+            ...WORKFLOW,
+            id: undefined,
+            current_version_id: "v-1",
+        } as unknown as AutomationWorkflow)
         const user = userEvent.setup()
         renderBuilder()
         await makeDirtyAndOpenPublish(user)
 
-        await waitFor(() => expect(validate).toHaveBeenCalled())
-        await waitFor(() => expect(patch).toHaveBeenCalled())
+        await waitFor(() => expect(publish).toHaveBeenCalled())
+        expect(toast.success).not.toHaveBeenCalledWith("Changes published")
+        expect(toast.error).toHaveBeenCalled()
+        expect(screen.getByRole("link", { name: /versions/i })).toHaveAttribute(
+            "href",
+            "/institution-admin/campaigns/wf-1/versions",
+        )
     }, 10000)
 })

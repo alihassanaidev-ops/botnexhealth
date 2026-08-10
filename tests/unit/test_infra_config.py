@@ -34,6 +34,7 @@ def test_staging_config_loads_scale_controls() -> None:
 
     assert config.worker.queue_scale_up_depth == 25
     assert config.worker.queue_scale_down_depth == 2
+    assert config.waf_count_oversize_body_requests is True
 
     assert config.retention.clinical_record_days == 3650
     assert config.retention.minor_record_age_years == 28
@@ -42,3 +43,9 @@ def test_staging_config_loads_scale_controls() -> None:
     assert config.retention.notification_days == 180
     assert config.retention.dead_letter_raw_days == 30
     assert config.retention.idempotency_days == 7
+
+
+def test_production_keeps_oversize_body_waf_blocking() -> None:
+    config = load_config(INFRA_ROOT / "config" / "production.json")
+
+    assert config.waf_count_oversize_body_requests is False

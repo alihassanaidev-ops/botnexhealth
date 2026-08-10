@@ -6,6 +6,7 @@
   "appEnv": "staging",
   "logLevel": "info",
   "alarmEmail": "zulkhaifahmed@gmail.com",
+  "wafCountOversizeBodyRequests": true,
   "network": {
     "maxAzs": 2,
     "natGateways": 1

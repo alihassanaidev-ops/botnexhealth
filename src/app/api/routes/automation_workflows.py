@@ -1319,9 +1319,12 @@ async def list_workflow_versions(
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
-        versions = sorted(
-            wf.versions, key=lambda v: v.version_number, reverse=True
+        result = await session.execute(
+            sa_select(AutomationWorkflowVersion)
+            .where(AutomationWorkflowVersion.workflow_id == wf.id)
+            .order_by(AutomationWorkflowVersion.version_number.desc())
         )
+        versions = list(result.scalars().all())
         return [
             WorkflowVersionResponse.from_model(v, current_version_id=wf.current_version_id)
             for v in versions
@@ -1356,12 +1359,19 @@ async def update_workflow(
 async def publish_workflow(
     workflow_id: str,
     current_user: _InstitutionAdmin,
+    data: WorkflowUpdateRequest | None = None,
 ) -> WorkflowResponse:
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
         wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
-        await svc.publish_version(wf)
+        if data is not None and data.name is not None:
+            wf.name = data.name
+            await session.flush()
+        if data is None:
+            await svc.publish_version(wf)
+        else:
+            await svc.publish_version(wf, data.definition)
         return WorkflowResponse.from_model(wf)
 
 

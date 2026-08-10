@@ -1404,6 +1404,21 @@ class NexHealthPlatformStack(Stack):
                         "managedRuleGroupStatement": {
                             "vendorName": "AWS",
                             "name": "AWSManagedRulesCommonRuleSet",
+                            # ALB inspection is fixed at 8 KiB. Staging can
+                            # explicitly count this rule instead of blocking so
+                            # larger authenticated JSON reaches app validation.
+                            **(
+                                {
+                                    "ruleActionOverrides": [
+                                        {
+                                            "name": "SizeRestrictions_BODY",
+                                            "actionToUse": {"count": {}},
+                                        }
+                                    ]
+                                }
+                                if self.config.waf_count_oversize_body_requests
+                                else {}
+                            ),
                         }
                     },
                     "visibilityConfig": {

@@ -4,6 +4,7 @@
  * pages handle errors). Endpoints per findings.md §3 (base already ends in `/api`).
  */
 import api from "@/lib/api"
+import { getAccessToken } from "@/lib/token-manager"
 import type { AutomationWorkflow } from "@/types"
 import type {
     ChannelReadiness,
@@ -117,8 +118,36 @@ export async function updateWorkflow(
     return data
 }
 
-export async function publishWorkflow(id: string): Promise<AutomationWorkflow> {
-    const { data } = await api.post<AutomationWorkflow>(`/automation/workflows/${id}/publish`)
+export async function publishWorkflow(
+    id: string,
+    payload?: { name?: string; definition?: WorkflowDefinition },
+): Promise<AutomationWorkflow> {
+    const path = `/automation/workflows/${id}/publish`
+    if (!payload) {
+        const { data } = await api.post<AutomationWorkflow>(path)
+        return data
+    }
+
+    const baseUrl = String(api.defaults?.baseURL ?? "/api").replace(/\/$/, "")
+    const token = getAccessToken()
+    const response = await fetch(`${baseUrl}${path}`, {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+    })
+    const data = await response.json().catch(() => null) as AutomationWorkflow | { detail?: string } | null
+    if (!response.ok) {
+        const detail = data && "detail" in data ? data.detail : null
+        throw new Error(detail || `Publish failed with HTTP ${response.status}.`)
+    }
+    if (!data || !("id" in data)) {
+        throw new Error("The publish response was not a workflow.")
+    }
     return data
 }
 

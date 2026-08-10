@@ -5,7 +5,7 @@
  * the definition via the palette + typed config panel, see live node-linked validation,
  * dry-run, and publish. The editing buffer is a client-side draft (state + localStorage
  * autosave) because the backend has no draft-with-definition path (findings.md §4);
- * publishing PATCHes a new active version.
+ * publishing snapshots a new active version.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
@@ -21,9 +21,8 @@ import {
     getWorkflow,
     pauseWorkflow,
     previewLaunchChecklist,
+    publishWorkflow,
     resumeWorkflow,
-    updateWorkflow,
-    validateDefinition as validateDefinitionOnServer,
 } from "@/lib/workflow-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import {
@@ -363,24 +362,19 @@ export default function WorkflowBuilder() {
         const payload = serializeDefinition(def)
         setBusy(true)
         try {
-            // Authoritative backend validation (consent/content-class + schema).
-            const result = await validateDefinitionOnServer(payload)
-            // Older API deployments returned only `{ valid }`. Publishing still
-            // performs authoritative validation, so an absent advisory issue list
-            // must not prevent the PATCH from reaching the backend.
-            const serverIssues = Array.isArray(result.issues) ? result.issues : []
-            setBackendIssues(serverIssues)
-            const serverErrors = serverIssues.filter((i) => i.severity === "error")
-            if (serverErrors.length > 0) {
-                toast.error(
-                    `Resolve ${serverErrors.length} server validation error${serverErrors.length > 1 ? "s" : ""} before publishing`,
-                )
-                return
-            }
-            const updated = await updateWorkflow(id, {
+            // Publish through the explicit command endpoint. The backend validates
+            // and snapshots this definition as one atomic operation.
+            const updated = await publishWorkflow(id, {
                 name: name.trim() || workflow?.name,
                 definition: payload,
             })
+            if (
+                updated.id !== id
+                || !updated.current_version_id
+                || updated.current_version_id === workflow?.current_version_id
+            ) {
+                throw new Error("The server did not confirm a new published version.")
+            }
             setWorkflow(updated)
             serverDef.current = def
             setDirty(false)
@@ -390,7 +384,8 @@ export default function WorkflowBuilder() {
             // Surface the real server reason (e.g. a status conflict or validation
             // detail) instead of a generic "rejected the definition" message.
             const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-            toast.error(detail ? `Couldn't publish: ${detail}` : "Failed to publish — please try again")
+            const message = detail ?? (err instanceof Error ? err.message : null)
+            toast.error(message ? `Couldn't publish: ${message}` : "Failed to publish — please try again")
         } finally {
             setBusy(false)
         }
@@ -421,7 +416,7 @@ export default function WorkflowBuilder() {
             {/* Header */}
             <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
                 <Button variant="ghost" size="icon" asChild className="h-8 w-8">
-                    <Link to={`/institution-admin/campaigns/${workflow.id}`}>
+                    <Link to={`/institution-admin/campaigns/${id}`}>
                         <ArrowLeft className="h-4 w-4" />
                     </Link>
                 </Button>
@@ -446,7 +441,7 @@ export default function WorkflowBuilder() {
 
                 <div className="ml-auto flex items-center gap-2">
                     <Button variant="outline" size="sm" className="gap-1.5" asChild>
-                        <Link to={`/institution-admin/campaigns/${workflow.id}/versions`}>
+                        <Link to={`/institution-admin/campaigns/${id}/versions`}>
                             <History className="h-3.5 w-3.5" /> Versions
                         </Link>
                     </Button>

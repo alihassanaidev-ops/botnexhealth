@@ -16,6 +16,7 @@ from src.app.api.routes.automation_workflows import (
     ValidateDefinitionRequest,
     WorkflowCreateRequest,
     WorkflowDraftCreateRequest,
+    WorkflowUpdateRequest,
     WorkflowResponse,
     WorkflowRunResponse,
     _institution_id,
@@ -348,6 +349,28 @@ def test_publish_workflow_calls_publish_version():
         asyncio.run(publish_workflow("wf-1", user))
 
     mock_svc.publish_version.assert_awaited_once_with(wf)
+
+
+def test_publish_workflow_snapshots_submitted_definition():
+    user = _make_user()
+    wf = _make_workflow(status="paused", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    mock_svc.publish_version = AsyncMock()
+    session = _make_session()
+    request = WorkflowUpdateRequest(name="Updated", definition=_VALID_DEF)
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        asyncio.run(publish_workflow("wf-1", user, request))
+
+    assert wf.name == "Updated"
+    mock_svc.publish_version.assert_awaited_once_with(wf, _VALID_DEF)
 
 
 def test_delete_workflow_calls_definition_service_delete():
@@ -953,12 +976,12 @@ def test_list_versions_returns_newest_first_with_current_flag():
     v1 = _make_version("ver-1", 1)
     v2 = _make_version("ver-2", 2)
     wf = _make_workflow(status="active", version_id="ver-2")
-    # relationship returns versions unordered; the route must sort them.
-    wf.versions = [v1, v2]
-
     mock_svc = AsyncMock()
     mock_svc.get_workflow = AsyncMock(return_value=wf)
     session = _make_session()
+    version_result = MagicMock()
+    version_result.scalars.return_value.all.return_value = [v2, v1]
+    session.execute = AsyncMock(return_value=version_result)
 
     with (
         patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
@@ -972,6 +995,7 @@ def test_list_versions_returns_newest_first_with_current_flag():
     assert [v.version_number for v in result] == [2, 1]
     assert result[0].is_current is True
     assert result[1].is_current is False
+    session.execute.assert_awaited_once()
 
 
 def test_list_versions_workflow_not_found_raises_404():

@@ -126,6 +126,10 @@ class EnvironmentConfig:
     # touches the application. AWS default minimum is 100; raise as traffic
     # grows. 2_000 is comfortable for staging.
     waf_rate_limit_per_5min: int = 2000
+    # AWS's managed ALB body-size rule blocks requests over 8 KiB before they
+    # reach the application. Enable only in environments where larger,
+    # authenticated JSON payloads have been explicitly tested.
+    waf_count_oversize_body_requests: bool = False
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -239,4 +243,7 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         optional_secrets=dict(raw.get("optionalSecrets", {})),
         alarm_email=raw.get("alarmEmail") or None,
         waf_rate_limit_per_5min=int(raw.get("wafRateLimitPer5Min", 2000)),
+        waf_count_oversize_body_requests=bool(
+            raw.get("wafCountOversizeBodyRequests", False)
+        ),
     )

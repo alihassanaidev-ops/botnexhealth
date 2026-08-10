@@ -1,10 +1,9 @@
 /**
  * Draft/publish/lifecycle controls for the builder.
  *
- * "Publish changes" republishes the edited definition to the live workflow via
- * `PATCH /automation/workflows/{id}` (the backend has no draft-with-definition path —
- * findings.md §4). It is gated behind an explicit confirmation to prevent accidental
- * activation, and disabled while there are validation errors.
+ * "Publish changes" sends the edited definition to the workflow publish command.
+ * It is gated behind an explicit confirmation to prevent accidental activation,
+ * and disabled while there are validation errors.
  */
 import { useState } from "react"
 import { Loader2, Pause, Play, Trash2, UploadCloud, FlaskConical, RotateCcw, AlertTriangle } from "lucide-react"

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { afterEach, describe, it, expect, beforeEach, vi } from "vitest"
 import api from "@/lib/api"
 import {
     createWorkflow,
@@ -40,6 +40,10 @@ beforeEach(() => {
     patch.mockReset()
 })
 
+afterEach(() => {
+    vi.unstubAllGlobals()
+})
+
 describe("workflow-api", () => {
     it("listWorkflows GETs the workflows collection", async () => {
         get.mockResolvedValue({ data: [] })
@@ -70,6 +74,23 @@ describe("workflow-api", () => {
         post.mockResolvedValue({ data: { id: "w1" } })
         await publishWorkflow("w1")
         expect(post).toHaveBeenCalledWith("/automation/workflows/w1/publish")
+    })
+
+    it("publishWorkflow POSTs an edited definition to the publish action", async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: vi.fn().mockResolvedValue({ id: "w1", current_version_id: "v2" }),
+        })
+        vi.stubGlobal("fetch", fetchMock)
+        await publishWorkflow("w1", { name: "Updated", definition: DEF })
+        expect(fetchMock).toHaveBeenCalledWith(
+            "/api/automation/workflows/w1/publish",
+            expect.objectContaining({
+                method: "POST",
+                body: JSON.stringify({ name: "Updated", definition: DEF }),
+            }),
+        )
     })
 
     it("listTemplates GETs the templates collection", async () => {
