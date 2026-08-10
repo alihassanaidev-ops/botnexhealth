@@ -91,6 +91,13 @@ function setupFieldDefault(template: CampaignTemplate, fieldId: string, fallback
     return String(field?.default ?? fallback).trim()
 }
 
+function isNonNegativeWholeNumber(value: string): boolean {
+    const normalized = value.trim()
+    if (!normalized) return false
+    const parsed = Number(normalized)
+    return Number.isInteger(parsed) && parsed >= 0
+}
+
 export default function WorkflowTemplates() {
     const navigate = useNavigate()
     const [templates, setTemplates] = useState<CampaignTemplate[]>([])
@@ -345,7 +352,7 @@ export default function WorkflowTemplates() {
         (voiceRequired && !voiceProfileId.trim()) ||
         (appointmentTypesRequired && appointmentTypeIds.length === 0) ||
         (appointmentReasonsRequired && appointmentReasons.split(",").every((reason) => !reason.trim())) ||
-        (picked && hasSetupField(picked, "call_offset_hours_before") && !(Number(callOffsetHoursBefore) > 0)) ||
+        (picked && hasSetupField(picked, "call_offset_hours_before") && !isNonNegativeWholeNumber(callOffsetHoursBefore)) ||
         (picked && hasSetupField(picked, "retry_delay_1_hours") && !(Number(retryDelay1Hours) > 0)) ||
         (picked && hasSetupField(picked, "retry_delay_2_hours") && !(Number(retryDelay2Hours) > 0)) ||
         pickedCapability?.supported === false
@@ -616,7 +623,7 @@ export default function WorkflowTemplates() {
                                                 <Input
                                                     id="call-offset-hours"
                                                     type="number"
-                                                    min="1"
+                                                    min="0"
                                                     step="1"
                                                     value={callOffsetHoursBefore}
                                                     onChange={(event) => setCallOffsetHoursBefore(event.target.value)}

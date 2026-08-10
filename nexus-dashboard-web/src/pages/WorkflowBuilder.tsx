@@ -141,22 +141,24 @@ export default function WorkflowBuilder() {
             return
         }
         let cancelled = false
-        Promise.all([
-            getChannelReadiness(locationId),
-            listOutboundVoiceProfiles({ locationId, isActive: true }),
-        ])
-            .then((r) => {
-                if (!cancelled) {
-                    setReadiness(r[0])
-                    setVoiceProfiles(r[1])
-                }
+        setReadiness(null)
+        setVoiceProfiles([])
+
+        // These are independent advisory lookups. A readiness outage must not
+        // hide otherwise usable voice profiles (and vice versa).
+        void getChannelReadiness(locationId)
+            .then((result) => {
+                if (!cancelled) setReadiness(result)
             })
             .catch(() => {
-                // Advisory only — a failed lookup silently omits the indicator.
-                if (!cancelled) {
-                    setReadiness(null)
-                    setVoiceProfiles([])
-                }
+                if (!cancelled) setReadiness(null)
+            })
+        void listOutboundVoiceProfiles({ locationId, isActive: true })
+            .then((profiles) => {
+                if (!cancelled) setVoiceProfiles(Array.isArray(profiles) ? profiles : [])
+            })
+            .catch(() => {
+                if (!cancelled) setVoiceProfiles([])
             })
         return () => {
             cancelled = true

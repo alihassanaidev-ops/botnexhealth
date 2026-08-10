@@ -115,6 +115,19 @@ def test_surgery_confirmation_template_configures_reasons_and_retry_timing() -> 
         assert nodes[node_id]["retell_agent_id"] == ""
 
 
+def test_surgery_confirmation_template_allows_call_at_appointment_time() -> None:
+    definition = instantiate_definition(
+        TEMPLATES["surgery-pre-appointment-confirmation"],
+        voice_profile_id="prof-surgery",
+        setup_options={
+            "appointment_reasons": ["Bridge Prep"],
+            "call_offset_hours_before": 0,
+        },
+    )
+
+    assert definition["trigger"]["offset_hours"] == 0
+
+
 def test_surgery_confirmation_template_requires_at_least_one_reason() -> None:
     template = TEMPLATES["surgery-pre-appointment-confirmation"]
 

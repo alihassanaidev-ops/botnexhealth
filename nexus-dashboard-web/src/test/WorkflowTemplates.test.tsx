@@ -186,6 +186,8 @@ describe("WorkflowTemplates page", () => {
         await user.click(await screen.findByRole("combobox", { name: "Voice profile" }))
         await user.click(screen.getByRole("option", { name: "Pre-appointment" }))
         await user.type(screen.getByLabelText("Eligible GoTracker reasons"), "Bridge Prep, Implant Surgery")
+        await user.clear(screen.getByLabelText("Call hours before"))
+        await user.type(screen.getByLabelText("Call hours before"), "0")
         await user.clear(screen.getByLabelText("Retry 1 delay (hours)"))
         await user.type(screen.getByLabelText("Retry 1 delay (hours)"), "4")
         await user.clear(screen.getByLabelText("Retry 2 delay (hours)"))
@@ -200,7 +202,7 @@ describe("WorkflowTemplates page", () => {
                     voiceProfileId: "profile-preop",
                     setupOptions: expect.objectContaining({
                         appointment_reasons: ["Bridge Prep", "Implant Surgery"],
-                        call_offset_hours_before: 24,
+                        call_offset_hours_before: 0,
                         retry_delay_1_hours: 4,
                         retry_delay_2_hours: 7.5,
                     }),

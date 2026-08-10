@@ -141,6 +141,7 @@ def _apply_required_setup_fields(
                 setup_options.get(field_id, setup_field.get("default", 24)),
                 field_id,
                 integer=True,
+                allow_zero=True,
             )
             definition["trigger"]["offset_hours"] = -int(hours)
             continue
@@ -169,13 +170,23 @@ def _node_by_id(definition: dict[str, Any], node_id: str) -> dict[str, Any] | No
     )
 
 
-def _positive_number(value: Any, field_id: str, *, integer: bool = False) -> float:
+def _positive_number(
+    value: Any,
+    field_id: str,
+    *,
+    integer: bool = False,
+    allow_zero: bool = False,
+) -> float:
     try:
         parsed = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_id} must be a positive number") from exc
-    if not math.isfinite(parsed) or parsed <= 0 or (integer and not parsed.is_integer()):
-        qualifier = "positive whole number" if integer else "positive number"
+    below_minimum = parsed < 0 if allow_zero else parsed <= 0
+    if not math.isfinite(parsed) or below_minimum or (integer and not parsed.is_integer()):
+        if allow_zero:
+            qualifier = "non-negative whole number" if integer else "non-negative number"
+        else:
+            qualifier = "positive whole number" if integer else "positive number"
         raise ValueError(f"{field_id} must be a {qualifier}")
     return parsed
 
