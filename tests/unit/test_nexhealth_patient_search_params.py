@@ -45,6 +45,7 @@ def capture(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         captured["method"] = method
         captured["path"] = path
         captured["params"] = params or {}
+        captured.setdefault("calls", []).append(dict(params or {}))
         return {"data": {"patients": []}}
 
     monkeypatch.setattr(
@@ -59,7 +60,7 @@ async def test_sends_name_and_dob_together(capture: dict[str, Any]) -> None:
     await adapter.search_patients(
         "ABDULLAH AHMED", date_of_birth="2000-02-02"
     )
-    params = capture["params"]
+    params = capture["calls"][0]
     assert params["name"] == "ABDULLAH AHMED"
     assert params["date_of_birth"] == "2000-02-02"
 
@@ -68,7 +69,7 @@ async def test_sends_name_and_dob_together(capture: dict[str, Any]) -> None:
 async def test_sends_name_and_phone_together_normalized(capture: dict[str, Any]) -> None:
     adapter = _adapter_capturing_params(capture)
     await adapter.search_patients("ALEX ALY", phone_number="(431) 450-1226")
-    params = capture["params"]
+    params = capture["calls"][0]
     assert params["name"] == "ALEX ALY"
     assert params["phone_number"] == _normalize_phone_for_nexhealth("(431) 450-1226")
 
@@ -82,7 +83,7 @@ async def test_sends_all_four_criteria(capture: dict[str, Any]) -> None:
         phone_number="5054821234",
         date_of_birth="1990-01-01",
     )
-    params = capture["params"]
+    params = capture["calls"][0]
     assert params["name"] == "Jane Doe"
     assert params["email"] == "jane@example.com"
     assert params["phone_number"] == "5054821234"

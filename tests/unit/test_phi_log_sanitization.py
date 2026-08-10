@@ -123,7 +123,12 @@ async def test_retell_patient_lookup_redacts_phi_in_logs(
     caplog.set_level(logging.ERROR, logger="src.app.retell.handlers")
 
     result = await handlers.lookup_patient(
-        {"name": "John", "detail_level": "basic"}
+        {
+            "name": "John Smith",
+            "date_of_birth": "1972-03-05",
+            "phone_number": "+14155552671",
+            "detail_level": "basic",
+        }
     )
 
     # Caller-visible response is generic (no PHI).

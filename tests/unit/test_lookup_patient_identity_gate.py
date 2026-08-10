@@ -1,10 +1,4 @@
-"""Unit tests for the server-side identity gate on lookup_patient.
-
-The Retell prompt's identity check is treated as advisory only — the
-server must independently verify the caller-supplied DOB matches the
-matched patient and that a second factor (exact email or full phone number)
-corroborates. Otherwise the response is downgraded to ``basic``.
-"""
+"""Regression tests for the privacy-safe Retell patient identity gate."""
 
 from __future__ import annotations
 
@@ -16,10 +10,11 @@ import pytest
 from src.app.retell import handlers
 
 
-def _ctx(patient: SimpleNamespace, location: SimpleNamespace | None = None):
-    """Build a fake _resolve_context result around a single PMS patient."""
+def _ctx(
+    patients: list[SimpleNamespace], location: SimpleNamespace | None = None
+) -> SimpleNamespace:
     adapter = MagicMock()
-    adapter.search_patients = AsyncMock(return_value=[patient])
+    adapter.search_patients = AsyncMock(return_value=patients)
     return SimpleNamespace(
         institution=SimpleNamespace(id="11111111-1111-1111-1111-111111111111"),
         location=location,
@@ -30,14 +25,16 @@ def _ctx(patient: SimpleNamespace, location: SimpleNamespace | None = None):
 def _patient(
     *,
     pid: str = "p1",
+    first_name: str = "Alice",
+    last_name: str = "Doe",
     dob: str | None = "1990-01-01",
     email: str | None = "alice@example.com",
     phone: str | None = "+15551234567",
-):
+) -> SimpleNamespace:
     return SimpleNamespace(
         id=pid,
-        first_name="Alice",
-        last_name="Doe",
+        first_name=first_name,
+        last_name=last_name,
         email=email,
         phone=phone,
         date_of_birth=dob,
@@ -45,7 +42,26 @@ def _patient(
     )
 
 
-def test_full_patient_payload_excludes_procedures_and_insurance():
+async def _invoke(monkeypatch: pytest.MonkeyPatch, ctx: SimpleNamespace, args: dict):
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+    return await handlers.lookup_patient.__wrapped__(args)
+
+
+def _verified_args(**overrides) -> dict:
+    args = {
+        "name": "Alice Doe",
+        "date_of_birth": "1990-01-01",
+        "phone_number": "(555) 123-4567",
+        "detail_level": "full",
+    }
+    args.update(overrides)
+    return args
+
+
+def test_full_patient_payload_contains_only_id_and_scheduling_context():
     patient = _patient()
     patient.extra.update(
         {
@@ -57,208 +73,177 @@ def test_full_patient_payload_excludes_procedures_and_insurance():
 
     payload = handlers._to_full_patient_payload(patient)
 
-    assert payload["upcoming_appointments"] == [{"id": "appt-1"}]
-    assert payload["last_visit"] == {"id": "appointment-previous"}
-    assert "recent_procedures" not in payload
-    assert "insurance_coverages" not in payload
+    assert payload == {
+        "id": "p1",
+        "upcoming_appointments": [{"id": "appt-1"}],
+        "last_visit": {"id": "appointment-previous"},
+    }
 
 
 @pytest.mark.asyncio
-async def test_identity_gate_allows_full_when_dob_and_email_match(monkeypatch):
-    p = _patient()
-    ctx = _ctx(p)
+async def test_phone_only_returns_no_patient_information_and_skips_pms_search(
+    monkeypatch,
+):
+    ctx = _ctx([_patient()])
 
-    async def _fake_resolve():
-        return ctx
-
-    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
-    target = handlers.lookup_patient.__wrapped__  # bypass audit decorator
-
-    result = await target(
-        {
-            "name": "Alice",
-            "date_of_birth": "1990-01-01",
-            "email": "alice@example.com",
-            "detail_level": "full",
-        }
+    result = await _invoke(
+        monkeypatch,
+        ctx,
+        {"phone_number": "+15551234567", "detail_level": "full"},
     )
 
-    assert result["detail_level"] == "full"
-    assert "identity_gate" not in result
-    # full payload includes email/phone in clear
-    assert result["patients"][0]["email"] == "alice@example.com"
+    assert result["verification_status"] == "additional_information_required"
+    assert result["required_fields"] == ["name", "date_of_birth"]
+    assert "patients" not in result
+    assert "patient_id" not in result
+    assert "count" not in result
+    assert "match_status" not in result
+    assert "Alice" not in str(result)
+    ctx.adapter.search_patients.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_identity_gate_allows_full_with_matching_phone(monkeypatch):
-    p = _patient()
-    ctx = _ctx(p)
+async def test_name_without_dob_or_second_factor_is_neutral_and_skips_search(
+    monkeypatch,
+):
+    ctx = _ctx([_patient()])
 
-    async def _fake_resolve():
-        return ctx
+    result = await _invoke(monkeypatch, ctx, {"name": "Alice"})
 
-    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
-    target = handlers.lookup_patient.__wrapped__
-
-    result = await target(
-        {
-            "name": "Alice",
-            "date_of_birth": "1990-01-01",
-            "phone_number": "(555) 123-4567",
-            "detail_level": "full",
-        }
-    )
-
-    assert result["detail_level"] == "full"
+    assert result["verification_status"] == "additional_information_required"
+    assert result["required_fields"] == ["date_of_birth", "phone_number_or_email"]
+    assert "patients" not in result
+    ctx.adapter.search_patients.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_identity_gate_rejects_phone_with_only_matching_last4(monkeypatch):
-    p = _patient()
-    ctx = _ctx(p)
+async def test_verified_phone_returns_id_and_scheduling_but_no_identity_fields(
+    monkeypatch,
+):
+    ctx = _ctx([_patient()])
 
-    async def _fake_resolve():
-        return ctx
+    result = await _invoke(monkeypatch, ctx, _verified_args())
 
-    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
-    target = handlers.lookup_patient.__wrapped__
+    assert result["verification_status"] == "verified"
+    assert result["patient_id"] == "p1"
+    assert result["patients"] == [
+        {"id": "p1", "upcoming_appointments": [{"id": "appt-1"}]}
+    ]
+    for forbidden in (
+        "first_name",
+        "last_name",
+        "email",
+        "phone_number",
+        "date_of_birth",
+        "email_hint",
+        "phone_hint",
+    ):
+        assert forbidden not in result["patients"][0]
 
-    result = await target(
-        {
-            "name": "Alice",
-            "date_of_birth": "1990-01-01",
-            "phone_number": "(415) 555-4567",
-            "detail_level": "full",
-        }
+
+@pytest.mark.asyncio
+async def test_verified_email_is_accepted_when_phone_is_not_supplied(monkeypatch):
+    ctx = _ctx([_patient()])
+
+    result = await _invoke(
+        monkeypatch,
+        ctx,
+        _verified_args(phone_number=None, email="ALICE@example.com"),
     )
 
+    assert result["verification_status"] == "verified"
+    assert result["patient_id"] == "p1"
+
+
+@pytest.mark.asyncio
+async def test_first_name_shape_remains_supported_but_is_not_echoed(monkeypatch):
+    ctx = _ctx([_patient()])
+
+    result = await _invoke(monkeypatch, ctx, _verified_args(name="Alice"))
+
+    assert result["verification_status"] == "verified"
+    assert "Alice" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_future_split_name_shape_is_supported(monkeypatch):
+    ctx = _ctx([_patient()])
+    args = _verified_args(name=None, first_name="Alice", last_name="Doe")
+
+    result = await _invoke(monkeypatch, ctx, args)
+
+    assert result["verification_status"] == "verified"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"name": "Mallory"},
+        {"date_of_birth": "1980-05-05"},
+        {"phone_number": "(415) 555-4567"},
+    ],
+)
+async def test_mismatched_claims_return_no_patient_information(monkeypatch, overrides):
+    ctx = _ctx([_patient()])
+
+    result = await _invoke(monkeypatch, ctx, _verified_args(**overrides))
+
+    assert result == handlers._verification_failed_response()
+    assert "patients" not in result
+    assert "patient_id" not in result
+    assert "Alice" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_no_match_failed_match_and_ambiguous_match_are_indistinguishable(
+    monkeypatch,
+):
+    args = _verified_args()
+    no_match = await _invoke(monkeypatch, _ctx([]), args)
+    failed_match = await _invoke(
+        monkeypatch,
+        _ctx([_patient(phone="+14155554567")]),
+        args,
+    )
+    ambiguous_match = await _invoke(
+        monkeypatch,
+        _ctx([_patient(pid="p1"), _patient(pid="p2")]),
+        args,
+    )
+
+    assert no_match == failed_match == ambiguous_match
+    assert no_match == handlers._verification_failed_response()
+
+
+@pytest.mark.asyncio
+async def test_basic_lookup_still_requires_verification_and_returns_only_id(
+    monkeypatch,
+):
+    ctx = _ctx([_patient()])
+
+    result = await _invoke(
+        monkeypatch,
+        ctx,
+        _verified_args(detail_level="basic"),
+    )
+
+    assert result["verification_status"] == "verified"
     assert result["detail_level"] == "basic"
-    assert result["identity_gate"] == "second_factor_mismatch"
+    assert result["patients"] == [{"id": "p1"}]
+    assert ctx.adapter.search_patients.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_identity_gate_demotes_to_basic_when_name_missing(monkeypatch):
-    p = _patient()
-    ctx = _ctx(p)
+async def test_full_detail_refetch_keeps_only_the_verified_patient(monkeypatch):
+    original = _patient(pid="p1")
+    refreshed = _patient(pid="p1")
+    unrelated = _patient(pid="p2", first_name="Other", last_name="Person")
+    ctx = _ctx([original])
+    ctx.adapter.search_patients.side_effect = [[original], [unrelated, refreshed]]
 
-    async def _fake_resolve():
-        return ctx
+    result = await _invoke(monkeypatch, ctx, _verified_args())
 
-    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
-    target = handlers.lookup_patient.__wrapped__
-
-    result = await target(
-        {
-            "date_of_birth": "1990-01-01",
-            "phone_number": "+15551234567",
-            "detail_level": "full",
-        }
-    )
-
-    assert result["detail_level"] == "basic"
-    assert result["identity_gate"] == "missing_name"
-
-
-@pytest.mark.asyncio
-async def test_identity_gate_demotes_to_basic_when_dob_missing(monkeypatch):
-    p = _patient()
-    ctx = _ctx(p)
-
-    async def _fake_resolve():
-        return ctx
-
-    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
-    target = handlers.lookup_patient.__wrapped__
-
-    result = await target(
-        {
-            "name": "Alice",
-            "email": "alice@example.com",
-            "detail_level": "full",  # asked for full, no DOB supplied
-        }
-    )
-
-    assert result["detail_level"] == "basic"
-    assert result["identity_gate"] == "missing_dob"
-    # basic payload masks email and phone
-    assert "email" not in result["patients"][0]
-    assert result["patients"][0].get("email_hint") is not None
-
-
-@pytest.mark.asyncio
-async def test_identity_gate_demotes_when_dob_does_not_match(monkeypatch):
-    p = _patient(dob="1990-01-01")
-    ctx = _ctx(p)
-
-    async def _fake_resolve():
-        return ctx
-
-    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
-    target = handlers.lookup_patient.__wrapped__
-
-    result = await target(
-        {
-            "name": "Alice",
-            "date_of_birth": "1980-05-05",  # wrong DOB
-            "email": "alice@example.com",
-            "detail_level": "full",
-        }
-    )
-
-    assert result["detail_level"] == "basic"
-    assert result["identity_gate"] == "dob_mismatch"
-
-
-@pytest.mark.asyncio
-async def test_identity_gate_demotes_when_only_dob_supplied(monkeypatch):
-    p = _patient()
-    ctx = _ctx(p)
-
-    async def _fake_resolve():
-        return ctx
-
-    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
-    target = handlers.lookup_patient.__wrapped__
-
-    result = await target(
-        {
-            "name": "Alice",
-            "date_of_birth": "1990-01-01",  # right DOB but no second factor
-            "detail_level": "full",
-        }
-    )
-
-    assert result["detail_level"] == "basic"
-    assert result["identity_gate"] == "second_factor_missing"
-
-
-@pytest.mark.asyncio
-async def test_multiple_matches_force_basic_regardless_of_identity_input(monkeypatch):
-    p1 = _patient(pid="p1")
-    p2 = _patient(pid="p2", email="alice2@example.com")
-
-    adapter = MagicMock()
-    adapter.search_patients = AsyncMock(return_value=[p1, p2])
-    ctx = SimpleNamespace(
-        institution=SimpleNamespace(id="i1"),
-        location=None,
-        adapter=adapter,
-    )
-
-    async def _fake_resolve():
-        return ctx
-
-    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
-    target = handlers.lookup_patient.__wrapped__
-
-    result = await target(
-        {
-            "name": "Alice",
-            "date_of_birth": "1990-01-01",
-            "email": "alice@example.com",
-            "detail_level": "full",
-        }
-    )
-
-    assert result["detail_level"] == "basic"
-    assert result["disambiguation_required"] is True
+    assert result["patient_id"] == "p1"
+    assert result["patients"][0]["id"] == "p1"
+    assert len(result["patients"]) == 1
