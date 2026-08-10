@@ -122,28 +122,8 @@ async def _resolve_context(require_pms: bool = True) -> ResolvedContext:
 
 
 # ============================================================================
-# Privacy Helpers (HIPAA-safe masking for patient data)
+# Privacy Helpers
 # ============================================================================
-
-
-def _mask_email(value: str | None) -> str | None:
-    """Mask email for safe identity hints in basic lookup responses."""
-    if not value or "@" not in value:
-        return None
-    local, domain = value.split("@", 1)
-    if len(local) <= 2:
-        return f"{local[0]}***@{domain}" if local else None
-    return f"{local[0]}***{local[-1]}@{domain}"
-
-
-def _mask_phone(value: str | None) -> str | None:
-    """Mask phone for safe identity hints in basic lookup responses."""
-    if not value:
-        return None
-    digits = "".join(ch for ch in value if ch.isdigit())
-    if len(digits) < 4:
-        return None
-    return f"***-***-{digits[-4:]}"
 
 
 async def _validate_appointment_type_for_provider(
@@ -183,21 +163,13 @@ async def _validate_appointment_type_for_provider(
     return None
 
 
-def _to_basic_patient_payload(patient: Any) -> dict[str, Any]:
-    """Return minimum necessary patient identity payload."""
-    return {
-        "id": patient.id,
-        "first_name": patient.first_name,
-        "last_name": patient.last_name,
-        "has_email": bool(patient.email),
-        "has_phone": bool(patient.phone),
-        "email_hint": _mask_email(patient.email),
-        "phone_hint": _mask_phone(patient.phone),
-    }
-
-
 def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
-    """Return richer payload for explicitly requested full detail lookups."""
+    """Return only the verified record ID and appointment context.
+
+    The caller already stated their identity claims. Echoing the canonical PMS
+    name, contact details, or DOB back to the voice model adds disclosure risk
+    without helping the booking flow, so those fields are deliberately absent.
+    """
     patient_extra = patient.extra if isinstance(patient.extra, dict) else {}
     scheduling_details = {
         key: patient_extra[key]
@@ -206,11 +178,6 @@ def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
     }
     return {
         "id": patient.id,
-        "first_name": patient.first_name,
-        "last_name": patient.last_name,
-        "email": patient.email,
-        "phone_number": patient.phone,
-        "date_of_birth": patient.date_of_birth,
         **scheduling_details,
     }
 
@@ -370,6 +337,66 @@ def _normalize_phone_for_identity(value: Any) -> str | None:
     return digits or None
 
 
+def _normalize_name_for_identity(value: Any) -> str | None:
+    """Normalize a caller-stated name without logging or returning it."""
+    if not value:
+        return None
+    normalized = " ".join(str(value).strip().casefold().split())
+    return normalized or None
+
+
+def _supplied_patient_name(args: dict[str, Any]) -> str | None:
+    """Accept the current combined name and a future split-name tool shape."""
+    combined = _normalize_name_for_identity(args.get("name"))
+    if combined:
+        return combined
+    split_name = " ".join(
+        str(args.get(key) or "").strip() for key in ("first_name", "last_name")
+    )
+    return _normalize_name_for_identity(split_name)
+
+
+def _verification_required_response(args: dict[str, Any]) -> dict[str, Any]:
+    """Return a neutral response before any PMS search is attempted."""
+    required_fields: list[str] = []
+    if not _supplied_patient_name(args):
+        required_fields.append("name")
+    if not _normalize_dob(args.get("date_of_birth")):
+        required_fields.append("date_of_birth")
+    if not (
+        _normalize_phone_for_identity(args.get("phone_number"))
+        or str(args.get("email") or "").strip()
+    ):
+        required_fields.append("phone_number_or_email")
+    return {
+        "detail_level": "none",
+        "verification_status": "additional_information_required",
+        "verification_required": True,
+        "required_fields": required_fields,
+        "message": (
+            "Before looking up a patient, ask the caller to state the patient's "
+            "name and date of birth. Use the full incoming phone number or ask "
+            "for the exact email address on file. Do not reveal or guess any "
+            "patient information."
+        ),
+    }
+
+
+def _verification_failed_response() -> dict[str, Any]:
+    """Return the same result for no match, ambiguous match, or bad claims."""
+    return {
+        "detail_level": "none",
+        "verification_status": "unable_to_verify",
+        "verification_required": True,
+        "message": (
+            "I couldn't verify the patient's identity with the information "
+            "provided. Re-confirm the caller-stated name, date of birth, and "
+            "full phone number or exact email address. Do not reveal or guess "
+            "whether a patient record exists."
+        ),
+    }
+
+
 def _identity_gate_passes(
     patient: Any, args: dict[str, Any]
 ) -> tuple[bool, str | None]:
@@ -381,8 +408,27 @@ def _identity_gate_passes(
 
     Returns (passed, reason_if_failed).
     """
-    if not str(args.get("name") or "").strip():
+    supplied_name = _supplied_patient_name(args)
+    if not supplied_name:
         return False, "missing_name"
+
+    actual_first_name = _normalize_name_for_identity(
+        getattr(patient, "first_name", None)
+    )
+    actual_full_name = _normalize_name_for_identity(
+        " ".join(
+            str(value or "").strip()
+            for value in (
+                getattr(patient, "first_name", None),
+                getattr(patient, "last_name", None),
+            )
+        )
+    )
+    # The current Retell tool may send either the patient's first name or full
+    # name. Both must match the returned PMS record; merely supplying any name
+    # is not an identity check.
+    if supplied_name not in {actual_first_name, actual_full_name}:
+        return False, "name_mismatch"
 
     supplied_dob = _normalize_dob(args.get("date_of_birth"))
     if not supplied_dob:
@@ -425,16 +471,14 @@ def _identity_gate_passes(
     ),
 )
 async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
-    """Lookup a patient by name, email, phone, or date of birth.
+    """Verify a patient without exposing identity data to the voice model.
 
-    Detail-level escalation: ``detail_level='full'`` returns full PHI only
-    after the caller supplies a name, the supplied DOB matches the matched
-    patient's DOB, and a second factor (exact email or full phone number)
-    verifies.
-    A mismatched DOB or missing second factor demotes the response to
-    ``basic`` even when a single patient matched. The Retell prompt's
-    identity gate is treated as advisory only — server-side verification is
-    the access control of record.
+    A PMS search is attempted only after the caller supplies a name, DOB, and
+    exact phone or email. No match, multiple matches, and mismatched claims all
+    receive the same neutral response. A successful lookup returns only the
+    patient ID needed by downstream booking functions and, when requested,
+    minimum scheduling context. The Retell prompt is advisory; this server-side
+    gate is the access control of record.
     """
     try:
         ctx = await _resolve_context()
@@ -446,12 +490,12 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     if detail_level not in {"basic", "full"}:
         detail_level = "basic"
 
-    query = args.get("name") or args.get("email") or args.get("phone_number") or ""
-    if not query and not args.get("date_of_birth"):
-        return {
-            "error": "missing_search_criterion",
-            "message": "Please provide at least one search criterion (name, email, phone, or DOB).",
-        }
+    required_response = _verification_required_response(args)
+    if required_response["required_fields"]:
+        return required_response
+
+    supplied_name = _supplied_patient_name(args)
+    query = supplied_name or ""
 
     full_detail_include = [
         "upcoming_appts",
@@ -461,6 +505,7 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     try:
         patients = await ctx.adapter.search_patients(
             query,
+            name=supplied_name,
             email=args.get("email"),
             phone_number=args.get("phone_number"),
             date_of_birth=args.get("date_of_birth"),
@@ -476,64 +521,75 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
             "message": "I had trouble accessing the patient records. Please try again.",
         }
 
-    if not patients:
-        return {
-            "match_status": "none",
-            "message": "No patients found matching the criteria.",
-        }
+    verified_patients: list[Any] = []
+    failure_reasons: list[str] = []
+    for patient in patients:
+        passed, failure_reason = _identity_gate_passes(patient, args)
+        if passed:
+            verified_patients.append(patient)
+        elif failure_reason:
+            failure_reasons.append(failure_reason)
 
-    match_count = len(patients)
-    needs_disambiguation = match_count > 1
-    effective_detail_level = "basic" if needs_disambiguation else detail_level
-    identity_failure_reason: str | None = None
-    if effective_detail_level == "full":
-        passed, identity_failure_reason = _identity_gate_passes(patients[0], args)
-        if not passed:
-            logger.info(
-                "Identity gate denied full PHI: reason=%s patient_hash=%s",
-                identity_failure_reason,
-                hash_for_logging(str(getattr(patients[0], "id", "unknown"))),
-            )
-            effective_detail_level = "basic"
+    if len(verified_patients) != 1:
+        logger.info(
+            "Patient identity verification denied: candidates=%d verified=%d reasons=%s",
+            len(patients),
+            len(verified_patients),
+            ",".join(sorted(set(failure_reasons))) or "no_match_or_ambiguous",
+        )
+        return _verification_failed_response()
 
-    if effective_detail_level == "full":
-        patient_id = str(getattr(patients[0], "id", "unknown"))
-        try:
-            async with phi_reveal_audit(
-                actor=AuditActor.RETELL_AGENT,
-                action=AuditAction.READ_PATIENT,
-                target_resource=f"patient:{hash_for_logging(patient_id)}",
-                institution_id=str(ctx.institution.id),
-                user_id=None,
-                location_id=str(ctx.location.id) if ctx.location else None,
-                metadata={
-                    "source": "retell_lookup_patient",
-                    "detail_level": "full",
-                    "identity_gate": "passed",
-                    "search_criteria": _patient_lookup_criteria(args),
-                },
-            ):
+    verified_patient = verified_patients[0]
+    patient_id = str(getattr(verified_patient, "id", "unknown"))
+    try:
+        async with phi_reveal_audit(
+            actor=AuditActor.RETELL_AGENT,
+            action=AuditAction.READ_PATIENT,
+            target_resource=f"patient:{hash_for_logging(patient_id)}",
+            institution_id=str(ctx.institution.id),
+            user_id=None,
+            location_id=str(ctx.location.id) if ctx.location else None,
+            metadata={
+                "source": "retell_lookup_patient",
+                "detail_level": detail_level,
+                "identity_gate": "passed",
+                "search_criteria": _patient_lookup_criteria(args),
+            },
+        ):
+            payload_patient = verified_patient
+            if detail_level == "full":
                 full_patients = await ctx.adapter.search_patients(
                     query,
+                    name=supplied_name,
                     email=args.get("email"),
                     phone_number=args.get("phone_number"),
                     date_of_birth=args.get("date_of_birth"),
                     include=full_detail_include,
                 )
-                payload_patients = full_patients or patients
-                simplified = [
-                    _to_full_patient_payload(p) for p in payload_patients[:10]
-                ]
-        except Exception as e:
-            logger.error(
-                "Full patient detail lookup failed: %s",
-                safe_error_summary(e),
+                payload_patient = next(
+                    (
+                        patient
+                        for patient in full_patients
+                        if str(getattr(patient, "id", "")) == patient_id
+                    ),
+                    verified_patient,
+                )
+            simplified = (
+                [_to_full_patient_payload(payload_patient)]
+                if detail_level == "full"
+                else [{"id": patient_id}]
             )
-            return {
-                "error": "patient_lookup_failed",
-                "message": "I had trouble accessing the patient records. Please try again.",
-            }
+    except Exception as e:
+        logger.error(
+            "Verified patient detail lookup failed: %s",
+            safe_error_summary(e),
+        )
+        return {
+            "error": "patient_lookup_failed",
+            "message": "I had trouble accessing the patient records. Please try again.",
+        }
 
+    if detail_level == "full":
         if ctx.location:
             tz_str = (ctx.location.timezone or "UTC").strip()
             try:
@@ -584,32 +640,18 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
                     last_visit["end_time_local"] = _to_local_iso(
                         last_visit.get("end_time")
                     )
-    else:
-        simplified = [_to_basic_patient_payload(p) for p in patients[:10]]
-
     response: dict[str, Any] = {
-        "detail_level": effective_detail_level,
-        "count": len(simplified),
+        "detail_level": detail_level,
+        "verification_status": "verified",
+        "verification_required": False,
+        "patient_id": patient_id,
+        "count": 1,
         "patients": simplified,
-        "match_status": "multiple" if needs_disambiguation else "single",
-        "disambiguation_required": needs_disambiguation,
-        "disambiguation_hints": ["date_of_birth", "email"]
-        if needs_disambiguation
-        else [],
+        "match_status": "single",
+        "disambiguation_required": False,
+        "disambiguation_hints": [],
+        "message": "Patient identity verified. Use patient_id for scheduling actions.",
     }
-    if needs_disambiguation:
-        response["message"] = (
-            "Multiple patients matched. Please ask for date of birth or email to confirm."
-        )
-    elif identity_failure_reason:
-        response["identity_gate"] = identity_failure_reason
-        response["message"] = (
-            "I can confirm a record exists. To share full appointment details, please "
-            "confirm the patient's name and date of birth, plus the full phone number "
-            "on file or the exact email address."
-        )
-    else:
-        response["message"] = f"Found {len(simplified)} patient(s)."
     return response
 
 

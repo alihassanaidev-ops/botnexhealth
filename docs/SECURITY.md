@@ -54,12 +54,11 @@ assigned location and any explicit `location_id` mismatching it is a 403.
 
 The voice agent is its own principal: Retell requests authenticate by HMAC
 signature, are scoped by the agent→location mapping, and `lookup_patient`
-additionally requires the *caller* to pass an identity gate — confirming **any
-one** of date of birth, last-4 of the phone on file, or exact email — before PHI
-is spoken back. This is single-factor as of 2026-08-01; it was previously DOB
-*plus* a second factor, which blocked legitimate callers whose record had no
-email on file. Single-factor phone verification is standard front-desk practice;
-DOB is still required to disambiguate family members who share a phone number.
+additionally requires the caller-stated patient name and date of birth plus an
+exact full phone number or email match. Incomplete and failed verification
+returns no patient name, ID, contact hint, match count, or record-existence
+signal. Successful verification returns only the internal patient ID and the
+minimum scheduling context needed by downstream appointment functions.
 
 ## Tenant isolation
 

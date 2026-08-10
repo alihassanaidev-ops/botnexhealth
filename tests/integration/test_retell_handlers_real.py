@@ -170,15 +170,11 @@ async def test_lookup_patient(test_context, retell_context):
 
     result = await lookup_patient(args)
 
-    assert result.get("count") is not None
-    assert result.get("count") > 0
-    assert "patients" in result
-    for p in result["patients"]:
-        if str(p["id"]) == str(test_context["patient_id"]):
-            break
-    # Note: Name search might be fuzzy or return multiple, so strict ID match might fail if name is common
-    # But we expect at least some results.
-    assert len(result["patients"]) > 0
+    # Name-only lookups are deliberately blocked before the PMS search. The
+    # voice agent must also provide DOB plus full phone or exact email.
+    assert result["verification_status"] == "additional_information_required"
+    assert "patients" not in result
+    assert "patient_id" not in result
 
 @pytest.mark.asyncio
 async def test_find_appointment_slots(test_context, retell_context):
