@@ -39,8 +39,11 @@ router = APIRouter(prefix="/gotracker/webhooks", tags=["GoTracker Webhooks"])
 _APPOINTMENT_EVENTS = frozenset(
     {"appointment.created", "appointment.updated", "appointment.cancelled"}
 )
+_APPOINTMENT_WRITEBACK_EVENTS = frozenset(
+    {"appointment.status_writeback.complete", "appointment.status_writeback.failed"}
+)
 _PATIENT_EVENTS = frozenset({"patient.created", "patient.updated"})
-_HANDLED_EVENTS = _APPOINTMENT_EVENTS | _PATIENT_EVENTS
+_HANDLED_EVENTS = _APPOINTMENT_EVENTS | _APPOINTMENT_WRITEBACK_EVENTS | _PATIENT_EVENTS
 _PROCESSING_TTL_SECONDS = 300
 _SIGNATURE_TOLERANCE_SECONDS = 300
 _PMS_FOREIGN_ID_PREFIX = "tracker-"
@@ -137,6 +140,13 @@ async def gotracker_webhook(location_id: str, request: Request) -> dict[str, Any
         return {"status": "ignored", "event": event}
 
     raw_payload = _raw_payload_text(raw_body)
+    if event in _APPOINTMENT_WRITEBACK_EVENTS:
+        return await _process_appointment_writeback_event(
+            event=event,
+            payload=payload,
+            raw_payload=raw_payload,
+            location=location,
+        )
     if event in _PATIENT_EVENTS:
         return await _process_patient_payload(
             event=event,
@@ -593,6 +603,251 @@ async def _process_appointment_event(
     }
 
 
+async def _process_appointment_writeback_event(
+    *,
+    event: str,
+    payload: dict[str, Any],
+    raw_payload: str,
+    location: InstitutionLocation,
+) -> dict[str, Any]:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    raw_appointment_id = _clean_str(
+        _first(data, "cloud_appointment_id", "appointment_id", "AppointmentId")
+        or _first(payload, "foreign_id", "appointment_id", "AppointmentId")
+    )
+    if not raw_appointment_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Writeback payload missing required appointment id",
+        )
+
+    appointment_id = gotracker_id(raw_appointment_id)
+    institution_id = str(location.institution_id)
+    location_id = str(location.id)
+    source_event_id = _source_event_id(payload)
+    fallback_basis = (
+        _clean_str(_first(payload, "sequence_number", "occurred_at"))
+        or _dedup_fallback(payload)
+    )
+    dedup_key = _event_dedup_key(
+        source_event_id=source_event_id,
+        item_key=f"{event}:writeback:{appointment_id}",
+        fallback=f"{event}:{appointment_id}:{fallback_basis}",
+    )
+
+    from src.app.services.automation.gotracker_subscription_service import (
+        GoTrackerSubscriptionLifecycleService,
+    )
+    from src.app.services.automation.gotracker_writeback_service import (
+        GoTrackerAppointmentWritebackService,
+    )
+    from src.app.services.automation.nexhealth_projection_service import (
+        NexHealthProjectionService,
+    )
+
+    async with get_system_db_session(
+        "gotracker_webhooks",
+        institution_id=institution_id,
+        location_id=location_id,
+        external_id=appointment_id,
+    ) as session:
+        claimed = await _claim_event(
+            session,
+            institution_id=institution_id,
+            location_id=location_id,
+            appointment_id=appointment_id,
+            patient_id=None,
+            event_type=event,
+            dedup_key=dedup_key,
+            source_event_id=source_event_id,
+            payload=payload,
+            raw_payload=raw_payload,
+        )
+        if not claimed:
+            await session.commit()
+            return {"status": "duplicate", "appointment_id": appointment_id}
+
+        await GoTrackerSubscriptionLifecycleService(session).record_event_seen(
+            institution_id=institution_id,
+            location_id=location_id,
+        )
+
+        writebacks = GoTrackerAppointmentWritebackService(session)
+        projection = NexHealthProjectionService(session)
+        if event.endswith(".failed"):
+            pending = await writebacks.fail_latest(
+                institution_id=institution_id,
+                appointment_id=appointment_id,
+                source_event_id=source_event_id,
+                error=_clean_str(_first(data, "error")),
+            )
+            if pending is not None and pending.previous_start_time is not None:
+                await projection.upsert_appointment(
+                    institution_id=institution_id,
+                    appointment_id=appointment_id,
+                    location_id=location_id,
+                    nexhealth_patient_id=None,
+                    contact_id=pending.contact_id,
+                    start_time=pending.previous_start_time.isoformat(),
+                    event=event,
+                    cancelled=False,
+                    provider_id=pending.provider_id,
+                    status_source="writeback_failed_restore",
+                )
+            await _complete_event(session, institution_id=institution_id, dedup_key=dedup_key)
+            await session.commit()
+            return {
+                "status": "writeback_failed",
+                "appointment_id": appointment_id,
+                "institution_id": institution_id,
+                "pending_writeback_found": pending is not None,
+                "action": pending.action if pending is not None else None,
+            }
+
+        pending = await writebacks.complete_latest(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            source_event_id=source_event_id,
+        )
+        if pending is None:
+            await _complete_event(session, institution_id=institution_id, dedup_key=dedup_key)
+            await session.commit()
+            return {
+                "status": "ignored",
+                "reason": "no_pending_writeback",
+                "appointment_id": appointment_id,
+                "institution_id": institution_id,
+            }
+
+        runs_cancelled = 0
+        should_trigger_appointment = False
+        should_trigger_state = False
+        appointment_at_iso: str | None = None
+
+        if pending.action == "reschedule":
+            if pending.requested_start_time is not None:
+                appointment_at_iso = pending.requested_start_time.isoformat()
+                await projection.upsert_appointment(
+                    institution_id=institution_id,
+                    appointment_id=appointment_id,
+                    location_id=location_id,
+                    nexhealth_patient_id=None,
+                    contact_id=pending.contact_id,
+                    start_time=appointment_at_iso,
+                    event=event,
+                    cancelled=False,
+                    provider_id=pending.provider_id,
+                    gotracker_status_id=pending.status_id,
+                    is_confirmed=pending.confirmed,
+                    is_preconfirmed=pending.preconfirmed,
+                    status_source="writeback_complete",
+                )
+                should_trigger_appointment = True
+        elif pending.action == "cancel":
+            await projection.upsert_appointment(
+                institution_id=institution_id,
+                appointment_id=appointment_id,
+                location_id=location_id,
+                nexhealth_patient_id=None,
+                contact_id=pending.contact_id,
+                start_time=(
+                    pending.previous_start_time.isoformat()
+                    if pending.previous_start_time is not None
+                    else None
+                ),
+                event=event,
+                cancelled=True,
+                gotracker_status_id=pending.status_id,
+                is_confirmed=pending.confirmed,
+                is_preconfirmed=pending.preconfirmed,
+                status_source="writeback_complete",
+            )
+        else:
+            await projection.upsert_appointment(
+                institution_id=institution_id,
+                appointment_id=appointment_id,
+                location_id=location_id,
+                nexhealth_patient_id=None,
+                contact_id=pending.contact_id,
+                start_time=(
+                    pending.previous_start_time.isoformat()
+                    if pending.previous_start_time is not None
+                    else None
+                ),
+                event=event,
+                cancelled=False,
+                gotracker_status_id=pending.status_id,
+                is_confirmed=pending.confirmed,
+                is_preconfirmed=pending.preconfirmed,
+                status_source="writeback_complete",
+            )
+            should_trigger_state = (
+                pending.status_id is not None
+                or isinstance(pending.confirmed, bool)
+                or isinstance(pending.preconfirmed, bool)
+            )
+
+        await _complete_event(session, institution_id=institution_id, dedup_key=dedup_key)
+        await session.commit()
+
+    if pending.action in {"reschedule", "cancel"}:
+        from src.app.api.routes.nexhealth_webhooks import _cancel_runs_for_appointment
+
+        runs_cancelled = await _cancel_runs_for_appointment(
+            institution_id,
+            appointment_id,
+            reason=f"gotracker_writeback_{pending.action}",
+            include_running=False,
+        )
+
+    if should_trigger_appointment and appointment_at_iso is not None:
+        from src.app.tasks.automation_workflow import trigger_appointment_workflows
+
+        trigger_appointment_workflows.delay(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            appointment_at_iso=appointment_at_iso,
+            contact_id=pending.contact_id,
+            location_id=location_id,
+            trigger_metadata={
+                "event": event,
+                "source": "gotracker_writeback_complete",
+                "gotracker_appointment_id": raw_appointment_id,
+                "appointment_at": appointment_at_iso,
+                "appointment_datetime": appointment_at_iso,
+                "origin_workflow_run_id": pending.workflow_run_id,
+            },
+        )
+
+    if should_trigger_state:
+        from src.app.tasks.automation_workflow import trigger_appointment_state_workflows
+
+        trigger_appointment_state_workflows.delay(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            contact_id=pending.contact_id,
+            location_id=location_id,
+            status_id=pending.status_id,
+            confirmed=pending.confirmed,
+            preconfirmed=pending.preconfirmed,
+            trigger_metadata={
+                "event": event,
+                "source": "gotracker_writeback_complete",
+                "gotracker_appointment_id": raw_appointment_id,
+            },
+        )
+
+    return {
+        "status": "writeback_completed",
+        "appointment_id": appointment_id,
+        "institution_id": institution_id,
+        "action": pending.action,
+        "runs_cancelled": runs_cancelled,
+        "appointment_triggered": should_trigger_appointment,
+        "state_triggered": should_trigger_state,
+    }
+
+
 async def _process_patient_payload(
     *,
     event: str,
@@ -881,7 +1136,10 @@ def _refresh_event_payload(
 
 def _event_name(payload: dict[str, Any]) -> str:
     value = payload.get("event") or payload.get("event_name") or payload.get("type") or ""
-    event = str(value).split(".complete", 1)[0].strip()
+    raw = str(value).strip()
+    if raw.startswith("appointment.status_writeback."):
+        return raw
+    event = raw.split(".complete", 1)[0]
     return event.replace("_", ".") if "." not in event else event
 
 

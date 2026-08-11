@@ -41,6 +41,11 @@ from src.app.models.gotracker_webhook_event import (  # noqa: F401 — model reg
     GoTrackerWebhookEvent,
     GoTrackerWebhookStatus,
 )
+from src.app.models.gotracker_appointment_writeback import (  # noqa: F401 — model registration
+    GoTrackerAppointmentWriteback,
+    GoTrackerAppointmentWritebackAction,
+    GoTrackerAppointmentWritebackStatus,
+)
 from src.app.models.gotracker_webhook_subscription import (  # noqa: F401 — model registration
     GoTrackerWebhookSubscription,
     GoTrackerWebhookSubscriptionStatus,
@@ -198,6 +203,9 @@ __all__ = [
     "NexHealthWebhookStatus",
     "GoTrackerWebhookEvent",
     "GoTrackerWebhookStatus",
+    "GoTrackerAppointmentWriteback",
+    "GoTrackerAppointmentWritebackAction",
+    "GoTrackerAppointmentWritebackStatus",
     "GoTrackerWebhookSubscription",
     "GoTrackerWebhookSubscriptionStatus",
     "PatientWorkingSet",

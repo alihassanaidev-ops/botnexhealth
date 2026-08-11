@@ -26,6 +26,7 @@ from src.app.tasks.automation_workflow import (
     _poll_retell_voice_outcomes_async,
     _retell_call_details_outcome,
     _retell_call_details_ready_for_resume,
+    _resolve_gotracker_writeback_target,
     _trigger_appointment_state_async,
     _trigger_patient_status_async,
     _waiting_step_targets_field,
@@ -173,6 +174,99 @@ def test_retell_call_details_outcome_falls_back_to_disconnect_reason() -> None:
 
     assert _retell_call_details_ready_for_resume(details)
     assert _retell_call_details_outcome(details) == "answered"
+
+
+@pytest.mark.asyncio
+async def test_gotracker_writeback_sweeper_completes_matching_reschedule() -> None:
+    pending = SimpleNamespace(
+        id="wb-1",
+        action="reschedule",
+        requested_start_time=datetime(2026, 8, 15, 11, 0, tzinfo=timezone.utc),
+        previous_start_time=datetime(2026, 8, 11, 12, 50, tzinfo=timezone.utc),
+        contact_id="contact-1",
+        provider_id="gt-2",
+        workflow_run_id="run-1",
+        status_id=None,
+        confirmed=None,
+        preconfirmed=None,
+    )
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.commit = AsyncMock()
+    session.get = AsyncMock(
+        side_effect=[
+            SimpleNamespace(id="inst-1", pms_type="gotracker", slug="clinic"),
+            SimpleNamespace(id="loc-1", slug="downtown"),
+        ]
+    )
+    writebacks = MagicMock()
+    writebacks.get_pending = AsyncMock(return_value=pending)
+    writebacks.complete = AsyncMock(return_value=pending)
+    writebacks.fail = AsyncMock()
+    projection = MagicMock()
+    projection.upsert_appointment = AsyncMock()
+    adapter = SimpleNamespace(
+        get_appointment=AsyncMock(
+            return_value={
+                "AppointmentId": 1398,
+                "AppointmentDate": "2026-08-15",
+                "AppointmentTime": "11:00:00",
+                "StatusId": 1,
+            }
+        ),
+        close=AsyncMock(),
+    )
+    cancel_runs = AsyncMock(return_value=1)
+
+    with patch(
+        "src.app.tasks.automation_workflow.get_system_db_session",
+        return_value=session,
+    ), patch(
+        "src.app.services.automation.gotracker_writeback_service."
+        "GoTrackerAppointmentWritebackService",
+        return_value=writebacks,
+    ), patch(
+        "src.app.pms.factory.get_adapter_for_institution_location",
+        new=AsyncMock(return_value=adapter),
+    ), patch(
+        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+        return_value=projection,
+    ), patch(
+        "src.app.api.routes.nexhealth_webhooks._cancel_runs_for_appointment",
+        new=cancel_runs,
+    ), patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+    ) as trigger_task:
+        trigger_task.delay = MagicMock()
+        result = await _resolve_gotracker_writeback_target(
+            id="wb-1",
+            institution_id="inst-1",
+            location_id="loc-1",
+            appointment_id="gt-1398",
+        )
+
+    assert result == {"status": "completed", "reason": "reschedule"}
+    writebacks.complete.assert_awaited_once_with(
+        pending,
+        source_event_id="sweeper:wb-1",
+    )
+    writebacks.fail.assert_not_called()
+    projection.upsert_appointment.assert_awaited_once()
+    assert projection.upsert_appointment.await_args.kwargs["start_time"] == (
+        "2026-08-15T11:00:00+00:00"
+    )
+    cancel_runs.assert_awaited_once_with(
+        "inst-1",
+        "gt-1398",
+        reason="gotracker_writeback_sweeper_reschedule",
+        include_running=False,
+    )
+    trigger_task.delay.assert_called_once()
+    assert trigger_task.delay.call_args.kwargs["appointment_at_iso"] == (
+        "2026-08-15T11:00:00+00:00"
+    )
+    adapter.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio

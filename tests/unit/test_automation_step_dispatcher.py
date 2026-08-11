@@ -217,7 +217,7 @@ def test_advance_json_mapper_writes_context_for_condition() -> None:
     )
 
 
-def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
+def test_advance_gotracker_writeback_records_pending_reschedule() -> None:
     session = _make_session()
     session.get = AsyncMock(
         side_effect=[
@@ -229,8 +229,10 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
     sched = _make_scheduler()
     dispatcher = WorkflowStepDispatcher(session, rt, sched)
     adapter = _FakeGoTrackerWritebackAdapter()
-    projection = MagicMock()
-    projection.record_gotracker_writeback = AsyncMock()
+    writeback_svc = MagicMock()
+    writeback_svc.acquire_appointment_lock = AsyncMock()
+    writeback_svc.pending_for_appointment = AsyncMock(return_value=None)
+    writeback_svc.record_request = AsyncMock()
 
     run = _make_run()
     run.id = "run-1"
@@ -242,7 +244,6 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
             UpdateGoTrackerAppointmentNode(
                 id="gt-write",
                 next_node_id="exit-1",
-                status_id=5,
                 start_time="{{new_start_time}}",
                 duration_min=45,
                 provider_id="{{provider_id}}",
@@ -259,14 +260,11 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
         ),
         patch("src.app.services.audit.log_audit", new=AsyncMock()) as mock_audit,
         patch(
-            "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
-            return_value=projection,
+            "src.app.services.automation.gotracker_writeback_service."
+            "GoTrackerAppointmentWritebackService",
+            return_value=writeback_svc,
         ),
-        patch("src.app.tasks.automation_workflow.trigger_appointment_state_workflows") as state_task,
-        patch("src.app.tasks.automation_workflow.trigger_appointment_workflows") as appointment_task,
     ):
-        state_task.delay = MagicMock()
-        appointment_task.delay = MagicMock()
         result = asyncio.run(
             dispatcher.advance(
                 run,
@@ -279,12 +277,15 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
         )
 
     assert result.status == "completed"
-    adapter.set_appointment_status_id.assert_awaited_once_with(
-        "gt-1343",
-        status_id=5,
-        confirmed=None,
-        preconfirmed=None,
+    writeback_svc.acquire_appointment_lock.assert_awaited_once_with(
+        institution_id="inst-1",
+        appointment_id="gt-1343",
     )
+    writeback_svc.pending_for_appointment.assert_awaited_once_with(
+        institution_id="inst-1",
+        appointment_id="gt-1343",
+    )
+    adapter.set_appointment_status_id.assert_not_called()
     adapter.update_appointment.assert_awaited_once_with(
         "gt-1343",
         start_time="2026-08-12T14:30",
@@ -296,34 +297,149 @@ def test_advance_gotracker_writeback_updates_status_and_appointment() -> None:
         reason=None,
     )
     adapter.close.assert_awaited_once()
-    assert projection.record_gotracker_writeback.await_count == 2
-    projection.record_gotracker_writeback.assert_any_await(
+    writeback_svc.record_request.assert_awaited_once_with(
         institution_id="inst-1",
         appointment_id="gt-1343",
         location_id="loc-1",
-        status_id=5,
+        contact_id=None,
+        workflow_run_id="run-1",
+        step_id="gt-write",
+        action="reschedule",
+        requested_start_time="2026-08-12T14:30:00+00:00",
+        provider_id="gt-2",
+        status_id=None,
         confirmed=None,
         preconfirmed=None,
     )
-    projection.record_gotracker_writeback.assert_any_await(
-        institution_id="inst-1",
-        appointment_id="gt-1343",
-        location_id="loc-1",
-        start_time="2026-08-12T14:30:00+00:00",
-        provider_id="gt-2",
+    assert mock_audit.await_count == 1
+
+
+def test_advance_gotracker_writeback_blocks_when_same_appointment_pending() -> None:
+    session = _make_session()
+    session.get = AsyncMock(
+        side_effect=[
+            SimpleNamespace(id="inst-1", pms_type="gotracker", slug="clinic"),
+            SimpleNamespace(id="loc-1", slug="downtown"),
+        ]
     )
-    state_task.delay.assert_called_once()
-    state_kwargs = state_task.delay.call_args.kwargs
-    assert state_kwargs["appointment_id"] == "gt-1343"
-    assert state_kwargs["status_id"] == 5
-    assert state_kwargs["confirmed"] is None
-    assert state_kwargs["preconfirmed"] is None
-    appointment_task.delay.assert_called_once()
-    appointment_kwargs = appointment_task.delay.call_args.kwargs
-    assert appointment_kwargs["appointment_id"] == "gt-1343"
-    assert appointment_kwargs["appointment_at_iso"] == "2026-08-12T14:30:00+00:00"
-    assert appointment_kwargs["trigger_metadata"]["appointment_at"] == "2026-08-12T14:30:00+00:00"
-    assert mock_audit.await_count == 2
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+    adapter = _FakeGoTrackerWritebackAdapter()
+    pending = SimpleNamespace(id="wb-1", action="reschedule")
+    writeback_svc = MagicMock()
+    writeback_svc.acquire_appointment_lock = AsyncMock()
+    writeback_svc.pending_for_appointment = AsyncMock(return_value=pending)
+    writeback_svc.record_request = AsyncMock()
+
+    run = _make_run()
+    run.id = "run-1"
+    run.location_id = "loc-1"
+    run.trigger_ref_type = "appointment"
+    run.trigger_ref_id = "gt-1343"
+    defn = _definition(
+        nodes=[
+            UpdateGoTrackerAppointmentNode(
+                id="gt-write",
+                next_node_id="exit-1",
+                start_time="{{new_start_time}}",
+            ),
+            ExitNode(id="exit-1", outcome="updated"),
+        ],
+        entry="gt-write",
+    )
+
+    with (
+        patch(
+            "src.app.pms.factory.get_adapter_for_institution_location",
+            new=AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.services.automation.gotracker_writeback_service."
+            "GoTrackerAppointmentWritebackService",
+            return_value=writeback_svc,
+        ),
+    ):
+        result = asyncio.run(
+            dispatcher.advance(
+                run,
+                defn,
+                context={"new_start_time": "2026-08-12T14:30"},
+            )
+        )
+
+    assert result.status == "failed"
+    adapter.set_appointment_status_id.assert_not_called()
+    adapter.update_appointment.assert_not_called()
+    writeback_svc.record_request.assert_not_called()
+    rt.fail_step.assert_awaited_once()
+    assert rt.fail_step.await_args.kwargs["result_code"] == "gotracker_writeback_failed"
+    assert rt.fail_step.await_args.kwargs["result_metadata"] == {
+        "pending_writeback_id": "wb-1",
+        "pending_action": "reschedule",
+    }
+
+
+def test_advance_gotracker_writeback_rejects_combined_status_and_reschedule() -> None:
+    session = _make_session()
+    session.get = AsyncMock(
+        side_effect=[
+            SimpleNamespace(id="inst-1", pms_type="gotracker", slug="clinic"),
+            SimpleNamespace(id="loc-1", slug="downtown"),
+        ]
+    )
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+    adapter = _FakeGoTrackerWritebackAdapter()
+    writeback_svc = MagicMock()
+    writeback_svc.acquire_appointment_lock = AsyncMock()
+    writeback_svc.pending_for_appointment = AsyncMock(return_value=None)
+    writeback_svc.record_request = AsyncMock()
+
+    run = _make_run()
+    run.id = "run-1"
+    run.location_id = "loc-1"
+    run.trigger_ref_type = "appointment"
+    run.trigger_ref_id = "gt-1343"
+    defn = _definition(
+        nodes=[
+            UpdateGoTrackerAppointmentNode(
+                id="gt-write",
+                next_node_id="exit-1",
+                status_id=5,
+                start_time="{{new_start_time}}",
+            ),
+            ExitNode(id="exit-1", outcome="updated"),
+        ],
+        entry="gt-write",
+    )
+
+    with (
+        patch(
+            "src.app.pms.factory.get_adapter_for_institution_location",
+            new=AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.services.automation.gotracker_writeback_service."
+            "GoTrackerAppointmentWritebackService",
+            return_value=writeback_svc,
+        ),
+    ):
+        result = asyncio.run(
+            dispatcher.advance(
+                run,
+                defn,
+                context={"new_start_time": "2026-08-12T14:30"},
+            )
+        )
+
+    assert result.status == "failed"
+    adapter.set_appointment_status_id.assert_not_called()
+    adapter.update_appointment.assert_not_called()
+    writeback_svc.record_request.assert_not_called()
+    rt.fail_step.assert_awaited_once()
+    assert rt.fail_step.await_args.kwargs["result_code"] == "gotracker_writeback_failed"
 
 
 def test_advance_llm_node_classifies_with_keyword_rules() -> None:

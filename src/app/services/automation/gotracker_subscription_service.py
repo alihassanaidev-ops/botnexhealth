@@ -24,6 +24,8 @@ DEFAULT_GOTRACKER_WEBHOOK_EVENTS = [
     "appointment.created",
     "appointment.updated",
     "appointment.cancelled",
+    "appointment.status_writeback.complete",
+    "appointment.status_writeback.failed",
     "patient.created",
     "patient.updated",
 ]

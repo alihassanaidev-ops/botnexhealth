@@ -270,12 +270,14 @@ class VoiceNodeExecutor:
             location=location,
             context=MergeContextBuilder.normalize_raw_context(context),
         )
+        patient_first_name = merge_context.get("patient_first_name", "")
         dynamic_variables = {
-            "first_name": merge_context.get("patient_first_name", ""),
+            **merge_context,
+            "patient_first_name": patient_first_name,
+            "first_name": patient_first_name or merge_context.get("first_name", ""),
             "user_number": to_number,
             "clinic_name": clinic_name or "",
             "compliance_disclosure": _ai_call_disclosure(clinic_name),
-            **merge_context,
         }
         metadata = {
             "workflow_run_id": str(run.id),

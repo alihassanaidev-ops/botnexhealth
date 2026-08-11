@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -86,6 +87,17 @@ def _patch_subscription_lifecycle():
         "src.app.services.automation.gotracker_subscription_service."
         "GoTrackerSubscriptionLifecycleService",
         return_value=lifecycle,
+    )
+
+
+def _patch_writeback_service(*, pending):
+    service = MagicMock()
+    service.complete_latest = AsyncMock(return_value=pending)
+    service.fail_latest = AsyncMock(return_value=pending)
+    return service, patch(
+        "src.app.services.automation.gotracker_writeback_service."
+        "GoTrackerAppointmentWritebackService",
+        return_value=service,
     )
 
 
@@ -585,6 +597,153 @@ async def test_api_originated_cancellation_does_not_cancel_or_start_runs():
     assert item["reason"] == "api_origin"
     projection.upsert_appointment.assert_awaited_once()
     cancel_runs.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_writeback_complete_reschedule_uses_pending_request_and_triggers_once():
+    payload = {
+        "id": "writeback-complete-1",
+        "type": "appointment.status_writeback.complete",
+        "foreign_id": "1395",
+        "foreign_id_type": "tracker",
+        "action": "complete",
+        "data": {
+            "cloud_appointment_id": 1395,
+            "status": "written",
+            "error": None,
+        },
+    }
+    pending = SimpleNamespace(
+        action="reschedule",
+        requested_start_time=datetime(2026, 8, 12, 17, 0, tzinfo=timezone.utc),
+        previous_start_time=datetime(2026, 8, 10, 17, 0, tzinfo=timezone.utc),
+        contact_id="contact-1",
+        provider_id="gt-2",
+        workflow_run_id="run-1",
+        status_id=None,
+        confirmed=None,
+        preconfirmed=None,
+    )
+    request = _make_request(payload)
+    projection, projection_patch = _patch_projection(change="rescheduled")
+    lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
+    writebacks, writebacks_patch = _patch_writeback_service(pending=pending)
+    cancel_runs = AsyncMock(return_value=1)
+
+    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+        side_effect=[
+            _session_with_scalar(_location()),
+            _processing_session(),
+        ],
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._claim_event",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
+    ), projection_patch, lifecycle_patch, writebacks_patch, patch(
+        "src.app.api.routes.nexhealth_webhooks._cancel_runs_for_appointment",
+        new=cancel_runs,
+    ), patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+    ) as trigger_task:
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        trigger_task.delay = MagicMock()
+        result = await gotracker_webhook("loc-1", request)
+
+    assert result["status"] == "writeback_completed"
+    assert result["action"] == "reschedule"
+    assert result["appointment_triggered"] is True
+    writebacks.complete_latest.assert_awaited_once_with(
+        institution_id="inst-1",
+        appointment_id="gt-1395",
+        source_event_id="writeback-complete-1",
+    )
+    projection.upsert_appointment.assert_awaited_once()
+    upsert_kwargs = projection.upsert_appointment.await_args.kwargs
+    assert upsert_kwargs["appointment_id"] == "gt-1395"
+    assert upsert_kwargs["start_time"] == "2026-08-12T17:00:00+00:00"
+    assert upsert_kwargs["status_source"] == "writeback_complete"
+    cancel_runs.assert_awaited_once_with(
+        "inst-1",
+        "gt-1395",
+        reason="gotracker_writeback_reschedule",
+        include_running=False,
+    )
+    trigger_task.delay.assert_called_once()
+    trigger_kwargs = trigger_task.delay.call_args.kwargs
+    assert trigger_kwargs["appointment_id"] == "gt-1395"
+    assert trigger_kwargs["appointment_at_iso"] == "2026-08-12T17:00:00+00:00"
+    assert trigger_kwargs["trigger_metadata"]["source"] == "gotracker_writeback_complete"
+    lifecycle.record_event_seen.assert_awaited_once_with(
+        institution_id="inst-1",
+        location_id="loc-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_writeback_failed_marks_pending_failed_and_does_not_trigger():
+    payload = {
+        "id": "writeback-failed-1",
+        "type": "appointment.status_writeback.failed",
+        "foreign_id": "1395",
+        "foreign_id_type": "tracker",
+        "action": "failed",
+        "data": {
+            "cloud_appointment_id": 1395,
+            "status": "failed",
+            "error": "PMS write failed",
+        },
+    }
+    pending = SimpleNamespace(
+        action="reschedule",
+        requested_start_time=datetime(2026, 8, 12, 17, 0, tzinfo=timezone.utc),
+        previous_start_time=datetime(2026, 8, 10, 17, 0, tzinfo=timezone.utc),
+        contact_id="contact-1",
+        provider_id="gt-2",
+        workflow_run_id="run-1",
+        status_id=None,
+        confirmed=None,
+        preconfirmed=None,
+    )
+    request = _make_request(payload)
+    projection, projection_patch = _patch_projection(change="rescheduled")
+    lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
+    writebacks, writebacks_patch = _patch_writeback_service(pending=pending)
+
+    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+        side_effect=[
+            _session_with_scalar(_location()),
+            _processing_session(),
+        ],
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._claim_event",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
+    ), projection_patch, lifecycle_patch, writebacks_patch, patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+    ) as trigger_task:
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        trigger_task.delay = MagicMock()
+        result = await gotracker_webhook("loc-1", request)
+
+    assert result["status"] == "writeback_failed"
+    assert result["action"] == "reschedule"
+    writebacks.fail_latest.assert_awaited_once_with(
+        institution_id="inst-1",
+        appointment_id="gt-1395",
+        source_event_id="writeback-failed-1",
+        error="PMS write failed",
+    )
+    projection.upsert_appointment.assert_awaited_once()
+    restore_kwargs = projection.upsert_appointment.await_args.kwargs
+    assert restore_kwargs["start_time"] == "2026-08-10T17:00:00+00:00"
+    assert restore_kwargs["status_source"] == "writeback_failed_restore"
+    trigger_task.delay.assert_not_called()
 
 
 @pytest.mark.asyncio

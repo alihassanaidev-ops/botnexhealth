@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from src.app.database import (
     get_superadmin_system_db_session,
@@ -81,6 +82,8 @@ _APPOINTMENT_SYNC_LOOKAHEAD_DAYS = 90
 _RETELL_OUTCOME_POLL_BATCH = 25
 _RETELL_OUTCOME_MIN_AGE_SECONDS = 30
 _RETELL_TERMINAL_CALL_STATUSES = frozenset({"ended", "not_connected", "error"})
+_GOTRACKER_WRITEBACK_STALE_SECONDS = 5 * 60
+_GOTRACKER_WRITEBACK_SWEEP_BATCH = 25
 
 
 def _superadmin_system_session(external_id: str):
@@ -333,6 +336,461 @@ async def _recover_stale_async() -> dict:
         await session.commit()
     logger.info("recover_stale_workflow_timers: recovered %d timer(s)", count)
     return {"recovered": count}
+
+
+# ---------------------------------------------------------------------------
+# GoTracker writeback sweeper — fallback for missed .complete/.failed webhooks
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.sweep_gotracker_appointment_writebacks",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def sweep_gotracker_appointment_writebacks(self) -> dict:
+    """Resolve stale GoTracker appointment writes by reading live PMS state.
+
+    The webhook path is the fast path. This task is the floor: if a completion
+    webhook is lost or GoTracker's one pending slot overwrote an earlier write,
+    stale pending rows do not stay pending forever.
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(_sweep_gotracker_writebacks_async())
+    except Exception as exc:
+        logger.exception("sweep_gotracker_appointment_writebacks failed: %s", exc)
+        raise self.retry(exc=exc, countdown=15)
+
+
+async def _sweep_gotracker_writebacks_async() -> dict:
+    from src.app.services.automation.gotracker_writeback_service import (
+        GoTrackerAppointmentWritebackService,
+    )
+
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=_GOTRACKER_WRITEBACK_STALE_SECONDS
+    )
+    async with _superadmin_system_session("gotracker_writeback_sweep") as session:
+        rows = await GoTrackerAppointmentWritebackService(session).list_stale_pending(
+            cutoff=cutoff,
+            limit=_GOTRACKER_WRITEBACK_SWEEP_BATCH,
+        )
+        targets = [
+            {
+                "id": str(row.id),
+                "institution_id": str(row.institution_id),
+                "location_id": str(row.location_id) if row.location_id else None,
+                "appointment_id": str(row.appointment_id),
+            }
+            for row in rows
+        ]
+        await session.commit()
+
+    resolved = 0
+    failed = 0
+    skipped = 0
+    errored = 0
+    for target in targets:
+        try:
+            result = await _resolve_gotracker_writeback_target(**target)
+        except Exception as exc:  # noqa: BLE001 - one bad location must not stop sweep
+            errored += 1
+            logger.warning(
+                "gotracker_writeback_sweep: target errored institution=%s appointment=%s writeback=%s error=%s",
+                target["institution_id"],
+                target["appointment_id"],
+                target["id"],
+                exc,
+                exc_info=True,
+            )
+            continue
+        if result["status"] == "completed":
+            resolved += 1
+        elif result["status"] == "failed":
+            failed += 1
+        else:
+            skipped += 1
+
+    logger.info(
+        "gotracker_writeback_sweep: checked=%d completed=%d failed=%d skipped=%d errored=%d",
+        len(targets),
+        resolved,
+        failed,
+        skipped,
+        errored,
+    )
+    return {
+        "checked": len(targets),
+        "completed": resolved,
+        "failed": failed,
+        "skipped": skipped,
+        "errored": errored,
+    }
+
+
+async def _resolve_gotracker_writeback_target(
+    *,
+    id: str,
+    institution_id: str,
+    location_id: str | None,
+    appointment_id: str,
+) -> dict[str, str]:
+    from src.app.api.routes.nexhealth_webhooks import _cancel_runs_for_appointment
+    from src.app.models.institution import Institution
+    from src.app.models.institution_location import InstitutionLocation
+    from src.app.pms.factory import get_adapter_for_institution_location
+    from src.app.services.automation.gotracker_writeback_service import (
+        GoTrackerAppointmentWritebackService,
+    )
+    from src.app.services.automation.nexhealth_projection_service import (
+        NexHealthProjectionService,
+    )
+
+    if not location_id:
+        async with get_system_db_session(
+            "celery",
+            institution_id=institution_id,
+            external_id=appointment_id,
+        ) as session:
+            writebacks = GoTrackerAppointmentWritebackService(session)
+            row = await writebacks.get_pending(writeback_id=id)
+            if row is None:
+                return {"status": "skipped", "reason": "already_resolved"}
+            await writebacks.fail(row, error="Missing location for GoTracker writeback sweep")
+            await session.commit()
+        return {"status": "failed", "reason": "missing_location"}
+
+    adapter = None
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        location_id=location_id,
+        external_id=appointment_id,
+    ) as session:
+        writebacks = GoTrackerAppointmentWritebackService(session)
+        row = await writebacks.get_pending(writeback_id=id)
+        if row is None:
+            await session.commit()
+            return {"status": "skipped", "reason": "already_resolved"}
+
+        institution = await session.get(Institution, institution_id)
+        location = await session.get(InstitutionLocation, location_id)
+        if institution is None or location is None:
+            await writebacks.fail(
+                row,
+                error="Missing institution/location for GoTracker writeback sweep",
+            )
+            await session.commit()
+            return {"status": "failed", "reason": "missing_scope"}
+
+        try:
+            adapter = await get_adapter_for_institution_location(institution, location)
+            if not hasattr(adapter, "get_appointment"):
+                await writebacks.fail(
+                    row,
+                    error="GoTracker adapter cannot fetch appointment for writeback sweep",
+                )
+                await session.commit()
+                return {"status": "failed", "reason": "adapter_missing_get_appointment"}
+
+            appointment = await adapter.get_appointment(appointment_id)  # type: ignore[attr-defined]
+        finally:
+            if adapter is not None:
+                await adapter.close()
+
+        current_start = _gotracker_sweep_start_time(appointment)
+        current_status_id = _gotracker_sweep_status_id(appointment)
+        current_cancelled = _gotracker_sweep_is_cancelled(appointment, current_status_id)
+        applied = _gotracker_pending_matches_current_state(
+            row,
+            current_start=current_start,
+            current_status_id=current_status_id,
+            current_cancelled=current_cancelled,
+            appointment=appointment,
+        )
+
+        projection = NexHealthProjectionService(session)
+        if applied:
+            await writebacks.complete(row, source_event_id=f"sweeper:{id}")
+            if row.action == "reschedule" and row.requested_start_time is not None:
+                appointment_at_iso = row.requested_start_time.isoformat()
+                await projection.upsert_appointment(
+                    institution_id=institution_id,
+                    appointment_id=appointment_id,
+                    location_id=location_id,
+                    nexhealth_patient_id=None,
+                    contact_id=row.contact_id,
+                    start_time=appointment_at_iso,
+                    event="appointment.status_writeback.swept",
+                    cancelled=False,
+                    provider_id=row.provider_id,
+                    gotracker_status_id=row.status_id,
+                    is_confirmed=row.confirmed,
+                    is_preconfirmed=row.preconfirmed,
+                    status_source="writeback_sweeper",
+                )
+                should_cancel_runs = True
+                should_trigger_appointment = True
+                should_trigger_state = False
+            elif row.action == "cancel":
+                await projection.upsert_appointment(
+                    institution_id=institution_id,
+                    appointment_id=appointment_id,
+                    location_id=location_id,
+                    nexhealth_patient_id=None,
+                    contact_id=row.contact_id,
+                    start_time=(
+                        row.previous_start_time.isoformat()
+                        if row.previous_start_time is not None
+                        else current_start.isoformat() if current_start is not None else None
+                    ),
+                    event="appointment.status_writeback.swept",
+                    cancelled=True,
+                    gotracker_status_id=row.status_id,
+                    is_confirmed=row.confirmed,
+                    is_preconfirmed=row.preconfirmed,
+                    status_source="writeback_sweeper",
+                )
+                should_cancel_runs = True
+                should_trigger_appointment = False
+                should_trigger_state = False
+                appointment_at_iso = None
+            else:
+                await projection.upsert_appointment(
+                    institution_id=institution_id,
+                    appointment_id=appointment_id,
+                    location_id=location_id,
+                    nexhealth_patient_id=None,
+                    contact_id=row.contact_id,
+                    start_time=(
+                        current_start.isoformat()
+                        if current_start is not None
+                        else row.previous_start_time.isoformat()
+                        if row.previous_start_time is not None
+                        else None
+                    ),
+                    event="appointment.status_writeback.swept",
+                    cancelled=False,
+                    gotracker_status_id=row.status_id,
+                    is_confirmed=row.confirmed,
+                    is_preconfirmed=row.preconfirmed,
+                    status_source="writeback_sweeper",
+                )
+                should_cancel_runs = False
+                should_trigger_appointment = False
+                should_trigger_state = (
+                    row.status_id is not None
+                    or isinstance(row.confirmed, bool)
+                    or isinstance(row.preconfirmed, bool)
+                )
+                appointment_at_iso = None
+        else:
+            await writebacks.fail(
+                row,
+                source_event_id=f"sweeper:{id}",
+                error="GoTracker writeback did not apply within stale window",
+            )
+            if row.previous_start_time is not None:
+                await projection.upsert_appointment(
+                    institution_id=institution_id,
+                    appointment_id=appointment_id,
+                    location_id=location_id,
+                    nexhealth_patient_id=None,
+                    contact_id=row.contact_id,
+                    start_time=row.previous_start_time.isoformat(),
+                    event="appointment.status_writeback.swept_failed",
+                    cancelled=False,
+                    provider_id=row.provider_id,
+                    status_source="writeback_sweeper_failed_restore",
+                )
+            should_cancel_runs = False
+            should_trigger_appointment = False
+            should_trigger_state = False
+            appointment_at_iso = None
+
+        await session.commit()
+
+    if not applied:
+        return {"status": "failed", "reason": "not_applied"}
+
+    if should_cancel_runs:
+        await _cancel_runs_for_appointment(
+            institution_id,
+            appointment_id,
+            reason=f"gotracker_writeback_sweeper_{row.action}",
+            include_running=False,
+        )
+
+    if should_trigger_appointment and appointment_at_iso is not None:
+        trigger_appointment_workflows.delay(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            appointment_at_iso=appointment_at_iso,
+            contact_id=row.contact_id,
+            location_id=location_id,
+            trigger_metadata={
+                "event": "appointment.status_writeback.swept",
+                "source": "gotracker_writeback_sweeper",
+                "gotracker_appointment_id": appointment_id.removeprefix("gt-"),
+                "appointment_at": appointment_at_iso,
+                "appointment_datetime": appointment_at_iso,
+                "origin_workflow_run_id": row.workflow_run_id,
+            },
+        )
+
+    if should_trigger_state:
+        trigger_appointment_state_workflows.delay(
+            institution_id=institution_id,
+            appointment_id=appointment_id,
+            contact_id=row.contact_id,
+            location_id=location_id,
+            status_id=row.status_id,
+            confirmed=row.confirmed,
+            preconfirmed=row.preconfirmed,
+            trigger_metadata={
+                "event": "appointment.status_writeback.swept",
+                "source": "gotracker_writeback_sweeper",
+                "gotracker_appointment_id": appointment_id.removeprefix("gt-"),
+            },
+        )
+
+    return {"status": "completed", "reason": row.action}
+
+
+def _gotracker_sweep_start_time(appointment: dict[str, Any] | None) -> datetime | None:
+    if not appointment:
+        return None
+    direct = _clean_sweep_str(
+        _first_sweep(
+            appointment,
+            "start_time",
+            "StartTime",
+            "appointment_datetime",
+            "AppointmentDateTime",
+            "AppointmentTimeStamp",
+        )
+    )
+    if direct:
+        return _parse_sweep_dt(direct)
+
+    appointment_date = _clean_sweep_str(
+        _first_sweep(appointment, "appointment_date", "AppointmentDate", "date", "Date")
+    )
+    appointment_time = _clean_sweep_str(
+        _first_sweep(appointment, "appointment_time", "AppointmentTime", "time", "Time")
+    )
+    if not appointment_date or not appointment_time:
+        return None
+
+    date_part = appointment_date.split("T", 1)[0]
+    time_part = appointment_time.split("T", 1)[-1].removesuffix("Z")
+    return _parse_sweep_dt(f"{date_part}T{time_part}Z")
+
+
+def _gotracker_sweep_status_id(appointment: dict[str, Any] | None) -> int | None:
+    if not appointment:
+        return None
+    raw = _first_sweep(appointment, "status_id", "StatusId", "statusId")
+    try:
+        return int(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _gotracker_sweep_is_cancelled(
+    appointment: dict[str, Any] | None,
+    status_id: int | None,
+) -> bool:
+    if not appointment:
+        return False
+    return status_id == 3 or _as_sweep_bool(
+        _first_sweep(appointment, "cancelled", "Cancelled", "is_cancelled")
+    )
+
+
+def _gotracker_pending_matches_current_state(
+    row,
+    *,
+    current_start: datetime | None,
+    current_status_id: int | None,
+    current_cancelled: bool,
+    appointment: dict[str, Any] | None,
+) -> bool:
+    if row.action == "reschedule":
+        return _same_sweep_instant(row.requested_start_time, current_start)
+    if row.action == "cancel":
+        return current_cancelled
+    if row.status_id is not None and row.status_id != current_status_id:
+        return False
+    if isinstance(row.confirmed, bool):
+        current_confirmed = _as_sweep_bool_or_none(
+            _first_sweep(appointment or {}, "confirmed", "Confirmed", "is_confirmed")
+        )
+        if current_confirmed is None or row.confirmed != current_confirmed:
+            return False
+    if isinstance(row.preconfirmed, bool):
+        current_preconfirmed = _as_sweep_bool_or_none(
+            _first_sweep(appointment or {}, "preconfirmed", "Preconfirmed", "is_preconfirmed")
+        )
+        if current_preconfirmed is None or row.preconfirmed != current_preconfirmed:
+            return False
+    return (
+        row.status_id is not None
+        or isinstance(row.confirmed, bool)
+        or isinstance(row.preconfirmed, bool)
+    )
+
+
+def _first_sweep(data: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in data and data[key] is not None:
+            return data[key]
+    return None
+
+
+def _clean_sweep_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _parse_sweep_dt(value: Any) -> datetime | None:
+    text_value = _clean_sweep_str(value)
+    if not text_value:
+        return None
+    try:
+        dt = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _same_sweep_instant(a: datetime | None, b: datetime | None) -> bool:
+    if a is None or b is None:
+        return a is b
+    return abs((a - b).total_seconds()) < 1.0
+
+
+def _as_sweep_bool(value: Any) -> bool:
+    parsed = _as_sweep_bool_or_none(value)
+    return bool(parsed) if parsed is not None else False
+
+
+def _as_sweep_bool_or_none(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y"}:
+            return True
+        if text in {"0", "false", "no", "n"}:
+            return False
+    return None
 
 
 @celery_app.task(

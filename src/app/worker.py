@@ -107,6 +107,12 @@ def _build_celery_app() -> Celery:
                 # outbound voice workflow runs do not remain WAITING.
                 "schedule": 60.0,
             },
+            "sweep-gotracker-appointment-writebacks": {
+                "task": "src.app.tasks.automation_workflow.sweep_gotracker_appointment_writebacks",
+                # Repairs missed GoTracker writeback completion/failure webhooks
+                # so patient reschedule reminders do not remain stuck pending.
+                "schedule": 60.0,
+            },
             "publish-workflow-metrics": {
                 "task": "src.app.tasks.automation_workflow.publish_workflow_metrics",
                 # Emit workflow-engine health metrics (backlog, stale timers,

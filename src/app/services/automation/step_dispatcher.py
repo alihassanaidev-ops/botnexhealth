@@ -638,8 +638,9 @@ class WorkflowStepDispatcher:
         from src.app.models.institution import Institution
         from src.app.pms.factory import get_adapter_for_institution_location
         from src.app.services.audit import log_audit
-        from src.app.services.automation.nexhealth_projection_service import (
-            NexHealthProjectionService,
+        from src.app.services.automation.gotracker_writeback_service import (
+            GoTrackerAppointmentWritebackService,
+            action_for_status_write,
         )
 
         step = await self.runtime.begin_step(
@@ -676,7 +677,62 @@ class WorkflowStepDispatcher:
                 await fail("GoTracker writeback can only run for GoTracker locations")
                 raise WorkflowGoTrackerWritebackError("non-gotracker adapter")
 
+            writebacks = GoTrackerAppointmentWritebackService(self.session)
+            await writebacks.acquire_appointment_lock(
+                institution_id=str(run.institution_id),
+                appointment_id=str(run.trigger_ref_id),
+            )
+            pending_writeback = await writebacks.pending_for_appointment(
+                institution_id=str(run.institution_id),
+                appointment_id=str(run.trigger_ref_id),
+            )
+            if pending_writeback is not None:
+                await fail(
+                    "GoTracker appointment writeback is already pending",
+                    {
+                        "pending_writeback_id": str(pending_writeback.id),
+                        "pending_action": pending_writeback.action,
+                    },
+                )
+                raise WorkflowGoTrackerWritebackError("writeback already pending")
+
             status_payload = _gotracker_status_payload(node)
+            update_payload = {
+                "start_time": _render_gotracker_update_value(node.start_time, context),
+                "end_time": _render_gotracker_update_value(node.end_time, context),
+                "duration_min": node.duration_min,
+                "provider_id": _render_gotracker_update_value(node.provider_id, context),
+                "operatory_id": _render_gotracker_update_value(node.operatory_id, context),
+                "patient_id": _render_gotracker_update_value(node.patient_id, context),
+                "reason": _render_gotracker_update_value(node.reason, context),
+            }
+            update_payload = {
+                key: value for key, value in update_payload.items() if value is not None
+            }
+            normalized_start_time: str | None = None
+            if isinstance(update_payload.get("start_time"), str):
+                parsed_start = _parse_context_datetime(
+                    update_payload["start_time"], location_timezone
+                )
+                if parsed_start is None:
+                    await fail(
+                        "GoTracker appointment start_time is not a valid ISO datetime",
+                        {"operations": operations},
+                    )
+                    raise WorkflowGoTrackerWritebackError("invalid appointment start_time")
+                normalized_start_time = parsed_start.isoformat()
+
+            if status_payload and update_payload:
+                await fail(
+                    (
+                        "GoTracker appointment writeback cannot combine status and "
+                        "appointment-field updates in one node"
+                    ),
+                    {"status_payload": status_payload, "update_payload": update_payload},
+                )
+                raise WorkflowGoTrackerWritebackError("combined writeback not serializable")
+
+            status_write_succeeded = False
             if status_payload:
                 if node.status_id is not None:
                     result = await adapter.set_appointment_status_id(
@@ -718,53 +774,8 @@ class WorkflowStepDispatcher:
                         {"operations": operations},
                     )
                     raise WorkflowGoTrackerWritebackError("status update failed")
-                await NexHealthProjectionService(self.session).record_gotracker_writeback(
-                    institution_id=str(run.institution_id),
-                    appointment_id=str(run.trigger_ref_id),
-                    location_id=str(run.location_id),
-                    status_id=node.status_id,
-                    confirmed=node.confirmed,
-                    preconfirmed=node.preconfirmed,
-                )
-                from src.app.tasks.automation_workflow import (
-                    trigger_appointment_state_workflows,
-                )
+                status_write_succeeded = True
 
-                trigger_appointment_state_workflows.delay(
-                    institution_id=str(run.institution_id),
-                    appointment_id=str(run.trigger_ref_id),
-                    contact_id=str(run.contact_id) if run.contact_id else None,
-                    location_id=str(run.location_id),
-                    status_id=node.status_id,
-                    confirmed=node.confirmed,
-                    preconfirmed=node.preconfirmed,
-                    trigger_metadata=context,
-                )
-
-            update_payload = {
-                "start_time": _render_gotracker_update_value(node.start_time, context),
-                "end_time": _render_gotracker_update_value(node.end_time, context),
-                "duration_min": node.duration_min,
-                "provider_id": _render_gotracker_update_value(node.provider_id, context),
-                "operatory_id": _render_gotracker_update_value(node.operatory_id, context),
-                "patient_id": _render_gotracker_update_value(node.patient_id, context),
-                "reason": _render_gotracker_update_value(node.reason, context),
-            }
-            update_payload = {
-                key: value for key, value in update_payload.items() if value is not None
-            }
-            normalized_start_time: str | None = None
-            if isinstance(update_payload.get("start_time"), str):
-                parsed_start = _parse_context_datetime(
-                    update_payload["start_time"], location_timezone
-                )
-                if parsed_start is None:
-                    await fail(
-                        "GoTracker appointment start_time is not a valid ISO datetime",
-                        {"operations": operations},
-                    )
-                    raise WorkflowGoTrackerWritebackError("invalid appointment start_time")
-                normalized_start_time = parsed_start.isoformat()
             if update_payload:
                 result = await adapter.update_appointment(
                     str(run.trigger_ref_id),
@@ -803,39 +814,59 @@ class WorkflowStepDispatcher:
                         {"operations": operations},
                     )
                     raise WorkflowGoTrackerWritebackError("appointment update failed")
-                await NexHealthProjectionService(self.session).record_gotracker_writeback(
+
+            writeback_action = (
+                action_for_status_write(
+                    status_id=node.status_id,
+                    confirmed=node.confirmed,
+                    preconfirmed=node.preconfirmed,
+                )
+                if status_write_succeeded
+                else None
+            )
+            if writeback_action == "cancel":
+                await writebacks.record_request(
                     institution_id=str(run.institution_id),
                     appointment_id=str(run.trigger_ref_id),
                     location_id=str(run.location_id),
-                    start_time=normalized_start_time,
+                    contact_id=str(run.contact_id) if run.contact_id else None,
+                    workflow_run_id=str(run.id),
+                    step_id=node.id,
+                    action="cancel",
+                    status_id=node.status_id,
+                    confirmed=node.confirmed,
+                    preconfirmed=node.preconfirmed,
+                )
+            elif normalized_start_time is not None:
+                await writebacks.record_request(
+                    institution_id=str(run.institution_id),
+                    appointment_id=str(run.trigger_ref_id),
+                    location_id=str(run.location_id),
+                    contact_id=str(run.contact_id) if run.contact_id else None,
+                    workflow_run_id=str(run.id),
+                    step_id=node.id,
+                    action="reschedule",
+                    requested_start_time=normalized_start_time,
                     provider_id=update_payload.get("provider_id")
                     if isinstance(update_payload.get("provider_id"), str)
                     else None,
+                    status_id=node.status_id if status_write_succeeded else None,
+                    confirmed=node.confirmed if status_write_succeeded else None,
+                    preconfirmed=node.preconfirmed if status_write_succeeded else None,
                 )
-                if normalized_start_time is not None:
-                    # The projection write above can make the returning GoTracker
-                    # webhook appear unchanged. Explicitly emit the time-aware,
-                    # idempotent appointment trigger so a real reschedule gets one
-                    # fresh confirmation cycle for its new start time.
-                    from src.app.tasks.automation_workflow import (
-                        trigger_appointment_workflows,
-                    )
-
-                    reschedule_context = {
-                        **context,
-                        "appointment_at": normalized_start_time,
-                        "appointment_datetime": normalized_start_time,
-                        "source": "workflow_gotracker_reschedule",
-                        "origin_workflow_run_id": str(run.id),
-                    }
-                    trigger_appointment_workflows.delay(
-                        institution_id=str(run.institution_id),
-                        appointment_id=str(run.trigger_ref_id),
-                        appointment_at_iso=normalized_start_time,
-                        contact_id=str(run.contact_id) if run.contact_id else None,
-                        location_id=str(run.location_id),
-                        trigger_metadata=reschedule_context,
-                    )
+            elif writeback_action is not None:
+                await writebacks.record_request(
+                    institution_id=str(run.institution_id),
+                    appointment_id=str(run.trigger_ref_id),
+                    location_id=str(run.location_id),
+                    contact_id=str(run.contact_id) if run.contact_id else None,
+                    workflow_run_id=str(run.id),
+                    step_id=node.id,
+                    action=writeback_action,
+                    status_id=node.status_id,
+                    confirmed=node.confirmed,
+                    preconfirmed=node.preconfirmed,
+                )
 
             await self.runtime.complete_step(
                 step,

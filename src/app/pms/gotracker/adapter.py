@@ -315,6 +315,43 @@ class GoTrackerAdapter(
             max_items=max_items,
         )
 
+    async def get_appointment(self, appointment_id: str) -> dict[str, Any] | None:
+        """Fetch one GoTracker appointment by id from the Synchronizer API."""
+        raw_id = mappers.strip(appointment_id).removeprefix("gt-")
+        try:
+            raw = await self._client.request("GET", f"/api/appointments/{raw_id}")
+        except GoTrackerAPIError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+        if not isinstance(data, dict):
+            return None
+
+        appointment = data.get("appointment")
+        if isinstance(appointment, dict):
+            return appointment
+
+        appointments = data.get("appointments")
+        if isinstance(appointments, list):
+            for item in appointments:
+                if not isinstance(item, dict):
+                    continue
+                item_id = mappers.strip(
+                    item.get("AppointmentId")
+                    or item.get("appointment_id")
+                    or item.get("id")
+                )
+                if item_id == raw_id:
+                    return item
+            return None
+
+        item_id = mappers.strip(
+            data.get("AppointmentId") or data.get("appointment_id") or data.get("id")
+        )
+        return data if item_id == raw_id else None
+
     async def list_patient_recalls(self, *, max_items: int = 500) -> list[dict[str, Any]]:
         return await self._fetch_all(
             "GET",

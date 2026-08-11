@@ -141,6 +141,19 @@ def _context_field(name: str) -> Callable[["Contact | None", "InstitutionLocatio
     return _resolve
 
 
+def _contact_value_or_context(
+    contact: "Contact | None",
+    attr: str,
+    context: dict[str, Any],
+    *keys: str,
+) -> str:
+    if contact is not None:
+        raw = getattr(contact, attr, None)
+        if raw is not None and raw != "":
+            return str(raw)
+    return _value(context, *keys)
+
+
 def _appointment_date(_contact: "Contact | None", _location: "InstitutionLocation | None", context: dict[str, Any]) -> str:
     return _value(context, "appointment_date") or _format_date(
         context.get("appointment_datetime")
@@ -261,6 +274,8 @@ class MergeContextBuilder:
 
         patient = raw.get("patient")
         if isinstance(patient, dict):
+            raw.setdefault("patient_first_name", _nested(raw, "patient", "first_name", "FirstName", "firstName"))
+            raw.setdefault("patient_last_name", _nested(raw, "patient", "last_name", "LastName", "lastName"))
             raw.setdefault("patient_preferred_language", _nested(raw, "patient", "preferred_language", "language"))
             raw.setdefault("guardian_first_name", _nested(raw, "patient", "guardian_first_name"))
             raw.setdefault("guardian_full_name", _nested(raw, "patient", "guardian_full_name"))
@@ -300,7 +315,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         phi_level="low",
         channels=ALL_CHANNELS,
         triggers=ALL_TRIGGERS,
-        resolve=lambda c, _l, _ctx: (c.first_name or "") if c else _value(_ctx, "patient_first_name"),
+        resolve=lambda c, _l, _ctx: _contact_value_or_context(c, "first_name", _ctx, "patient_first_name", "first_name"),
     ),
     MergeFieldSpec(
         name="patient_last_name",
@@ -314,7 +329,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         phi_level="low",
         channels=ALL_CHANNELS,
         triggers=ALL_TRIGGERS,
-        resolve=lambda c, _l, _ctx: (c.last_name or "") if c else _value(_ctx, "patient_last_name"),
+        resolve=lambda c, _l, _ctx: _contact_value_or_context(c, "last_name", _ctx, "patient_last_name", "last_name"),
     ),
     MergeFieldSpec(
         name="patient_full_name",

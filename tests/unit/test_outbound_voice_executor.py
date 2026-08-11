@@ -215,6 +215,7 @@ def test_executor_places_call_and_stores_call_id():
     assert kw["override_agent_id"] == "agent_xyz"
     dv = kw["dynamic_variables"]
     assert dv["first_name"] == "Jane"
+    assert dv["patient_first_name"] == "Jane"
     assert dv["user_number"] == "+14165551234"
     assert dv["clinic_name"] == "Bright Smiles Dental"
     assert "automated call" in dv["compliance_disclosure"].lower()
@@ -235,6 +236,26 @@ def test_executor_places_call_and_stores_call_id():
     assert result_metadata["retell_from_number_source"] == "location"
     assert result_metadata["retell_from_number_masked"] == "+*******0000"
     assert result_metadata["to_number_masked"] == "+*******1234"
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_populates_patient_first_name_from_first_name_fallback():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(first=None),
+        location=_make_location(),
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(agent_id="agent_xyz"),
+                {"first_name": "Alex"},
+            )
+        )
+
+    dv = call_mock.call_args.kwargs["dynamic_variables"]
+    assert dv["patient_first_name"] == "Alex"
+    assert dv["first_name"] == "Alex"
     runtime.fail_run.assert_not_called()
 
 
