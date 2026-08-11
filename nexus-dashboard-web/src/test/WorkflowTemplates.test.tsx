@@ -92,6 +92,7 @@ const PRE_APPOINTMENT_TEMPLATE = {
             { id: "call_offset_hours_before", label: "Call hours before", type: "number", required: true, default: 24 },
             { id: "retry_delay_1_hours", label: "Retry 1", type: "number", required: true, default: 5 },
             { id: "retry_delay_2_hours", label: "Retry 2", type: "number", required: true, default: 5 },
+            { id: "patient_voice_cooldown_hours", label: "Patient cooldown", type: "number", required: true, default: 24 },
         ],
     },
 }
@@ -192,6 +193,8 @@ describe("WorkflowTemplates page", () => {
         await user.type(screen.getByLabelText("Retry 1 delay (hours)"), "4")
         await user.clear(screen.getByLabelText("Retry 2 delay (hours)"))
         await user.type(screen.getByLabelText("Retry 2 delay (hours)"), "7.5")
+        await user.clear(screen.getByLabelText("Patient cooldown (hours)"))
+        await user.type(screen.getByLabelText("Patient cooldown (hours)"), "12")
         await user.click(screen.getByRole("button", { name: /create & open builder/i }))
 
         await waitFor(() => {
@@ -205,6 +208,7 @@ describe("WorkflowTemplates page", () => {
                         call_offset_hours_before: 0,
                         retry_delay_1_hours: 4,
                         retry_delay_2_hours: 7.5,
+                        patient_voice_cooldown_hours: 12,
                     }),
                 }),
             )

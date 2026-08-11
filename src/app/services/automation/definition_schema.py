@@ -252,6 +252,10 @@ class SendVoiceNode(BaseModel):
     next_node_id: str
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
+    # Patient-level safety guard across workflow runs. Retries inside the same
+    # run are allowed; this prevents a second appointment/campaign run from
+    # dialing the same patient too soon. 0 disables the guard.
+    patient_voice_cooldown_hours: int = Field(default=24, ge=0, le=168)
     # Optional workflow-level override for local-format patient phone numbers.
     # When disabled, only already-international numbers are accepted for voice.
     phone_country_code_enabled: bool = False

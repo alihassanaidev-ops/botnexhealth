@@ -157,6 +157,18 @@ def _apply_required_setup_fields(
                     "delay_type": "duration",
                     "duration_seconds": int(hours * 60 * 60),
                 }
+            continue
+        if field_id == "patient_voice_cooldown_hours":
+            hours = _positive_number(
+                setup_options.get(field_id, setup_field.get("default", 24)),
+                field_id,
+                integer=True,
+                allow_zero=True,
+            )
+            for node in definition.get("nodes", []):
+                if isinstance(node, dict) and node.get("type") == "send_voice":
+                    node["patient_voice_cooldown_hours"] = int(hours)
+            continue
 
 
 def _node_by_id(definition: dict[str, Any], node_id: str) -> dict[str, Any] | None:
@@ -1142,6 +1154,13 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                     "type": "number",
                     "required": True,
                     "default": 5,
+                },
+                {
+                    "id": "patient_voice_cooldown_hours",
+                    "label": "Patient voice cooldown (hours)",
+                    "type": "number",
+                    "required": True,
+                    "default": 24,
                 },
             ],
             frequency_cap=TemplateFrequencyCap(

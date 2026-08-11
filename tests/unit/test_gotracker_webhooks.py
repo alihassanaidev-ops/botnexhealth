@@ -330,6 +330,8 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
             "appointment": {
                 "AppointmentId": 900000004,
                 "ContactId": 900000001,
+                "FirstName": "Hammad",
+                "LastName": "Khan",
                 "AppointmentDate": "2026-07-28T00:00:00.000Z",
                 "AppointmentTime": "10:00:00",
                 "ProviderId": 2,
@@ -417,6 +419,10 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     assert metadata["appointment_reasons"] == ["bridge prep"]
     assert metadata["gotracker_contact_id"] == "900000001"
     assert metadata["contact_source_id"] == "gt-900000001"
+    assert metadata["patient_first_name"] == "Hammad"
+    assert metadata["first_name"] == "Hammad"
+    assert metadata["patient_last_name"] == "Khan"
+    assert metadata["last_name"] == "Khan"
     assert metadata["provider_id"] == "gt-2"
     assert metadata["gotracker_provider_id"] == "2"
     assert metadata["schedule_column_id"] == "1"

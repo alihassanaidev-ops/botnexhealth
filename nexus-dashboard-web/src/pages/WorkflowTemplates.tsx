@@ -121,6 +121,7 @@ export default function WorkflowTemplates() {
     const [callOffsetHoursBefore, setCallOffsetHoursBefore] = useState("24")
     const [retryDelay1Hours, setRetryDelay1Hours] = useState("5")
     const [retryDelay2Hours, setRetryDelay2Hours] = useState("5")
+    const [patientVoiceCooldownHours, setPatientVoiceCooldownHours] = useState("24")
     const [activeCategory, setActiveCategory] = useState<string>("all")
     const [creating, setCreating] = useState(false)
 
@@ -267,6 +268,7 @@ export default function WorkflowTemplates() {
         setCallOffsetHoursBefore(setupFieldDefault(t, "call_offset_hours_before", "24"))
         setRetryDelay1Hours(setupFieldDefault(t, "retry_delay_1_hours", "5"))
         setRetryDelay2Hours(setupFieldDefault(t, "retry_delay_2_hours", "5"))
+        setPatientVoiceCooldownHours(setupFieldDefault(t, "patient_voice_cooldown_hours", "24"))
     }
 
     async function handleCreate() {
@@ -296,6 +298,9 @@ export default function WorkflowTemplates() {
             }
             if (hasSetupField(picked, "retry_delay_2_hours")) {
                 setupOptions.retry_delay_2_hours = Number(retryDelay2Hours)
+            }
+            if (hasSetupField(picked, "patient_voice_cooldown_hours")) {
+                setupOptions.patient_voice_cooldown_hours = Number(patientVoiceCooldownHours)
             }
             const wf = await createWorkflowFromTemplate(picked.id, name, {
                 locationId: selectedLocationId || null,
@@ -355,6 +360,7 @@ export default function WorkflowTemplates() {
         (picked && hasSetupField(picked, "call_offset_hours_before") && !isNonNegativeWholeNumber(callOffsetHoursBefore)) ||
         (picked && hasSetupField(picked, "retry_delay_1_hours") && !(Number(retryDelay1Hours) > 0)) ||
         (picked && hasSetupField(picked, "retry_delay_2_hours") && !(Number(retryDelay2Hours) > 0)) ||
+        (picked && hasSetupField(picked, "patient_voice_cooldown_hours") && !isNonNegativeWholeNumber(patientVoiceCooldownHours)) ||
         pickedCapability?.supported === false
 
     return (
@@ -615,7 +621,8 @@ export default function WorkflowTemplates() {
                                 )}
                                 {(hasSetupField(picked, "call_offset_hours_before") ||
                                     hasSetupField(picked, "retry_delay_1_hours") ||
-                                    hasSetupField(picked, "retry_delay_2_hours")) && (
+                                    hasSetupField(picked, "retry_delay_2_hours") ||
+                                    hasSetupField(picked, "patient_voice_cooldown_hours")) && (
                                     <div className="grid gap-4 sm:grid-cols-3">
                                         {hasSetupField(picked, "call_offset_hours_before") && (
                                             <div className="space-y-2">
@@ -653,6 +660,19 @@ export default function WorkflowTemplates() {
                                                     step="0.25"
                                                     value={retryDelay2Hours}
                                                     onChange={(event) => setRetryDelay2Hours(event.target.value)}
+                                                />
+                                            </div>
+                                        )}
+                                        {hasSetupField(picked, "patient_voice_cooldown_hours") && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="patient-voice-cooldown">Patient cooldown (hours)</Label>
+                                                <Input
+                                                    id="patient-voice-cooldown"
+                                                    type="number"
+                                                    min="0"
+                                                    step="1"
+                                                    value={patientVoiceCooldownHours}
+                                                    onChange={(event) => setPatientVoiceCooldownHours(event.target.value)}
                                                 />
                                             </div>
                                         )}

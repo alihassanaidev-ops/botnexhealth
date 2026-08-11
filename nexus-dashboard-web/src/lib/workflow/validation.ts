@@ -232,6 +232,19 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                         fix: "Enable the override if this workflow receives patient numbers without a +country code.",
                     })
                 }
+                if (
+                    node.patient_voice_cooldown_hours !== undefined &&
+                    (!Number.isInteger(node.patient_voice_cooldown_hours) ||
+                        node.patient_voice_cooldown_hours < 0 ||
+                        node.patient_voice_cooldown_hours > 168)
+                ) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Voice cooldown must be a whole number from 0 to 168 hours.",
+                        fix: "Use 24 for one call per patient per day, or 0 to disable.",
+                    })
+                }
                 checkAttempts(node.max_attempts, node.id, issues)
                 break
             }

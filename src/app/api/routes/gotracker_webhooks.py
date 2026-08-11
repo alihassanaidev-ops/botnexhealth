@@ -270,6 +270,51 @@ async def _process_appointment_event(
     raw_appointment_time = _clean_str(
         _first(appointment, "appointment_time", "AppointmentTime", "time", "Time")
     )
+    embedded_patient = _embedded_patient_payload(appointment)
+    raw_patient_first_name = _clean_str(
+        _first(
+            appointment,
+            "patient_first_name",
+            "PatientFirstName",
+            "first_name",
+            "FirstName",
+            "firstName",
+        )
+        or (
+            _first(
+                embedded_patient,
+                "patient_first_name",
+                "PatientFirstName",
+                "first_name",
+                "FirstName",
+                "firstName",
+            )
+            if embedded_patient is not None
+            else None
+        )
+    )
+    raw_patient_last_name = _clean_str(
+        _first(
+            appointment,
+            "patient_last_name",
+            "PatientLastName",
+            "last_name",
+            "LastName",
+            "lastName",
+        )
+        or (
+            _first(
+                embedded_patient,
+                "patient_last_name",
+                "PatientLastName",
+                "last_name",
+                "LastName",
+                "lastName",
+            )
+            if embedded_patient is not None
+            else None
+        )
+    )
     raw_status_id = _clean_str(_first(appointment, "status_id", "StatusId", "statusId"))
     status_id = _clean_int(raw_status_id)
     duration = _clean_str(_first(appointment, "duration", "Duration"))
@@ -520,6 +565,10 @@ async def _process_appointment_event(
         "gotracker_appointment_id": raw_appointment_id,
         "gotracker_contact_id": raw_patient_id,
         "contact_source_id": patient_id,
+        "patient_first_name": raw_patient_first_name,
+        "first_name": raw_patient_first_name,
+        "patient_last_name": raw_patient_last_name,
+        "last_name": raw_patient_last_name,
         "appointment_reason": reasons[0] if reasons else None,
         "appointment_reasons": reasons,
         "gotracker_reasons": reasons,

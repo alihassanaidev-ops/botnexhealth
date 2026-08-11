@@ -104,6 +104,28 @@ def test_enroll_dedupes_conflicting_active_run() -> None:
     session.add.assert_not_called()
 
 
+def test_enroll_allows_second_active_appointment_run_for_same_contact() -> None:
+    """Appointment workflows are appointment-scoped, so another appointment for
+    the same patient must not be blocked by an old waiting appointment run."""
+    session = _make_session(existing_run=None)
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, created = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            contact_id="contact-1",
+            trigger_type="appointment_offset",
+            trigger_ref_type="appointment",
+            trigger_ref_id="appt-2",
+            idempotency_key="appt:ver-1:appt-2:2026-08-14T15:00:00+00:00",
+        )
+    )
+    assert created is True
+    assert run.contact_id == "contact-1"
+    assert run.trigger_ref_id == "appt-2"
+
+
 def test_enroll_idempotency_race_returns_winner() -> None:
     """Concurrent insert loses the unique-index race → recover the winner's run
     instead of surfacing IntegrityError."""

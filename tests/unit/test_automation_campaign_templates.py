@@ -90,6 +90,7 @@ def test_surgery_confirmation_template_configures_reasons_and_retry_timing() -> 
             "call_offset_hours_before": 36,
             "retry_delay_1_hours": 4,
             "retry_delay_2_hours": 7.5,
+            "patient_voice_cooldown_hours": 12,
         },
     )
 
@@ -113,6 +114,7 @@ def test_surgery_confirmation_template_configures_reasons_and_retry_timing() -> 
     for node_id in ("voice-preop-attempt-1", "voice-preop-attempt-2", "voice-preop-attempt-3"):
         assert nodes[node_id]["voice_profile_id"] == "prof-surgery"
         assert nodes[node_id]["retell_agent_id"] == ""
+        assert nodes[node_id]["patient_voice_cooldown_hours"] == 12
 
 
 def test_surgery_confirmation_template_allows_call_at_appointment_time() -> None:

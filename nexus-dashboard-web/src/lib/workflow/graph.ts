@@ -447,6 +447,7 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 next_node_id: "",
                 respect_quiet_hours: true,
                 max_attempts: 1,
+                patient_voice_cooldown_hours: 24,
                 phone_country_code_enabled: false,
                 phone_country_region: "US",
                 wait_for_outcome: false,

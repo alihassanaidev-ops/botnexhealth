@@ -695,6 +695,26 @@ function VoiceFields({
                     onCheckedChange={(checked) => onChange({ ...node, wait_for_outcome: checked })}
                 />
             </div>
+            <Field
+                label="Patient voice cooldown"
+                hint="Minimum hours before another workflow run may call the same patient. Retries inside this same run are still allowed. Use 0 to disable."
+            >
+                <Input
+                    aria-label="Patient voice cooldown"
+                    type="number"
+                    min={0}
+                    max={168}
+                    step={1}
+                    value={node.patient_voice_cooldown_hours ?? 24}
+                    disabled={readOnly}
+                    onChange={(event) =>
+                        onChange({
+                            ...node,
+                            patient_voice_cooldown_hours: toInt(event.target.value, 24),
+                        })
+                    }
+                />
+            </Field>
             {!readOnly && (
                 <div className="space-y-2 rounded-md border border-border p-3">
                     <div className="space-y-1">

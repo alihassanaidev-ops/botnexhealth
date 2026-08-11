@@ -9,6 +9,7 @@ pre-POST insert. No raw phone numbers are stored — only masked forms (PHI-safe
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,6 +72,42 @@ async def voice_send_already_claimed(
         )
     ).scalar()
     return claimed is not None
+
+
+async def recent_voice_attempt_for_contact(
+    session: AsyncSession,
+    *,
+    institution_id: str,
+    contact_id: str,
+    since: datetime,
+    excluding_workflow_run_id: str | None = None,
+) -> WorkflowVoiceAttempt | None:
+    """Return the most recent non-failed automated voice attempt for a contact.
+
+    Used as a patient-level cooldown guard across workflow runs. The current run
+    is excluded so a workflow's own explicit retry sequence still behaves as
+    authored.
+    """
+    query = (
+        select(WorkflowVoiceAttempt)
+        .join(
+            AutomationWorkflowRun,
+            WorkflowVoiceAttempt.workflow_run_id == AutomationWorkflowRun.id,
+        )
+        .where(
+            WorkflowVoiceAttempt.institution_id == institution_id,
+            AutomationWorkflowRun.contact_id == contact_id,
+            WorkflowVoiceAttempt.created_at >= since,
+            WorkflowVoiceAttempt.status != VoiceAttemptStatus.FAILED.value,
+        )
+        .order_by(WorkflowVoiceAttempt.created_at.desc())
+        .limit(1)
+    )
+    if excluding_workflow_run_id is not None:
+        query = query.where(
+            WorkflowVoiceAttempt.workflow_run_id != excluding_workflow_run_id
+        )
+    return (await session.execute(query)).scalar()
 
 
 async def list_voice_attempts(

@@ -41,6 +41,7 @@ def _make_node(
     voice_profile_id=None,
     phone_country_code_enabled=False,
     phone_country_region=None,
+    patient_voice_cooldown_hours=24,
 ):
     return SendVoiceNode(
         id="node-1",
@@ -49,6 +50,7 @@ def _make_node(
         next_node_id=next_id,
         max_attempts=max_attempts,
         wait_for_outcome=wait_for_outcome,
+        patient_voice_cooldown_hours=patient_voice_cooldown_hours,
         phone_country_code_enabled=phone_country_code_enabled,
         phone_country_region=phone_country_region,
     )
@@ -71,7 +73,7 @@ def _make_location(retell_from_number="+15005550000", name="Bright Smiles Dental
 
 def _make_executor(
     contact=None, location=None, already_placed=False, attempt_number=1, profile=None,
-    claim_id=None,
+    claim_id=None, recent_attempt=None,
 ):
     from src.app.services.automation.voice_node_executor import VoiceNodeExecutor
 
@@ -88,13 +90,19 @@ def _make_executor(
         return None
 
     session.get = AsyncMock(side_effect=_get)
-    # Query results: profile lookup reads scalar_one_or_none() (None = fall back to
-    # node/location defaults); the P9 claim check reads scalar() (None = not claimed).
-    # Distinct accessors on the shared result mock keep the two queries independent.
-    exec_result = MagicMock()
-    exec_result.scalar_one_or_none = MagicMock(return_value=profile)
-    exec_result.scalar = MagicMock(return_value=claim_id)
-    session.execute = AsyncMock(return_value=exec_result)
+    async def _execute(stmt):
+        text = str(stmt)
+        result = MagicMock()
+        if "JOIN automation_workflow_runs" in text:
+            result.scalar = MagicMock(return_value=recent_attempt)
+            return result
+        if "workflow_voice_attempts" in text:
+            result.scalar = MagicMock(return_value=claim_id)
+            return result
+        result.scalar_one_or_none = MagicMock(return_value=profile)
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
     session.add = MagicMock()  # sync in SQLAlchemy — keep it non-awaitable
     session.commit = AsyncMock()
     runtime.already_sent = AsyncMock(return_value=already_placed)
@@ -236,6 +244,54 @@ def test_executor_places_call_and_stores_call_id():
     assert result_metadata["retell_from_number_source"] == "location"
     assert result_metadata["retell_from_number_masked"] == "+*******0000"
     assert result_metadata["to_number_masked"] == "+*******1234"
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_skips_cross_run_call_inside_patient_cooldown():
+    from datetime import datetime, timezone
+
+    recent_attempt = MagicMock()
+    recent_attempt.id = "attempt-recent"
+    recent_attempt.created_at = datetime(2026, 8, 11, 15, 0, tzinfo=timezone.utc)
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        recent_attempt=recent_attempt,
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        result = asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(patient_voice_cooldown_hours=24),
+                {},
+            )
+        )
+
+    assert result == "node-2"
+    call_mock.assert_not_called()
+    runtime.complete_step.assert_called_once()
+    assert runtime.complete_step.call_args.kwargs["result_code"] == "voice_cooldown_skipped"
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_allows_cooldown_disabled():
+    recent_attempt = MagicMock()
+    recent_attempt.id = "attempt-recent"
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        recent_attempt=recent_attempt,
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(patient_voice_cooldown_hours=0),
+                {},
+            )
+        )
+
+    call_mock.assert_called_once()
     runtime.fail_run.assert_not_called()
 
 

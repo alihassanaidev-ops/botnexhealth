@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +38,7 @@ from src.app.services.automation.voice_attempt_recorder import (
     claim_voice_attempt,
     mark_attempt_failed,
     mark_attempt_placed,
+    recent_voice_attempt_for_contact,
     resolve_outbound_voice_profile,
     voice_send_already_claimed,
 )
@@ -183,6 +185,45 @@ class VoiceNodeExecutor:
             )
             await self.runtime.fail_run(run, reason="send_voice: contact phone number is invalid")
             return node.next_node_id
+
+        cooldown_hours = node.patient_voice_cooldown_hours
+        if cooldown_hours > 0:
+            recent_attempt = await recent_voice_attempt_for_contact(
+                self.session,
+                institution_id=str(run.institution_id),
+                contact_id=str(run.contact_id),
+                since=datetime.now(timezone.utc) - timedelta(hours=cooldown_hours),
+                excluding_workflow_run_id=str(run.id),
+            )
+            if recent_attempt is not None:
+                context["call_outcome"] = "voice_cooldown_skipped"
+                await self.runtime.complete_step(
+                    step,
+                    result_code="voice_cooldown_skipped",
+                    result_metadata={
+                        "patient_voice_cooldown_hours": cooldown_hours,
+                        "recent_attempt_id": str(recent_attempt.id),
+                        "recent_attempt_created_at": (
+                            recent_attempt.created_at.isoformat()
+                            if recent_attempt.created_at is not None
+                            else None
+                        ),
+                        "to_number_masked": mask_phone(to_number),
+                        "to_number_normalized": bool(
+                            raw_to_number and to_number and raw_to_number != to_number
+                        ),
+                    },
+                )
+                logger.info(
+                    "send_voice cooldown skip: institution=%s run=%s node=%s contact=%s cooldown_hours=%s recent_attempt=%s",
+                    run.institution_id,
+                    run.id,
+                    node.id,
+                    run.contact_id,
+                    cooldown_hours,
+                    recent_attempt.id,
+                )
+                return node.next_node_id
 
         location: InstitutionLocation | None = (
             await self.session.get(InstitutionLocation, run.location_id)

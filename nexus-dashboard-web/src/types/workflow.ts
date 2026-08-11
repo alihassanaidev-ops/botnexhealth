@@ -145,6 +145,7 @@ export interface SendVoiceNode {
     next_node_id: string
     respect_quiet_hours?: boolean
     max_attempts?: number
+    patient_voice_cooldown_hours?: number
     phone_country_code_enabled?: boolean
     phone_country_region?: string | null
     wait_for_outcome?: boolean

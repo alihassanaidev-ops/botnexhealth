@@ -43,6 +43,7 @@ describe("StepConfigPanel voice outcome controls", () => {
         )
 
         expect(screen.getByText("Wait for voice outcome")).toBeInTheDocument()
+        expect(screen.getByLabelText("Patient voice cooldown")).toHaveValue(24)
         expect(screen.getAllByText(/call_outcome/).length).toBeGreaterThan(0)
         expect(screen.getByText("do_not_call")).toBeInTheDocument()
 
@@ -52,5 +53,33 @@ describe("StepConfigPanel voice outcome controls", () => {
         const condition = next.nodes.find((node) => node.type === "condition")
         expect(condition?.type === "condition" && condition.rules[0].field).toBe("call_outcome")
         expect(next.nodes.some((node) => node.type === "exit" && node.outcome === "staff_handoff")).toBe(true)
+    })
+
+    it("updates patient voice cooldown hours", () => {
+        const onNodeChange = vi.fn()
+
+        render(
+            <StepConfigPanel
+                open
+                onOpenChange={vi.fn()}
+                def={DEF}
+                selectedId="voice-1"
+                onNodeChange={onNodeChange}
+                onDefinitionChange={vi.fn()}
+                onTriggerChange={vi.fn()}
+                onDeleteNode={vi.fn()}
+                onSetEntry={vi.fn()}
+            />,
+        )
+
+        const input = screen.getByLabelText("Patient voice cooldown")
+        fireEvent.change(input, { target: { value: "12" } })
+
+        expect(onNodeChange).toHaveBeenCalledWith(
+            expect.objectContaining({
+                type: "send_voice",
+                patient_voice_cooldown_hours: 12,
+            }),
+        )
     })
 })
