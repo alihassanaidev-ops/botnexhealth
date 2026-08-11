@@ -229,6 +229,50 @@ def _patient_lookup_criteria(args: dict[str, Any]) -> list[str]:
     return criteria
 
 
+def _clinic_tz_offset(start_date: str, timezone_name: str | None) -> str | None:
+    """Return the UTC offset for a clinic-local date as +/-HH:MM."""
+    if not timezone_name:
+        return None
+    try:
+        local_date = date.fromisoformat(str(start_date))
+        tz = ZoneInfo(timezone_name)
+        local_midnight = datetime(
+            local_date.year,
+            local_date.month,
+            local_date.day,
+            tzinfo=tz,
+        )
+    except (TypeError, ValueError, ZoneInfoNotFoundError):
+        return None
+    offset = local_midnight.utcoffset()
+    if offset is None:
+        return None
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{sign}{hours:02d}:{minutes:02d}"
+
+
+def _source_id_for_pms(source: str, provider_id: str | None) -> str | None:
+    if not provider_id:
+        return None
+    if provider_id.startswith(("nh-", "gt-")):
+        return provider_id
+    if source == "nexhealth":
+        return f"nh-{provider_id}"
+    if source == "gotracker":
+        return f"gt-{provider_id}"
+    return provider_id
+
+
+def _strip_source_prefix(value: str | None) -> str | None:
+    if not value or "-" not in value:
+        return value
+    prefix, raw_id = value.split("-", 1)
+    return raw_id if prefix in {"nh", "gt"} else value
+
+
 # ============================================================================
 # Location Functions (auto-routed)
 # ============================================================================
@@ -743,6 +787,11 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             provider_id=provider_ids if provider_ids is not None else None,
             appointment_type_id=appt_type_id,
             operatory_ids=args.get("operatory_ids"),
+            tz_offset=(
+                _clinic_tz_offset(start_date, ctx.location.timezone)
+                if ctx.location and ctx.adapter.source == "gotracker"
+                else None
+            ),
         )
         slots = slot_result.slots
 
@@ -753,11 +802,9 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             return {"error": "buffer_minutes must be an integer >= 0."}
 
         normalized_provider_id = (
-            str(provider_id).removeprefix("nh-") if provider_id else None
+            _strip_source_prefix(str(provider_id)) if provider_id else None
         )
-        provider_source_id = (
-            f"nh-{normalized_provider_id}" if normalized_provider_id else None
-        )
+        provider_source_id = _source_id_for_pms(ctx.adapter.source, provider_id)
         provider_cutoff = None
 
         if ctx.location:
@@ -863,6 +910,12 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             message = (
                 f"No availability on {start_date}. "
                 f"The next available date is {next_available_date}."
+            )
+        elif provider_id:
+            message = (
+                f"No availability was found for this provider from {start_date} "
+                "in the requested date range. Try another date range or transfer "
+                "the caller to the office for help."
             )
         else:
             message = (
@@ -978,7 +1031,7 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
     ),
 )
 async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
-    """Reschedule an appointment (cancel old + book new)."""
+    """Reschedule an appointment."""
     old_id = args.get("old_appointment_id")
     if not old_id:
         return {"error": "old_appointment_id is required."}
@@ -987,19 +1040,20 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
     for field in required:
         if not args.get(field):
             return {"error": f"{field} is required for the new booking."}
-    if not args.get("appointment_type_id"):
-        return {"error": "appointment_type_id is required for the new booking."}
 
     try:
         ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
-    validation_error = await _validate_appointment_type_for_provider(
-        ctx, args.get("provider_id"), args.get("appointment_type_id")
-    )
-    if validation_error:
-        return {"success": False, "error": validation_error}
+    if ctx.adapter.source != "gotracker":
+        if not args.get("appointment_type_id"):
+            return {"error": "appointment_type_id is required for the new booking."}
+        validation_error = await _validate_appointment_type_for_provider(
+            ctx, args.get("provider_id"), args.get("appointment_type_id")
+        )
+        if validation_error:
+            return {"success": False, "error": validation_error}
 
     try:
         result = await ctx.adapter.reschedule_appointment(
@@ -1009,8 +1063,13 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
                 provider_id=args["provider_id"],
                 slot_start=args["start_time"],
                 slot_end=args.get("end_time"),
+                duration_min=args.get("duration_min"),
                 operatory_id=args.get("operatory_id"),
-                appointment_type_id=args.get("appointment_type_id"),
+                appointment_type_id=(
+                    None
+                    if ctx.adapter.source == "gotracker"
+                    else args.get("appointment_type_id")
+                ),
                 descriptor_ids=args.get("descriptor_ids", []),
                 note=args.get("note"),
             ),
@@ -1127,7 +1186,9 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
 
             filtered = []
             for p in providers:
-                rule = age_rules.get(f"nh-{p.id}") or age_rules.get(str(p.id))
+                rule = age_rules.get(p.id) or age_rules.get(
+                    _source_id_for_pms(ctx.adapter.source, p.id) or p.id
+                )
                 if rule is None:
                     # No local cache entry — include by default
                     filtered.append(p)

@@ -721,6 +721,13 @@ class WorkflowStepDispatcher:
                     )
                     raise WorkflowGoTrackerWritebackError("invalid appointment start_time")
                 normalized_start_time = parsed_start.isoformat()
+                update_payload["start_time"] = _gotracker_wall_clock_datetime(
+                    update_payload["start_time"]
+                )
+            if isinstance(update_payload.get("end_time"), str):
+                update_payload["end_time"] = _gotracker_wall_clock_datetime(
+                    update_payload["end_time"]
+                )
 
             if status_payload and update_payload:
                 await fail(
@@ -1112,6 +1119,15 @@ def _parse_context_datetime(value: object, location_timezone: str = "UTC") -> da
             tz = ZoneInfo("UTC")
         dt = dt.replace(tzinfo=tz)
     return dt.astimezone(timezone.utc)
+
+
+def _gotracker_wall_clock_datetime(value: str) -> str:
+    """Format ISO datetimes for GoTracker without converting wall time."""
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return dt.replace(tzinfo=None).isoformat(timespec="minutes")
 
 
 async def build_dispatcher(

@@ -198,6 +198,27 @@ async def test_find_available_slots_uses_documented_params() -> None:
 
 
 @pytest.mark.asyncio
+async def test_find_available_slots_passes_tz_offset_when_supplied() -> None:
+    client = FakeGoTrackerClient()
+    adapter = _adapter(client)
+
+    await adapter.find_available_slots(
+        "2026-08-13",
+        days=7,
+        provider_id="gt-2",
+        tz_offset="-04:00",
+    )
+
+    assert client.calls[0]["path"] == "/api/scheduling/available_slots"
+    assert client.calls[0]["params"] == {
+        "start_date": "2026-08-13",
+        "days": 7,
+        "provider_ids": "2",
+        "tz_offset": "-04:00",
+    }
+
+
+@pytest.mark.asyncio
 async def test_list_providers_reads_provider_name_payload() -> None:
     client = FakeGoTrackerClient()
     client.responses.append(
@@ -362,6 +383,39 @@ async def test_update_appointment_uses_snake_case_consumer_endpoint() -> None:
         "duration_min": 45,
         "provider_id": "2",
         "operatory_id": "1",
+        "patient_id": "583",
+        "reason": "bridge prep",
+    }
+
+
+@pytest.mark.asyncio
+async def test_reschedule_appointment_patches_existing_without_type_or_end_time() -> None:
+    client = FakeGoTrackerClient()
+    adapter = _adapter(client)
+
+    result = await adapter.reschedule_appointment(
+        "gt-900000001",
+        BookingRequest(
+            patient_id="gt-583",
+            provider_id="gt-2",
+            operatory_id="gt-7",
+            appointment_type_id="gt-9",
+            slot_start="2026-08-13T09:30:00-04:00",
+            slot_end="2026-08-13T09:45:00-04:00",
+            duration_min=5,
+            note="bridge prep",
+        ),
+    )
+
+    assert result.success is True
+    assert result.status == "appointment_updated"
+    assert client.calls[0]["method"] == "PATCH"
+    assert client.calls[0]["path"] == "/api/appointments/900000001"
+    assert client.calls[0]["json"] == {
+        "start_time": "2026-08-13T09:30",
+        "duration_min": 5,
+        "provider_id": "2",
+        "operatory_id": "7",
         "patient_id": "583",
         "reason": "bridge prep",
     }

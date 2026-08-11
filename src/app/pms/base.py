@@ -68,6 +68,7 @@ class PMSAdapter(ABC):
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
+        tz_offset: str | None = None,
     ) -> list[UniversalSlot]:
         ...
 
@@ -78,6 +79,7 @@ class PMSAdapter(ABC):
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
+        tz_offset: str | None = None,
     ) -> SlotSearchResult:
         """Slots plus a "next available date" hint.
 
@@ -91,6 +93,7 @@ class PMSAdapter(ABC):
             provider_id=provider_id,
             appointment_type_id=appointment_type_id,
             operatory_ids=operatory_ids,
+            tz_offset=tz_offset,
         )
         return SlotSearchResult(slots=slots)
 

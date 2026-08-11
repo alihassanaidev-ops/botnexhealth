@@ -7,6 +7,7 @@ queue, and installer remain outside this repository.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from src.app.models.institution import Institution
@@ -221,6 +222,7 @@ class GoTrackerAdapter(
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
+        tz_offset: str | None = None,
     ) -> list[UniversalSlot]:
         result = await self.find_available_slots(
             start_date=start_date,
@@ -228,6 +230,7 @@ class GoTrackerAdapter(
             provider_id=provider_id,
             appointment_type_id=appointment_type_id,
             operatory_ids=operatory_ids,
+            tz_offset=tz_offset,
         )
         return result.slots
 
@@ -238,6 +241,7 @@ class GoTrackerAdapter(
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
+        tz_offset: str | None = None,
     ) -> SlotSearchResult:
         params: dict[str, Any] = {"start_date": start_date, "days": days}
         if provider_id:
@@ -254,6 +258,8 @@ class GoTrackerAdapter(
                 str(item) for item in (mappers.strip(value) for value in operatory_ids)
                 if item
             )
+        if tz_offset:
+            params["tz_offset"] = tz_offset
 
         raw = await self._client.request(
             "GET", "/api/scheduling/available_slots", params=params
@@ -522,19 +528,15 @@ class GoTrackerAdapter(
     async def reschedule_appointment(
         self, old_appointment_id: str, new_booking: BookingRequest
     ) -> BookingResult:
-        book_result = await self.book_appointment(new_booking)
-        if not book_result.success:
-            return book_result
-
-        cancel_result = await self.cancel_appointment(old_appointment_id)
-        if not cancel_result.success:
-            book_result.message = (
-                "Rescheduled (new booked) but failed to cancel old appointment: "
-                f"{cancel_result.error}. Please cancel manually."
-            )
-        else:
-            book_result.message = "Rescheduled successfully (new booked, old cancelled)."
-        return book_result
+        return await self.update_appointment(
+            old_appointment_id,
+            start_time=_wall_clock_datetime(new_booking.slot_start),
+            duration_min=new_booking.duration_min,
+            provider_id=new_booking.provider_id,
+            operatory_id=new_booking.operatory_id,
+            patient_id=new_booking.patient_id,
+            reason=new_booking.note,
+        )
 
     # ── Locations ────────────────────────────────────────────────────────
 
@@ -641,6 +643,14 @@ def _data_object(raw: dict[str, Any], *, fallback_id: str | None = None) -> dict
     if fallback_id is not None and data.get("id") is None:
         data = {**data, "id": fallback_id}
     return data
+
+
+def _wall_clock_datetime(value: str) -> str:
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return dt.replace(tzinfo=None).isoformat(timespec="minutes")
 
 
 def _list_data(raw: dict[str, Any], *, nested_key: str) -> list[dict[str, Any]]:

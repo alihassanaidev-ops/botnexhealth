@@ -18,6 +18,7 @@ from src.app.retell import handlers
 
 def _ctx(search_result: SlotSearchResult):
     adapter = MagicMock()
+    adapter.source = "gotracker"
     adapter.find_available_slots = AsyncMock(return_value=search_result)
     return SimpleNamespace(
         institution=SimpleNamespace(id="11111111-1111-1111-1111-111111111111"),
@@ -71,6 +72,79 @@ async def test_no_hint_when_no_availability_within_window(monkeypatch):
     assert result["slots_count"] == 0
     assert result["next_available_date"] is None
     assert "no upcoming openings" in result["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_no_group_for_provider_gets_clear_empty_range_message(monkeypatch):
+    ctx = _ctx(SlotSearchResult(slots=[], next_available_date=None))
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+
+    result = await _find_slots(
+        {
+            "start_date": "2026-07-20",
+            "appointment_type_id": "gt-50",
+            "provider_id": "gt-9",
+        }
+    )
+
+    assert result["slots_count"] == 0
+    assert result["next_available_date"] is None
+    assert "this provider" in result["message"]
+    assert "requested date range" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_gotracker_slots_use_clinic_tz_offset(monkeypatch):
+    adapter = MagicMock()
+    adapter.source = "gotracker"
+    adapter.find_available_slots = AsyncMock(
+        return_value=SlotSearchResult(slots=[], next_available_date=None)
+    )
+    ctx = SimpleNamespace(
+        institution=SimpleNamespace(id="11111111-1111-1111-1111-111111111111"),
+        location=SimpleNamespace(
+            id="22222222-2222-2222-2222-222222222222",
+            timezone="America/New_York",
+        ),
+        adapter=adapter,
+    )
+
+    class _FakeSession:
+        async def execute(self, *_a, **_k):
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: []),
+                one_or_none=lambda: None,
+            )
+
+    class _FakeSessionCtx:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+    monkeypatch.setattr(
+        handlers, "get_system_db_session", lambda *a, **k: _FakeSessionCtx()
+    )
+
+    await _find_slots(
+        {
+            "start_date": "2026-08-13",
+            "appointment_type_id": "gt-50",
+            "provider_id": "gt-9",
+        }
+    )
+
+    adapter.find_available_slots.assert_awaited_once()
+    assert adapter.find_available_slots.await_args.kwargs["tz_offset"] == "-04:00"
 
 
 @pytest.mark.asyncio

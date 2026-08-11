@@ -469,6 +469,7 @@ class NexHealthAdapter(
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
+        tz_offset: str | None = None,
     ) -> list[UniversalSlot]:
         result = await self.find_available_slots(
             start_date=start_date,
@@ -476,6 +477,7 @@ class NexHealthAdapter(
             provider_id=provider_id,
             appointment_type_id=appointment_type_id,
             operatory_ids=operatory_ids,
+            tz_offset=tz_offset,
         )
         return result.slots
 
@@ -486,7 +488,9 @@ class NexHealthAdapter(
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
+        tz_offset: str | None = None,
     ) -> SlotSearchResult:
+        del tz_offset
         params: dict[str, Any] = {
             "start_date": start_date,
             "days": days,

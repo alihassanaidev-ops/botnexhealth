@@ -96,6 +96,7 @@ class BookingRequest(BaseModel):
     appointment_type_id: str | None = None
     slot_start: str  # ISO datetime
     slot_end: str | None = None
+    duration_min: int | None = None
     operatory_id: str | None = None
     descriptor_ids: list[str] = []  # NexHealth: EHR procedure codes
     note: str | None = None
