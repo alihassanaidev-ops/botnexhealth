@@ -67,7 +67,9 @@ def _processing_session():
 
 def _patch_projection(change="new", contact_id="contact-1"):
     inst = MagicMock()
-    inst.upsert_appointment = AsyncMock(return_value=SimpleNamespace(change=change))
+    inst.upsert_appointment = AsyncMock(
+        return_value=SimpleNamespace(change=change, state_changed=False)
+    )
     inst.upsert_patient = AsyncMock(
         return_value=SimpleNamespace(
             change=change,
@@ -174,9 +176,7 @@ def test_nested_entity_id_is_not_mistaken_for_webhook_delivery_id():
 def test_foreign_id_type_is_normalized_from_supported_webhook_shapes():
     assert _foreign_id_type({"foreign_id_type": "TRACKER-1"}) == "tracker-1"
     assert (
-        _foreign_id_type(
-            {"data": {"foreignIdType": "tracker-cloud-booked"}}
-        )
+        _foreign_id_type({"data": {"foreignIdType": "tracker-cloud-booked"}})
         == "tracker-cloud-booked"
     )
 
@@ -216,22 +216,33 @@ async def test_legacy_null_origin_appointment_queues_workflow():
     projection, projection_patch = _patch_projection(change="new")
     lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[
-            _session_with_scalar(_location()),
-            _session_with_scalar(SimpleNamespace(id="contact-1")),
-            _processing_session(),
-        ],
-    ), patch("src.app.api.routes.gotracker_webhooks._claim_event", new=AsyncMock(return_value=True)), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch, patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as trigger_task, patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
-    ) as state_task, patch(
-        "src.app.tasks.automation_workflow.resume_reactivation_booking"
-    ) as reactivation_task:
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _session_with_scalar(SimpleNamespace(id="contact-1")),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as trigger_task,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+        ) as state_task,
+        patch(
+            "src.app.tasks.automation_workflow.resume_reactivation_booking"
+        ) as reactivation_task,
+    ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         trigger_task.delay = MagicMock()
@@ -280,25 +291,38 @@ async def test_appointment_created_upserts_embedded_patient_when_contact_missing
         },
     }
     request = _make_request(payload)
-    projection, projection_patch = _patch_projection(change="new", contact_id="contact-from-patient")
+    projection, projection_patch = _patch_projection(
+        change="new", contact_id="contact-from-patient"
+    )
     lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[
-            _session_with_scalar(_location()),
-            _session_with_scalar(None),
-            _processing_session(),
-        ],
-    ), patch("src.app.api.routes.gotracker_webhooks._claim_event", new=AsyncMock(return_value=True)), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch, patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as trigger_task, patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
-    ) as state_task, patch(
-        "src.app.tasks.automation_workflow.resume_reactivation_booking"
-    ) as reactivation_task:
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _session_with_scalar(None),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as trigger_task,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+        ) as state_task,
+        patch(
+            "src.app.tasks.automation_workflow.resume_reactivation_booking"
+        ) as reactivation_task,
+    ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         trigger_task.delay = MagicMock()
@@ -381,22 +405,33 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     projection, projection_patch = _patch_projection(change="new")
     lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[
-            _session_with_scalar(_location()),
-            _session_with_scalar(SimpleNamespace(id="contact-1")),
-            _processing_session(),
-        ],
-    ), patch("src.app.api.routes.gotracker_webhooks._claim_event", new=AsyncMock(return_value=True)), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch, patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as trigger_task, patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
-    ) as state_task, patch(
-        "src.app.tasks.automation_workflow.resume_reactivation_booking"
-    ) as reactivation_task:
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _session_with_scalar(SimpleNamespace(id="contact-1")),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as trigger_task,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+        ) as state_task,
+        patch(
+            "src.app.tasks.automation_workflow.resume_reactivation_booking"
+        ) as reactivation_task,
+    ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         trigger_task.delay = MagicMock()
@@ -449,14 +484,26 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     assert metadata["booked_timestamp"] == "2026-07-29T20:32:00.81"
     assert metadata["created_machine_name"] == "EC2AMAZ-QKGJ1Q1"
     assert metadata["gotracker_payload"]["appointment"]["contact_id"] == "900000001"
-    assert metadata["gotracker_payload"]["appointment"]["date"] == "2026-07-28T00:00:00.000Z"
+    assert (
+        metadata["gotracker_payload"]["appointment"]["date"]
+        == "2026-07-28T00:00:00.000Z"
+    )
     assert metadata["gotracker_payload"]["appointment"]["time"] == "10:00:00"
-    assert metadata["gotracker_payload"]["appointment"]["datetime"] == "2026-07-28T10:00:00Z"
+    assert (
+        metadata["gotracker_payload"]["appointment"]["datetime"]
+        == "2026-07-28T10:00:00Z"
+    )
     assert metadata["gotracker_payload"]["appointment"]["status_id"] == "1"
     assert metadata["gotracker_payload"]["appointment"]["is_confirmed"] is False
-    assert metadata["gotracker_payload"]["appointment"]["booked_machine_name"] == "EC2AMAZ-QKGJ1Q1"
+    assert (
+        metadata["gotracker_payload"]["appointment"]["booked_machine_name"]
+        == "EC2AMAZ-QKGJ1Q1"
+    )
     assert metadata["gotracker_payload"]["data"]["AppointmentId"] == 900000004
-    assert metadata["gotracker_payload"]["data"]["AppointmentDate"] == "2026-07-28T00:00:00.000Z"
+    assert (
+        metadata["gotracker_payload"]["data"]["AppointmentDate"]
+        == "2026-07-28T00:00:00.000Z"
+    )
     assert metadata["gotracker_payload"]["data"]["AppointmentTime"] == "10:00:00"
     assert metadata["gotracker_payload"]["data"]["Reason"] == "bridge prep"
 
@@ -470,7 +517,7 @@ async def test_status_only_appointment_updated_is_accepted_as_partial_projection
         "data": {
             "appointment": {
                 "AppointmentId": 1414,
-                "StatusId": 2,
+                "StatusId": 1,
                 "IsConfirmed": True,
                 "IsPreconfirmed": False,
             }
@@ -480,18 +527,23 @@ async def test_status_only_appointment_updated_is_accepted_as_partial_projection
     projection, projection_patch = _patch_projection(change="unchanged")
     lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[
-            _session_with_scalar(_location()),
-            _processing_session(),
-        ],
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._claim_event",
-        new=AsyncMock(return_value=True),
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch:
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+    ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         result = await gotracker_webhook("loc-1", request)
@@ -504,9 +556,81 @@ async def test_status_only_appointment_updated_is_accepted_as_partial_projection
     upsert_kwargs = projection.upsert_appointment.await_args.kwargs
     assert upsert_kwargs["appointment_id"] == "gt-1414"
     assert upsert_kwargs["start_time"] is None
-    assert upsert_kwargs["gotracker_status_id"] == 2
+    assert upsert_kwargs["gotracker_status_id"] == 1
     assert upsert_kwargs["is_confirmed"] is True
     assert upsert_kwargs["is_preconfirmed"] is False
+
+
+@pytest.mark.asyncio
+async def test_completed_flow_state_queues_post_op_state_trigger_from_raw_webhook():
+    payload = {
+        "id": "webhook-completed-1414",
+        "type": "appointment.updated",
+        "data": {
+            "AppointmentId": 1414,
+            "ContactId": 595,
+            "AppointmentDate": "2026-08-12T00:00:00",
+            "AppointmentTime": "07:20:00",
+            "StatusId": 1,
+            "Reason": "Implant Surgery",
+            "FlowState": "Completed",
+            "FlowChange": "2026-08-12T09:27:01.94",
+            "CheckIn": "09:27:01",
+            "CheckOut": "09:27:01",
+        },
+    }
+    request = _make_request(payload)
+    projection, projection_patch = _patch_projection(change="unchanged")
+    projection.upsert_appointment.return_value = SimpleNamespace(
+        change="unchanged", state_changed=True
+    )
+    lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
+
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _session_with_scalar(SimpleNamespace(id="contact-1")),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+        ) as state_task,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as appointment_task,
+        patch(
+            "src.app.tasks.automation_workflow.resume_reactivation_booking"
+        ) as reactivation_task,
+    ):
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        state_task.delay = MagicMock()
+        appointment_task.delay = MagicMock()
+        reactivation_task.delay = MagicMock()
+        result = await gotracker_webhook("loc-1", request)
+
+    assert result["status"] == "queued"
+    upsert_kwargs = projection.upsert_appointment.await_args.kwargs
+    assert upsert_kwargs["appointment_reason"] == "Implant Surgery"
+    assert upsert_kwargs["flow_state"] == "Completed"
+    assert upsert_kwargs["flow_changed_at"] == "2026-08-12T09:27:01.94"
+    assert upsert_kwargs["checked_in_at"] == "09:27:01"
+    assert upsert_kwargs["checked_out_at"] == "09:27:01"
+    state_kwargs = state_task.delay.call_args.kwargs
+    assert state_kwargs["appointment_id"] == "gt-1414"
+    assert state_kwargs["flow_state"] == "Completed"
+    assert state_kwargs["flow_changed_at"] == "2026-08-12T09:27:01.94"
 
 
 @pytest.mark.asyncio
@@ -519,9 +643,12 @@ async def test_appointment_created_still_requires_start_time():
     }
     request = _make_request(payload)
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        return_value=_session_with_scalar(_location()),
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            return_value=_session_with_scalar(_location()),
+        ),
     ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
@@ -544,18 +671,27 @@ async def test_appointment_cancelled_cancels_existing_runs():
     projection, projection_patch = _patch_projection(change="cancelled")
     lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[
-            _session_with_scalar(_location()),
-            _session_with_scalar(SimpleNamespace(id="contact-1")),
-            _processing_session(),
-        ],
-    ), patch("src.app.api.routes.gotracker_webhooks._claim_event", new=AsyncMock(return_value=True)), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch, patch(
-        "src.app.api.routes.nexhealth_webhooks._cancel_runs_for_appointment",
-        new=AsyncMock(return_value=2),
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _session_with_scalar(SimpleNamespace(id="contact-1")),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks._cancel_runs_for_appointment",
+            new=AsyncMock(return_value=2),
+        ),
     ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
@@ -602,24 +738,30 @@ async def test_non_pms_appointment_updates_projection_without_reacting(
     lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
     claim_event = AsyncMock(return_value=True)
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[
-            _session_with_scalar(_location()),
-            _session_with_scalar(SimpleNamespace(id="contact-1")),
-            _processing_session(),
-        ],
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._claim_event", new=claim_event
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch, patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as trigger_task, patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
-    ) as state_task, patch(
-        "src.app.tasks.automation_workflow.resume_reactivation_booking"
-    ) as reactivation_task:
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _session_with_scalar(SimpleNamespace(id="contact-1")),
+                _processing_session(),
+            ],
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._claim_event", new=claim_event),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as trigger_task,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+        ) as state_task,
+        patch(
+            "src.app.tasks.automation_workflow.resume_reactivation_booking"
+        ) as reactivation_task,
+    ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         result = await gotracker_webhook("loc-1", request)
@@ -649,21 +791,27 @@ async def test_api_originated_cancellation_does_not_cancel_or_start_runs():
     lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
     cancel_runs = AsyncMock(return_value=2)
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[
-            _session_with_scalar(_location()),
-            _session_with_scalar(SimpleNamespace(id="contact-1")),
-            _processing_session(),
-        ],
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._claim_event",
-        new=AsyncMock(return_value=True),
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch, patch(
-        "src.app.api.routes.nexhealth_webhooks._cancel_runs_for_appointment",
-        new=cancel_runs,
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _session_with_scalar(SimpleNamespace(id="contact-1")),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks._cancel_runs_for_appointment",
+            new=cancel_runs,
+        ),
     ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
@@ -707,23 +855,31 @@ async def test_writeback_complete_reschedule_uses_pending_request_and_triggers_o
     writebacks, writebacks_patch = _patch_writeback_service(pending=pending)
     cancel_runs = AsyncMock(return_value=1)
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[
-            _session_with_scalar(_location()),
-            _processing_session(),
-        ],
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._claim_event",
-        new=AsyncMock(return_value=True),
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch, writebacks_patch, patch(
-        "src.app.api.routes.nexhealth_webhooks._cancel_runs_for_appointment",
-        new=cancel_runs,
-    ), patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as trigger_task:
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        writebacks_patch,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks._cancel_runs_for_appointment",
+            new=cancel_runs,
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as trigger_task,
+    ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         trigger_task.delay = MagicMock()
@@ -752,7 +908,9 @@ async def test_writeback_complete_reschedule_uses_pending_request_and_triggers_o
     trigger_kwargs = trigger_task.delay.call_args.kwargs
     assert trigger_kwargs["appointment_id"] == "gt-1395"
     assert trigger_kwargs["appointment_at_iso"] == "2026-08-12T17:00:00+00:00"
-    assert trigger_kwargs["trigger_metadata"]["source"] == "gotracker_writeback_complete"
+    assert (
+        trigger_kwargs["trigger_metadata"]["source"] == "gotracker_writeback_complete"
+    )
     lifecycle.record_event_seen.assert_awaited_once_with(
         institution_id="inst-1",
         location_id="loc-1",
@@ -789,20 +947,27 @@ async def test_writeback_failed_marks_pending_failed_and_does_not_trigger():
     lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
     writebacks, writebacks_patch = _patch_writeback_service(pending=pending)
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[
-            _session_with_scalar(_location()),
-            _processing_session(),
-        ],
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._claim_event",
-        new=AsyncMock(return_value=True),
-    ), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch, writebacks_patch, patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as trigger_task:
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        writebacks_patch,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as trigger_task,
+    ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         trigger_task.delay = MagicMock()
@@ -841,12 +1006,20 @@ async def test_patient_created_updates_projection():
     projection, projection_patch = _patch_projection(change="new")
     lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[_session_with_scalar(_location()), _processing_session()],
-    ), patch("src.app.api.routes.gotracker_webhooks._claim_event", new=AsyncMock(return_value=True)), patch(
-        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
-    ), projection_patch, lifecycle_patch:
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[_session_with_scalar(_location()), _processing_session()],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+    ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         result = await gotracker_webhook("loc-1", request)
@@ -872,10 +1045,18 @@ async def test_duplicate_claim_returns_duplicate_without_projection():
     request = _make_request(payload)
     projection, projection_patch = _patch_projection(change="updated")
 
-    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
-        side_effect=[_session_with_scalar(_location()), _processing_session()],
-    ), patch("src.app.api.routes.gotracker_webhooks._claim_event", new=AsyncMock(return_value=False)), projection_patch:
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[_session_with_scalar(_location()), _processing_session()],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=False),
+        ),
+        projection_patch,
+    ):
         mock_settings.gotracker_webhook_secret = ""
         mock_settings.is_production = False
         result = await gotracker_webhook("loc-1", request)

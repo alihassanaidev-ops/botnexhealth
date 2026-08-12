@@ -92,6 +92,25 @@ class VoiceParked:
     timeout_minutes: int = 30
 
 
+@dataclass(frozen=True)
+class VoiceCooldownDeferred:
+    """Signal that a voice send should retry at the patient cooldown boundary."""
+
+    step: object
+    due_at: datetime
+
+
+def _context_deadline(value: object) -> datetime | None:
+    """Parse an optional UTC workflow-context deadline."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _ai_call_disclosure(clinic_name: str | None) -> str:
     """Spoken AI-call identity disclosure + opt-out (TCPA artificial-voice / CASL).
     Passed to Retell as a dynamic variable so the agent prompt opens every outbound
@@ -120,7 +139,7 @@ class VoiceNodeExecutor:
         run: AutomationWorkflowRun,
         node: SendVoiceNode,
         context: dict,
-    ) -> str | VoiceParked:
+    ) -> str | VoiceParked | VoiceCooldownDeferred:
         """Place an outbound call. Returns next_node_id (fire-and-forget) or a
         VoiceParked signal (wait-for-outcome). On unrecoverable failure the step and
         run are failed; on a transient Retell error the exception is re-raised so the
@@ -196,7 +215,40 @@ class VoiceNodeExecutor:
                 excluding_workflow_run_id=str(run.id),
             )
             if recent_attempt is not None:
+                recent_attempt_created_at = recent_attempt.created_at
+                cooldown_expires_at = (
+                    recent_attempt_created_at + timedelta(hours=cooldown_hours)
+                    if recent_attempt_created_at is not None
+                    else None
+                )
+                deadline = _context_deadline(
+                    context.get(node.patient_voice_cooldown_deadline_field)
+                    if node.patient_voice_cooldown_deadline_field
+                    else None
+                )
+                if (
+                    node.patient_voice_cooldown_behavior == "defer"
+                    and cooldown_expires_at is not None
+                    and (deadline is None or cooldown_expires_at <= deadline)
+                ):
+                    step.result_metadata = {
+                        "patient_voice_cooldown_hours": cooldown_hours,
+                        "recent_attempt_id": str(recent_attempt.id),
+                        "recent_attempt_created_at": recent_attempt_created_at.isoformat(),
+                        "cooldown_expires_at": cooldown_expires_at.isoformat(),
+                        "cooldown_deadline_at": deadline.isoformat() if deadline else None,
+                    }
+                    logger.info(
+                        "send_voice cooldown deferred: institution=%s run=%s node=%s until=%s",
+                        run.institution_id,
+                        run.id,
+                        node.id,
+                        cooldown_expires_at,
+                    )
+                    return VoiceCooldownDeferred(step=step, due_at=cooldown_expires_at)
                 context["call_outcome"] = "voice_cooldown_skipped"
+                if node.patient_voice_cooldown_behavior == "defer" and deadline is not None:
+                    context["call_outcome"] = "voice_cooldown_window_expired"
                 await self.runtime.complete_step(
                     step,
                     result_code="voice_cooldown_skipped",
@@ -204,8 +256,8 @@ class VoiceNodeExecutor:
                         "patient_voice_cooldown_hours": cooldown_hours,
                         "recent_attempt_id": str(recent_attempt.id),
                         "recent_attempt_created_at": (
-                            recent_attempt.created_at.isoformat()
-                            if recent_attempt.created_at is not None
+                            recent_attempt_created_at.isoformat()
+                            if recent_attempt_created_at is not None
                             else None
                         ),
                         "to_number_masked": mask_phone(to_number),

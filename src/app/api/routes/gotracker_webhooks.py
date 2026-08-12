@@ -23,6 +23,7 @@ from src.app.models.gotracker_webhook_event import (
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.pms.gotracker.mappers import pid as gotracker_id
+from src.app.pms.gotracker.statuses import is_non_attending_status
 from src.app.services.dead_letter import capture_dead_letter
 from src.app.services.retention_policy import default_gotracker_webhook_raw_retain_until
 from src.app.services.sms_privacy import (
@@ -233,8 +234,22 @@ async def _process_appointment_event(
             detail="Appointment payload missing required field: id",
         )
 
-    is_cancelled = event == "appointment.cancelled" or bool(
-        _first(appointment, "cancelled", "canceled", "Cancelled", "IsCancelled", default=False)
+    raw_status_id_for_disposition = _clean_int(
+        _clean_str(_first(appointment, "status_id", "StatusId", "statusId"))
+    )
+    is_cancelled = (
+        event == "appointment.cancelled"
+        or bool(
+            _first(
+                appointment,
+                "cancelled",
+                "canceled",
+                "Cancelled",
+                "IsCancelled",
+                default=False,
+            )
+        )
+        or is_non_attending_status(raw_status_id_for_disposition)
     )
     # GoTracker sends patch-shaped appointment.updated events for status-only
     # changes (for example, confirmation). The projection upsert preserves the
@@ -266,7 +281,9 @@ async def _process_appointment_event(
         gotracker_id(raw_appointment_type_id) if raw_appointment_type_id else None
     )
     raw_schedule_column_id = _clean_str(
-        _first(appointment, "schedule_column_id", "ScheduleColumnId", "scheduleColumnId")
+        _first(
+            appointment, "schedule_column_id", "ScheduleColumnId", "scheduleColumnId"
+        )
     )
     raw_appointment_date = _clean_str(
         _first(appointment, "appointment_date", "AppointmentDate", "date", "Date")
@@ -327,7 +344,12 @@ async def _process_appointment_event(
         _first(appointment, "booked_timestamp", "BookedTimeStamp", "bookedTimeStamp")
     )
     created_machine_name = _clean_str(
-        _first(appointment, "created_machine_name", "CreatedMachineName", "createdMachineName")
+        _first(
+            appointment,
+            "created_machine_name",
+            "CreatedMachineName",
+            "createdMachineName",
+        )
     )
     raw_appointment_context = {
         "is_preconfirmed": _first(appointment, "is_preconfirmed", "IsPreconfirmed"),
@@ -335,7 +357,9 @@ async def _process_appointment_event(
         "master_id": _first(appointment, "master_id", "MasterId"),
         "original_date": _first(appointment, "original_date", "OriginalDate"),
         "detail": _first(appointment, "detail", "Detail"),
-        "appointment_amount": _first(appointment, "appointment_amount", "AppointmentAmount"),
+        "appointment_amount": _first(
+            appointment, "appointment_amount", "AppointmentAmount"
+        ),
         "is_recall": _first(appointment, "is_recall", "IsRecall"),
         "is_personal": _first(appointment, "is_personal", "IsPersonal"),
         "is_all_day_appointment": _first(
@@ -368,7 +392,9 @@ async def _process_appointment_event(
         "confirmed_timestamp": _first(
             appointment, "confirmed_timestamp", "ConfirmedTimeStamp"
         ),
-        "confirmed_user_id": _first(appointment, "confirmed_user_id", "ConfirmedUserId"),
+        "confirmed_user_id": _first(
+            appointment, "confirmed_user_id", "ConfirmedUserId"
+        ),
         "confirmed_machine_name": _first(
             appointment, "confirmed_machine_name", "ConfirmedMachineName"
         ),
@@ -479,6 +505,7 @@ async def _process_appointment_event(
                 cancelled=is_cancelled,
                 provider_id=provider_id,
                 appointment_type_id=appointment_type_id,
+                appointment_reason=reasons[0] if reasons else None,
                 gotracker_status_id=status_id,
                 is_confirmed=raw_appointment_context["is_confirmed"]
                 if isinstance(raw_appointment_context["is_confirmed"], bool)
@@ -486,6 +513,12 @@ async def _process_appointment_event(
                 is_preconfirmed=raw_appointment_context["is_preconfirmed"]
                 if isinstance(raw_appointment_context["is_preconfirmed"], bool)
                 else None,
+                flow_state=_clean_str(raw_appointment_context["flow_state"]),
+                flow_changed_at=_clean_str(raw_appointment_context["flow_change"]),
+                checked_in_at=_clean_str(raw_appointment_context["check_in"]),
+                in_chair_at=_clean_str(raw_appointment_context["in_chair"]),
+                out_chair_at=_clean_str(raw_appointment_context["out_chair"]),
+                checked_out_at=_clean_str(raw_appointment_context["check_out"]),
                 status_source="webhook",
             )
         except Exception as exc:  # noqa: BLE001
@@ -499,7 +532,9 @@ async def _process_appointment_event(
                 raw_payload=raw_payload,
                 error=exc,
             )
-        await _complete_event(session, institution_id=institution_id, dedup_key=dedup_key)
+        await _complete_event(
+            session, institution_id=institution_id, dedup_key=dedup_key
+        )
         await session.commit()
 
     if not should_react:
@@ -539,7 +574,8 @@ async def _process_appointment_event(
             "runs_cancelled": runs_cancelled,
         }
 
-    if upsert.change == "unchanged":
+    state_changed = bool(getattr(upsert, "state_changed", False))
+    if upsert.change == "unchanged" and not state_changed:
         return {"status": "unchanged", "appointment_id": appointment_id}
 
     runs_cancelled = 0
@@ -635,6 +671,7 @@ async def _process_appointment_event(
         status_id is not None
         or isinstance(confirmed_state, bool)
         or isinstance(preconfirmed_state, bool)
+        or state_changed
     ):
         trigger_appointment_state_workflows.delay(
             institution_id=institution_id,
@@ -643,7 +680,11 @@ async def _process_appointment_event(
             location_id=location_id,
             status_id=status_id,
             confirmed=confirmed_state if isinstance(confirmed_state, bool) else None,
-            preconfirmed=preconfirmed_state if isinstance(preconfirmed_state, bool) else None,
+            preconfirmed=preconfirmed_state
+            if isinstance(preconfirmed_state, bool)
+            else None,
+            flow_state=_clean_str(raw_appointment_context["flow_state"]),
+            flow_changed_at=_clean_str(raw_appointment_context["flow_change"]),
             trigger_metadata=workflow_metadata,
         )
 
@@ -678,10 +719,9 @@ async def _process_appointment_writeback_event(
     institution_id = str(location.institution_id)
     location_id = str(location.id)
     source_event_id = _source_event_id(payload)
-    fallback_basis = (
-        _clean_str(_first(payload, "sequence_number", "occurred_at"))
-        or _dedup_fallback(payload)
-    )
+    fallback_basis = _clean_str(
+        _first(payload, "sequence_number", "occurred_at")
+    ) or _dedup_fallback(payload)
     dedup_key = _event_dedup_key(
         source_event_id=source_event_id,
         item_key=f"{event}:writeback:{appointment_id}",
@@ -747,7 +787,9 @@ async def _process_appointment_writeback_event(
                     provider_id=pending.provider_id,
                     status_source="writeback_failed_restore",
                 )
-            await _complete_event(session, institution_id=institution_id, dedup_key=dedup_key)
+            await _complete_event(
+                session, institution_id=institution_id, dedup_key=dedup_key
+            )
             await session.commit()
             return {
                 "status": "writeback_failed",
@@ -763,7 +805,9 @@ async def _process_appointment_writeback_event(
             source_event_id=source_event_id,
         )
         if pending is None:
-            await _complete_event(session, institution_id=institution_id, dedup_key=dedup_key)
+            await _complete_event(
+                session, institution_id=institution_id, dedup_key=dedup_key
+            )
             await session.commit()
             return {
                 "status": "ignored",
@@ -840,7 +884,9 @@ async def _process_appointment_writeback_event(
                 or isinstance(pending.preconfirmed, bool)
             )
 
-        await _complete_event(session, institution_id=institution_id, dedup_key=dedup_key)
+        await _complete_event(
+            session, institution_id=institution_id, dedup_key=dedup_key
+        )
         await session.commit()
 
     if pending.action in {"reschedule", "cancel"}:
@@ -873,7 +919,9 @@ async def _process_appointment_writeback_event(
         )
 
     if should_trigger_state:
-        from src.app.tasks.automation_workflow import trigger_appointment_state_workflows
+        from src.app.tasks.automation_workflow import (
+            trigger_appointment_state_workflows,
+        )
 
         trigger_appointment_state_workflows.delay(
             institution_id=institution_id,
@@ -942,7 +990,9 @@ async def _process_patient_event(
     raw_payload: str,
     location: InstitutionLocation,
 ) -> dict[str, Any]:
-    raw_patient_id = _clean_str(_first(patient, "id", "ContactId", "contact_id", "patient_id"))
+    raw_patient_id = _clean_str(
+        _first(patient, "id", "ContactId", "contact_id", "patient_id")
+    )
     if not raw_patient_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1003,7 +1053,11 @@ async def _process_patient_event(
                 patient=_patient_projection_payload(patient, patient_id=patient_id),
                 local_location_ids=[location_id],
                 nexhealth_location_ids=[
-                    gotracker_id(_first(patient, "LocationId", "location_id", default=location_id))
+                    gotracker_id(
+                        _first(
+                            patient, "LocationId", "location_id", default=location_id
+                        )
+                    )
                 ],
                 event=event,
             )
@@ -1018,7 +1072,9 @@ async def _process_patient_event(
                 raw_payload=raw_payload,
                 error=exc,
             )
-        await _complete_event(session, institution_id=institution_id, dedup_key=dedup_key)
+        await _complete_event(
+            session, institution_id=institution_id, dedup_key=dedup_key
+        )
         await session.commit()
 
     return {
@@ -1056,9 +1112,13 @@ async def _claim_event(
         is_stale_processing = (
             existing.status == GoTrackerWebhookStatus.PROCESSING.value
             and existing.updated_at is not None
-            and (now - _as_utc(existing.updated_at)).total_seconds() > _PROCESSING_TTL_SECONDS
+            and (now - _as_utc(existing.updated_at)).total_seconds()
+            > _PROCESSING_TTL_SECONDS
         )
-        if existing.status == GoTrackerWebhookStatus.FAILED.value or is_stale_processing:
+        if (
+            existing.status == GoTrackerWebhookStatus.FAILED.value
+            or is_stale_processing
+        ):
             existing.status = GoTrackerWebhookStatus.PROCESSING.value
             existing.attempts += 1
             existing.updated_at = now
@@ -1118,7 +1178,8 @@ async def _complete_event(
     if row is None:
         return None
     row.status = (
-        GoTrackerWebhookStatus.FAILED.value if error
+        GoTrackerWebhookStatus.FAILED.value
+        if error
         else GoTrackerWebhookStatus.COMPLETED.value
     )
     row.last_error = sanitize_provider_error(error) if error else None
@@ -1182,13 +1243,17 @@ def _refresh_event_payload(
         row.source_event_id = source_event_id
     row.payload_hash = payload_hash(payload)
     redacted = redact_payload(payload)
-    row.redacted_payload = redacted if isinstance(redacted, dict) else {"payload": redacted}
+    row.redacted_payload = (
+        redacted if isinstance(redacted, dict) else {"payload": redacted}
+    )
     row.raw_payload = raw_payload
     row.raw_payload_retain_until = default_gotracker_webhook_raw_retain_until(now)
 
 
 def _event_name(payload: dict[str, Any]) -> str:
-    value = payload.get("event") or payload.get("event_name") or payload.get("type") or ""
+    value = (
+        payload.get("event") or payload.get("event_name") or payload.get("type") or ""
+    )
     raw = str(value).strip()
     if raw.startswith("appointment.status_writeback."):
         return raw
@@ -1292,8 +1357,12 @@ def _appointment_start_time(appointment: dict[str, Any]) -> str | None:
     if direct:
         return direct
 
-    appointment_date = _clean_str(_first(appointment, "AppointmentDate", "date", "Date"))
-    appointment_time = _clean_str(_first(appointment, "AppointmentTime", "time", "Time"))
+    appointment_date = _clean_str(
+        _first(appointment, "AppointmentDate", "date", "Date")
+    )
+    appointment_time = _clean_str(
+        _first(appointment, "AppointmentTime", "time", "Time")
+    )
     if not appointment_date or not appointment_time:
         return None
 
@@ -1373,7 +1442,11 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _embedded_patient_payload(appointment: dict[str, Any]) -> dict[str, Any] | None:
-    patient = appointment.get("patient") or appointment.get("contact") or appointment.get("Patient")
+    patient = (
+        appointment.get("patient")
+        or appointment.get("contact")
+        or appointment.get("Patient")
+    )
     if isinstance(patient, dict):
         return patient
     patient_keys = {
@@ -1393,11 +1466,15 @@ def _embedded_patient_payload(appointment: dict[str, Any]) -> dict[str, Any] | N
     return appointment if any(key in appointment for key in patient_keys) else None
 
 
-def _patient_projection_payload(patient: dict[str, Any], *, patient_id: str) -> dict[str, Any]:
+def _patient_projection_payload(
+    patient: dict[str, Any], *, patient_id: str
+) -> dict[str, Any]:
     first_name = _clean_str(_first(patient, "first_name", "FirstName", "firstName"))
     last_name = _clean_str(_first(patient, "last_name", "LastName", "lastName"))
     full_name = _clean_str(_first(patient, "name", "Name", "full_name", "FullName"))
-    phone = _clean_str(_first(patient, "phone", "Phone", "PhoneNumber", "phone_number", "CellPhone"))
+    phone = _clean_str(
+        _first(patient, "phone", "Phone", "PhoneNumber", "phone_number", "CellPhone")
+    )
     return {
         "id": patient_id,
         "first_name": first_name,
@@ -1407,11 +1484,17 @@ def _patient_projection_payload(patient: dict[str, Any], *, patient_id: str) -> 
         "preferred_language": _clean_str(
             _first(patient, "preferred_language", "PreferredLanguage")
         ),
-        "inactive": bool(_first(patient, "inactive", "Inactive", "IsInactive", default=False)),
+        "inactive": bool(
+            _first(patient, "inactive", "Inactive", "IsInactive", default=False)
+        ),
         "bio": {
             "phone_number": phone,
-            "date_of_birth": _clean_str(_first(patient, "date_of_birth", "DateOfBirth", "DOB")),
-            "new_patient": bool(_first(patient, "is_new_patient", "IsNewPatient", default=False)),
+            "date_of_birth": _clean_str(
+                _first(patient, "date_of_birth", "DateOfBirth", "DOB")
+            ),
+            "new_patient": bool(
+                _first(patient, "is_new_patient", "IsNewPatient", default=False)
+            ),
         },
     }
 

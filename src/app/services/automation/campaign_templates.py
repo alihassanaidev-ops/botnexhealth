@@ -169,6 +169,52 @@ def _apply_required_setup_fields(
                 if isinstance(node, dict) and node.get("type") == "send_voice":
                     node["patient_voice_cooldown_hours"] = int(hours)
             continue
+        if field_id == "post_op_reasons":
+            reasons = _string_list(setup_options.get(field_id))
+            if setup_field.get("required") and not reasons:
+                raise ValueError("post_op_reasons must contain at least one GoTracker reason")
+            node = _node_by_id(definition, "check-post-op-eligible-reason")
+            if node:
+                node["rules"][0]["value"] = reasons
+            continue
+        if field_id == "post_op_delay_hours":
+            hours = _positive_number(
+                setup_options.get(field_id, setup_field.get("default", 24)),
+                field_id,
+                integer=True,
+                allow_zero=True,
+            )
+            node = _node_by_id(definition, "wait-post-op")
+            if node:
+                node["delay"]["offset_seconds"] = int(hours * 60 * 60)
+            continue
+        if field_id == "post_op_latest_call_hours":
+            hours = _positive_number(
+                setup_options.get(field_id, setup_field.get("default", 72)),
+                field_id,
+                integer=True,
+            )
+            definition["trigger"]["max_followup_delay_hours"] = int(hours)
+            continue
+
+    # A call cannot be both scheduled after completion and forbidden before it
+    # becomes eligible. Keep the setup error local and understandable.
+    if _node_by_id(definition, "wait-post-op") is not None:
+        delay = _positive_number(
+            setup_options.get("post_op_delay_hours", 24),
+            "post_op_delay_hours",
+            integer=True,
+            allow_zero=True,
+        )
+        latest = _positive_number(
+            setup_options.get("post_op_latest_call_hours", 72),
+            "post_op_latest_call_hours",
+            integer=True,
+        )
+        if latest < delay:
+            raise ValueError(
+                "post_op_latest_call_hours must be at least post_op_delay_hours"
+            )
 
 
 def _node_by_id(definition: dict[str, Any], node_id: str) -> dict[str, Any] | None:
@@ -791,19 +837,34 @@ _POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
     "trigger": {
         "type": "appointment_state_changed",
         "status_ids": [],
-        "confirmed": True,
+        "confirmed": None,
         "preconfirmed": None,
+        "flow_states": ["Completed"],
+        "max_followup_delay_hours": 72,
         "campaign_goal": "post_op_followup",
     },
-    "entry_node_id": "wait-post-op",
+    "entry_node_id": "check-post-op-eligible-reason",
     "nodes": [
+        {
+            "type": "condition",
+            "id": "check-post-op-eligible-reason",
+            "rules": [
+                {
+                    "field": "appointment_reason",
+                    "op": "in_case_insensitive",
+                    "value": [],
+                }
+            ],
+            "true_next_node_id": "wait-post-op",
+            "false_next_node_id": "exit-ineligible-reason",
+        },
         {
             "type": "wait",
             "id": "wait-post-op",
             "delay": {
                 "delay_type": "appointment_relative",
                 "offset_seconds": 86400,
-                "anchor_field": "appointment_at",
+                "anchor_field": "flow_changed_at",
             },
             "next_node_id": "voice-post-op",
         },
@@ -814,7 +875,22 @@ _POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
             "voice_profile_id": VOICE_PROFILE_PLACEHOLDER,
             "wait_for_outcome": True,
             "max_attempts": 1,
-            "next_node_id": "check-post-op-dnc",
+            "patient_voice_cooldown_behavior": "defer",
+            "patient_voice_cooldown_deadline_field": "post_op_expires_at",
+            "next_node_id": "check-post-op-cooldown-expired",
+        },
+        {
+            "type": "condition",
+            "id": "check-post-op-cooldown-expired",
+            "rules": [
+                {
+                    "field": "call_outcome",
+                    "op": "eq",
+                    "value": "voice_cooldown_window_expired",
+                }
+            ],
+            "true_next_node_id": "exit-post-op-cooldown-expired",
+            "false_next_node_id": "check-post-op-dnc",
         },
         {
             "type": "condition",
@@ -866,6 +942,12 @@ _POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
         {"type": "exit", "id": "exit-post-op-complete", "outcome": "post_op_complete"},
         {"type": "exit", "id": "exit-post-op-followup", "outcome": "staff_handoff"},
         {"type": "exit", "id": "exit-post-op-dnc", "outcome": "do_not_call"},
+        {"type": "exit", "id": "exit-ineligible-reason", "outcome": "ineligible_reason"},
+        {
+            "type": "exit",
+            "id": "exit-post-op-cooldown-expired",
+            "outcome": "post_op_cooldown_expired",
+        },
     ],
     "compliance": {"content_class": "transactional_care", "consent_required": True},
 }
@@ -1172,25 +1254,26 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
     ),
     "post-op-followup-after-confirmation": CampaignTemplate(
         id="post-op-followup-after-confirmation",
-        name="Post-Op Follow-Up After Confirmation",
+        name="Post-Op Follow-Up After Completed Visit",
         description=(
-            "Call patients one day after a confirmed surgical/major appointment "
+            "Call patients after a completed surgical/major appointment "
             "to check whether staff follow-up is needed."
         ),
             trigger_type="appointment_state_changed",
             definition=_POST_OP_FOLLOWUP_AFTER_CONFIRMATION,
             metadata=_metadata(
                 category="appointment_ops",
-                goal="Complete next-day post-op follow-up for appointments whose cached GoTracker state is confirmed.",
+                goal="Complete configurable post-op follow-up after Tracker marks an eligible appointment Completed.",
             outcome_labels=["post_op_complete", "staff_handoff", "do_not_call"],
             supported_channels=["voice"],
             required_readiness_checks=["location", "voice", "consent", "quiet_hours"],
             required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time"],
             content_class="transactional_care",
-                audience="Appointments with confirmed=true in the cached GoTracker state",
+                audience="Eligible appointments whose Tracker Chair Flow state became Completed",
                 eligibility=[
-                    "cached GoTracker appointment state is confirmed",
-                    "source appointment state includes appointment time",
+                    "Tracker Chair Flow state is Completed",
+                    "appointment reason is selected during setup",
+                    "source appointment includes FlowChange",
                     "voice consent exists",
                     "patient is not suppressed",
                 ],
@@ -1206,7 +1289,8 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 "appointment_date": "July 22, 2026",
                 "appointment_time": "2:00 PM",
                 "call_outcome": "post_op_ok",
-                "is_confirmed": True,
+                "appointment_flow_state": "Completed",
+                "flow_changed_at": "2026-07-22T14:00:00+00:00",
                 "gotracker_status_id": 1,
             },
             setup_fields=[
@@ -1216,7 +1300,35 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                     "type": "voice_profile_select",
                     "required": True,
                     "placeholder": "Choose outbound voice profile",
-                }
+                },
+                {
+                    "id": "post_op_reasons",
+                    "label": "Eligible completed GoTracker reasons",
+                    "type": "string_list",
+                    "required": True,
+                    "placeholder": "implant surgery, extraction",
+                },
+                {
+                    "id": "post_op_delay_hours",
+                    "label": "Hours after completion before calling",
+                    "type": "number",
+                    "required": True,
+                    "default": 24,
+                },
+                {
+                    "id": "post_op_latest_call_hours",
+                    "label": "Latest allowed post-op call (hours after completion)",
+                    "type": "number",
+                    "required": True,
+                    "default": 72,
+                },
+                {
+                    "id": "patient_voice_cooldown_hours",
+                    "label": "Patient voice cooldown (hours)",
+                    "type": "number",
+                    "required": True,
+                    "default": 24,
+                },
             ],
         ),
         tags=["appointment", "surgery", "voice", "post-op"],

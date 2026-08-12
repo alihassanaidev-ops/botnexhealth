@@ -79,6 +79,7 @@ class AppointmentTriggerService:
             "appointment_at": appt.start_time.isoformat() if appt.start_time else None,
             "appointment_start_time": appt.start_time.isoformat() if appt.start_time else None,
             "appointment_status": appt.status,
+            "appointment_reason": appt.appointment_reason,
             "appointment_type_id": appt.appointment_type_id,
             "appointment_type": type_name or appt.appointment_type_id,
             "appointment_type_name": type_name,
@@ -90,6 +91,7 @@ class AppointmentTriggerService:
                 "id": appt.nexhealth_appointment_id,
                 "start_time": appt.start_time.isoformat() if appt.start_time else None,
                 "status": appt.status,
+                "reason": appt.appointment_reason,
                 "appointment_type_id": appt.appointment_type_id,
                 "appointment_type_name": type_name,
                 "provider_id": appt.provider_id,
@@ -192,6 +194,7 @@ def workflow_matches_appointment_state(
     status_id: int | None = None,
     confirmed: bool | None = None,
     preconfirmed: bool | None = None,
+    flow_state: str | None = None,
 ) -> bool:
     if not workflow.definition:
         return False
@@ -211,6 +214,12 @@ def workflow_matches_appointment_state(
         return False
     if trigger.preconfirmed is not None and preconfirmed != trigger.preconfirmed:
         return False
+    if trigger.flow_states and (
+        not flow_state
+        or flow_state.casefold()
+        not in {configured.casefold() for configured in trigger.flow_states}
+    ):
+        return False
     return True
 
 
@@ -221,11 +230,19 @@ def make_appointment_state_idempotency_key(
     status_id: int | None = None,
     confirmed: bool | None = None,
     preconfirmed: bool | None = None,
+    flow_state: str | None = None,
+    flow_changed_at: str | None = None,
 ) -> str:
-    return (
+    key = (
         f"appt-state:{workflow_version_id}:{appointment_id}:"
         f"status={status_id}:confirmed={confirmed}:preconfirmed={preconfirmed}"
     )
+    # Preserve keys for existing status/confirmation workflows. A flow event
+    # needs its own timestamped key: the same appointment can legitimately be
+    # completed again only after a later, distinct FlowChange.
+    if flow_state is None and flow_changed_at is None:
+        return key
+    return f"{key}:flow_state={flow_state}:flow_changed_at={flow_changed_at}"
 
 
 def make_appointment_idempotency_key(

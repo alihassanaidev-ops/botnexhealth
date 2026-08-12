@@ -15,7 +15,7 @@ from src.app.services.automation.retell_outbound_client import (
     RetellPermanentError,
     RetellTransientError,
 )
-from src.app.services.automation.voice_node_executor import VoiceParked
+from src.app.services.automation.voice_node_executor import VoiceCooldownDeferred, VoiceParked
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +42,8 @@ def _make_node(
     phone_country_code_enabled=False,
     phone_country_region=None,
     patient_voice_cooldown_hours=24,
+    patient_voice_cooldown_behavior="skip",
+    patient_voice_cooldown_deadline_field=None,
 ):
     return SendVoiceNode(
         id="node-1",
@@ -51,6 +53,8 @@ def _make_node(
         max_attempts=max_attempts,
         wait_for_outcome=wait_for_outcome,
         patient_voice_cooldown_hours=patient_voice_cooldown_hours,
+        patient_voice_cooldown_behavior=patient_voice_cooldown_behavior,
+        patient_voice_cooldown_deadline_field=patient_voice_cooldown_deadline_field,
         phone_country_code_enabled=phone_country_code_enabled,
         phone_country_region=phone_country_region,
     )
@@ -272,6 +276,35 @@ def test_executor_skips_cross_run_call_inside_patient_cooldown():
     runtime.complete_step.assert_called_once()
     assert runtime.complete_step.call_args.kwargs["result_code"] == "voice_cooldown_skipped"
     runtime.fail_run.assert_not_called()
+
+
+def test_executor_defers_post_op_call_until_voice_cooldown_ends() -> None:
+    from datetime import datetime, timezone
+
+    recent_attempt = MagicMock()
+    recent_attempt.id = "attempt-recent"
+    recent_attempt.created_at = datetime(2026, 8, 11, 15, 0, tzinfo=timezone.utc)
+    executor, runtime, step = _make_executor(
+        contact=_make_contact(), location=_make_location(), recent_attempt=recent_attempt
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        result = asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(
+                    patient_voice_cooldown_hours=24,
+                    patient_voice_cooldown_behavior="defer",
+                    patient_voice_cooldown_deadline_field="post_op_expires_at",
+                ),
+                {"post_op_expires_at": "2026-08-14T15:00:00Z"},
+            )
+        )
+
+    assert result == VoiceCooldownDeferred(
+        step=step, due_at=datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc)
+    )
+    call_mock.assert_not_called()
+    runtime.complete_step.assert_not_called()
 
 
 def test_executor_allows_cooldown_disabled():

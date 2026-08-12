@@ -41,6 +41,10 @@ class AppointmentStateChangedTrigger(BaseModel):
     status_ids: list[int] = Field(default_factory=list)
     confirmed: bool | None = None
     preconfirmed: bool | None = None
+    flow_states: list[str] = Field(default_factory=list)
+    # A campaign-specific deadline measured from FlowChange. It is used by the
+    # post-op template when a voice cooldown defers the call.
+    max_followup_delay_hours: int | None = Field(default=None, ge=0, le=168)
     campaign_goal: str | None = None
 
     @field_validator("status_ids")
@@ -54,9 +58,26 @@ class AppointmentStateChangedTrigger(BaseModel):
                 unique.append(value)
         return unique
 
+    @field_validator("flow_states")
+    @classmethod
+    def validate_flow_states(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            cleaned = value.strip()
+            if cleaned and cleaned.casefold() not in {
+                item.casefold() for item in normalized
+            }:
+                normalized.append(cleaned)
+        return normalized
+
     @model_validator(mode="after")
     def require_matcher(self) -> "AppointmentStateChangedTrigger":
-        if not self.status_ids and self.confirmed is None and self.preconfirmed is None:
+        if (
+            not self.status_ids
+            and self.confirmed is None
+            and self.preconfirmed is None
+            and not self.flow_states
+        ):
             raise ValueError("appointment_state_changed needs at least one matcher")
         return self
 
@@ -256,6 +277,10 @@ class SendVoiceNode(BaseModel):
     # run are allowed; this prevents a second appointment/campaign run from
     # dialing the same patient too soon. 0 disables the guard.
     patient_voice_cooldown_hours: int = Field(default=24, ge=0, le=168)
+    # Most campaigns skip a cross-run cooldown conflict. Care workflows may
+    # defer until it expires instead, optionally bounded by a context deadline.
+    patient_voice_cooldown_behavior: Literal["skip", "defer"] = "skip"
+    patient_voice_cooldown_deadline_field: str | None = None
     # Optional workflow-level override for local-format patient phone numbers.
     # When disabled, only already-international numbers are accepted for voice.
     phone_country_code_enabled: bool = False

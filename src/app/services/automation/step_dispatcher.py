@@ -52,6 +52,7 @@ from src.app.services.automation.runtime_service import AutomationWorkflowRuntim
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.voice_node_executor import (
     _CALL_PLACED_AWAITING,
+    VoiceCooldownDeferred,
     VoiceParked,
 )
 
@@ -304,6 +305,22 @@ class WorkflowStepDispatcher:
                             "dispatch: voice parked for outcome run=%s node=%s timeout_at=%s",
                             run.id, node.id, resume_at,
                         )
+                        return DispatchResult(
+                            status="waiting",
+                            timer_id=timer.id,
+                            steps_advanced=steps_advanced,
+                            patient_status_event_ids=patient_status_event_ids,
+                        )
+                    if isinstance(dispatch_result, VoiceCooldownDeferred):
+                        timer = await self.scheduler.create_timer(
+                            institution_id=run.institution_id,
+                            location_id=run.location_id,
+                            workflow_run_id=run.id,
+                            step_execution_id=dispatch_result.step.id,
+                            due_at=dispatch_result.due_at,
+                            timezone_name=location_timezone,
+                        )
+                        await self.runtime.wait_run(run, dispatch_result.step)
                         return DispatchResult(
                             status="waiting",
                             timer_id=timer.id,

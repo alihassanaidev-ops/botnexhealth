@@ -471,6 +471,64 @@ async def test_trigger_appointment_state_schedules_matching_confirmed_workflow()
 
 
 @pytest.mark.asyncio
+async def test_trigger_appointment_state_schedules_completed_flow_with_deadline() -> None:
+    workflow = SimpleNamespace(
+        id="postop-wf",
+        current_version_id="postop-ver",
+        definition={
+            "trigger": {
+                "type": "appointment_state_changed",
+                "flow_states": ["Completed"],
+                "max_followup_delay_hours": 72,
+                "campaign_goal": "post_op_followup",
+            },
+            "entry_node_id": "exit-1",
+            "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
+        },
+    )
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    trigger_service = AsyncMock()
+    trigger_service.find_active_appointment_state_workflows = AsyncMock(return_value=[workflow])
+    trigger_service.get_appointment_context = AsyncMock(
+        return_value={
+            "appointment_reason": "Implant Surgery",
+            "contact_id": "contact-from-projection",
+            "location_id": "loc-from-projection",
+        }
+    )
+
+    with (
+        patch("src.app.tasks.automation_workflow.get_system_db_session", return_value=session),
+        patch("src.app.tasks.automation_workflow.AppointmentTriggerService", return_value=trigger_service),
+        patch("src.app.tasks.automation_workflow.enroll_and_start_workflow_run") as mock_enroll,
+    ):
+        result = await _trigger_appointment_state_async(
+            institution_id="inst-1",
+            appointment_id="gt-1414",
+            contact_id=None,
+            location_id=None,
+            status_id=1,
+            confirmed=True,
+            preconfirmed=False,
+            flow_state="Completed",
+            flow_changed_at="2026-08-12T09:27:01.940Z",
+            trigger_metadata={"source": "gotracker_webhook"},
+        )
+
+    assert result == {"appointment_id": "gt-1414", "scheduled": 1, "skipped": 0}
+    kwargs = mock_enroll.apply_async.call_args.kwargs["kwargs"]
+    assert kwargs["idempotency_key"] == (
+        "appt-state:postop-ver:gt-1414:status=1:confirmed=True:preconfirmed=False:"
+        "flow_state=Completed:flow_changed_at=2026-08-12T09:27:01.940Z"
+    )
+    assert kwargs["trigger_metadata"]["appointment_reason"] == "Implant Surgery"
+    assert kwargs["trigger_metadata"]["flow_changed_at"] == "2026-08-12T09:27:01.940Z"
+    assert kwargs["trigger_metadata"]["post_op_expires_at"] == "2026-08-15T09:27:01.940000+00:00"
+
+
+@pytest.mark.asyncio
 async def test_poll_retell_voice_outcomes_enqueues_resume_for_completed_call() -> None:
     attempt = SimpleNamespace(
         institution_id="inst-1",

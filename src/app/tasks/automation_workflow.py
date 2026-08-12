@@ -37,8 +37,14 @@ from src.app.services.automation.callback_trigger_service import (
     compute_callback_eta,
     make_callback_idempotency_key,
 )
-from src.app.services.automation.definition_schema import ConditionNode, WaitNode, WorkflowDefinition
-from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+from src.app.services.automation.definition_schema import (
+    ConditionNode,
+    WaitNode,
+    WorkflowDefinition,
+)
+from src.app.services.automation.enrollment_service import (
+    AutomationWorkflowEnrollmentService,
+)
 from src.app.services.automation.gotracker_subscription_service import (
     GoTrackerSubscriptionLifecycleService,
 )
@@ -58,8 +64,11 @@ from src.app.services.automation.patient_status_trigger_service import (
     PatientStatusTriggerService,
     patient_status_idempotency_key,
 )
+from src.app.pms.gotracker.statuses import is_non_attending_status
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
-from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
+from src.app.services.automation.scheduler_service import (
+    AutomationWorkflowSchedulerService,
+)
 from src.app.services.automation.step_dispatcher import build_dispatcher
 from src.app.services.automation.voice_attempt_recorder import stamp_attempt_outcome
 from src.app.services.dead_letter import capture_dead_letter
@@ -73,10 +82,12 @@ _CLAIM_TTL_SECONDS = 120
 _PAUSED_DEFER_SECONDS = 300
 
 # Run statuses that can be advanced by a fired timer.
-_ADVANCEABLE_STATUSES = frozenset({
-    AutomationRunStatus.WAITING.value,
-    AutomationRunStatus.RUNNING.value,
-})
+_ADVANCEABLE_STATUSES = frozenset(
+    {
+        AutomationRunStatus.WAITING.value,
+        AutomationRunStatus.RUNNING.value,
+    }
+)
 
 _APPOINTMENT_SYNC_LOOKAHEAD_DAYS = 90
 _RETELL_OUTCOME_POLL_BATCH = 25
@@ -93,11 +104,14 @@ def _superadmin_system_session(external_id: str):
 
 def _ensure_db() -> None:
     from src.app.config import settings
+
     if not is_database_initialized() and settings.database_url:
         init_database(settings.database_url, use_null_pool=True)
 
 
-def _merge_sync_summary(total: AppointmentSyncSummary, part: AppointmentSyncSummary) -> None:
+def _merge_sync_summary(
+    total: AppointmentSyncSummary, part: AppointmentSyncSummary
+) -> None:
     total.locations_scanned += part.locations_scanned
     total.appointments_seen += part.appointments_seen
     total.projected += part.projected
@@ -106,7 +120,9 @@ def _merge_sync_summary(total: AppointmentSyncSummary, part: AppointmentSyncSumm
     total.failed_locations += part.failed_locations
 
 
-def _merge_patient_sync_summary(total: PatientSyncSummary, part: PatientSyncSummary) -> None:
+def _merge_patient_sync_summary(
+    total: PatientSyncSummary, part: PatientSyncSummary
+) -> None:
     total.locations_scanned += part.locations_scanned
     total.patients_seen += part.patients_seen
     total.projected += part.projected
@@ -244,7 +260,10 @@ async def _dispatch_timer_async(
         # it. Pause must stop in-flight runs, not just new enrollments; re-arm the
         # timer for a later poll so the run resumes once the workflow is active.
         workflow = await session.get(AutomationWorkflow, run.workflow_id)
-        if workflow is not None and workflow.status == AutomationWorkflowStatus.PAUSED.value:
+        if (
+            workflow is not None
+            and workflow.status == AutomationWorkflowStatus.PAUSED.value
+        ):
             svc = AutomationWorkflowSchedulerService(session)
             await svc.reschedule_timer(
                 timer,
@@ -253,14 +272,20 @@ async def _dispatch_timer_async(
             )
             await session.commit()
             logger.info(
-                "dispatch: workflow %s paused — deferred run %s", run.workflow_id, run_id
+                "dispatch: workflow %s paused — deferred run %s",
+                run.workflow_id,
+                run_id,
             )
             return {"skipped": True, "reason": "workflow paused", "deferred": True}
 
         # Load workflow version and parse definition.
         version = await session.get(AutomationWorkflowVersion, run.workflow_version_id)
         if version is None:
-            logger.error("dispatch: version %s not found for run %s", run.workflow_version_id, run_id)
+            logger.error(
+                "dispatch: version %s not found for run %s",
+                run.workflow_version_id,
+                run_id,
+            )
             return {"skipped": True, "reason": "version not found"}
 
         definition = WorkflowDefinition.model_validate(version.definition)
@@ -292,7 +317,10 @@ async def _dispatch_timer_async(
     )
     logger.info(
         "dispatch: timer=%s run=%s status=%s steps=%d",
-        timer_id, run_id, result.status, result.steps_advanced,
+        timer_id,
+        run_id,
+        result.status,
+        result.steps_advanced,
     )
     return {
         "timer_id": timer_id,
@@ -458,7 +486,9 @@ async def _resolve_gotracker_writeback_target(
             row = await writebacks.get_pending(writeback_id=id)
             if row is None:
                 return {"status": "skipped", "reason": "already_resolved"}
-            await writebacks.fail(row, error="Missing location for GoTracker writeback sweep")
+            await writebacks.fail(
+                row, error="Missing location for GoTracker writeback sweep"
+            )
             await session.commit()
         return {"status": "failed", "reason": "missing_location"}
 
@@ -502,7 +532,9 @@ async def _resolve_gotracker_writeback_target(
 
         current_start = _gotracker_sweep_start_time(appointment)
         current_status_id = _gotracker_sweep_status_id(appointment)
-        current_cancelled = _gotracker_sweep_is_cancelled(appointment, current_status_id)
+        current_cancelled = _gotracker_sweep_is_cancelled(
+            appointment, current_status_id
+        )
         applied = _gotracker_pending_matches_current_state(
             row,
             current_start=current_start,
@@ -544,7 +576,9 @@ async def _resolve_gotracker_writeback_target(
                     start_time=(
                         row.previous_start_time.isoformat()
                         if row.previous_start_time is not None
-                        else current_start.isoformat() if current_start is not None else None
+                        else current_start.isoformat()
+                        if current_start is not None
+                        else None
                     ),
                     event="appointment.status_writeback.swept",
                     cancelled=True,
@@ -705,7 +739,7 @@ def _gotracker_sweep_is_cancelled(
 ) -> bool:
     if not appointment:
         return False
-    return status_id == 3 or _as_sweep_bool(
+    return is_non_attending_status(status_id) or _as_sweep_bool(
         _first_sweep(appointment, "cancelled", "Cancelled", "is_cancelled")
     )
 
@@ -732,7 +766,9 @@ def _gotracker_pending_matches_current_state(
             return False
     if isinstance(row.preconfirmed, bool):
         current_preconfirmed = _as_sweep_bool_or_none(
-            _first_sweep(appointment or {}, "preconfirmed", "Preconfirmed", "is_preconfirmed")
+            _first_sweep(
+                appointment or {}, "preconfirmed", "Preconfirmed", "is_preconfirmed"
+            )
         )
         if current_preconfirmed is None or row.preconfirmed != current_preconfirmed:
             return False
@@ -870,7 +906,9 @@ def enroll_and_start_workflow_run(
     except Exception as exc:
         logger.exception(
             "enroll_and_start_workflow_run failed: workflow=%s contact=%s: %s",
-            workflow_id, contact_id, exc,
+            workflow_id,
+            contact_id,
+            exc,
         )
         if self.request.retries >= self.max_retries:
             asyncio.run(
@@ -926,7 +964,8 @@ async def _enroll_and_start_async(
 
         if not created:
             logger.info(
-                "enroll_and_start: duplicate idempotency_key=%s — skipping", idempotency_key
+                "enroll_and_start: duplicate idempotency_key=%s — skipping",
+                idempotency_key,
             )
             await session.commit()
             return {"run_id": str(run.id), "created": False}
@@ -935,7 +974,8 @@ async def _enroll_and_start_async(
         if version is None:
             logger.error(
                 "enroll_and_start: version %s not found for workflow %s",
-                workflow_version_id, workflow_id,
+                workflow_version_id,
+                workflow_id,
             )
             await session.commit()
             return {"run_id": str(run.id), "created": True, "skipped": True}
@@ -949,7 +989,10 @@ async def _enroll_and_start_async(
 
         await dispatcher.runtime.start_run(run)
         result = await dispatcher.advance(
-            run, definition, context=trigger_metadata, location_timezone=location_timezone
+            run,
+            definition,
+            context=trigger_metadata,
+            location_timezone=location_timezone,
         )
         await session.commit()
 
@@ -959,7 +1002,10 @@ async def _enroll_and_start_async(
     )
     logger.info(
         "enroll_and_start: workflow=%s run=%s status=%s steps=%d",
-        workflow_id, run.id, result.status, result.steps_advanced,
+        workflow_id,
+        run.id,
+        result.status,
+        result.steps_advanced,
     )
     return {
         "run_id": str(run.id),
@@ -1012,7 +1058,9 @@ def trigger_appointment_workflows(
     except Exception as exc:
         logger.exception(
             "trigger_appointment_workflows failed: institution=%s appt=%s: %s",
-            institution_id, appointment_id, exc,
+            institution_id,
+            appointment_id,
+            exc,
         )
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
 
@@ -1078,7 +1126,8 @@ async def _trigger_appointment_async(
             skipped += 1
             logger.info(
                 "trigger_appointment: skipping past-window appt=%s workflow=%s",
-                appointment_id, wf.id,
+                appointment_id,
+                wf.id,
             )
             continue
 
@@ -1105,7 +1154,11 @@ async def _trigger_appointment_async(
 
     logger.info(
         "trigger_appointment: institution=%s appt=%s scheduled=%d skipped=%d skipped_type=%d",
-        institution_id, appointment_id, scheduled, skipped, skipped_type,
+        institution_id,
+        appointment_id,
+        scheduled,
+        skipped,
+        skipped_type,
     )
     return {
         "appointment_id": appointment_id,
@@ -1131,6 +1184,8 @@ def trigger_appointment_state_workflows(
     status_id: int | None = None,
     confirmed: bool | None = None,
     preconfirmed: bool | None = None,
+    flow_state: str | None = None,
+    flow_changed_at: str | None = None,
     trigger_metadata: dict | None = None,
 ) -> dict:
     """Enroll workflows that trigger from cached GoTracker appointment state."""
@@ -1145,6 +1200,8 @@ def trigger_appointment_state_workflows(
                 status_id=status_id,
                 confirmed=confirmed,
                 preconfirmed=preconfirmed,
+                flow_state=flow_state,
+                flow_changed_at=flow_changed_at,
                 trigger_metadata=trigger_metadata or {},
             )
         )
@@ -1167,7 +1224,9 @@ async def _trigger_appointment_state_async(
     status_id: int | None,
     confirmed: bool | None,
     preconfirmed: bool | None,
-    trigger_metadata: dict,
+    flow_state: str | None = None,
+    flow_changed_at: str | None = None,
+    trigger_metadata: dict | None = None,
 ) -> dict:
     async with get_system_db_session(
         "celery",
@@ -1183,13 +1242,17 @@ async def _trigger_appointment_state_async(
         )
 
     enriched_metadata = {
-        **trigger_metadata,
+        **(trigger_metadata or {}),
         **{k: v for k, v in appointment_context.items() if v is not None},
         "appointment_id": appointment_id,
         "appointment_status_id": status_id,
         "gotracker_status_id": status_id,
         "is_confirmed": confirmed,
         "is_preconfirmed": preconfirmed,
+        "appointment_flow_state": flow_state,
+        "flow_state": flow_state,
+        "appointment_flow_changed_at": flow_changed_at,
+        "flow_changed_at": flow_changed_at,
     }
     effective_contact_id = contact_id or appointment_context.get("contact_id")
     effective_location_id = location_id or appointment_context.get("location_id")
@@ -1203,6 +1266,7 @@ async def _trigger_appointment_state_async(
             status_id=status_id,
             confirmed=confirmed,
             preconfirmed=preconfirmed,
+            flow_state=flow_state,
         ):
             skipped += 1
             continue
@@ -1212,6 +1276,8 @@ async def _trigger_appointment_state_async(
             status_id=status_id,
             confirmed=confirmed,
             preconfirmed=preconfirmed,
+            flow_state=flow_state,
+            flow_changed_at=flow_changed_at,
         )
         workflow_metadata = dict(enriched_metadata)
         try:
@@ -1219,6 +1285,22 @@ async def _trigger_appointment_state_async(
             campaign_goal = getattr(trigger, "campaign_goal", None)
             if campaign_goal:
                 workflow_metadata["campaign_goal"] = campaign_goal
+            max_followup_delay_hours = getattr(trigger, "max_followup_delay_hours", None)
+            if max_followup_delay_hours is not None and flow_changed_at:
+                try:
+                    flow_changed = datetime.fromisoformat(
+                        flow_changed_at.replace("Z", "+00:00")
+                    )
+                    if flow_changed.tzinfo is None:
+                        flow_changed = flow_changed.replace(tzinfo=timezone.utc)
+                    workflow_metadata["post_op_expires_at"] = (
+                        flow_changed + timedelta(hours=max_followup_delay_hours)
+                    ).isoformat()
+                except ValueError:
+                    logger.warning(
+                        "trigger_appointment_state: invalid flow_changed_at=%s",
+                        flow_changed_at,
+                    )
         except Exception:
             pass
         enroll_and_start_workflow_run.apply_async(
@@ -1245,7 +1327,11 @@ async def _trigger_appointment_state_async(
         scheduled,
         skipped,
     )
-    return {"appointment_id": appointment_id, "scheduled": scheduled, "skipped": skipped}
+    return {
+        "appointment_id": appointment_id,
+        "scheduled": scheduled,
+        "skipped": skipped,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1414,10 +1500,10 @@ def poll_nexhealth_sync_statuses(self) -> dict:
 
 
 async def _poll_nexhealth_sync_statuses_async() -> dict:
-    async with _superadmin_system_session(
-        "nexhealth_sync_status_poll"
-    ) as session:
-        summary = await NexHealthSyncStatusService(session).poll_all_configured_locations()
+    async with _superadmin_system_session("nexhealth_sync_status_poll") as session:
+        summary = await NexHealthSyncStatusService(
+            session
+        ).poll_all_configured_locations()
         await session.commit()
 
     logger.info(
@@ -1437,7 +1523,9 @@ async def _sync_nexhealth_patients_async(*, mode: str) -> dict:
     async with get_system_db_session(
         "celery", external_id=f"nexhealth_patient_{mode}_target_scan"
     ) as session:
-        targets = await NexHealthSubscriptionLifecycleService(session).active_or_pending_targets()
+        targets = await NexHealthSubscriptionLifecycleService(
+            session
+        ).active_or_pending_targets()
 
     total = PatientSyncSummary()
     for institution_id, subscription_id in targets:
@@ -1477,7 +1565,9 @@ async def _sync_nexhealth_appointments_async(*, mode: str) -> dict:
     async with get_system_db_session(
         "celery", external_id=f"nexhealth_{mode}_target_scan"
     ) as session:
-        targets = await NexHealthSubscriptionLifecycleService(session).active_or_pending_targets()
+        targets = await NexHealthSubscriptionLifecycleService(
+            session
+        ).active_or_pending_targets()
 
     total = AppointmentSyncSummary()
     for institution_id, subscription_id in targets:
@@ -1561,7 +1651,9 @@ def trigger_callback_workflows(
     except Exception as exc:
         logger.exception(
             "trigger_callback_workflows failed: institution=%s call=%s: %s",
-            institution_id, call_id, exc,
+            institution_id,
+            call_id,
+            exc,
         )
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
 
@@ -1605,9 +1697,14 @@ async def _trigger_callback_async(
         if call is None or call.callback_resolved:
             logger.info(
                 "trigger_callback: skip institution=%s call=%s (missing or already resolved)",
-                institution_id, call_id,
+                institution_id,
+                call_id,
             )
-            return {"call_id": call_id, "scheduled": 0, "skipped": "resolved_or_missing"}
+            return {
+                "call_id": call_id,
+                "scheduled": 0,
+                "skipped": "resolved_or_missing",
+            }
 
         svc = CallbackTriggerService(session)
         workflows = await svc.find_active_callback_workflows(institution_id)
@@ -1623,7 +1720,9 @@ async def _trigger_callback_async(
             phone = contact.phone if contact else None
             if phone:
                 comp = SmsComplianceService(session)
-                if not await comp.has_consent_record(institution_id, phone, ConsentChannel.VOICE):
+                if not await comp.has_consent_record(
+                    institution_id, phone, ConsentChannel.VOICE
+                ):
                     await comp.record_consent(
                         institution_id=institution_id,
                         phone=phone,
@@ -1642,7 +1741,9 @@ async def _trigger_callback_async(
     for wf in workflows:
         if not wf.current_version_id:
             continue
-        idempotency_key = make_callback_idempotency_key(str(wf.current_version_id), call_id)
+        idempotency_key = make_callback_idempotency_key(
+            str(wf.current_version_id), call_id
+        )
         enroll_and_start_workflow_run.apply_async(
             kwargs={
                 "institution_id": institution_id,
@@ -1667,7 +1768,10 @@ async def _trigger_callback_async(
 
     logger.info(
         "trigger_callback: institution=%s call=%s scheduled=%d eta=%s",
-        institution_id, call_id, scheduled, eta.isoformat() if eta else "now",
+        institution_id,
+        call_id,
+        scheduled,
+        eta.isoformat() if eta else "now",
     )
     return {"call_id": call_id, "scheduled": scheduled}
 
@@ -1730,7 +1834,9 @@ async def _trigger_patient_status_async(
 ) -> dict:
     from src.app.models.automation_workflow import AutomationWorkflowRun
     from src.app.models.patient_workflow_status import PatientWorkflowStatusEvent
-    from src.app.services.automation.definition_schema import PatientStatusChangedTrigger
+    from src.app.services.automation.definition_schema import (
+        PatientStatusChangedTrigger,
+    )
 
     async with get_system_db_session(
         "celery",
@@ -1739,7 +1845,11 @@ async def _trigger_patient_status_async(
     ) as session:
         event = await session.get(PatientWorkflowStatusEvent, status_event_id)
         if event is None or event.institution_id != institution_id:
-            return {"status_event_id": status_event_id, "scheduled": 0, "reason": "event_not_found"}
+            return {
+                "status_event_id": status_event_id,
+                "scheduled": 0,
+                "reason": "event_not_found",
+            }
 
         source_run = await session.get(AutomationWorkflowRun, event.workflow_run_id)
         source_metadata = dict(source_run.trigger_metadata or {}) if source_run else {}
@@ -1880,12 +1990,15 @@ async def _poll_retell_voice_outcomes_async() -> dict:
             "skipped": "missing_api_key",
         }
 
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=_RETELL_OUTCOME_MIN_AGE_SECONDS)
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(
+        seconds=_RETELL_OUTCOME_MIN_AGE_SECONDS
+    )
     async with _superadmin_system_session("retell_voice_outcome_poll") as session:
         result = await session.execute(
             select(WorkflowVoiceAttempt)
             .where(
-                WorkflowVoiceAttempt.status == VoiceAttemptStatus.AWAITING_OUTCOME.value,
+                WorkflowVoiceAttempt.status
+                == VoiceAttemptStatus.AWAITING_OUTCOME.value,
                 WorkflowVoiceAttempt.retell_call_id.is_not(None),
                 WorkflowVoiceAttempt.created_at <= cutoff,
             )
@@ -1970,7 +2083,9 @@ def _retell_call_details_outcome(details) -> str:
 
 
 def _retell_call_details_context(details) -> dict[str, str]:
-    from src.app.services.automation.voice_outcome import extract_workflow_outcome_context
+    from src.app.services.automation.voice_outcome import (
+        extract_workflow_outcome_context,
+    )
 
     analysis = details.call_analysis or details.scrubbed_call_analysis or {}
     custom = analysis.get("custom_analysis_data") if isinstance(analysis, dict) else {}
@@ -2014,7 +2129,9 @@ def resume_voice_outcome(
     except Exception as exc:
         logger.exception(
             "resume_voice_outcome failed: institution=%s call=%s: %s",
-            institution_id, retell_call_id, exc,
+            institution_id,
+            retell_call_id,
+            exc,
         )
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
 
@@ -2043,16 +2160,27 @@ async def _resume_voice_outcome_async(
         # Find the parked voice step by retell_call_id (dialect-safe: filter in Python
         # over the few awaiting steps rather than a JSON query).
         rows = (
-            await session.execute(
-                select(AutomationWorkflowStepExecution).where(
-                    AutomationWorkflowStepExecution.institution_id == institution_id,
-                    AutomationWorkflowStepExecution.status == AutomationStepStatus.WAITING.value,
-                    AutomationWorkflowStepExecution.result_code == _CALL_PLACED_AWAITING,
+            (
+                await session.execute(
+                    select(AutomationWorkflowStepExecution).where(
+                        AutomationWorkflowStepExecution.institution_id
+                        == institution_id,
+                        AutomationWorkflowStepExecution.status
+                        == AutomationStepStatus.WAITING.value,
+                        AutomationWorkflowStepExecution.result_code
+                        == _CALL_PLACED_AWAITING,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         step = next(
-            (s for s in rows if (s.result_metadata or {}).get("retell_call_id") == retell_call_id),
+            (
+                s
+                for s in rows
+                if (s.result_metadata or {}).get("retell_call_id") == retell_call_id
+            ),
             None,
         )
         if step is None:
@@ -2077,7 +2205,9 @@ async def _resume_voice_outcome_async(
             call_outcome=call_outcome,
             disconnection_reason=disconnection_reason,
         )
-        from src.app.services.automation.voice_outcome import extract_workflow_outcome_context
+        from src.app.services.automation.voice_outcome import (
+            extract_workflow_outcome_context,
+        )
 
         md = dict(run.trigger_metadata or {})
         md["call_outcome"] = call_outcome
@@ -2122,7 +2252,10 @@ async def _resume_voice_outcome_async(
     )
     logger.info(
         "resume_voice_outcome: institution=%s call=%s outcome=%s status=%s",
-        institution_id, retell_call_id, call_outcome, result.status,
+        institution_id,
+        retell_call_id,
+        call_outcome,
+        result.status,
     )
     return {"resumed": True, "status": result.status, "call_outcome": call_outcome}
 
@@ -2194,7 +2327,9 @@ def resume_sms_confirmation(
     except Exception as exc:
         logger.exception(
             "resume_sms_confirmation failed: institution=%s location=%s: %s",
-            institution_id, location_id, exc,
+            institution_id,
+            location_id,
+            exc,
         )
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
 
@@ -2222,13 +2357,17 @@ async def _resume_sms_confirmation_async(
         external_id=f"sms_confirmation:{message_sid or phone_hash}",
     ) as session:
         contacts = (
-            await session.execute(
-                select(Contact.id).where(
-                    Contact.institution_id == institution_id,
-                    Contact.phone_hash == phone_hash,
+            (
+                await session.execute(
+                    select(Contact.id).where(
+                        Contact.institution_id == institution_id,
+                        Contact.phone_hash == phone_hash,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not contacts:
             return {"resumed": 0, "reason": "contact_not_found"}
 
@@ -2290,7 +2429,10 @@ def resume_reactivation_booking(
     except Exception as exc:
         logger.exception(
             "resume_reactivation_booking failed: institution=%s location=%s contact=%s: %s",
-            institution_id, location_id, contact_id, exc,
+            institution_id,
+            location_id,
+            contact_id,
+            exc,
         )
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
 
@@ -2344,15 +2486,19 @@ async def _resume_waiting_runs_for_context_field(
         return {"matched": 0, "resumed": 0, "outcomes": {}, "outcome_runs": {}}
 
     rows = (
-        await session.execute(
-            select(AutomationWorkflowRun).where(
-                AutomationWorkflowRun.institution_id == institution_id,
-                AutomationWorkflowRun.location_id == location_id,
-                AutomationWorkflowRun.contact_id.in_(contact_ids),
-                AutomationWorkflowRun.status == AutomationRunStatus.WAITING.value,
+        (
+            await session.execute(
+                select(AutomationWorkflowRun).where(
+                    AutomationWorkflowRun.institution_id == institution_id,
+                    AutomationWorkflowRun.location_id == location_id,
+                    AutomationWorkflowRun.contact_id.in_(contact_ids),
+                    AutomationWorkflowRun.status == AutomationRunStatus.WAITING.value,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     scheduler = AutomationWorkflowSchedulerService(session)
     matched = 0
@@ -2365,7 +2511,9 @@ async def _resume_waiting_runs_for_context_field(
         if version is None:
             continue
         definition = WorkflowDefinition.model_validate(version.definition)
-        if not _waiting_step_targets_field(definition, run.current_step_id, context_field):
+        if not _waiting_step_targets_field(
+            definition, run.current_step_id, context_field
+        ):
             continue
 
         matched += 1
@@ -2571,11 +2719,12 @@ def _recall_is_due(recall: dict, *, now: datetime) -> bool:
 async def _scan_recall_async() -> dict:
     from sqlalchemy import select as sa_select
 
-    from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowStatus
+    from src.app.models.automation_workflow import (
+        AutomationWorkflow,
+        AutomationWorkflowStatus,
+    )
 
-    async with get_system_db_session(
-        "celery", external_id="recall_scanner"
-    ) as session:
+    async with get_system_db_session("celery", external_id="recall_scanner") as session:
         result = await session.execute(
             sa_select(AutomationWorkflow).where(
                 AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,
@@ -2612,7 +2761,9 @@ async def _scan_recall_async() -> dict:
 
     logger.info(
         "scan_recall_workflows: institutions=%d workflows=%d enrolled=%d",
-        len(by_institution), active_workflows, total_enrolled,
+        len(by_institution),
+        active_workflows,
+        total_enrolled,
     )
     return {
         "active_recall_workflows": active_workflows,
@@ -2640,7 +2791,9 @@ async def _enroll_recalls_for_institution(
     enrolled = 0
 
     async with get_system_db_session(
-        "celery", institution_id=institution_id, external_id=f"recall_scan:{institution_id}"
+        "celery",
+        institution_id=institution_id,
+        external_id=f"recall_scan:{institution_id}",
     ) as session:
         institution = await session.get(Institution, institution_id)
         if institution is None:
@@ -2661,7 +2814,9 @@ async def _enroll_recalls_for_institution(
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "recall_scan: adapter build failed inst=%s loc=%s: %s",
-                    institution_id, location.id, exc,
+                    institution_id,
+                    location.id,
+                    exc,
                 )
                 continue
             try:
@@ -2669,7 +2824,9 @@ async def _enroll_recalls_for_institution(
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "recall_scan: recall pull failed inst=%s loc=%s: %s",
-                    institution_id, location.id, exc,
+                    institution_id,
+                    location.id,
+                    exc,
                 )
                 continue
             finally:
@@ -2690,7 +2847,9 @@ async def _enroll_recalls_for_institution(
                 contact_id = str(contact.id) if contact else None
 
                 for wf in workflows:
-                    key = make_recall_idempotency_key(wf["version_id"], patient_id, period)
+                    key = make_recall_idempotency_key(
+                        wf["version_id"], patient_id, period
+                    )
                     enroll_and_start_workflow_run.apply_async(
                         kwargs={
                             "institution_id": institution_id,

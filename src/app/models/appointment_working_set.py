@@ -73,6 +73,7 @@ class AppointmentWorkingSet(Base):
     )
     provider_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     appointment_type_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    appointment_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Scheduling state we compare against to detect a reschedule.
     start_time: Mapped[datetime | None] = mapped_column(
@@ -91,6 +92,25 @@ class AppointmentWorkingSet(Base):
         DateTime(timezone=True), nullable=True
     )
     last_writeback_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Tracker patient-flow data. Unlike StatusId, FlowState records visit
+    # progress; post-op enrollment is driven by a terminal state such as
+    # "Completed".
+    flow_state: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    flow_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    checked_in_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    in_chair_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    out_chair_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    checked_out_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     last_event: Mapped[str | None] = mapped_column(String(64), nullable=True)

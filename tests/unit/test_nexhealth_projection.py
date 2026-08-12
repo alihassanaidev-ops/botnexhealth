@@ -78,6 +78,35 @@ def test_upsert_new_stores_gotracker_status_snapshot():
     assert row.is_preconfirmed is False
     assert row.last_status_source == "webhook"
     assert row.last_status_synced_at is not None
+    assert row.status == "cancelled"
+
+
+def test_upsert_stores_gotracker_flow_state_and_marks_flow_change():
+    session = _session(existing=None)
+    res = _upsert(
+        session,
+        appointment_reason="Implant Surgery",
+        start_time="2026-08-12T10:00:00Z",
+        flow_state="Completed",
+        flow_changed_at="2026-08-12T09:27:01.940Z",
+        checked_in_at="09:00:00",
+        checked_out_at="09:27:01",
+    )
+
+    row = session.add.call_args.args[0]
+    assert res.state_changed is True
+    assert row.appointment_reason == "Implant Surgery"
+    assert row.flow_state == "Completed"
+    assert row.flow_changed_at == datetime(2026, 8, 12, 9, 27, 1, 940000, tzinfo=timezone.utc)
+    assert row.checked_in_at == datetime(2026, 8, 12, 9, 0, tzinfo=timezone.utc)
+    assert row.checked_out_at == datetime(2026, 8, 12, 9, 27, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("status_id", [3, 5, 6, 8])
+def test_upsert_non_attending_gotracker_status_cancels_appointment(status_id):
+    session = _session(existing=None)
+    _upsert(session, gotracker_status_id=status_id)
+    assert session.add.call_args.args[0].status == "cancelled"
 
 
 def test_upsert_unchanged_when_same_start_time():
@@ -197,7 +226,12 @@ def test_claim_event_new_returns_true():
     session = _session(existing=None)
     svc = NexHealthProjectionService(session)
     claimed = asyncio.run(
-        svc.claim_event(institution_id="i", appointment_id="a", event_type="appointment.updated", dedup_key="k")
+        svc.claim_event(
+            institution_id="i",
+            appointment_id="a",
+            event_type="appointment.updated",
+            dedup_key="k",
+        )
     )
     assert claimed is True
     session.add.assert_called_once()
@@ -205,7 +239,9 @@ def test_claim_event_new_returns_true():
 
 def test_claim_event_completed_returns_false():
     existing = SimpleNamespace(
-        status=NexHealthWebhookStatus.COMPLETED.value, attempts=1, updated_at=datetime.now(timezone.utc)
+        status=NexHealthWebhookStatus.COMPLETED.value,
+        attempts=1,
+        updated_at=datetime.now(timezone.utc),
     )
     claimed = asyncio.run(
         NexHealthProjectionService(_session(existing=existing)).claim_event(
@@ -217,7 +253,9 @@ def test_claim_event_completed_returns_false():
 
 def test_claim_event_failed_is_reclaimable():
     existing = SimpleNamespace(
-        status=NexHealthWebhookStatus.FAILED.value, attempts=1, updated_at=datetime.now(timezone.utc)
+        status=NexHealthWebhookStatus.FAILED.value,
+        attempts=1,
+        updated_at=datetime.now(timezone.utc),
     )
     claimed = asyncio.run(
         NexHealthProjectionService(_session(existing=existing)).claim_event(
@@ -256,7 +294,9 @@ def test_claim_event_fresh_processing_blocks():
     assert claimed is False
 
 
-def test_claim_event_stores_encrypted_raw_and_redacted_payload(monkeypatch: pytest.MonkeyPatch):
+def test_claim_event_stores_encrypted_raw_and_redacted_payload(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
     session = _session(existing=None)
     svc = NexHealthProjectionService(session)
@@ -299,8 +339,9 @@ def test_idempotency_key_changes_on_reschedule():
 
 
 def test_idempotency_key_same_instant_normalizes():
-    assert make_appointment_idempotency_key("v1", "a1", "2026-08-01T10:00:00Z") == \
-        make_appointment_idempotency_key("v1", "a1", "2026-08-01T10:00:00+00:00")
+    assert make_appointment_idempotency_key(
+        "v1", "a1", "2026-08-01T10:00:00Z"
+    ) == make_appointment_idempotency_key("v1", "a1", "2026-08-01T10:00:00+00:00")
 
 
 def test_idempotency_key_falls_back_without_time():

@@ -186,24 +186,70 @@ def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() ->
     assert nodes["attempt-1-unreachable"]["true_next_node_id"] == "wait-retry-1"
 
 
-def test_post_op_template_starts_from_confirmed_status_and_waits_one_day() -> None:
+def test_post_op_template_starts_from_completed_flow_state_and_waits_one_day() -> None:
     t = TEMPLATES["post-op-followup-after-confirmation"]
     nodes = {node["id"]: node for node in t.definition["nodes"]}
 
     assert t.definition["trigger"] == {
         "type": "appointment_state_changed",
         "status_ids": [],
-        "confirmed": True,
+        "confirmed": None,
         "preconfirmed": None,
+        "flow_states": ["Completed"],
+        "max_followup_delay_hours": 72,
         "campaign_goal": "post_op_followup",
     }
+    assert nodes["check-post-op-eligible-reason"]["rules"] == [
+        {
+            "field": "appointment_reason",
+            "op": "in_case_insensitive",
+            "value": [],
+        }
+    ]
     assert nodes["wait-post-op"]["delay"] == {
         "delay_type": "appointment_relative",
         "offset_seconds": 86400,
-        "anchor_field": "appointment_at",
+        "anchor_field": "flow_changed_at",
     }
     assert nodes["voice-post-op"]["type"] == "send_voice"
     assert nodes["voice-post-op"]["wait_for_outcome"] is True
+    assert nodes["voice-post-op"]["patient_voice_cooldown_behavior"] == "defer"
+    assert nodes["voice-post-op"]["patient_voice_cooldown_deadline_field"] == "post_op_expires_at"
+
+
+def test_post_op_template_configures_reason_delay_deadline_and_cooldown() -> None:
+    definition = instantiate_definition(
+        TEMPLATES["post-op-followup-after-confirmation"],
+        voice_profile_id="prof-post-op",
+        setup_options={
+            "post_op_reasons": ["Implant Surgery", "Extraction"],
+            "post_op_delay_hours": 36,
+            "post_op_latest_call_hours": 60,
+            "patient_voice_cooldown_hours": 12,
+        },
+    )
+    nodes = {node["id"]: node for node in definition["nodes"]}
+
+    assert nodes["check-post-op-eligible-reason"]["rules"][0]["value"] == [
+        "Implant Surgery",
+        "Extraction",
+    ]
+    assert nodes["wait-post-op"]["delay"]["offset_seconds"] == 36 * 60 * 60
+    assert definition["trigger"]["max_followup_delay_hours"] == 60
+    assert nodes["voice-post-op"]["patient_voice_cooldown_hours"] == 12
+
+
+def test_post_op_template_rejects_deadline_before_planned_call() -> None:
+    with pytest.raises(ValueError, match="at least post_op_delay_hours"):
+        instantiate_definition(
+            TEMPLATES["post-op-followup-after-confirmation"],
+            voice_profile_id="prof-post-op",
+            setup_options={
+                "post_op_reasons": ["Implant Surgery"],
+                "post_op_delay_hours": 48,
+                "post_op_latest_call_hours": 24,
+            },
+        )
 
 
 def test_template_metadata_has_required_dental_contract() -> None:

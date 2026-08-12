@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from sqlalchemy import select
 
+from src.app.pms.gotracker.statuses import is_non_attending_status
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -69,6 +71,18 @@ def _same_instant(expected: object, current: object) -> bool:
     return a == b
 
 
+def _gotracker_start_time(appointment: dict) -> str | None:
+    """Normalize Tracker's split AppointmentDate/AppointmentTime response."""
+    direct = appointment.get("start_time", appointment.get("StartTime"))
+    if isinstance(direct, str) and direct.strip():
+        return direct
+    date = appointment.get("AppointmentDate", appointment.get("appointment_date"))
+    time = appointment.get("AppointmentTime", appointment.get("appointment_time"))
+    if not isinstance(date, str) or not isinstance(time, str):
+        return None
+    return f"{date.split('T', 1)[0]}T{time.split('T', 1)[-1].removesuffix('Z')}Z"
+
+
 # A projection row synced within this window is trusted without a live NexHealth
 # read (Plan 09 D-2 freshness window). Cuts the ~800-call burst when a large
 # fixed-time batch all dispatches at once. Tunable.
@@ -102,6 +116,10 @@ class PmsLiveRevalidationService:
     async def revalidate(self, run: "AutomationWorkflowRun") -> str | None:
         metadata = getattr(run, "trigger_metadata", None) or {}
         require_occurred = metadata.get("campaign_goal") == "post_op_followup"
+        if require_occurred:
+            deadline = _parse_dt(metadata.get("post_op_expires_at"))
+            if deadline is not None and deadline <= datetime.now(timezone.utc):
+                return "skipped_post_op_window_expired"
 
         appointment_id = (
             getattr(run, "trigger_ref_id", None)
@@ -121,7 +139,9 @@ class PmsLiveRevalidationService:
         except Exception as exc:  # noqa: BLE001 — fail-open on any error
             logger.warning(
                 "revalidate: lookup failed run=%s appt=%s: %s — proceeding with send",
-                getattr(run, "id", None), appointment_id, exc,
+                getattr(run, "id", None),
+                appointment_id,
+                exc,
             )
             return None
 
@@ -134,6 +154,7 @@ class PmsLiveRevalidationService:
     ) -> str | None:
         from src.app.models.institution import Institution
         from src.app.models.institution_location import InstitutionLocation
+        from src.app.pms.gotracker.adapter import GoTrackerAdapter
         from src.app.pms.nexhealth.adapter import NexHealthAdapter
 
         # Freshness window (D-2): trust a recently-synced projection row instead of
@@ -147,6 +168,24 @@ class PmsLiveRevalidationService:
         if decided:
             return outcome
 
+        if not run.location_id:
+            return None
+        location = await self._session.get(InstitutionLocation, run.location_id)
+        institution = await self._session.get(Institution, run.institution_id)
+        if location is None or institution is None:
+            return None
+        if getattr(institution, "pms_type", None) == "gotracker":
+            adapter = await GoTrackerAdapter.create(institution, location)
+            try:
+                appt = await adapter.get_appointment(appointment_id)
+            finally:
+                await adapter.close()
+            return self._gotracker_live_outcome(
+                run,
+                appt,
+                require_occurred=require_occurred,
+            )
+
         if await self._pms_read_unhealthy(run):
             logger.warning(
                 "revalidate: PMS read sync unhealthy run=%s appt=%s — skipping send",
@@ -155,12 +194,6 @@ class PmsLiveRevalidationService:
             )
             return "skipped_pms_read_unhealthy"
 
-        if not run.location_id:
-            return None
-        location = await self._session.get(InstitutionLocation, run.location_id)
-        institution = await self._session.get(Institution, run.institution_id)
-        if location is None or institution is None:
-            return None
         if not location.nexhealth_subdomain or not location.nexhealth_location_id:
             # Location not wired to NexHealth — cannot revalidate; fail open.
             return None
@@ -192,6 +225,48 @@ class PmsLiveRevalidationService:
                 return "skipped_appointment_not_occurred"
         return None
 
+    @staticmethod
+    def _gotracker_live_outcome(
+        run: "AutomationWorkflowRun",
+        appt: dict | None,
+        *,
+        require_occurred: bool,
+    ) -> str | None:
+        """Apply GoTracker's raw appointment fields to the send-time guard."""
+        if appt is None:
+            return None  # unavailable / deleted rows fail open like NexHealth
+        status_id = appt.get("StatusId", appt.get("status_id"))
+        try:
+            status_id = int(status_id) if status_id is not None else None
+        except (TypeError, ValueError):
+            status_id = None
+        if (
+            bool(appt.get("Cancelled", appt.get("cancelled", False)))
+            or is_non_attending_status(status_id)
+        ):
+            return "skipped_cancelled"
+
+        expected_at = (run.trigger_metadata or {}).get("appointment_at")
+        current_at = _gotracker_start_time(appt)
+        if expected_at and current_at and not _same_instant(expected_at, current_at):
+            return "skipped_rescheduled"
+
+        if require_occurred:
+            expected_flow_state = (run.trigger_metadata or {}).get("flow_state")
+            current_flow_state = appt.get("FlowState", appt.get("flow_state"))
+            if (
+                isinstance(current_flow_state, str)
+                and isinstance(expected_flow_state, str)
+                and current_flow_state.casefold() != expected_flow_state.casefold()
+            ):
+                return "skipped_appointment_not_completed"
+            current_dt = _parse_dt(current_at) or _parse_dt(expected_at)
+            if current_dt is None:
+                return "skipped_missing_appointment_context"
+            if current_dt > datetime.now(timezone.utc):
+                return "skipped_appointment_not_occurred"
+        return None
+
     async def _check_projection(
         self,
         run: "AutomationWorkflowRun",
@@ -216,7 +291,19 @@ class PmsLiveRevalidationService:
                 )
             )
         ).scalar_one_or_none()
-        if row is None or row.last_synced_at is None:
+        if row is None:
+            return False, None
+
+        # Tracker's non-attending dispositions are terminal for outreach. Trust
+        # the last-known terminal state even if its normal freshness window has
+        # elapsed: sending a reminder to a known no-show is worse than awaiting
+        # a later webhook that reactivates the appointment.
+        if row.status == "cancelled" or is_non_attending_status(
+            getattr(row, "gotracker_status_id", None)
+        ):
+            return True, "skipped_cancelled"
+
+        if row.last_synced_at is None:
             return False, None
 
         synced = row.last_synced_at
@@ -226,13 +313,22 @@ class PmsLiveRevalidationService:
         if age > _FRESHNESS_WINDOW_SECONDS:
             return False, None  # stale — revalidate live
 
-        if row.status == "cancelled":
-            return True, "skipped_cancelled"
-
         expected_at = (run.trigger_metadata or {}).get("appointment_at")
-        if expected_at and row.start_time and not _same_instant(expected_at, row.start_time.isoformat()):
+        if (
+            expected_at
+            and row.start_time
+            and not _same_instant(expected_at, row.start_time.isoformat())
+        ):
             return True, "skipped_rescheduled"
         if require_occurred:
+            expected_flow_state = (run.trigger_metadata or {}).get("flow_state")
+            current_flow_state = getattr(row, "flow_state", None)
+            if (
+                isinstance(current_flow_state, str)
+                and isinstance(expected_flow_state, str)
+                and current_flow_state.casefold() != expected_flow_state.casefold()
+            ):
+                return True, "skipped_appointment_not_completed"
             appointment_at = row.start_time or _parse_dt(expected_at)
             if appointment_at is None:
                 return True, "skipped_missing_appointment_context"
@@ -250,7 +346,9 @@ class PmsLiveRevalidationService:
         if not run.location_id:
             return False
         from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
-        from src.app.services.automation.nexhealth_sync_status_service import assess_sync_status
+        from src.app.services.automation.nexhealth_sync_status_service import (
+            assess_sync_status,
+        )
 
         try:
             row = (
