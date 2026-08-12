@@ -75,6 +75,47 @@ async def test_no_hint_when_no_availability_within_window(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gotracker_allows_slot_search_without_appointment_type(monkeypatch):
+    ctx = _ctx(SlotSearchResult(slots=[], next_available_date=None))
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+
+    result = await _find_slots(
+        {
+            "start_date": "2026-08-14",
+            "days": 7,
+            "provider_id": "3",
+        }
+    )
+
+    assert "error" not in result
+    ctx.adapter.find_available_slots.assert_awaited_once()
+    assert (
+        ctx.adapter.find_available_slots.await_args.kwargs["appointment_type_id"]
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_gotracker_still_requires_appointment_type(monkeypatch):
+    ctx = _ctx(SlotSearchResult(slots=[], next_available_date=None))
+    ctx.adapter.source = "nexhealth"
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+
+    result = await _find_slots({"start_date": "2026-08-14", "provider_id": "3"})
+
+    assert result == {"error": "appointment_type_id is required."}
+    ctx.adapter.find_available_slots.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_no_group_for_provider_gets_clear_empty_range_message(monkeypatch):
     ctx = _ctx(SlotSearchResult(slots=[], next_available_date=None))
 

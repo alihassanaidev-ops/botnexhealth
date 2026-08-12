@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
+from src.app.retell.pii import contains_retell_pii_placeholder
+
 if TYPE_CHECKING:
     from src.app.models.contact import Contact
     from src.app.models.institution_location import InstitutionLocation
@@ -70,7 +72,7 @@ class MergeFieldSpec:
 def _value(context: dict[str, Any], *keys: str) -> str:
     for key in keys:
         raw = context.get(key)
-        if raw is not None and raw != "":
+        if raw is not None and raw != "" and not contains_retell_pii_placeholder(raw):
             return str(raw)
     return ""
 
@@ -81,7 +83,7 @@ def _nested(context: dict[str, Any], section: str, *keys: str) -> str:
         return ""
     for key in keys:
         raw = raw_section.get(key)
-        if raw is not None and raw != "":
+        if raw is not None and raw != "" and not contains_retell_pii_placeholder(raw):
             return str(raw)
     return ""
 
@@ -116,10 +118,12 @@ def _format_time(value: Any) -> str:
 
 def _full_name(contact: "Contact | None", _location: "InstitutionLocation | None", _ctx: dict[str, Any]) -> str:
     if contact is not None:
-        return (
-            contact.full_name
-            or f"{contact.first_name or ''} {contact.last_name or ''}".strip()
-        )
+        for candidate in (
+            contact.full_name,
+            f"{contact.first_name or ''} {contact.last_name or ''}".strip(),
+        ):
+            if candidate and not contains_retell_pii_placeholder(candidate):
+                return candidate
     return _value(_ctx, "patient_full_name")
 
 
@@ -149,7 +153,7 @@ def _contact_value_or_context(
 ) -> str:
     if contact is not None:
         raw = getattr(contact, attr, None)
-        if raw is not None and raw != "":
+        if raw is not None and raw != "" and not contains_retell_pii_placeholder(raw):
             return str(raw)
     return _value(context, *keys)
 

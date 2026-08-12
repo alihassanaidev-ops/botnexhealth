@@ -57,3 +57,41 @@ async def test_hard_delete_location_deletes_only_location_row() -> None:
 
     session.delete.assert_awaited_once_with(location)
     session.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_location_by_retell_agent_id_uses_location_mapping_first() -> None:
+    location = _location()
+    institution = SimpleNamespace(id="inst-1", slug="clinic", is_active=True)
+    result = MagicMock()
+    result.first.return_value = (location, institution)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    resolved = await InstitutionService(session).get_location_by_retell_agent_id(
+        "agent-location"
+    )
+
+    assert resolved == (location, institution)
+    session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_location_by_retell_agent_id_falls_back_to_outbound_voice_profile() -> (
+    None
+):
+    location = _location()
+    institution = SimpleNamespace(id="inst-1", slug="clinic", is_active=True)
+    direct_result = MagicMock()
+    direct_result.first.return_value = None
+    profile_result = MagicMock()
+    profile_result.first.return_value = (location, institution)
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[direct_result, profile_result])
+
+    resolved = await InstitutionService(session).get_location_by_retell_agent_id(
+        "agent-profile"
+    )
+
+    assert resolved == (location, institution)
+    assert session.execute.await_count == 2

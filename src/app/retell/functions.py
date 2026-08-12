@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
@@ -88,6 +89,28 @@ def _safe_key_list(value: Any) -> str:
         return "not_dict"
     keys = sorted(str(key) for key in value.keys())
     return ",".join(keys) if keys else "empty"
+
+
+_UNRESOLVED_TEMPLATE = re.compile(r"^\s*\{\{[^{}]+\}\}\s*$")
+
+
+def _omit_unresolved_template_args(
+    args: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Drop top-level Retell arguments that are unresolved template tokens.
+
+    Retell can send the literal ``{{variable_name}}`` when a dynamic variable
+    is absent. Treat that exact whole-value shape as an omitted optional
+    argument while preserving normal text that merely contains braces.
+    """
+    omitted = sorted(
+        key
+        for key, value in args.items()
+        if isinstance(value, str) and _UNRESOLVED_TEMPLATE.fullmatch(value)
+    )
+    if not omitted:
+        return args, []
+    return {key: value for key, value in args.items() if key not in omitted}, omitted
 
 
 def _agent_id_debug_value(agent_id: str | None) -> str:
@@ -272,6 +295,9 @@ async def handle_function_call(
                 payload["call_id"] = query_call_id
 
         request = FunctionCallRequest.model_validate(payload)
+        request.args, omitted_template_args = _omit_unresolved_template_args(
+            request.args
+        )
 
         # Resolve call_id from every place Retell can put it (voice payloads
         # nest under ``call.call_id``; chat/debug variants use
@@ -288,6 +314,12 @@ async def handle_function_call(
             f"Function call received: call={call_id_hash}, function={request.function_name}, "
             f"call_id_source={call_id_source}"
         )
+        if omitted_template_args:
+            logger.warning(
+                "Omitted unresolved Retell template arguments: "
+                f"call={call_id_hash}, function={request.function_name}, "
+                f"arg_keys={','.join(omitted_template_args)}"
+            )
 
         # Get handler from registry
         handler = _function_registry.get(request.function_name)

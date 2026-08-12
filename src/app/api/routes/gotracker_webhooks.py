@@ -236,7 +236,11 @@ async def _process_appointment_event(
     is_cancelled = event == "appointment.cancelled" or bool(
         _first(appointment, "cancelled", "canceled", "Cancelled", "IsCancelled", default=False)
     )
-    if not is_cancelled and not start_time:
+    # GoTracker sends patch-shaped appointment.updated events for status-only
+    # changes (for example, confirmation). The projection upsert preserves the
+    # existing scheduling fields when an incoming value is absent, so only a
+    # brand-new appointment requires a start time at this boundary.
+    if event == "appointment.created" and not start_time:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Appointment payload missing required field: start_time",

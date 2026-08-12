@@ -462,6 +462,77 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
 
 
 @pytest.mark.asyncio
+async def test_status_only_appointment_updated_is_accepted_as_partial_projection():
+    payload = {
+        "id": "webhook-confirmed-1414",
+        "event": "appointment.updated",
+        "foreign_id_type": "tracker-cloud-booked",
+        "data": {
+            "appointment": {
+                "AppointmentId": 1414,
+                "StatusId": 2,
+                "IsConfirmed": True,
+                "IsPreconfirmed": False,
+            }
+        },
+    }
+    request = _make_request(payload)
+    projection, projection_patch = _patch_projection(change="unchanged")
+    lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
+
+    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+        side_effect=[
+            _session_with_scalar(_location()),
+            _processing_session(),
+        ],
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._claim_event",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()
+    ), projection_patch, lifecycle_patch:
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        result = await gotracker_webhook("loc-1", request)
+
+    assert result["status"] == "processed"
+    event_result = result["results"][0]
+    assert event_result["status"] == "projection_only"
+    assert event_result["reason"] == "api_origin"
+    projection.upsert_appointment.assert_awaited_once()
+    upsert_kwargs = projection.upsert_appointment.await_args.kwargs
+    assert upsert_kwargs["appointment_id"] == "gt-1414"
+    assert upsert_kwargs["start_time"] is None
+    assert upsert_kwargs["gotracker_status_id"] == 2
+    assert upsert_kwargs["is_confirmed"] is True
+    assert upsert_kwargs["is_preconfirmed"] is False
+
+
+@pytest.mark.asyncio
+async def test_appointment_created_still_requires_start_time():
+    payload = {
+        "id": "webhook-created-without-time",
+        "event": "appointment.created",
+        "foreign_id_type": "tracker-1",
+        "data": {"appointment": {"AppointmentId": 1414}},
+    }
+    request = _make_request(payload)
+
+    with patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+        return_value=_session_with_scalar(_location()),
+    ):
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        with pytest.raises(HTTPException) as exc:
+            await gotracker_webhook("loc-1", request)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Appointment payload missing required field: start_time"
+
+
+@pytest.mark.asyncio
 async def test_appointment_cancelled_cancels_existing_runs():
     payload = {
         "id": "webhook-cancelled-abc",

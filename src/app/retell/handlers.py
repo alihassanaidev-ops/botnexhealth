@@ -745,6 +745,8 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
     """Find available appointment slots.
 
     Supports optional ``buffer_minutes`` — minimum lead-time from now.
+    GoTracker can search with its default 15-minute slot length when no
+    appointment type is configured; other PMS adapters still require one.
     Slots starting before now + buffer are excluded.
     """
     start_date = args.get("start_date")
@@ -752,13 +754,14 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "start_date is required."}
 
     appt_type_id = args.get("appointment_type_id")
-    if not appt_type_id:
-        return {"error": "appointment_type_id is required."}
 
     try:
         ctx = await _resolve_context()
     except ValueError as e:
         return {"error": str(e)}
+
+    if not appt_type_id and ctx.adapter.source != "gotracker":
+        return {"error": "appointment_type_id is required."}
 
     raw_provider = args.get("provider_id")
     provider_ids: list[str] | None = None

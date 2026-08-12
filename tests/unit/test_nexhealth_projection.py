@@ -89,6 +89,52 @@ def test_upsert_unchanged_when_same_start_time():
     assert res.change == "unchanged"
 
 
+def test_upsert_partial_status_update_preserves_existing_scheduling_fields():
+    original_start = datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc)
+    existing = SimpleNamespace(
+        location_id="loc-1",
+        nexhealth_patient_id="gt-595",
+        contact_id="contact-1",
+        provider_id="gt-3",
+        appointment_type_id="gt-8",
+        start_time=original_start,
+        status="scheduled",
+        gotracker_status_id=1,
+        gotracker_status_label="booked",
+        is_confirmed=False,
+        is_preconfirmed=False,
+        last_status_source="webhook",
+        last_status_synced_at=None,
+        last_event="appointment.created",
+        last_synced_at=None,
+        updated_at=None,
+    )
+
+    res = _upsert(
+        _session(existing=existing),
+        nexhealth_patient_id=None,
+        contact_id=None,
+        start_time=None,
+        provider_id=None,
+        appointment_type_id=None,
+        gotracker_status_id=2,
+        is_confirmed=True,
+        is_preconfirmed=False,
+        status_source="webhook",
+    )
+
+    assert res.change == "unchanged"
+    assert existing.start_time == original_start
+    assert existing.nexhealth_patient_id == "gt-595"
+    assert existing.contact_id == "contact-1"
+    assert existing.provider_id == "gt-3"
+    assert existing.appointment_type_id == "gt-8"
+    assert existing.gotracker_status_id == 2
+    assert existing.gotracker_status_label == "booked_waiting"
+    assert existing.is_confirmed is True
+    assert existing.is_preconfirmed is False
+
+
 def test_upsert_rescheduled_when_start_time_changes():
     existing = SimpleNamespace(
         start_time=datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc),  # different

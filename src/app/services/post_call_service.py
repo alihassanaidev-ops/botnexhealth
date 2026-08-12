@@ -14,6 +14,7 @@ from src.app.models.call import Call, CallStatus, PatientStatus
 from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.retell.models import RetellCallData
+from src.app.retell.pii import contains_retell_pii_placeholder
 from src.app.services.custom_field_service import CustomFieldService
 from src.app.services.retention_policy import (
     clinical_record_retain_until,
@@ -58,7 +59,7 @@ def _nonempty(value: str | None) -> str | None:
     if not value:
         return None
     stripped = value.strip()
-    if stripped.lower() in ("none", "n/a", ""):
+    if stripped.lower() in ("none", "n/a", "") or contains_retell_pii_placeholder(stripped):
         return None
     return stripped
 

@@ -9,8 +9,10 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
+
+from src.app.services.institution_service import InstitutionService
 
 pytestmark = pytest.mark.rls
 
@@ -33,6 +35,8 @@ CALL_A2 = "10000000-0000-0000-0000-000000000002"
 CALL_B1 = "10000000-0000-0000-0000-000000000003"
 SMS_A1 = "20000000-0000-0000-0000-000000000001"
 SMS_A2 = "20000000-0000-0000-0000-000000000002"
+VOICE_PROFILE_A1 = "21000000-0000-0000-0000-000000000001"
+VOICE_PROFILE_B1 = "21000000-0000-0000-0000-000000000002"
 
 
 @pytest.fixture(scope="module")
@@ -211,6 +215,28 @@ async def _seed(conn) -> None:
             "loc_b1": LOC_B1,
             "inst_a": INST_A,
             "inst_b": INST_B,
+        },
+    )
+    await conn.execute(
+        text(
+            """
+            INSERT INTO outbound_voice_profiles
+              (id, institution_id, location_id, retell_agent_id, display_name,
+               purpose, is_active)
+            VALUES
+              (:profile_a1, :inst_a, :loc_a1, 'agent-profile-a1',
+               'Clinic A outbound', 'pre_appointment', true),
+              (:profile_b1, :inst_b, :loc_b1, 'agent-profile-b1',
+               'Clinic B outbound', 'pre_appointment', true)
+            """
+        ),
+        {
+            "profile_a1": VOICE_PROFILE_A1,
+            "profile_b1": VOICE_PROFILE_B1,
+            "inst_a": INST_A,
+            "inst_b": INST_B,
+            "loc_a1": LOC_A1,
+            "loc_b1": LOC_B1,
         },
     )
     await conn.execute(
@@ -697,6 +723,37 @@ async def test_rls_institution_locations_branches(rls_engine) -> None:
         assert (
             await conn.scalar(text("SELECT count(*) FROM institution_locations"))
         ) == 1
+
+
+@pytest.mark.asyncio
+async def test_retell_lookup_resolves_outbound_voice_profile_agent(rls_engine) -> None:
+    """Outbound campaign agents must resolve through the same fail-closed
+    Retell lookup used by scheduling function calls.
+
+    The outbound agent intentionally exists only on ``outbound_voice_profiles``;
+    the location keeps its separate inbound/location-wide agent mapping.
+    """
+    session_factory = async_sessionmaker(rls_engine, expire_on_commit=False)
+
+    async with session_factory.begin() as session:
+        await _set_context(
+            session,
+            context_type="retell_lookup",
+            external_id="agent-profile-a1",
+        )
+
+        resolved = await InstitutionService(session).get_location_by_retell_agent_id(
+            "agent-profile-a1"
+        )
+
+        assert resolved is not None
+        location, institution = resolved
+        assert location.id == LOC_A1
+        assert institution.id == INST_A
+
+        assert await session.scalar(text("SELECT count(*) FROM outbound_voice_profiles")) == 1
+        assert await session.scalar(text("SELECT count(*) FROM institution_locations")) == 1
+        assert await session.scalar(text("SELECT count(*) FROM institutions")) == 1
 
 
 @pytest.mark.asyncio
