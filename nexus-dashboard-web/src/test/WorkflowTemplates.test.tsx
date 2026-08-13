@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import WorkflowTemplates from "@/pages/WorkflowTemplates"
@@ -92,6 +92,23 @@ const PRE_APPOINTMENT_TEMPLATE = {
             { id: "call_offset_hours_before", label: "Call hours before", type: "number", required: true, default: 24 },
             { id: "retry_delay_1_hours", label: "Retry 1", type: "number", required: true, default: 5 },
             { id: "retry_delay_2_hours", label: "Retry 2", type: "number", required: true, default: 5 },
+            { id: "patient_voice_cooldown_hours", label: "Patient cooldown", type: "number", required: true, default: 24 },
+        ],
+    },
+}
+const POST_OP_TEMPLATE = {
+    ...TEMPLATES[0],
+    id: "post-op-followup-after-confirmation",
+    name: "Post-Op Follow-Up After Completed Visit",
+    metadata: {
+        ...TEMPLATES[0].metadata,
+        supported_channels: ["voice"],
+        default_frequency_cap: { max_per_day: 1, max_per_rolling_7_days: 3 },
+        setup_fields: [
+            { id: "voice_profile_id", label: "Post-op voice profile", type: "voice_profile_select", required: true },
+            { id: "post_op_reasons", label: "Eligible completed GoTracker reasons", type: "string_list", required: true },
+            { id: "post_op_delay_hours", label: "Hours after completion before calling", type: "number", required: true, default: 24 },
+            { id: "post_op_latest_call_hours", label: "Latest allowed post-op call", type: "number", required: true, default: 72 },
             { id: "patient_voice_cooldown_hours", label: "Patient cooldown", type: "number", required: true, default: 24 },
         ],
     },
@@ -209,6 +226,59 @@ describe("WorkflowTemplates page", () => {
                         retry_delay_1_hours: 4,
                         retry_delay_2_hours: 7.5,
                         patient_voice_cooldown_hours: 12,
+                    }),
+                }),
+            )
+        })
+    }, 10_000)
+
+    it("configures completed-visit reasons and post-op call timing", async () => {
+        list.mockResolvedValue([POST_OP_TEMPLATE])
+        voiceProfiles.mockResolvedValue([
+            { id: "profile-postop", display_name: "Post Appointment", purpose: "post_op" },
+        ])
+        create.mockResolvedValue({ id: "wf-postop", name: POST_OP_TEMPLATE.name })
+        const user = userEvent.setup()
+        render(
+            <MemoryRouter>
+                <WorkflowTemplates />
+            </MemoryRouter>,
+        )
+
+        await screen.findByText(POST_OP_TEMPLATE.name)
+        await user.click(screen.getByRole("button", { name: /use template/i }))
+
+        expect(screen.getByLabelText("Eligible completed GoTracker reasons")).toBeInTheDocument()
+        expect(screen.getByLabelText("Hours after completion before calling")).toHaveValue(24)
+        expect(screen.getByLabelText("Latest allowed post-op call (hours after completion)")).toHaveValue(72)
+
+        await user.click(await screen.findByRole("combobox", { name: "Voice profile" }))
+        await user.click(screen.getByRole("option", { name: "Post Appointment" }))
+        fireEvent.change(screen.getByLabelText("Eligible completed GoTracker reasons"), {
+            target: { value: "Extraction, Implant Surgery" },
+        })
+        fireEvent.change(screen.getByLabelText("Hours after completion before calling"), {
+            target: { value: "0" },
+        })
+        fireEvent.change(screen.getByLabelText("Latest allowed post-op call (hours after completion)"), {
+            target: { value: "24" },
+        })
+        fireEvent.change(screen.getByLabelText("Patient cooldown (hours)"), {
+            target: { value: "0" },
+        })
+        await user.click(screen.getByRole("button", { name: /create & open builder/i }))
+
+        await waitFor(() => {
+            expect(create).toHaveBeenCalledWith(
+                POST_OP_TEMPLATE.id,
+                POST_OP_TEMPLATE.name,
+                expect.objectContaining({
+                    voiceProfileId: "profile-postop",
+                    setupOptions: expect.objectContaining({
+                        post_op_reasons: ["Extraction", "Implant Surgery"],
+                        post_op_delay_hours: 0,
+                        post_op_latest_call_hours: 24,
+                        patient_voice_cooldown_hours: 0,
                     }),
                 }),
             )

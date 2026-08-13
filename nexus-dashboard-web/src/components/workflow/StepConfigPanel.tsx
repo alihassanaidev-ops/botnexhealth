@@ -188,7 +188,25 @@ function TriggerForm({
                 )}
                 {trigger.type === "appointment_state_changed" && (
                     <>
-                        <Field label="GoTracker status">
+                        <Field
+                            label="Chair Flow states"
+                            htmlFor="trigger-flow-states"
+                            hint="Comma-separated exact Tracker wording, for example Completed. Status and confirmation fields below are optional AND filters."
+                        >
+                            <Input
+                                id="trigger-flow-states"
+                                defaultValue={(trigger.flow_states ?? []).join(", ")}
+                                disabled={readOnly}
+                                placeholder="Completed"
+                                onChange={(e) => {
+                                    onChange({
+                                        ...trigger,
+                                        flow_states: textToStringList(e.target.value),
+                                    })
+                                }}
+                            />
+                        </Field>
+                        <Field label="GoTracker status (optional AND filter)">
                             <Select
                                 value={trigger.status_ids[0] ? String(trigger.status_ids[0]) : NONE}
                                 disabled={readOnly}
@@ -197,7 +215,7 @@ function TriggerForm({
                                     status_ids: value === NONE ? [] : [toInt(value, 1)],
                                 })}
                             >
-                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectTrigger aria-label="GoTracker status (optional AND filter)"><SelectValue /></SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value={NONE}>Any status</SelectItem>
                                     {GOTRACKER_STATUS_OPTIONS.map((status) => (
@@ -209,25 +227,55 @@ function TriggerForm({
                             </Select>
                         </Field>
                         <div className="grid grid-cols-2 gap-2">
-                            <Field label="Confirmed">
+                            <Field label="Confirmed (optional AND filter)">
                                 <TriStateBooleanSelect
                                     value={trigger.confirmed}
                                     disabled={readOnly}
+                                    ariaLabel="Confirmed (optional AND filter)"
+                                    nullLabel="Do not restrict"
                                     trueLabel="Is true"
                                     falseLabel="Is false"
                                     onChange={(value) => onChange({ ...trigger, confirmed: value })}
                                 />
                             </Field>
-                            <Field label="Preconfirmed">
+                            <Field label="Preconfirmed (optional AND filter)">
                                 <TriStateBooleanSelect
                                     value={trigger.preconfirmed}
                                     disabled={readOnly}
+                                    ariaLabel="Preconfirmed (optional AND filter)"
+                                    nullLabel="Do not restrict"
                                     trueLabel="Is true"
                                     falseLabel="Is false"
                                     onChange={(value) => onChange({ ...trigger, preconfirmed: value })}
                                 />
                             </Field>
                         </div>
+                        <Field
+                            label="Latest follow-up window (hours after flow change)"
+                            htmlFor="trigger-max-followup-hours"
+                            hint="Optional. Post-op calls are blocked after this many hours from FlowChange."
+                        >
+                            <Input
+                                id="trigger-max-followup-hours"
+                                type="number"
+                                min={0}
+                                max={168}
+                                step={1}
+                                value={trigger.max_followup_delay_hours ?? ""}
+                                disabled={readOnly}
+                                placeholder="72"
+                                onChange={(e) => onChange({
+                                    ...trigger,
+                                    max_followup_delay_hours: e.target.value === ""
+                                        ? null
+                                        : toInt(e.target.value, 0),
+                                })}
+                            />
+                        </Field>
+                        <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                            Any listed Chair Flow state can match. Non-empty status and confirmation filters are
+                            combined with it using AND. For Completed-only post-op, leave those filters unrestricted.
+                        </p>
                         <Field label="Campaign goal">
                             <Input
                                 value={trigger.campaign_goal ?? ""}
@@ -1470,10 +1518,20 @@ function ConditionFields({
 // ---------------------------------------------------------------------------
 // Shared field helpers
 // ---------------------------------------------------------------------------
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({
+    label,
+    hint,
+    htmlFor,
+    children,
+}: {
+    label: string
+    hint?: string
+    htmlFor?: string
+    children: React.ReactNode
+}) {
     return (
         <div className="space-y-1.5">
-            <Label className="text-sm">{label}</Label>
+            <Label className="text-sm" htmlFor={htmlFor}>{label}</Label>
             {children}
             {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
         </div>
@@ -1594,12 +1652,16 @@ function NextStepField({
 function TriStateBooleanSelect({
     value,
     disabled,
+    ariaLabel,
+    nullLabel = "Do not change",
     trueLabel,
     falseLabel,
     onChange,
 }: {
     value?: boolean | null
     disabled?: boolean
+    ariaLabel?: string
+    nullLabel?: string
     trueLabel: string
     falseLabel: string
     onChange: (value: boolean | null) => void
@@ -1610,9 +1672,9 @@ function TriStateBooleanSelect({
             disabled={disabled}
             onValueChange={(next) => onChange(next === NONE ? null : next === "true")}
         >
-            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectTrigger aria-label={ariaLabel}><SelectValue /></SelectTrigger>
             <SelectContent>
-                <SelectItem value={NONE}>Do not change</SelectItem>
+                <SelectItem value={NONE}>{nullLabel}</SelectItem>
                 <SelectItem value="true">{trueLabel}</SelectItem>
                 <SelectItem value="false">{falseLabel}</SelectItem>
             </SelectContent>
@@ -1628,7 +1690,15 @@ function defaultTrigger(type: TriggerType): WorkflowTrigger {
         case "appointment_offset":
             return { type, offset_hours: -24 }
         case "appointment_state_changed":
-            return { type, status_ids: [], confirmed: true, preconfirmed: null, campaign_goal: "post_op_followup" }
+            return {
+                type,
+                status_ids: [],
+                confirmed: true,
+                preconfirmed: null,
+                flow_states: [],
+                max_followup_delay_hours: null,
+                campaign_goal: "post_op_followup",
+            }
         case "recall_scan":
             return { type, recall_interval_months: 6 }
         case "manual":
@@ -1649,6 +1719,16 @@ function defaultTrigger(type: TriggerType): WorkflowTrigger {
 function toInt(v: string, fallback: number): number {
     const n = parseInt(v, 10)
     return Number.isFinite(n) ? n : fallback
+}
+function textToStringList(text: string): string[] {
+    const values: string[] = []
+    for (const raw of text.split(",")) {
+        const value = raw.trim()
+        if (value && !values.some((existing) => existing.toLowerCase() === value.toLowerCase())) {
+            values.push(value)
+        }
+    }
+    return values
 }
 function toFloat(v: string, fallback: number): number {
     const n = parseFloat(v)

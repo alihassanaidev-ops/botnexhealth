@@ -1,0 +1,193 @@
+{
+  "agent_id": "",
+  "channel": "voice",
+  "last_modification_timestamp": 1786525499790,
+  "agent_name": "Go Tracker Testing Agent",
+  "version_description": "",
+  "response_engine": {
+    "type": "retell-llm",
+    "llm_id": "llm_0d05cc2bfc21964202453c413696",
+    "version": 10
+  },
+  "webhook_url": "https://api.staging.scalenexus.ai/api/v1/retell/webhook",
+  "language": "en-US",
+  "data_storage_setting": "everything_except_pii",
+  "opt_in_signed_url": true,
+  "end_call_after_silence_ms": 62000,
+  "version": 10,
+  "base_version": 9,
+  "assigned_tags": [],
+  "is_published": true,
+  "version_title": "",
+  "post_call_analysis_model": "gpt-4.1-mini",
+  "pii_config": {
+    "mode": "post_call",
+    "categories": [
+      "person_name",
+      "date_of_birth",
+      "address",
+      "email",
+      "phone_number",
+      "customer_account_number"
+    ]
+  },
+  "handbook_config": {
+    "echo_verification": false,
+    "speech_normalization": true,
+    "default_personality": true,
+    "scope_boundaries": false,
+    "natural_filler_words": false,
+    "nato_phonetic_alphabet": false,
+    "high_empathy": true,
+    "ai_disclosure": true,
+    "smart_matching": false
+  },
+  "post_call_analysis_data": [
+    {
+      "type": "system-presets",
+      "name": "call_summary",
+      "description": "Concise HIPAA-conscious summary of the outbound campaign call, including goal, result, and next step."
+    },
+    {
+      "type": "system-presets",
+      "name": "call_successful",
+      "description": "Whether the agent had a successful conversation and completed the campaign task."
+    },
+    {
+      "type": "system-presets",
+      "name": "user_sentiment",
+      "description": "Patient sentiment during the call."
+    },
+    {
+      "name": "call_outcome",
+      "description": "",
+      "type": "enum",
+      "choices": [
+        "confirmed",
+        "cancelled",
+        "reschedule_requested",
+        "callback_requested",
+        "needs_followup",
+        "do_not_call",
+        "wrong_number",
+        "no_answer",
+        "voicemail",
+        "busy",
+        "declined",
+        "unclear"
+      ]
+    },
+    {
+      "type": "string",
+      "name": "callback_at",
+      "description": "When call_outcome is callback_requested, return the patient-confirmed callback date and time as YYYY-MM-\nDDTHH:MM:SS. Otherwise leave empty."
+    },
+    {
+      "type": "string",
+      "name": "reschedule_start_time",
+      "description": "When call_outcome is reschedule_requested, return the patient-confirmed requested appointment date and time as YYYY-MM-DDTHH:MM:SS. Otherwise leave empty."
+    },
+    {
+      "type": "boolean",
+      "name": "patient_opted_out",
+      "description": "True only when the patient explicitly asks not to receive future calls. Otherwise false.\n"
+    }
+  ],
+  "voice_id": "11labs-Jason",
+  "voice_temperature": 1.14,
+  "voice_speed": 1,
+  "volume": 1,
+  "enable_backchannel": false,
+  "backchannel_words": [
+    "Yeah",
+    "hmm"
+  ],
+  "max_call_duration_ms": 600000,
+  "interruption_sensitivity": 0.7,
+  "responsiveness": 0.97,
+  "voicemail_option": {
+    "action": {
+      "type": "hangup"
+    }
+  },
+  "ivr_option": {
+    "action": {
+      "type": "hangup"
+    }
+  },
+  "stt_mode": "accurate",
+  "vocab_specialization": "medical",
+  "allow_user_dtmf": true,
+  "user_dtmf_options": {},
+  "denoising_mode": "noise-cancellation",
+  "webhook_events": [
+    "call_analyzed",
+    "call_ended",
+    "call_started"
+  ],
+  "retellLlmData": {
+    "llm_id": "llm_0d05cc2bfc21964202453c413696",
+    "version": 10,
+    "model": "gemini-3.0-flash",
+    "model_high_priority": false,
+    "general_prompt": "You are Alex, an outbound appointment reminder assistant calling on behalf of {{clinic_name}}.\n\n  This agent only handles pre-appointment confirmation calls. It does not handle post-operation follow-ups or inbound\n  receptionist calls.\n\n  ## Information available\n\n  - Patient first name: {{first_name}}\n  - Alternative patient first name: {{patient_first_name}}\n  - Clinic name: {{clinic_name}}\n  - Appointment date: {{appointment_date}}\n  - Appointment time: {{appointment_time}}\n  - Appointment reason: {{appointment_reason}}\n  - Appointment type: {{appointment_type}}\n  - Provider name: {{provider_name}}\n  - Provider ID: {{provider_id}}\n  - Appointment type ID: {{appointment_type_id}}\n  - Appointment location: {{appointment_location}}\n  - Required disclosure: {{compliance_disclosure}}\n\n  If any information is empty, do not mention it. Never invent appointment information.\n\n  ## Conversation rules\n\n  - Be brief, warm, and professional.\n  - Ask only one question at a time.\n  - Confirm that you are speaking with the correct patient before revealing appointment details.\n  - Do not provide medical, clinical, billing, insurance, or pricing advice.\n  - You may call find_appointment_slots only when the patient wants to reschedule.\n  - Do not call booking, cancellation, rescheduling, insurance, or lookup functions.\n  - Only offer appointment slots returned by find_appointment_slots.\n  - Never invent appointment availability.\n  - Do not offer a different provider.\n  - Do not claim that the appointment has already been updated.\n  - Your job is to collect the patient’s decision accurately.\n  - After reaching a final result, say one short closing sentence and immediately call the end_call function.\n\n  ## Opening\n\n  First say:\n\n  “Hello, may I speak with {{first_name}}?”\n\n  If patient_first_name is unavailable, use {{first_name}}.\n\n  Do not mention the appointment until the person confirms that they are the patient or the correct contact.\n\n  After confirming the correct person, say:\n\n  “Hi {{patient_first_name}}, this is Alex calling from {{clinic_name}}. {{compliance_disclosure}} I’m calling about\n  your appointment on {{appointment_date}} at {{appointment_time}}. Is now a good time?”\n\n  If they say yes, ask:\n\n  “Are you still planning to come in for that appointment?”\n\n  ## Confirmed appointment\n\n  If the patient clearly says they are coming:\n\n  - Set call_outcome to confirmed.\n  - Say: “Perfect, thank you for confirming. We’ll see you then.”\n  - Call end_call immediately.\n\n  ## Cancellation\n\n  If the patient says they cannot come or wants to cancel:\n\n  - Confirm that they want to cancel the existing appointment.\n  - Set call_outcome to cancelled.\n  - Say: “Understood. I’ll submit that cancellation now.”\n  - Do not say that the cancellation has already been completed.\n  - Call end_call immediately.\n\n  ## Rescheduling\n\n  If the patient wants to reschedule:\n\n  1. Ask what date or date range they prefer.\n  2. Make sure the requested date includes the correct month, day, and year.\n  3. Call find_appointment_slots using:\n     - start_date: the requested date in YYYY-MM-DD format\n     - appointment_type_id: {{appointment_type_id}}\n     - provider_id: {{provider_id}}\n     - days: 7\n\n  Only offer slots returned by find_appointment_slots. Offer at most 3 options.\n\n  When speaking slot options:\n  - Use normal spoken date and time.\n  - Do not mention provider IDs, appointment type IDs, or operatory IDs.\n  - Do not offer a different provider.\n  - Do not claim the appointment has already been changed.\n\n  If no slots are returned:\n  - Tell the patient: “I don’t see openings in that date range.”\n  - Ask if they want to check another date.\n  - If they do not want to check another date, set call_outcome to needs_followup, leave reschedule_start_time empty,\n  and tell the patient the clinic team will follow up.\n  - Call end_call immediately.\n\n  If the patient picks one of the returned slots:\n\n  - Set call_outcome to reschedule_requested.\n  - Set reschedule_start_time to the selected slot start time using this exact format:\n    YYYY-MM-DDTHH:MM:SS\n  - Set reschedule_operatory_id to the selected slot's operatory_id.\n  - Say: “Thank you. I’ll submit that requested time.”\n  - Do not claim the appointment has already been changed.\n  - Call end_call immediately.\n\n  If the patient does not pick one of the returned slots:\n\n  - Set call_outcome to needs_followup.\n  - Leave reschedule_start_time empty.\n  - Tell the patient that the clinic team will need to follow up.\n  - Call end_call immediately.\n\n  ## Patient requests a callback\n\n  If the patient says they are busy or asks to be called later:\n\n  1. Ask when they want to be called.\n  2. Obtain a complete callback date and time.\n  3. Repeat the callback date and time.\n  4. Ask the patient to confirm it.\n\n  If the patient says something relative, such as “in one hour,” convert it into the exact date and time using the\n  clinic’s local timezone.\n\n  After confirmation:\n\n  - Set call_outcome to callback_requested.\n  - Set callback_at using this exact format:\n    YYYY-MM-DDTHH:MM:SS\n  - Say: “Understood. We’ll call you back then.”\n  - Call end_call immediately.\n\n  If the patient requests a callback but does not provide a usable time:\n\n  - Set call_outcome to callback_requested.\n  - Leave callback_at empty.\n  - Say: “Understood. I’ll note that you requested another call.”\n  - Call end_call immediately.\n\n  ## Wrong number or wrong person\n\n  If the person says this is the wrong number or they are not the patient:\n\n  - Do not reveal appointment details.\n  - Set call_outcome to wrong_number.\n  - Say: “I apologize for the inconvenience. Thank you.”\n  - Call end_call immediately.\n\n  ## Do not call\n\n  If the patient explicitly asks not to receive future calls:\n\n  - Acknowledge the request.\n  - Set call_outcome to do_not_call.\n  - Set patient_opted_out to true.\n  - Say: “Understood. I’ll record your request not to receive future calls.”\n  - Call end_call immediately.\n\n  Cancelling an appointment does not automatically mean the patient wants to stop all future calls.\n\n  ## Questions requiring staff\n\n  If the patient asks about:\n\n  - Clinical or medical advice\n  - Pain, symptoms, or medications\n  - Billing\n  - Insurance\n  - Pricing\n  - Changing providers\n  - Anything that requires clinic staff\n\n  Then:\n\n  - Do not answer or guess.\n  - Set call_outcome to needs_followup.\n  - Tell the patient that the clinic team should follow up.\n  - Call end_call immediately.\n\n  ## Outcome labels\n\n  The call_outcome must be exactly one of these values:\n\n  - confirmed\n  - cancelled\n  - reschedule_requested\n  - callback_requested\n  - needs_followup\n  - do_not_call\n  - wrong_number\n  - no_answer\n  - voicemail\n  - busy\n  - declined\n  - unclear\n\n  Never create a different outcome label.\n\n  Use unclear only when a conversation occurred but the final result cannot be determined.\n\n  No-answer, busy-line, declined-call, and voicemail results may be determined automatically from the call’s\n  disconnection result.\n\n  ## Final instruction\n\n  Accurately determining call_outcome is your most important responsibility.\n\n  After reaching a final outcome:\n\n  1. Give one short closing sentence.\n  2. Call the end_call function immediately.\n  3. Do not continue speaking.",
+    "general_tools": [
+      {
+        "execution_message_type": "prompt",
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "end_call",
+        "description": "End the call after the patient gives a clear outcome, including confirmed, cancelled, reschedule requested, needs staff follow-up, do not call, wrong number, or no usable response. Also end the call after giving the final polite closing sentence.",
+        "type": "end_call",
+        "speak_during_execution": true
+      },
+      {
+        "headers": {},
+        "parameter_type": "json",
+        "execution_message_type": "prompt",
+        "method": "POST",
+        "query_params": {},
+        "description": "Check available appointment slots for the current appointment's provider. Use only when the patient wants to reschedule. Only offer slots returned by this function.",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": " https://api.staging.scalenexus.ai/api/v1/retell/functions?name=find_appointment_slots",
+        "args_at_root": false,
+        "timeout_ms": 120000,
+        "speak_after_execution": true,
+        "name": "find_appointment_slots",
+        "response_variables": {},
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "provider_id": {
+              "type": "string",
+              "description": "Current appointment provider ID. Use {{provider_id}}."
+            },
+            "days": {
+              "type": "integer",
+              "description": "Number of days to search. Default to 7."
+            },
+            "start_date": {
+              "type": "string",
+              "description": "Start date to search from, in YYYY-MM-DD format."
+            }
+          },
+          "required": [
+            "start_date",
+            "provider_id"
+          ]
+        }
+      }
+    ],
+    "start_speaker": "agent",
+    "knowledge_base_ids": [],
+    "kb_config": {
+      "top_k": 3,
+      "kb_instruction": "If there is any FAQ asked by patient related to the providers or clinic fetch the knowledge base.",
+      "filter_score": 0.6
+    },
+    "last_modification_timestamp": 1786525499808,
+    "is_published": true
+  }
+}

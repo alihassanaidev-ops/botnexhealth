@@ -18,8 +18,8 @@ import {
 } from "@/lib/token-manager";
 import { toast } from "sonner";
 import { useLocation, useNavigate } from "react-router-dom";
+import { AUTH_INACTIVITY_TIMEOUT_MS } from "@/lib/auth-session-policy";
 
-const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
 const SESSION_WARNING_MS = 60 * 1000;
 const SESSION_WARNING_SECONDS = Math.ceil(SESSION_WARNING_MS / 1000);
 const AUTH_REQUEST_TIMEOUT_MS = 12_000;
@@ -200,7 +200,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsSessionWarningOpen(false);
         setSessionSecondsRemaining(SESSION_WARNING_SECONDS);
 
-        const warningDelay = Math.max(INACTIVITY_TIMEOUT_MS - SESSION_WARNING_MS, 0);
+        const warningDelay = Math.max(AUTH_INACTIVITY_TIMEOUT_MS - SESSION_WARNING_MS, 0);
 
         warningTimer.current = setTimeout(() => {
             const warningStartedAt = Date.now();

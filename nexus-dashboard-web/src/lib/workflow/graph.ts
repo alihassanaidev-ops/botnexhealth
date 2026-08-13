@@ -586,6 +586,8 @@ export function createTrigger(type: TriggerType): WorkflowTrigger {
                 status_ids: [],
                 confirmed: true,
                 preconfirmed: null,
+                flow_states: [],
+                max_followup_delay_hours: null,
                 campaign_goal: "post_op_followup",
             }
         case "recall_scan":

@@ -64,7 +64,9 @@ function triggerSummary(t: WorkflowTrigger): string {
             return `${h}h ${t.offset_hours < 0 ? "before" : "after"} appointment`
         }
         case "appointment_state_changed":
-            return t.confirmed !== null && t.confirmed !== undefined
+            return t.flow_states?.length
+                ? `Flow: ${t.flow_states.join(", ")}`
+                : t.confirmed !== null && t.confirmed !== undefined
                 ? `Confirmed: ${t.confirmed ? "yes" : "no"}`
                 : t.preconfirmed !== null && t.preconfirmed !== undefined
                     ? `Preconfirmed: ${t.preconfirmed ? "yes" : "no"}`

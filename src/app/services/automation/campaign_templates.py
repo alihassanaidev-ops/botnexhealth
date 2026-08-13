@@ -902,17 +902,11 @@ _POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
         {
             "type": "condition",
             "id": "check-post-op-needs-review",
-            "logic": "OR",
             "rules": [
                 {
                     "field": "call_outcome",
-                    "op": "in",
-                    "value": [
-                        "post_op_concern",
-                        "appointment_requested",
-                        "needs_followup",
-                        "unclear",
-                    ],
+                    "op": "neq",
+                    "value": "post_op_ok",
                 }
             ],
             "true_next_node_id": "mark-post-op-followup",

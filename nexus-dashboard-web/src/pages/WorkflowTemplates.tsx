@@ -98,6 +98,13 @@ function isNonNegativeWholeNumber(value: string): boolean {
     return Number.isInteger(parsed) && parsed >= 0
 }
 
+function isPositiveWholeNumber(value: string): boolean {
+    const normalized = value.trim()
+    if (!normalized) return false
+    const parsed = Number(normalized)
+    return Number.isInteger(parsed) && parsed > 0
+}
+
 export default function WorkflowTemplates() {
     const navigate = useNavigate()
     const [templates, setTemplates] = useState<CampaignTemplate[]>([])
@@ -118,9 +125,12 @@ export default function WorkflowTemplates() {
     const [voiceProfileId, setVoiceProfileId] = useState("")
     const [appointmentTypeIds, setAppointmentTypeIds] = useState<string[]>([])
     const [appointmentReasons, setAppointmentReasons] = useState("")
+    const [postOpReasons, setPostOpReasons] = useState("")
     const [callOffsetHoursBefore, setCallOffsetHoursBefore] = useState("24")
     const [retryDelay1Hours, setRetryDelay1Hours] = useState("5")
     const [retryDelay2Hours, setRetryDelay2Hours] = useState("5")
+    const [postOpDelayHours, setPostOpDelayHours] = useState("24")
+    const [postOpLatestCallHours, setPostOpLatestCallHours] = useState("72")
     const [patientVoiceCooldownHours, setPatientVoiceCooldownHours] = useState("24")
     const [activeCategory, setActiveCategory] = useState<string>("all")
     const [creating, setCreating] = useState(false)
@@ -265,9 +275,12 @@ export default function WorkflowTemplates() {
         setAppointmentTypes([])
         setAppointmentTypesLocationId(null)
         setAppointmentReasons("")
+        setPostOpReasons("")
         setCallOffsetHoursBefore(setupFieldDefault(t, "call_offset_hours_before", "24"))
         setRetryDelay1Hours(setupFieldDefault(t, "retry_delay_1_hours", "5"))
         setRetryDelay2Hours(setupFieldDefault(t, "retry_delay_2_hours", "5"))
+        setPostOpDelayHours(setupFieldDefault(t, "post_op_delay_hours", "24"))
+        setPostOpLatestCallHours(setupFieldDefault(t, "post_op_latest_call_hours", "72"))
         setPatientVoiceCooldownHours(setupFieldDefault(t, "patient_voice_cooldown_hours", "24"))
     }
 
@@ -290,6 +303,12 @@ export default function WorkflowTemplates() {
                     .map((reason) => reason.trim())
                     .filter(Boolean)
             }
+            if (hasSetupField(picked, "post_op_reasons")) {
+                setupOptions.post_op_reasons = postOpReasons
+                    .split(",")
+                    .map((reason) => reason.trim())
+                    .filter(Boolean)
+            }
             if (hasSetupField(picked, "call_offset_hours_before")) {
                 setupOptions.call_offset_hours_before = Number(callOffsetHoursBefore)
             }
@@ -298,6 +317,12 @@ export default function WorkflowTemplates() {
             }
             if (hasSetupField(picked, "retry_delay_2_hours")) {
                 setupOptions.retry_delay_2_hours = Number(retryDelay2Hours)
+            }
+            if (hasSetupField(picked, "post_op_delay_hours")) {
+                setupOptions.post_op_delay_hours = Number(postOpDelayHours)
+            }
+            if (hasSetupField(picked, "post_op_latest_call_hours")) {
+                setupOptions.post_op_latest_call_hours = Number(postOpLatestCallHours)
             }
             if (hasSetupField(picked, "patient_voice_cooldown_hours")) {
                 setupOptions.patient_voice_cooldown_hours = Number(patientVoiceCooldownHours)
@@ -318,6 +343,15 @@ export default function WorkflowTemplates() {
     const voiceRequired = picked ? requiresVoiceProfile(picked) : false
     const appointmentTypesRequired = picked ? requiresAppointmentTypes(picked) : false
     const appointmentReasonsRequired = picked ? hasSetupField(picked, "appointment_reasons") : false
+    const postOpReasonsRequired = picked ? hasSetupField(picked, "post_op_reasons") : false
+    const postOpTimingInvalid = Boolean(
+        picked &&
+        hasSetupField(picked, "post_op_delay_hours") &&
+        hasSetupField(picked, "post_op_latest_call_hours") &&
+        isNonNegativeWholeNumber(postOpDelayHours) &&
+        isPositiveWholeNumber(postOpLatestCallHours) &&
+        Number(postOpLatestCallHours) < Number(postOpDelayHours),
+    )
     const pickedCapability = picked ? pmsCapabilityStatus(picked) : null
     const audienceSourceOptions = picked
         ? setupFieldOptions(picked, "audience_source", picked.metadata.default_audience)
@@ -357,9 +391,13 @@ export default function WorkflowTemplates() {
         (voiceRequired && !voiceProfileId.trim()) ||
         (appointmentTypesRequired && appointmentTypeIds.length === 0) ||
         (appointmentReasonsRequired && appointmentReasons.split(",").every((reason) => !reason.trim())) ||
+        (postOpReasonsRequired && postOpReasons.split(",").every((reason) => !reason.trim())) ||
         (picked && hasSetupField(picked, "call_offset_hours_before") && !isNonNegativeWholeNumber(callOffsetHoursBefore)) ||
         (picked && hasSetupField(picked, "retry_delay_1_hours") && !(Number(retryDelay1Hours) > 0)) ||
         (picked && hasSetupField(picked, "retry_delay_2_hours") && !(Number(retryDelay2Hours) > 0)) ||
+        (picked && hasSetupField(picked, "post_op_delay_hours") && !isNonNegativeWholeNumber(postOpDelayHours)) ||
+        (picked && hasSetupField(picked, "post_op_latest_call_hours") && !isPositiveWholeNumber(postOpLatestCallHours)) ||
+        postOpTimingInvalid ||
         (picked && hasSetupField(picked, "patient_voice_cooldown_hours") && !isNonNegativeWholeNumber(patientVoiceCooldownHours)) ||
         pickedCapability?.supported === false
 
@@ -489,7 +527,7 @@ export default function WorkflowTemplates() {
             )}
 
             <Dialog open={picked !== null} onOpenChange={(o) => !o && !creating && setPicked(null)}>
-                <DialogContent className="max-w-3xl">
+                <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle>Set up campaign</DialogTitle>
                         <DialogDescription>
@@ -619,9 +657,25 @@ export default function WorkflowTemplates() {
                                         </p>
                                     </div>
                                 )}
+                                {hasSetupField(picked, "post_op_reasons") && (
+                                    <div className="space-y-2">
+                                        <Label htmlFor="post-op-reasons">Eligible completed GoTracker reasons</Label>
+                                        <Input
+                                            id="post-op-reasons"
+                                            value={postOpReasons}
+                                            onChange={(event) => setPostOpReasons(event.target.value)}
+                                            placeholder="extraction, implant surgery"
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            Comma-separated. Matching is exact and ignores capitalization.
+                                        </p>
+                                    </div>
+                                )}
                                 {(hasSetupField(picked, "call_offset_hours_before") ||
                                     hasSetupField(picked, "retry_delay_1_hours") ||
                                     hasSetupField(picked, "retry_delay_2_hours") ||
+                                    hasSetupField(picked, "post_op_delay_hours") ||
+                                    hasSetupField(picked, "post_op_latest_call_hours") ||
                                     hasSetupField(picked, "patient_voice_cooldown_hours")) && (
                                     <div className="grid gap-4 sm:grid-cols-3">
                                         {hasSetupField(picked, "call_offset_hours_before") && (
@@ -663,6 +717,36 @@ export default function WorkflowTemplates() {
                                                 />
                                             </div>
                                         )}
+                                        {hasSetupField(picked, "post_op_delay_hours") && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="post-op-delay-hours">
+                                                    Hours after completion before calling
+                                                </Label>
+                                                <Input
+                                                    id="post-op-delay-hours"
+                                                    type="number"
+                                                    min="0"
+                                                    step="1"
+                                                    value={postOpDelayHours}
+                                                    onChange={(event) => setPostOpDelayHours(event.target.value)}
+                                                />
+                                            </div>
+                                        )}
+                                        {hasSetupField(picked, "post_op_latest_call_hours") && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="post-op-latest-call-hours">
+                                                    Latest allowed post-op call (hours after completion)
+                                                </Label>
+                                                <Input
+                                                    id="post-op-latest-call-hours"
+                                                    type="number"
+                                                    min="1"
+                                                    step="1"
+                                                    value={postOpLatestCallHours}
+                                                    onChange={(event) => setPostOpLatestCallHours(event.target.value)}
+                                                />
+                                            </div>
+                                        )}
                                         {hasSetupField(picked, "patient_voice_cooldown_hours") && (
                                             <div className="space-y-2">
                                                 <Label htmlFor="patient-voice-cooldown">Patient cooldown (hours)</Label>
@@ -675,6 +759,11 @@ export default function WorkflowTemplates() {
                                                     onChange={(event) => setPatientVoiceCooldownHours(event.target.value)}
                                                 />
                                             </div>
+                                        )}
+                                        {postOpTimingInvalid && (
+                                            <p className="text-xs text-destructive sm:col-span-3">
+                                                Latest allowed call time must be at least the post-op delay.
+                                            </p>
                                         )}
                                     </div>
                                 )}

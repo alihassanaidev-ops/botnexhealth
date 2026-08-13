@@ -33,6 +33,10 @@ export interface AppointmentStateChangedTrigger {
     status_ids: number[]
     confirmed?: boolean | null
     preconfirmed?: boolean | null
+    /** Exact Tracker Chair Flow labels; all configured matchers are ANDed. */
+    flow_states?: string[]
+    /** Optional deadline measured from FlowChange (0–168 hours). */
+    max_followup_delay_hours?: number | null
     campaign_goal?: string | null
 }
 export interface RecallScanTrigger {

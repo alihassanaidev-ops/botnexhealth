@@ -215,6 +215,9 @@ def test_post_op_template_starts_from_completed_flow_state_and_waits_one_day() -
     assert nodes["voice-post-op"]["wait_for_outcome"] is True
     assert nodes["voice-post-op"]["patient_voice_cooldown_behavior"] == "defer"
     assert nodes["voice-post-op"]["patient_voice_cooldown_deadline_field"] == "post_op_expires_at"
+    assert nodes["check-post-op-needs-review"]["rules"] == [
+        {"field": "call_outcome", "op": "neq", "value": "post_op_ok"}
+    ]
 
 
 def test_post_op_template_configures_reason_delay_deadline_and_cooldown() -> None:

@@ -68,12 +68,27 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
         def.trigger.type === "appointment_state_changed" &&
         def.trigger.status_ids.length === 0 &&
         (def.trigger.confirmed === null || def.trigger.confirmed === undefined) &&
-        (def.trigger.preconfirmed === null || def.trigger.preconfirmed === undefined)
+        (def.trigger.preconfirmed === null || def.trigger.preconfirmed === undefined) &&
+        !(def.trigger.flow_states ?? []).some((state) => state.trim())
     ) {
         issues.push({
             node_id: TRIGGER_NODE_ID,
             severity: "error",
             message: "Appointment state trigger needs at least one matcher.",
+        })
+    }
+    if (
+        def.trigger.type === "appointment_state_changed" &&
+        def.trigger.max_followup_delay_hours !== null &&
+        def.trigger.max_followup_delay_hours !== undefined &&
+        (!Number.isInteger(def.trigger.max_followup_delay_hours) ||
+            def.trigger.max_followup_delay_hours < 0 ||
+            def.trigger.max_followup_delay_hours > 168)
+    ) {
+        issues.push({
+            node_id: TRIGGER_NODE_ID,
+            severity: "error",
+            message: "Latest follow-up window must be a whole number from 0 to 168 hours.",
         })
     }
     if (def.trigger.type === "patient_status_changed" && def.trigger.statuses.length === 0) {

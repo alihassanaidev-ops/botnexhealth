@@ -20,6 +20,26 @@ function flow() {
 }
 
 describe("WorkflowCanvas — Auto layout control", () => {
+    it("shows the Chair Flow state in a post-op trigger card", () => {
+        const postOp: WorkflowDefinition = {
+            ...DEF,
+            trigger: {
+                type: "appointment_state_changed",
+                status_ids: [],
+                confirmed: null,
+                preconfirmed: null,
+                flow_states: ["Completed"],
+                max_followup_delay_hours: 72,
+                campaign_goal: "post_op_followup",
+            },
+        }
+        const { nodes, edges } = definitionToFlow(postOp)
+
+        render(<WorkflowCanvas nodes={nodes} edges={edges} />)
+
+        expect(screen.getByText("Flow: Completed")).toBeInTheDocument()
+    })
+
     it("shows an Auto layout button in editable mode and invokes onAutoLayout on click", async () => {
         const onAutoLayout = vi.fn()
         const { nodes, edges } = flow()

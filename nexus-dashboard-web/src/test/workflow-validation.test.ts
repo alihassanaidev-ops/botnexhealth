@@ -25,6 +25,39 @@ function base(): WorkflowDefinition {
 }
 
 describe("workflow validation", () => {
+    it("accepts a Chair Flow state as the only appointment-state matcher", () => {
+        const def = base()
+        def.trigger = {
+            type: "appointment_state_changed",
+            status_ids: [],
+            confirmed: null,
+            preconfirmed: null,
+            flow_states: ["Completed"],
+            max_followup_delay_hours: 72,
+            campaign_goal: "post_op_followup",
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((issue) => issue.message.includes("at least one matcher"))).toBe(false)
+    })
+
+    it("rejects a post-op deadline outside the backend's 168-hour limit", () => {
+        const def = base()
+        def.trigger = {
+            type: "appointment_state_changed",
+            status_ids: [],
+            confirmed: null,
+            preconfirmed: null,
+            flow_states: ["Completed"],
+            max_followup_delay_hours: 169,
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((issue) => issue.message.includes("0 to 168 hours"))).toBe(true)
+    })
+
     it("a well-formed workflow has no errors", () => {
         const issues = validateDefinition(base())
         expect(issues.filter((i) => i.severity === "error")).toHaveLength(0)
