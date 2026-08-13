@@ -3,6 +3,10 @@
 > Orientation for a new developer or AI agent. This document deliberately
 > **does not repeat** what the existing docs already cover well — it fills the
 > gaps and ties the pieces together. Read the cross-referenced docs for depth.
+>
+> Last refreshed: 2026-08-13. Treat this as the onboarding map, not the live task
+> board. Current work state lives in ClickUp; when this doc and code disagree,
+> verify against the current code and the focused docs linked below.
 
 ## Where to start (existing docs — read these first)
 
@@ -14,30 +18,35 @@
 | HIPAA/PHIPA/PIPEDA readiness (scope, vendors, gaps, policies) | [compliance/](compliance/README.md) |
 | Deploy runbook + infra compliance | [DEPLOYMENT_AND_HIPAA_GUIDE.md](DEPLOYMENT_AND_HIPAA_GUIDE.md) |
 | Recurring jobs catalog + local debug harness | [SCHEDULED_JOBS.md](SCHEDULED_JOBS.md) |
+| Outbound automation/campaign roadmap and current implementation plan | [ROADMAP_OUTBOUND_ENGAGEMENT.md](ROADMAP_OUTBOUND_ENGAGEMENT.md), [OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md](OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md) |
+| NexHealth v3 migration risks and webhook cutover notes | [nexhealth-v3-inbound-compatibility.md](nexhealth-v3-inbound-compatibility.md), [nexhealth-api-version-research.md](nexhealth-api-version-research.md) |
 | CDK infra (ECS Fargate, RDS, etc.) | [../infra/README.md](../infra/README.md) |
 
 **This document adds:** the full multi-tenant hierarchy (incl. the
 `InstitutionGroup` oversight tier the other docs miss), the complete RBAC
 permission model, how each clinic's voice agent is provisioned, the voice-agent
-booking orchestration, the Twilio/phone-number model, and a consolidated
-external-services & config reference.
+booking orchestration, the automation/GoTracker integration map, the
+Twilio/phone-number model, and a consolidated external-services & config
+reference.
 
 ---
 
 ## 1. Product in one paragraph
 
-An **AI voice agent for dental clinics**. Retell answers the clinic's phone; our
-backend gives the agent function calls into the clinic's practice-management
-system (PMS) — patient lookup, slot search, booking, cancel, reschedule — through
-**NexHealth as the universal PMS integration layer**. Clinic staff get a web
-dashboard with per-call transcripts, summaries, tags, a callback queue, and daily
-metrics, plus email/in-app/SMS notifications. The platform is **dental-specific**
-and ships under the **ScaleNexus** brand.
+An **AI voice and engagement platform for dental clinics**. Retell answers the
+clinic's phone; our backend gives the agent function calls into a
+practice-management system (PMS) for patient lookup, slot search, booking,
+cancel, and reschedule. Clinic staff get a web dashboard with per-call
+transcripts, summaries, tags, a callback queue, and metrics, plus
+email/in-app/SMS notifications. The newer outbound engine adds workflow-driven
+appointment campaigns across SMS/email/voice, backed by appointment projections
+and PMS writebacks. The platform is **dental-specific** and ships under the
+**ScaleNexus** brand.
 
-Why NexHealth matters: dental PMSs (Dentrix, Eaglesoft, Open Dental, …) each have
-their own integration surface. NexHealth normalizes all of them behind one REST
-API, so the voice agent speaks one protocol regardless of the clinic's PMS. We
-never talk to a PMS directly. See [NEXHEALTH.md](NEXHEALTH.md).
+PMS routing is through the adapter seam in `src/app/pms/`. `pms_type="nexhealth"`
+uses NexHealth as the universal PMS layer (see [NEXHEALTH.md](NEXHEALTH.md));
+`pms_type="gotracker"` uses the ScaleNexus GoTracker Synchronizer API; and
+`pms_type="none"` is call-intelligence-only, with booking/scheduling disabled.
 
 ---
 
@@ -50,7 +59,8 @@ is not documented elsewhere and is easy to miss.**
 InstitutionGroup          (e.g. a DSO — read-only oversight tier; optional)
    └── Institution        (one clinic company / tenant root — owns all PHI scope)
          └── InstitutionLocation   (one physical practice/office)
-               ├── nexhealth_subdomain + nexhealth_location_id  → PMS binding
+               ├── pms_type-specific location config            → PMS binding
+               │    (NexHealth subdomain/location or GoTracker product key)
                ├── retell_agent_id                              → voice-agent binding
                ├── twilio_from_number                           → outbound SMS identity
                ├── operating hours, breaks                      → slot filtering
@@ -61,11 +71,11 @@ InstitutionGroup          (e.g. a DSO — read-only oversight tier; optional)
   `institution_id`; Postgres RLS enforces isolation (see ARCHITECTURE.md §Multi-tenancy).
 - **`InstitutionLocation`** is one physical office. Slugs are unique **per
   institution**, not globally (`src/app/models/institution_location.py`). Each
-  location independently binds to its own NexHealth subdomain/location, its own
-  Retell agent, and its own Twilio sender number. For a multi-location institution
-  there is **no "default" location** — `location_id` is mandatory on every
-  PMS-touching route, because guessing would route a booking into the wrong
-  clinic's PMS (`src/app/pms/factory.py`).
+  location independently binds to its PMS config, its own Retell agent, and its
+  own Twilio sender number. For a multi-location institution there is **no
+  "default" location** — `location_id` is mandatory on every PMS-touching route,
+  because guessing would route a booking into the wrong clinic's PMS
+  (`src/app/pms/factory.py`).
 - **`InstitutionGroup`** (`src/app/models/institution_group.py`) models a parent
   org (e.g. a **DSO** that owns several clinic companies). It exists **only** to
   power the read-only `GROUP_ADMIN` oversight role across member institutions (see
@@ -78,9 +88,9 @@ InstitutionGroup          (e.g. a DSO — read-only oversight tier; optional)
 
 ## 3. RBAC & permission model
 
-> SECURITY.md's authorization section is **stale** — it says "four roles." There
-> are **five**, and the fifth (`GROUP_ADMIN`) plus the `ContactLocationAccess`
-> visibility mechanism are the substance of this section.
+> SECURITY.md carries the high-level authorization model. This section keeps the
+> detailed role inventory, dependency-function list, and route matrix in one
+> place for code navigation.
 
 ### 3.1 Roles (`UserRole`, `src/app/models/user.py`)
 
@@ -211,8 +221,10 @@ binding is strictly **1 Retell agent ↔ 1 InstitutionLocation**.
   `(call_id, function_name, HMAC(args))`. A Retell retry replays the cached result
   instead of double-booking; in-flight duplicates get a retryable "still
   processing" response.
-- **Identity gate:** `lookup_patient` requires DOB **plus** exact email or
-  phone-last-4 before any PHI is read back.
+- **Identity gate:** `lookup_patient` requires the caller-stated patient name,
+  date of birth, and an exact full phone number or email match before any patient
+  ID is returned. Failed, missing, and ambiguous matches return the same neutral
+  no-data response.
 
 After the call, Retell posts a `call_analyzed` webhook → the request thread only
 verifies the signature, claims an idempotency row, and enqueues a Celery task
@@ -222,20 +234,20 @@ ARCHITECTURE.md §Call lifecycle.
 ### 4.4 Appointment booking flow (voice-agent orchestration)
 
 What the agent's tool calls do, in order, during a booking call — this is the
-voice view that stitches the Retell functions to NexHealth (PMS-side details in
-[NEXHEALTH.md](NEXHEALTH.md)):
+voice view that stitches the Retell functions to the PMS adapter (NexHealth
+details in [NEXHEALTH.md](NEXHEALTH.md)):
 
-1. **Identify the caller** — `lookup_patient` (DOB + email/phone-last-4 gate).
-   If not found and the caller wants to book → `create_patient`.
+1. **Identify the caller** — `lookup_patient` (name + DOB + full phone/email
+   gate). If not found and the caller wants to book → `create_patient`.
 2. **Scope the request** — `list_appointment_types`, `list_providers`,
    `list_operatories`, `list_insurance_plans` give the LLM the location's
    bookable options (these are a local cache of PMS reference data, synced on
    demand by `sync_service.py`).
-3. **Offer times** — `find_appointment_slots` queries NexHealth availability,
+3. **Offer times** — `find_appointment_slots` queries the location's PMS adapter,
    then `slot_filter.py` trims results to the location's operating hours/breaks
    before the agent reads them out.
 4. **Book** — `book_appointment` (idempotency-wrapped) writes the booking back
-   into the PMS via NexHealth. `cancel_appointment` / `reschedule_appointment`
+   through the PMS adapter. `cancel_appointment` / `reschedule_appointment`
    handle changes.
 5. **Transfer if needed** — `list_transfer_numbers` returns the location's
    per-department numbers so Retell can transfer the live call (the bridging
@@ -246,13 +258,54 @@ booking can only ever land in that location's PMS.
 
 ---
 
-## 5. Twilio & phone numbers
+## 5. Automation workflows, outbound engagement, and GoTracker events
+
+The repo now contains a production-oriented automation workflow engine in
+`src/app/models/automation_workflow.py`, `src/app/services/automation/`, and
+`src/app/api/routes/automation_workflows.py`. Workflow definitions are authored
+as JSON, validated by `definition_schema.py`, published as immutable versions,
+and executed as tenant/location-scoped runs with step executions, durable timers,
+events, and drip state. The dashboard surfaces this through the workflow builder
+and campaign detail pages under `nexus-dashboard-web/`.
+
+Current schema version `1.0` supports triggers such as `appointment_offset`,
+`appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
+`callback_requested`, and `patient_status_changed`; node types include `wait`,
+`drip`, `send_sms`, `send_voice`, `send_email`, `update_patient_status`,
+`update_gotracker_appointment`, `json_mapper`, `llm`, `condition`, and `exit`.
+
+Appointment-triggered campaigns use a disposable working set rather than live PMS
+reads on every dispatch:
+
+- `AppointmentWorkingSet` stores the last scheduling state seen for one
+  tenant-scoped appointment: start time, status, provider/type IDs, confirmation
+  flags, GoTracker status/flow fields, and freshness timestamps.
+- `NexHealthProjectionService` maintains that projection from signed
+  `/api/v1/nexhealth/webhooks/*` deliveries and event-ledger claims, then
+  enqueues matching active workflows.
+- `gotracker_webhooks.py` receives signed GoTracker Synchronizer appointment and
+  patient events for `pms_type="gotracker"` locations, updates the same working
+  set, cancels runs for non-attending/cancelled states, and records writeback
+  completion/failure events.
+- `GoTrackerAppointmentWritebackService` tracks ScaleNexus-originated GoTracker
+  appointment writes until the synchronizer confirms or fails them. It serializes
+  writes per appointment with an advisory lock because GoTracker has one pending
+  write slot per appointment.
+
+GoTracker's **on-site synchronizer, local SQL agent, installer, offline queue,
+and stored-procedure implementation remain outside this repo**. This repo owns
+the PMS adapter contract, the cloud-facing GoTracker adapter/webhooks, and
+workflow behavior that must stay PMS-agnostic.
+
+---
+
+## 6. Twilio & phone numbers
 
 Twilio in this codebase is an **SMS integration only**. The inbound **voice**
 number → Retell routing is configured externally (Retell/Twilio dashboards); the
 repo has no Twilio Voice/TwiML voice wiring.
 
-### 5.1 The three phone fields
+### 6.1 The three phone fields
 
 - `InstitutionLocation.twilio_from_number` — the location's **outbound SMS sender**
   (E.164). `SmsService.send_sms` rejects any `from_number` that doesn't exactly
@@ -268,7 +321,7 @@ repo has no Twilio Voice/TwiML voice wiring.
 admin can *see* owned numbers; `twilio_from_number` is then set through admin
 location CRUD.
 
-### 5.2 Webhooks (`src/app/api/routes/twilio_webhooks.py`, prefix `/twilio/webhooks`)
+### 6.2 Webhooks (`src/app/api/routes/twilio_webhooks.py`, prefix `/twilio/webhooks`)
 
 - `POST /inbound-sms` — keyword opt-out/in (STOP/UNSUBSCRIBE/… → suppress;
   START/UNSTOP → release; HELP/INFO → help text). Routes `To` number → location
@@ -279,7 +332,7 @@ Both **require Twilio signature validation** (`RequestValidator` against the raw
 URL + form): **503** if the secret isn't configured, **401** on missing/invalid
 `X-Twilio-Signature`. Unmatched location / `MessageSid` → dead-letter.
 
-### 5.3 Outbound SMS
+### 6.3 Outbound SMS
 
 Single chokepoint `SmsService.send_sms` (`src/app/services/sms_service.py`):
 enforces the sender number, **gates on consent** (`SmsComplianceService` — a
@@ -291,7 +344,7 @@ task (`tasks/sms.py`, 5 retries, exp backoff, dead-letters on exhaustion).
 Call-triggered auto-SMS is enqueued from the post-call pipeline only if a body +
 patient phone + `twilio_from_number` are all present.
 
-### 5.4 Gotchas
+### 6.4 Gotchas
 
 - **Env var is misspelled `TWILLIO_` (double-L)**: `TWILLIO_SID`,
   `TWILLIO_API_SECRET` — but `TWILIO_SMS_STATUS_CALLBACK_URL` is spelled
@@ -303,7 +356,7 @@ patient phone + `twilio_from_number` are all present.
 
 ---
 
-## 6. External services & configuration reference
+## 7. External services & configuration reference
 
 All settings live on the `Settings` class in `src/app/config.py`. Secrets can be
 injected via Docker secret files using the `*_FILE` variants.
@@ -312,8 +365,9 @@ injected via Docker secret files using the `*_FILE` variants.
 |---|---|---|
 | **PostgreSQL (RDS)** | Primary store, RLS multi-tenant | `DATABASE_URL` or `DATABASE_HOST/PORT/NAME/USER/PASSWORD`; pool sizing vars; `DATABASE_ADMIN_URL` for cross-tenant jobs |
 | **Redis (ElastiCache)** | Celery broker, sessions, rate limits, NexHealth token cache, SSE pub/sub | `CELERY_BROKER_URL`, `REDIS_URL`, `REDIS_SSL_CERT_REQS` |
-| **NexHealth** (PMS) | Universal PMS integration layer | `NEXHEALTH_API_KEY`, `NEXHEALTH_BASE_URL` (`https://nexhealth.info`), `NEXHEALTH_API_VERSION`, connection-pool vars |
-| **Retell AI** (voice) | Inbound voice agent | `RETELL_API_SECRET` (signature verify + read-only agents API) |
+| **NexHealth** (PMS) | Universal PMS integration layer for NexHealth-backed institutions | `NEXHEALTH_API_KEY`, `NEXHEALTH_BASE_URL` (`https://nexhealth.info`), `NEXHEALTH_API_VERSION`, `NEXHEALTH_WEBHOOK_SECRET`, connection-pool vars |
+| **GoTracker Synchronizer** (PMS) | PMS adapter + webhooks for GoTracker-backed institutions | `GOTRACKER_BASE_URL`, `GOTRACKER_WEBHOOK_SECRET`; per-location product key/base URL fields |
+| **Retell AI** (voice) | Inbound and workflow-driven voice agent calls | `RETELL_API_SECRET` (signature verify + read-only agents API) |
 | **Twilio** (SMS) | Outbound/inbound SMS, delivery callbacks | `TWILLIO_SID`, `TWILLIO_API_SECRET`, `TWILIO_SMS_STATUS_CALLBACK_URL` *(note spelling)* |
 | **Resend** (email) | Transactional email — **verified, see below** | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_REPLY_TO`, `RESEND_ALERT_RECIPIENTS` |
 | **AWS S3** | Call-recording storage | `AWS_S3_BUCKET_NAME`, `AWS_REGION` (`ca-central-1`) |
@@ -321,7 +375,7 @@ injected via Docker secret files using the `*_FILE` variants.
 | **Encryption (PHI)** | AES-256-GCM for PHI columns | `ENCRYPTION_KEY` (must differ from `JWT_SECRET` in prod) |
 | **WebAuthn / MFA** | Passkeys + TOTP | `WEBAUTHN_RP_ID`, `WEBAUTHN_RP_NAME`, `WEBAUTHN_ALLOWED_ORIGINS` |
 
-### 6.1 Email provider — **verified: Resend (raw HTTP, not SDK)**
+### 7.1 Email provider — **verified: Resend (raw HTTP, not SDK)**
 
 Email is sent through **Resend** over its REST API (`POST https://api.resend.com/emails`)
 using `httpx` with a bearer token — **no SMTP, no `resend` SDK package**. Two senders:
@@ -335,14 +389,14 @@ Templates are stored in Postgres (`email_templates` table, `EmailTemplate` model
 rendered with **Jinja2**, managed via `EmailTemplateService` and the
 `/api/.../email-templates` routes, with in-code defaults as fallback.
 
-### 6.2 Dependency note
+### 7.2 Dependency note
 
 Only **Retell** (`retell-sdk`) and **Twilio** (`twilio`) use a vendor SDK.
-NexHealth and Resend are plain `httpx` HTTP calls. S3 uses `boto3`.
+NexHealth, GoTracker, and Resend are plain `httpx` HTTP calls. S3 uses `boto3`.
 
 ---
 
-## 7. Background work & service modules
+## 8. Background work & service modules
 
 ### Celery tasks (`src/app/tasks/`)
 
@@ -353,6 +407,7 @@ NexHealth and Resend are plain `httpx` HTTP calls. S3 uses `boto3`.
 | `sms.py` | Outbound SMS send tasks (Twilio), auto-SMS enqueue |
 | `recordings.py` | Download Retell recordings → upload to S3 |
 | `webhooks.py` | Async processing of inbound webhook payloads (post-call pipeline) |
+| `automation_workflow.py` | Workflow timers, appointment-triggered enrollment, channel dispatch, GoTracker writeback follow-up |
 
 Recurring jobs (dashboard rollup, audit-partition pre-creation, idempotency/
 dead-letter pruning) run as **EventBridge-triggered ECS tasks**, not Celery beat —
@@ -362,7 +417,9 @@ see [SCHEDULED_JOBS.md](SCHEDULED_JOBS.md).
 
 `post_call_service` (post-call pipeline) · `institution_service` (tenant CRUD +
 the `retell_agent_id` location lookup) · `sync_service` (pull providers/appt-types/
-operatories from NexHealth) · `slot_filter` (trim slots to operating hours) ·
+operatories from the PMS adapter) · `slot_filter` (trim slots to operating hours) ·
+`automation/*` (workflow definition, enrollment, scheduling, channel dispatch,
+appointment projection, campaign analytics, GoTracker writeback) ·
 `sms_service` / `sms_compliance` / `sms_privacy` (SMS send + consent/DNC) ·
 `email_notification_service` / `auth_email_service` / `email_template_service`
 (Resend + templates) · `mfa` (WebAuthn/TOTP/recovery) ·
@@ -372,7 +429,7 @@ operatories from NexHealth) · `slot_filter` (trim slots to operating hours) ·
 
 ---
 
-## 8. Conventions & gotchas for contributors
+## 9. Conventions & gotchas for contributors
 
 - **Graph-first.** `graphify-out/graph.json` exists; query the Graphify graph
   (MCP `query_graph`, or `graphify query "..."`) before grepping. Run
@@ -382,18 +439,23 @@ operatories from NexHealth) · `slot_filter` (trim slots to operating hours) ·
   forgets RLS is logged CRITICAL on startup and caught by the `rls` pytest tier.
   Cross-tenant work uses `DATABASE_ADMIN_URL`, never the app role.
 - **`location_id` is mandatory** on PMS routes — never invent a default.
+- **PMS routing is adapter-based.** Check `institution.pms_type` before assuming
+  NexHealth. `nexhealth`, `gotracker`, and `none` have different setup and
+  failure modes, but all PMS-touching routes still require explicit location
+  scope.
 - **Provisioning is manual** for both Retell agents and Twilio numbers today.
   `retell_agent_id` / `twilio_from_number` are set via admin CRUD; no API write
   path creates them. This is the most common source of "why isn't this clinic's
   agent/SMS working" — check those two fields are populated.
 - **Schemas the LLM sees live in Retell**, not the repo. Changing a function's
   parameters means editing the Retell dashboard tool config *and* the handler.
-- **Single shared vendor accounts**: one NexHealth key (per-location isolation via
-  subdomain + location_id), one Twilio account, one Retell account. Per-clinic
-  credential columns exist (`nexhealth_api_key_encrypted`) but are not wired up.
+- **Single/shared vendor accounts remain common**: NexHealth currently uses the
+  platform key plus per-location subdomain/location ID; Twilio/Retell are shared
+  account integrations. Per-clinic credential columns exist for future expansion,
+  and GoTracker uses per-location synchronizer product-key config.
 - **`TWILLIO_` env vars are misspelled** (double-L) — match the existing spelling.
 - **Migrations** are manual (one-off ECS task before deploy); **CI/CD is manual**
-  (no GitHub Actions). See ARCHITECTURE.md §In-flight work for the roadmap and
-  known limitations (no-PMS mode, per-clinic NexHealth credentials, etc.).
+  (no GitHub Actions). For roadmap details, verify the focused roadmap docs and
+  current code before relying on older "in-flight" notes.
 - **PHI never travels on the SSE channel** — events are payload-free hints;
   clients refetch through the authenticated API.

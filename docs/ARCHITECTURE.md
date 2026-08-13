@@ -1,23 +1,26 @@
 # Platform Architecture
 
-Last reviewed: June 2026, against branch `staging-scalenexus-rename`.
+Last refreshed: 2026-08-13, against branch `fix/phase3-staging-deploy`.
 
 This is the system-level overview: what the components are, how a request flows
 through them, and where the important invariants live. Deep-dives are split out:
 
 - [NEXHEALTH.md](NEXHEALTH.md) — the PMS integration, including its caveats and edge cases
 - [SECURITY.md](SECURITY.md) — auth, MFA, tenant isolation, PHI encryption, retention
+- [REPOSITORY_CONTEXT.md](REPOSITORY_CONTEXT.md) — onboarding map, RBAC matrix, PMS modes, automation/GoTracker notes
 - [DEPLOYMENT_AND_HIPAA_GUIDE.md](DEPLOYMENT_AND_HIPAA_GUIDE.md) — deploy runbook and infra compliance
 - [SCHEDULED_JOBS.md](SCHEDULED_JOBS.md) — cron jobs and how to debug them
 
 ## What the platform does
 
 Dental/medical clinics get an AI voice agent (built on Retell) that answers their
-phone, looks up patients, and books/cancels/reschedules appointments directly in
-their practice-management system (NexHealth). Clinic staff get a web dashboard
-showing every call with a transcript, summary, tags (new patient, emergency,
-needs-callback, …), a callback queue, and daily metrics. The platform notifies
-staff about calls that need attention via email, in-app notifications, and SMS.
+phone, looks up patients, and books/cancels/reschedules appointments through the
+configured PMS adapter (`nexhealth` or `gotracker`; `none` is call-intelligence
+only). Clinic staff get a web dashboard showing every call with a transcript,
+summary, tags (new patient, emergency, needs-callback, …), a callback queue, and
+daily metrics. The platform notifies staff about calls that need attention via
+email, in-app notifications, and SMS, and newer workflow/campaign surfaces add
+outbound engagement across SMS/email/voice.
 
 Tenancy is per clinic: a clinic company is an *institution* with N physical
 *locations*, and every PHI-bearing row is scoped to one. The product ships
@@ -36,7 +39,7 @@ under the ScaleNexus brand.
                                               │        ├──> PostgreSQL (RDS) — RLS-enforced multi-tenant
                                               │        ├──> Redis (ElastiCache) — sessions, rate limits,
                                               │        │      NexHealth token cache, SSE pub/sub
-                                              │        └──> NexHealth API (patients, slots, bookings)
+                                              │        └──> PMS APIs (NexHealth or GoTracker Synchronizer)
                                               v
                                    Celery worker (ECS Fargate)
                                      ├──> Resend (email)
@@ -168,18 +171,19 @@ replayable from the admin UI (`src/app/services/dead_letter.py`).
 
 ## Data model
 
-28 tables; the ones worth knowing (all under `src/app/models/`):
+Core models worth knowing (all under `src/app/models/`):
 
-- `institutions`, `institution_locations` — tenancy. Per-location NexHealth
-  binding (`nexhealth_subdomain`, `nexhealth_location_id`) and Retell binding
-  (`retell_agent_id`). Locations also own operating hours, breaks, and transfer
-  numbers (their own tables).
+- `institutions`, `institution_locations` — tenancy. `institutions.pms_type`
+  selects `nexhealth`, `gotracker`, or `none`; locations carry PMS-specific
+  config such as NexHealth subdomain/location IDs or GoTracker product-key/base
+  URL fields, plus Retell binding (`retell_agent_id`). Locations also own
+  operating hours, breaks, and transfer numbers (their own tables).
 - `institution_providers` / `_operatories` / `_appointment_types` /
   `_descriptors` — local cache of PMS reference data, synced on demand
   (`src/app/services/sync_service.py`).
 - `contacts` — callers/patients. Email/phone/DOB encrypted; `phone_hash` for
-  caller-ID lookup; `nexhealth_patient_id` links to the PMS; `anonymized_at`
-  set when retention strips identity.
+  caller-ID lookup; PMS-specific patient IDs link contacts to the adapter;
+  `anonymized_at` set when retention strips identity.
 - `calls` — one per analyzed call. Encrypted transcript/summary, status + tags,
   retention columns (`retain_until`, `recording_retain_until`, `legal_hold_until`,
   `purged_at`).
@@ -192,6 +196,12 @@ replayable from the admin UI (`src/app/services/dead_letter.py`).
 - `sms_history_logs`, `sms_consents` (+ suppression/DNC) — see SECURITY.md.
 - `retell_webhook_events`, `retell_function_invocations`, `dead_letter_events` —
   idempotency and failure capture described above.
+- `automation_workflows`, immutable workflow versions, workflow runs, step
+  executions, timers, events, and drip state — outbound/campaign orchestration.
+- `appointment_working_set`, `nexhealth_webhook_events`,
+  `gotracker_webhook_events`, and GoTracker appointment writeback rows —
+  disposable appointment projections, webhook idempotency, and PMS writeback
+  tracking for appointment-triggered workflows.
 
 Conventions: UUID PKs everywhere; PHI columns encrypted at the application layer
 (AES-256-GCM, key derived from `ENCRYPTION_KEY`); soft-delete for users
@@ -233,33 +243,23 @@ Three tiers (`pytest.ini` markers):
 
 `make test`, `make lint` (ruff). Frontend: Vitest + testing-library.
 
-## In-flight work, roadmap, known limitations
+## Current limitations and roadmap pointers
 
-- **No-PMS mode** (unmerged, `feat/native-pms-mode` branch): clinics without
-  NexHealth get the call-intelligence side only — Retell webhook ingest,
-  transcripts, summaries, tags, callback queue — with the booking and
-  availability functions disabled. On this branch the factory only builds the
-  NexHealth adapter.
-- **Single NexHealth account**: all clinics share one platform API key;
+- **PMS modes are adapter-based**: `nexhealth` and `gotracker` are booking/sync
+  capable; `none` is call-intelligence-only and disables booking/availability.
+  All PMS-touching routes still require explicit location scope.
+- **Single NexHealth account for NexHealth-backed tenants**: clinics share one platform API key;
   isolation comes from per-location subdomain + location ID (fail-closed if
   either is missing). `institutions.nexhealth_api_key_encrypted` exists for a
   future per-clinic-credentials model but is not wired into the adapter path.
 - **CI/CD** is manual (`make cdk-deploy-staging` + migration task + frontend
   publish). No GitHub Actions yet; production config is deliberately not
   automated.
-Near-term roadmap, roughly in order:
+- **SMS quiet hours** are still called out as a security/compliance gap in
+  [SECURITY.md](SECURITY.md).
+- **Audit-log archival** remains a known follow-up: partitions are monthly, but
+  export/drop enforcement is not automated.
 
-1. Frontend overhaul — the dashboard UI is the next major work item.
-2. Production launch hardening: HTTPS listener on the ALB, production CDK
-   config, and the security backlog (self-serve account unlock for
-   institution admins, `TWILIO_*` env rename, tag-filter normalization,
-   phone search via `phone_hash`).
-3. Audit-log archival job — partitions are already monthly, so this is
-   export-to-S3 + drop-partition on a 6-year window.
-4. SMS quiet hours.
-5. CI/CD: lint + unit tier on PR, then staged deploys.
-6. No-PMS mode (merge of `feat/native-pms-mode`): call intelligence without
-   scheduling for clinics that don't use NexHealth.
-7. Evaluate NexHealth's new-generation (beta) API — better naming and
-   self-serve working-window configuration; see the "Stable vs. new API"
-   section in NEXHEALTH.md. Exploration only, no migration scheduled.
+For active roadmap/order-of-work, use ClickUp plus
+[ROADMAP_OUTBOUND_ENGAGEMENT.md](ROADMAP_OUTBOUND_ENGAGEMENT.md) and the
+implementation notes linked from [REPOSITORY_CONTEXT.md](REPOSITORY_CONTEXT.md).

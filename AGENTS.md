@@ -1,13 +1,13 @@
 ## Repository context
 
-New to this codebase? Start with **[docs/REPOSITORY_CONTEXT.md](docs/REPOSITORY_CONTEXT.md)** —
+New to this codebase? Start with **[docs/REPOSITORY_CONTEXT.md](docs/REPOSITORY_CONTEXT.md)** -
 the onboarding & integration guide. It explains the product, the multi-tenant
-hierarchy (InstitutionGroup → Institution → Location), the full RBAC permission
+hierarchy (InstitutionGroup -> Institution -> Location), the full RBAC permission
 model, how each clinic's Retell voice agent is provisioned and bound, the
 appointment-booking flow, the automation/GoTracker integration map, the
 Twilio/phone-number model, and a consolidated external-services & config
 reference. It links out to the deeper docs
-(`docs/ARCHITECTURE.md`, `docs/NEXHEALTH.md`, `docs/SECURITY.md`, …).
+(`docs/ARCHITECTURE.md`, `docs/NEXHEALTH.md`, `docs/SECURITY.md`, ...).
 
 ## graphify
 
