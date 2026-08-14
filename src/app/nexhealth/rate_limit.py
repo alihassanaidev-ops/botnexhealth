@@ -2,7 +2,7 @@
 
 NexHealth limits each API key to:
   - 100 req/s globally (10 req/s for ``GET /appointments`` and
-    ``GET /appointment_slots``)
+    ``GET /appointment_slots``/``GET /available_slots``)
   - 1000 req/min for patients + appointments endpoints
   - 2000 req/min for other endpoints
 
@@ -87,8 +87,10 @@ def classify_endpoint(method: str, path: str) -> EndpointPolicy:
     method matters only for the slot/appointment GET sub-cap.
     """
     method_upper = (method or "GET").upper()
-    is_appts_or_slots = path.startswith("/appointments") or path.startswith(
-        "/appointment_slots"
+    is_appts_or_slots = (
+        path.startswith("/appointments")
+        or path.startswith("/appointment_slots")
+        or path.startswith("/available_slots")
     )
     is_patients = path.startswith("/patients")
 

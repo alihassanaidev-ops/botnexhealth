@@ -7,6 +7,10 @@ from typing import Protocol
 import httpx
 
 from src.app.nexhealth.exceptions import NexHealthAuthenticationError
+from src.app.nexhealth.api_contract import (
+    NexHealthAPIContract,
+    nexhealth_api_contract_from_config,
+)
 
 
 class AuthConfig(Protocol):
@@ -32,6 +36,11 @@ class AuthConfig(Protocol):
         """API version header value."""
         ...
 
+    @property
+    def nexhealth_api_contract(self) -> NexHealthAPIContract:
+        """Normalized NexHealth API contract target."""
+        ...
+
 
 class AuthService:
     """Handles NexHealth API authentication."""
@@ -48,11 +57,10 @@ class AuthService:
         (NOT with "Bearer" prefix). The response will contain a bearer token to use
         for all subsequent API requests.
         """
-        return {
-            "Accept": self._config.accept_header,
-            "Authorization": self._config.api_key,  # API key directly, no "Bearer" prefix
-            "Nex-Api-Version": self._config.api_version,
-        }
+        contract = nexhealth_api_contract_from_config(self._config)
+        return contract.request_headers(
+            authorization=self._config.api_key,  # API key directly, no "Bearer" prefix
+        )
 
     async def authenticate(self) -> tuple[str, int]:
         """

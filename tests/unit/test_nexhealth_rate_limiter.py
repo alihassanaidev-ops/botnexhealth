@@ -30,7 +30,7 @@ from src.app.nexhealth.rate_limit import (
 
 
 def test_classify_get_appointments_uses_slow_read_per_second() -> None:
-    """GET /appointments and /appointment_slots get the documented 10/s sub-cap."""
+    """GET appointment/slot endpoints get the documented 10/s sub-cap."""
     policy = classify_endpoint("GET", "/appointments")
     assert policy.class_name == "appts_read"
     assert policy.class_per_s == 10
@@ -39,6 +39,10 @@ def test_classify_get_appointments_uses_slow_read_per_second() -> None:
     slots = classify_endpoint("GET", "/appointment_slots")
     assert slots.class_name == "appts_read"
     assert slots.class_per_s == 10
+
+    stable_slots = classify_endpoint("GET", "/available_slots")
+    assert stable_slots.class_name == "appts_read"
+    assert stable_slots.class_per_s == 10
 
 
 def test_classify_post_appointments_uses_general_per_second() -> None:

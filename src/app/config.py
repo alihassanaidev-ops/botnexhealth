@@ -10,6 +10,11 @@ import structlog
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.app.nexhealth.api_contract import (
+    NexHealthAPIContract,
+    normalize_nexhealth_api_contract,
+)
+
 
 def read_secret_file(file_path: str | None) -> str | None:
     """Read secret from Docker secret file if it exists."""
@@ -216,6 +221,20 @@ class Settings(BaseSettings):
         if secret := read_secret_file(self.jwt_secret_file):
             object.__setattr__(self, "jwt_secret", secret)
 
+        nexhealth_api_contract = normalize_nexhealth_api_contract(
+            self.nexhealth_api_version
+        )
+        object.__setattr__(
+            self,
+            "nexhealth_api_version",
+            nexhealth_api_contract.api_version_header,
+        )
+        object.__setattr__(
+            self,
+            "nexhealth_accept",
+            nexhealth_api_contract.accept_header,
+        )
+
         # Block wildcard CORS in production
         if self.is_production and self.cors_allowed_origins.strip() == "*":
             raise ValueError(
@@ -331,13 +350,18 @@ class Settings(BaseSettings):
 
     @property
     def accept_header(self) -> str:
-        """Alias for nexhealth_accept (implements AuthConfig protocol)."""
-        return self.nexhealth_accept
+        """Derived NexHealth Accept header (implements AuthConfig protocol)."""
+        return self.nexhealth_api_contract.accept_header
 
     @property
     def api_version(self) -> str:
-        """Alias for nexhealth_api_version (implements AuthConfig protocol)."""
-        return self.nexhealth_api_version
+        """Derived NexHealth API version header (implements AuthConfig protocol)."""
+        return self.nexhealth_api_contract.api_version_header
+
+    @property
+    def nexhealth_api_contract(self) -> NexHealthAPIContract:
+        """Normalized NexHealth API contract target."""
+        return normalize_nexhealth_api_contract(self.nexhealth_api_version)
 
     @property
     def normalized_redis_url(self) -> str | None:

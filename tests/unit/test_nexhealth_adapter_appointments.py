@@ -8,12 +8,13 @@ from src.app.pms.nexhealth import adapter as adapter_module
 from src.app.pms.nexhealth.adapter import NexHealthAdapter
 
 
-def _make_adapter() -> NexHealthAdapter:
+def _make_adapter(api_contract: str = "legacy_v2") -> NexHealthAdapter:
     return NexHealthAdapter(
         client=SimpleNamespace(),
         institution=SimpleNamespace(),
         subdomain="test-subdomain",
         location_id="test-location",
+        api_contract=api_contract,
     )
 
 
@@ -214,6 +215,26 @@ async def test_list_availabilities_uses_provider_embedded_windows_when_endpoint_
 
 
 @pytest.mark.asyncio
+async def test_list_availabilities_routes_to_working_hours_for_v3(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    calls: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append(path)
+        return {"data": [], "count": 0}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.list_availabilities(provider_id="nh-123")
+
+    assert result == []
+    assert calls[0] == "/working_hours"
+    assert calls[1] == "/providers"
+
+
+@pytest.mark.asyncio
 async def test_create_availability_wraps_body_under_availability_key(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -252,6 +273,66 @@ async def test_create_availability_wraps_body_under_availability_key(
     }
 
 
+@pytest.mark.asyncio
+async def test_create_availability_routes_to_working_hours_for_v3(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict = {}
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        captured["method"] = method
+        captured["path"] = path
+        captured["json"] = json
+        return {"data": {"id": 1}}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    adapter = _make_adapter(api_contract="stable_v3")
+    await adapter.link_availability(
+        provider_id="nh-123",
+        appointment_type_ids=["nh-50"],
+        operatory_id="nh-789",
+        days=["Monday"],
+        start_time="09:00",
+        end_time="17:00",
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/working_hours"
+    assert captured["json"] == {
+        "working_hour": {
+            "provider_id": "123",
+            "appointment_type_ids": ["50"],
+            "operatory_id": "789",
+            "days": ["Monday"],
+            "begin_time": "09:00",
+            "end_time": "17:00",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_availability_routes_to_working_hours_for_v3(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict = {}
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        captured["method"] = method
+        captured["path"] = path
+        captured["json"] = json
+        return {"data": {"id": 1, "active": False}}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    adapter = _make_adapter(api_contract="stable_v3")
+    await adapter.update_availability("nh-456", active=False)
+
+    assert captured["method"] == "PATCH"
+    assert captured["path"] == "/working_hours/456"
+    assert captured["json"] == {"working_hour": {"active": False}}
+
+
 # ── Slots: next_available_date hint ─────────────────────────────────────────
 
 
@@ -279,6 +360,33 @@ async def test_find_available_slots_surfaces_next_available_date(
     assert result.slots == []
     assert result.next_available_date == "2026-08-01"
     assert result.next_available_by_provider == {"nh-123": "2026-08-01"}
+
+
+@pytest.mark.asyncio
+async def test_find_available_slots_routes_to_available_slots_for_v3(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    captured: dict = {}
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        captured["method"] = method
+        captured["path"] = path
+        captured["params"] = params
+        return {"data": [{"lid": 1, "pid": 123, "slots": [], "next_available_date": None}]}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    await adapter.find_available_slots(
+        start_date="2026-07-20",
+        days=1,
+        provider_id="nh-123",
+        appointment_type_id="nh-50",
+    )
+
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/available_slots"
+    assert captured["params"]["pids[]"] == ["123"]
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,10 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from src.app.api.helpers import fetch_all_pages, handle_nexhealth_request
+from src.app.nexhealth.api_contract import (
+    NexHealthAPIContract,
+    normalize_nexhealth_api_contract,
+)
 from src.app.pms.base import (
     PMSAdapter,
     SupportsAppointmentConfirmation,
@@ -121,12 +125,16 @@ class NexHealthAdapter(
         *,
         subdomain: str | None = None,
         location_id: str | None = None,
+        api_contract: NexHealthAPIContract | str | None = None,
         owns_client: bool = False,
     ) -> None:
         self._client = client
         self._institution = institution
         self._subdomain = subdomain
         self._location_id = location_id
+        self._api_contract = normalize_nexhealth_api_contract(
+            api_contract or NexHealthAPIContract.LEGACY_V2
+        )
         self._owns_client = owns_client
 
     @classmethod
@@ -165,6 +173,7 @@ class NexHealthAdapter(
             institution,
             subdomain=subdomain,
             location_id=location_id,
+            api_contract=global_settings.nexhealth_api_contract,
             owns_client=False,
         )
 
@@ -515,7 +524,12 @@ class NexHealthAdapter(
         if operatory_ids:
             params["operatory_ids[]"] = [_strip(oid) for oid in operatory_ids]
 
-        raw = await handle_nexhealth_request(self._client, "GET", "/appointment_slots", params=params)
+        raw = await handle_nexhealth_request(
+            self._client,
+            "GET",
+            self._api_contract.slot_search_path,
+            params=params,
+        )
         # NexHealth returns nested: data = [{lid, pid, slots: [...], next_available_date}]
         # When a provider group has no slots in the window, next_available_date
         # holds the next date that does (or null if none within ~180 days).
@@ -774,7 +788,11 @@ class NexHealthAdapter(
             "end_time": end_time,
         }
         return await handle_nexhealth_request(
-            self._client, "POST", "/availabilities", params=params, json={"availability": body}
+            self._client,
+            "POST",
+            self._api_contract.working_windows_path,
+            params=params,
+            json={self._api_contract.working_window_wrapper_key: body},
         )
 
     async def update_availability(
@@ -803,8 +821,11 @@ class NexHealthAdapter(
             body["active"] = active
 
         raw = await handle_nexhealth_request(
-            self._client, "PATCH", f"/availabilities/{_strip(availability_id)}",
-            params=params, json={"availability": body},
+            self._client,
+            "PATCH",
+            f"{self._api_contract.working_windows_path}/{_strip(availability_id)}",
+            params=params,
+            json={self._api_contract.working_window_wrapper_key: body},
         )
         return raw.get("data", {})
 
@@ -823,7 +844,12 @@ class NexHealthAdapter(
         if "include[]" not in params:
             params["include[]"] = ["appointment_types"]
 
-        raw = await handle_nexhealth_request(self._client, "GET", "/availabilities", params=params)
+        raw = await handle_nexhealth_request(
+            self._client,
+            "GET",
+            self._api_contract.working_windows_path,
+            params=params,
+        )
         direct_items = raw.get("data", [])
         if not isinstance(direct_items, list):
             direct_items = []

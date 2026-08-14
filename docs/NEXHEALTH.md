@@ -1,6 +1,6 @@
 # NexHealth Integration
 
-Last reviewed: June 2026. Code lives in `src/app/nexhealth/` (transport: auth,
+Last reviewed: August 2026. Code lives in `src/app/nexhealth/` (transport: auth,
 HTTP, rate limiting) and `src/app/pms/nexhealth/` (the adapter: domain calls and
 response mapping). If you're debugging a booking or slot problem, start with the
 [Caveats and edge cases](#caveats-and-edge-cases) section — most surprises are
@@ -54,8 +54,9 @@ Token caching (`src/app/nexhealth/token_manager.py`):
 ## Rate limiting
 
 NexHealth's documented limits: 100 req/s global per key, 10 req/s for
-`GET /appointments` and `GET /appointment_slots`, 1000 req/min for
-patient/appointment endpoints, 2000 req/min otherwise.
+`GET /appointments` and slot reads (`GET /appointment_slots` on legacy v2,
+`GET /available_slots` on stable v3), 1000 req/min for patient/appointment
+endpoints, 2000 req/min otherwise.
 
 Since the whole fleet shares one key, limiting must be cluster-wide:
 `src/app/nexhealth/rate_limit.py` classifies each request into an endpoint
@@ -90,8 +91,11 @@ tables for anything booking-critical (slot search always hits the live API).
 
 ## Slot search and booking
 
-Raw availability comes from `GET /appointment_slots` (response is nested per
-location/provider; the adapter flattens it). We then filter locally
+Raw bookable slots come from a contract-aware path: legacy v2 calls
+`GET /appointment_slots`; stable v3 calls `GET /available_slots`. The request
+parameters we use and the response shape are compatible, so the adapter still
+flattens the nested per-location/provider response into universal slots. We
+then filter locally
 (`src/app/services/slot_filter.py`):
 
 1. Buffer: drop slots starting before `now + provider.buffer_minutes`.
@@ -207,19 +211,22 @@ Tests that pin this behavior: `tests/unit/test_nexhealth_token_manager.py`,
 `test_nexhealth_adapter_appointments.py`, `test_slot_filter.py`, and
 `tests/integration/test_slot_duration_edge_cases.py`.
 
-## Stable vs. new API
+## API contract selection
 
-We pin NexHealth's stable API via the Accept header
-(`application/vnd.Nexhealth+json;version=2`, `src/app/config.py:69`).
-NexHealth has a newer API generation (currently beta) that addresses two of
-the pain points above directly: the misleading names are fixed (what the
-stable API calls "availabilities" is exposed as working windows), and
-working-window sync is configurable through the API itself instead of
-requiring a NexHealth support request per practice.
+NexHealth API versioning is selected by `NEXHEALTH_API_VERSION`, normalized at
+startup into one internal contract target:
 
-Migrating is a planned future improvement, not active work — the stable API
-is what production runs on. When the evaluation happens, the work is contained
-to the adapter and mappers (`src/app/pms/nexhealth/`); the `PMSAdapter`
-interface and everything above it shouldn't need to change. The caveats list
-above doubles as the regression checklist for that migration: each quirk
-should be re-tested against the new API, and several should simply disappear.
+- `v2`, `v2.2.2`, and `legacy_v2` select the legacy v2.2.2 contract.
+- `v3`, `v3.0.0`, `v20240412`, and `stable_v3` select the stable v3 contract.
+
+Unknown values fail startup. Request headers are derived from that normalized
+target, not hand-composed independently. Legacy v2 sends
+`Nex-Api-Version: v2` with the legacy versioned `Accept` header. Stable v3 sends
+`Nex-Api-Version: v3.0.0` with a non-versioned JSON `Accept` header.
+
+The NexHealth adapter also derives renamed scheduling paths from the same
+contract target: legacy v2 uses `/appointment_slots` and `/availabilities`;
+stable v3 uses `/available_slots` and `/working_hours`, including the v3
+`working_hour` body wrapper for working-window writes. This version-aware
+routing is temporary migration scaffolding and should be removed after one
+stable production release cycle on v3.

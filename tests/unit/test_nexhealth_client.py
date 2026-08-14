@@ -4,6 +4,7 @@ import pytest
 import respx
 import httpx
 from httpx import Response
+from src.app.config import Settings
 from src.app.nexhealth.client import NexHealthClient
 
 @pytest.fixture
@@ -67,6 +68,36 @@ async def test_api_request_success(client, mock_settings):
         # Verify Headers
         last_request = route.calls.last.request
         assert last_request.headers["Authorization"] == "Bearer token"
+        assert last_request.headers["Nex-Api-Version"] == "v2"
+        assert last_request.headers["Accept"] == "application/vnd.Nexhealth+json;version=2"
+
+
+@pytest.mark.asyncio
+async def test_api_request_uses_stable_v3_headers():
+    """Stable v3 sends only the dedicated NexHealth version selector."""
+    settings = Settings(
+        nexhealth_api_key="test-api-key",
+        jwt_secret="test-jwt-secret",
+        app_env="test",
+        nexhealth_api_version="stable_v3",
+    )
+    client = NexHealthClient(config=settings)
+
+    async with respx.mock(base_url=settings.base_url) as respx_mock:
+        respx_mock.post("/authenticates").mock(
+            return_value=Response(201, json={"code": True, "data": {"token": "token"}})
+        )
+        route = respx_mock.get("/institutions").mock(
+            return_value=Response(200, json={"code": True, "data": []})
+        )
+
+        async with client:
+            await client.get("/institutions")
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer token"
+    assert request.headers["Nex-Api-Version"] == "v3.0.0"
+    assert request.headers["Accept"] == "application/json"
 
 @pytest.mark.asyncio
 async def test_rate_limit_retry(client, mock_settings):
