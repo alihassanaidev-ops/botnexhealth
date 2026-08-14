@@ -17,7 +17,11 @@ from src.app.nexhealth.api_contract import (
     NexHealthAPIContract,
     normalize_nexhealth_api_contract,
 )
-from src.app.nexhealth.pagination import extract_list_items, extract_page_info, fetch_all_pages
+from src.app.nexhealth.pagination import (
+    extract_list_items,
+    extract_page_info,
+    fetch_all_pages,
+)
 from src.app.pms.base import (
     PMSAdapter,
     SupportsAppointmentConfirmation,
@@ -272,7 +276,9 @@ class NexHealthAdapter(
         self._owns_client = owns_client
 
     @classmethod
-    async def create(cls, institution: Institution, location: InstitutionLocation) -> NexHealthAdapter:
+    async def create(
+        cls, institution: Institution, location: InstitutionLocation
+    ) -> NexHealthAdapter:
         """Build a NexHealth adapter scoped to an institution + location.
 
         The platform shares a single NexHealth account, so the API key comes
@@ -327,7 +333,9 @@ class NexHealthAdapter(
 
     # ── Patients ─────────────────────────────────────────────────────────
 
-    async def search_patients(self, query: str, **kwargs: Any) -> list[UniversalPatient]:
+    async def search_patients(
+        self, query: str, **kwargs: Any
+    ) -> list[UniversalPatient]:
         params = self._default_params()
         # Send EVERY criterion the caller supplied, not just the first one.
         # NexHealth AND-combines name/email/phone/date_of_birth server-side, so
@@ -353,7 +361,9 @@ class NexHealthAdapter(
             params["name"] = name
         # NexHealth requires at least one search criterion; preserve prior
         # behavior of falling back to the raw query if nothing else was set.
-        if not any(k in params for k in ("email", "phone_number", "date_of_birth", "name")):
+        if not any(
+            k in params for k in ("email", "phone_number", "date_of_birth", "name")
+        ):
             params["name"] = query
 
         if self._api_contract is NexHealthAPIContract.STABLE_V3:
@@ -361,10 +371,15 @@ class NexHealthAdapter(
         else:
             params.setdefault("page", 1)
             params.setdefault("per_page", 10)
-        if kwargs.get("include") and self._api_contract is NexHealthAPIContract.LEGACY_V2:
+        if (
+            kwargs.get("include")
+            and self._api_contract is NexHealthAPIContract.LEGACY_V2
+        ):
             params["include[]"] = kwargs["include"]
 
-        raw = await handle_nexhealth_request(self._client, "GET", "/patients", params=params)
+        raw = await handle_nexhealth_request(
+            self._client, "GET", "/patients", params=params
+        )
         patients = extract_list_items(raw, collection_key="patients")
 
         # Phone fallback: callers often dial from a number that isn't on their
@@ -425,7 +440,9 @@ class NexHealthAdapter(
 
         async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
             p = {**params, **page_params}
-            return await handle_nexhealth_request(self._client, "GET", "/patients", params=p)
+            return await handle_nexhealth_request(
+                self._client, "GET", "/patients", params=p
+            )
 
         return await fetch_all_pages(
             fetch,
@@ -465,7 +482,9 @@ class NexHealthAdapter(
         return {
             "success": raw.get("code") is not False,
             "patient_id": f"{PREFIX}-{user.get('id')}" if user.get("id") else None,
-            "message": f"Patient {user.get('first_name')} created successfully." if user.get("id") else raw.get("error", "Failed"),
+            "message": f"Patient {user.get('first_name')} created successfully."
+            if user.get("id")
+            else raw.get("error", "Failed"),
         }
 
     # ── Appointment Types ────────────────────────────────────────────────
@@ -473,7 +492,9 @@ class NexHealthAdapter(
     async def list_appointment_types(self) -> list[UniversalAppointmentType]:
         params = self._default_params()
         params["include[]"] = ["descriptors"]
-        raw = await handle_nexhealth_request(self._client, "GET", "/appointment_types", params=params)
+        raw = await handle_nexhealth_request(
+            self._client, "GET", "/appointment_types", params=params
+        )
         data = extract_list_items(raw, collection_key="appointment_types")
         return [mappers.to_appointment_type(at) for at in data]
 
@@ -488,7 +509,9 @@ class NexHealthAdapter(
                 **page_params,
                 "include[]": ["availabilities", "appointment_types"],
             }
-            return await handle_nexhealth_request(self._client, "GET", "/providers", params=p)
+            return await handle_nexhealth_request(
+                self._client, "GET", "/providers", params=p
+            )
 
         all_raw = await fetch_all_pages(
             fetch,
@@ -515,7 +538,10 @@ class NexHealthAdapter(
                 # NexHealth /appointments expects `start`/`end` (not start_date/end_date).
                 params["start"] = date_str
                 params["end"] = date_str
-                params["provider_id"] = _strip(provider_id)
+                if self._api_contract is NexHealthAPIContract.STABLE_V3:
+                    params["provider_ids[]"] = [_strip(provider_id)]
+                else:
+                    params["provider_id"] = _strip(provider_id)
                 params["cancelled"] = False
                 params["per_page"] = per_page
                 if self._api_contract is NexHealthAPIContract.STABLE_V3:
@@ -527,16 +553,26 @@ class NexHealthAdapter(
                 raw = await handle_nexhealth_request(
                     self._client, "GET", "/appointments", params=params
                 )
-                if not isinstance(raw.get("data"), list):
+                data = extract_list_items(raw, collection_key="appointments")
+                raw_data = raw.get("data") if isinstance(raw, dict) else None
+                has_supported_list_shape = isinstance(raw_data, list) or (
+                    isinstance(raw_data, dict)
+                    and any(
+                        isinstance(raw_data.get(key), list)
+                        for key in ("appointments", "items")
+                    )
+                )
+                if not data and not has_supported_list_shape:
                     logger.warning(
                         "Unexpected appointments payload type while checking provider schedule: %s",
-                        type(raw.get("data")),
+                        type(raw_data),
                     )
                     return True
-                data = extract_list_items(raw)
 
                 for appt in data:
-                    cancelled = bool(appt.get("cancelled", False) or appt.get("canceled", False))
+                    cancelled = bool(
+                        appt.get("cancelled", False) or appt.get("canceled", False)
+                    )
                     if not cancelled:
                         return True
 
@@ -574,7 +610,10 @@ class NexHealthAdapter(
         params = self._default_params()
         try:
             raw = await handle_nexhealth_request(
-                self._client, "GET", f"/appointments/{_strip(appointment_id)}", params=params
+                self._client,
+                "GET",
+                f"/appointments/{_strip(appointment_id)}",
+                params=params,
             )
         except Exception:
             return None
@@ -608,6 +647,7 @@ class NexHealthAdapter(
         seen_ids: set[str] = set()
 
         for cancelled in _appointment_cancelled_filters(cancellation_mode):
+
             async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
                 p = {
                     **params,
@@ -638,7 +678,9 @@ class NexHealthAdapter(
 
         return all_rows
 
-    async def list_patient_recalls(self, *, max_items: int = 500) -> list[dict[str, Any]]:
+    async def list_patient_recalls(
+        self, *, max_items: int = 500
+    ) -> list[dict[str, Any]]:
         """List patient recall records for this location from NexHealth.
 
         NexHealth exposes recall queues (``GET /recalls``) scoped by subdomain +
@@ -651,7 +693,9 @@ class NexHealthAdapter(
 
         async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
             p = {**params, **page_params}
-            return await handle_nexhealth_request(self._client, "GET", "/recalls", params=p)
+            return await handle_nexhealth_request(
+                self._client, "GET", "/recalls", params=p
+            )
 
         return await fetch_all_pages(
             fetch,
@@ -903,8 +947,12 @@ class NexHealthAdapter(
             start_time=req.slot_start,
             end_time=req.slot_end or validation.end_time,
             operatory_id=_strip(req.operatory_id) if req.operatory_id else None,
-            appointment_type_id=_strip(req.appointment_type_id) if req.appointment_type_id else None,
-            descriptor_ids=[_strip(d) for d in req.descriptor_ids] if req.descriptor_ids else None,
+            appointment_type_id=_strip(req.appointment_type_id)
+            if req.appointment_type_id
+            else None,
+            descriptor_ids=[_strip(d) for d in req.descriptor_ids]
+            if req.descriptor_ids
+            else None,
             note=req.note,
         )
         request_body = CreateAppointmentRequest(appt=body)
@@ -914,7 +962,11 @@ class NexHealthAdapter(
 
         try:
             raw = await handle_nexhealth_request(
-                self._client, "POST", "/appointments", params=params, json=request_body.model_dump()
+                self._client,
+                "POST",
+                "/appointments",
+                params=params,
+                json=request_body.model_dump(),
             )
             if raw.get("code") is False or raw.get("error"):
                 return BookingResult(
@@ -931,7 +983,9 @@ class NexHealthAdapter(
                 result.appointment_type_id = _strip(req.appointment_type_id)
             return result
         except Exception as e:
-            return BookingResult(success=False, source="nexhealth", status="error", error=str(e))
+            return BookingResult(
+                success=False, source="nexhealth", status="error", error=str(e)
+            )
 
     async def cancel_appointment(self, appointment_id: str) -> BookingResult:
         from src.app.api.models import CancelAppointmentBody, CancelAppointmentRequest
@@ -941,13 +995,29 @@ class NexHealthAdapter(
 
         try:
             raw = await handle_nexhealth_request(
-                self._client, "PATCH", f"/appointments/{_strip(appointment_id)}", params=params, json=body.model_dump()
+                self._client,
+                "PATCH",
+                f"/appointments/{_strip(appointment_id)}",
+                params=params,
+                json=body.model_dump(),
             )
             if raw.get("code") is False:
-                return BookingResult(success=False, source="nexhealth", status="error", error=raw.get("error", "Failed"))
-            return BookingResult(success=True, source="nexhealth", status="cancelled", message="Appointment cancelled successfully.")
+                return BookingResult(
+                    success=False,
+                    source="nexhealth",
+                    status="error",
+                    error=raw.get("error", "Failed"),
+                )
+            return BookingResult(
+                success=True,
+                source="nexhealth",
+                status="cancelled",
+                message="Appointment cancelled successfully.",
+            )
         except Exception as e:
-            return BookingResult(success=False, source="nexhealth", status="error", error=str(e))
+            return BookingResult(
+                success=False, source="nexhealth", status="error", error=str(e)
+            )
 
     async def confirm_appointment(self, appointment_id: str) -> BookingResult:
         from src.app.api.models import ConfirmAppointmentBody, ConfirmAppointmentRequest
@@ -977,9 +1047,13 @@ class NexHealthAdapter(
                 message="Appointment confirmed successfully.",
             )
         except Exception as e:
-            return BookingResult(success=False, source="nexhealth", status="error", error=str(e))
+            return BookingResult(
+                success=False, source="nexhealth", status="error", error=str(e)
+            )
 
-    async def reschedule_appointment(self, old_appointment_id: str, new_booking: BookingRequest) -> BookingResult:
+    async def reschedule_appointment(
+        self, old_appointment_id: str, new_booking: BookingRequest
+    ) -> BookingResult:
         # Book the new slot first so the patient never loses coverage if the new
         # booking fails. Only cancel the old appointment after the new one is
         # confirmed.
@@ -988,20 +1062,27 @@ class NexHealthAdapter(
             return book_result
 
         cancel_result = await self.cancel_appointment(old_appointment_id)
-        if not cancel_result.success and "already cancelled" not in (cancel_result.error or "").lower():
+        if (
+            not cancel_result.success
+            and "already cancelled" not in (cancel_result.error or "").lower()
+        ):
             book_result.message = (
                 "Rescheduled (new booked) but failed to cancel old appointment: "
                 f"{cancel_result.error}. Please cancel manually."
             )
         else:
-            book_result.message = "Rescheduled successfully (new booked, old cancelled)."
+            book_result.message = (
+                "Rescheduled successfully (new booked, old cancelled)."
+            )
         return book_result
 
     # ── Locations ────────────────────────────────────────────────────────
 
     async def list_locations(self) -> list[UniversalLocation]:
         params: dict[str, Any] = {"page": 1, "per_page": 25}
-        raw = await handle_nexhealth_request(self._client, "GET", "/institutions", params=params)
+        raw = await handle_nexhealth_request(
+            self._client, "GET", "/institutions", params=params
+        )
         data = raw.get("data", [])
 
         locations: list[UniversalLocation] = []
@@ -1013,7 +1094,9 @@ class NexHealthAdapter(
 
     async def get_location(self, location_id: str) -> UniversalLocation | None:
         try:
-            raw = await handle_nexhealth_request(self._client, "GET", f"/locations/{_strip(location_id)}")
+            raw = await handle_nexhealth_request(
+                self._client, "GET", f"/locations/{_strip(location_id)}"
+            )
             loc = raw.get("data", {})
             return mappers.to_location(loc, subdomain=self._subdomain) if loc else None
         except Exception:
@@ -1023,10 +1106,26 @@ class NexHealthAdapter(
 
     async def get_setup_steps(self) -> list[SetupStep]:
         return [
-            SetupStep(id="select_types", label="Select appointment types", description="Choose which appointment types to offer"),
-            SetupStep(id="set_durations", label="Set durations", description="Set how long each appointment type takes"),
-            SetupStep(id="link_operatories", label="Assign operatories", description="Link rooms/chairs to appointment types"),
-            SetupStep(id="set_schedules", label="Set provider schedules", description="Configure provider availability by day"),
+            SetupStep(
+                id="select_types",
+                label="Select appointment types",
+                description="Choose which appointment types to offer",
+            ),
+            SetupStep(
+                id="set_durations",
+                label="Set durations",
+                description="Set how long each appointment type takes",
+            ),
+            SetupStep(
+                id="link_operatories",
+                label="Assign operatories",
+                description="Link rooms/chairs to appointment types",
+            ),
+            SetupStep(
+                id="set_schedules",
+                label="Set provider schedules",
+                description="Configure provider availability by day",
+            ),
         ]
 
     # ── NexHealth-specific setup (optional capabilities) ─────────────────
@@ -1034,7 +1133,10 @@ class NexHealthAdapter(
     async def list_pms_descriptors(self) -> list[dict]:
         params = self._default_params()
         raw = await handle_nexhealth_request(
-            self._client, "GET", f"/locations/{self._location_id}/appointment_descriptors", params=params
+            self._client,
+            "GET",
+            f"/locations/{self._location_id}/appointment_descriptors",
+            params=params,
         )
         return raw.get("data", [])
 
@@ -1061,7 +1163,9 @@ class NexHealthAdapter(
                 "appointment_descriptor_ids": [_strip(d) for d in descriptor_ids],
             }
         }
-        raw = await handle_nexhealth_request(self._client, "POST", "/appointment_types", params=params, json=body)
+        raw = await handle_nexhealth_request(
+            self._client, "POST", "/appointment_types", params=params, json=body
+        )
         return mappers.to_appointment_type(raw.get("data", {}))
 
     async def update_appointment_type(
@@ -1082,6 +1186,7 @@ class NexHealthAdapter(
         if duration_minutes is not None:
             payload["minutes"] = duration_minutes
         if descriptor_ids is not None:
+
             def _to_int(value: str) -> int | str:
                 stripped = _strip(value)
                 try:
@@ -1148,7 +1253,9 @@ class NexHealthAdapter(
         params = self._default_params()
         body: dict[str, Any] = {}
         if appointment_type_ids is not None:
-            body["appointment_type_ids"] = [int(_strip(aid)) for aid in appointment_type_ids]
+            body["appointment_type_ids"] = [
+                int(_strip(aid)) for aid in appointment_type_ids
+            ]
         if days is not None:
             body["days"] = days
         if start_time is not None:
@@ -1231,7 +1338,9 @@ class NexHealthAdapter(
                 **page_params,
                 "include[]": ["availabilities", "appointment_types"],
             }
-            return await handle_nexhealth_request(self._client, "GET", "/providers", params=p)
+            return await handle_nexhealth_request(
+                self._client, "GET", "/providers", params=p
+            )
 
         providers = await fetch_all_pages(
             fetch,
@@ -1251,7 +1360,8 @@ class NexHealthAdapter(
             provider_name = (
                 provider.get("name")
                 or " ".join(
-                    part for part in [provider.get("first_name"), provider.get("last_name")]
+                    part
+                    for part in [provider.get("first_name"), provider.get("last_name")]
                     if part
                 )
                 or None

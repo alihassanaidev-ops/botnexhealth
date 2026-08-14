@@ -127,6 +127,28 @@ def shadow_callback_url(callback_base_url: str, route_family: str) -> str:
     return f"{callback_base_url.rstrip('/')}/api/v1/nexhealth/webhooks/shadow/{path}"
 
 
+async def shadow_signature_secrets(
+    session: AsyncSession, *, route_family: str
+) -> list[str]:
+    """Return endpoint signing secrets accepted for one shadow route family."""
+    result = await session.execute(
+        select(NexHealthWebhookShadowSubscription).where(
+            NexHealthWebhookShadowSubscription.route_family == route_family,
+            NexHealthWebhookShadowSubscription.status
+            != NexHealthWebhookShadowSubscriptionStatus.DISABLED.value,
+            NexHealthWebhookShadowSubscription.secret_key_encrypted.is_not(None),
+        )
+    )
+    secrets: list[str] = []
+    seen: set[str] = set()
+    for row in result.scalars().all():
+        secret = row.secret_key
+        if secret and secret not in seen:
+            secrets.append(secret)
+            seen.add(secret)
+    return secrets
+
+
 class NexHealthWebhookShadowCaptureService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -148,14 +170,22 @@ class NexHealthWebhookShadowCaptureService:
             else None
         )
 
-        identity = _extract_identity(payload, route_family) if payload is not None else {}
+        identity = (
+            _extract_identity(payload, route_family) if payload is not None else {}
+        )
         resolution = (
             await self._resolve_delivery(payload, route_family)
             if payload is not None
             else _empty_resolution()
         )
+        is_institution_scoped = bool(resolution.get("institution_id"))
+        stored_identity = identity if is_institution_scoped else {}
         payload_for_hash: Any = payload if payload is not None else raw_payload
-        redacted = redact_payload(payload) if payload is not None else {"payload": "[redacted]"}
+        redacted = (
+            redact_payload(payload)
+            if payload is not None
+            else {"payload": "[redacted]"}
+        )
         if not isinstance(redacted, dict):
             redacted = {"payload": redacted}
 
@@ -170,9 +200,9 @@ class NexHealthWebhookShadowCaptureService:
             resource_type=identity.get("resource_type"),
             event_name=identity.get("event_name"),
             event_family=identity.get("event_family"),
-            pms_resource_id=identity.get("pms_resource_id"),
-            change_marker=identity.get("change_marker"),
-            business_event_key=identity.get("business_event_key"),
+            pms_resource_id=stored_identity.get("pms_resource_id"),
+            change_marker=stored_identity.get("change_marker"),
+            business_event_key=stored_identity.get("business_event_key"),
             provider_delivery_id=_provider_delivery_id(payload, headers or {}),
             provider_subscription_id=_provider_subscription_id(payload),
             payload_hash=payload_hash(payload_for_hash),
@@ -180,12 +210,22 @@ class NexHealthWebhookShadowCaptureService:
             parse_error_summary=parse_error_summary,
             resolution_status=str(resolution["resolution_status"]),
             resolution_metadata=resolution.get("resolution_metadata"),
-            extracted_identity=identity or None,
-            raw_payload_retain_until=default_nexhealth_webhook_raw_retain_until(now),
+            extracted_identity=stored_identity or None,
+            raw_payload_retain_until=(
+                default_nexhealth_webhook_raw_retain_until(now)
+                if is_institution_scoped
+                else None
+            ),
             updated_at=now,
         )
-        row.raw_payload = raw_payload
-        row.redacted_payload = redacted
+        if is_institution_scoped:
+            row.raw_payload = raw_payload
+            row.redacted_payload = redacted
+        else:
+            row.raw_payload = None
+            row.redacted_payload = {
+                "payload": "[not_stored_unresolved_shadow_delivery]"
+            }
         self.session.add(row)
         await self.session.flush()
         await self._record_subscription_capture(row, resolution)
@@ -252,8 +292,13 @@ class NexHealthWebhookShadowCaptureService:
             if row.parse_status == NexHealthWebhookShadowParseStatus.PARSED.value:
                 subscription.last_parse_success_at = now
                 subscription.parse_success_count += 1
-                if subscription.provider_endpoint_id or subscription.provider_subscription_ids:
-                    subscription.status = NexHealthWebhookShadowSubscriptionStatus.ACTIVE.value
+                if (
+                    subscription.provider_endpoint_id
+                    or subscription.provider_subscription_ids
+                ):
+                    subscription.status = (
+                        NexHealthWebhookShadowSubscriptionStatus.ACTIVE.value
+                    )
             else:
                 subscription.last_parse_failure_at = now
                 subscription.parse_failure_count += 1
@@ -358,7 +403,10 @@ class NexHealthWebhookShadowSubscriptionService:
             existing.event_types = list(events)
             existing.api_contract = NexHealthAPIContract.STABLE_V3.value
             existing.updated_at = now
-            if existing.status == NexHealthWebhookShadowSubscriptionStatus.DISABLED.value:
+            if (
+                existing.status
+                == NexHealthWebhookShadowSubscriptionStatus.DISABLED.value
+            ):
                 existing.status = NexHealthWebhookShadowSubscriptionStatus.PENDING.value
             was_created = False
 
@@ -419,6 +467,7 @@ class NexHealthWebhookShadowSubscriptionService:
             nexhealth_max_connections=settings.nexhealth_max_connections,
         )
         subscription_ids: list[str] = []
+        secret_key: str | None = None
         try:
             async with NexHealthClient(config) as client:
                 endpoint = await handle_nexhealth_request(
@@ -430,6 +479,7 @@ class NexHealthWebhookShadowSubscriptionService:
                 endpoint_id = _extract_endpoint_id(endpoint)
                 if not endpoint_id:
                     raise RuntimeError("webhook_endpoint id missing in response")
+                secret_key = _extract_endpoint_secret_key(endpoint)
 
                 for event in event_types:
                     subscription = await handle_nexhealth_request(
@@ -463,6 +513,8 @@ class NexHealthWebhookShadowSubscriptionService:
 
         row.provider_endpoint_id = str(endpoint_id)
         row.provider_subscription_ids = subscription_ids
+        if secret_key:
+            row.secret_key = secret_key
         row.status = NexHealthWebhookShadowSubscriptionStatus.ACTIVE.value
         row.error_metadata = None
 
@@ -502,14 +554,18 @@ def _resolution_from_locations(
     if not locations:
         return {
             **_empty_resolution(),
-            "nexhealth_location_id": nexhealth_location_ids[0] if nexhealth_location_ids else None,
+            "nexhealth_location_id": nexhealth_location_ids[0]
+            if nexhealth_location_ids
+            else None,
             "resolution_metadata": metadata,
         }
     if len(institution_ids) > 1:
         return {
             "institution_id": None,
             "location_id": None,
-            "nexhealth_location_id": nexhealth_location_ids[0] if nexhealth_location_ids else None,
+            "nexhealth_location_id": nexhealth_location_ids[0]
+            if nexhealth_location_ids
+            else None,
             "resolution_status": "ambiguous",
             "resolution_metadata": metadata,
             "matched_location_ids": location_ids,
@@ -518,7 +574,9 @@ def _resolution_from_locations(
     return {
         "institution_id": institution_ids[0],
         "location_id": location_ids[0] if len(location_ids) == 1 else None,
-        "nexhealth_location_id": nexhealth_location_ids[0] if nexhealth_location_ids else None,
+        "nexhealth_location_id": nexhealth_location_ids[0]
+        if nexhealth_location_ids
+        else None,
         "resolution_status": status,
         "resolution_metadata": metadata,
         "matched_location_ids": location_ids,
@@ -528,9 +586,13 @@ def _resolution_from_locations(
 def _extract_identity(payload: dict[str, Any], route_family: str) -> dict[str, Any]:
     event_name = _clean_str(payload.get("event_name") or payload.get("event"))
     event_family = event_name.split(".", 1)[0] if event_name else None
-    resource = _clean_str(payload.get("resource_type")) or _route_resource_type(route_family)
+    resource = _clean_str(payload.get("resource_type")) or _route_resource_type(
+        route_family
+    )
     resource_payload = _primary_resource_payload(payload, route_family)
-    pms_resource_id = _clean_str(resource_payload.get("id")) if resource_payload else None
+    pms_resource_id = (
+        _clean_str(resource_payload.get("id")) if resource_payload else None
+    )
     if route_family == SHADOW_ROUTE_SYNC_STATUS and not pms_resource_id:
         subdomain = _clean_str(payload.get("subdomain")) or "unknown-subdomain"
         location_ids = _sync_status_location_ids(resource_payload or {})
@@ -538,7 +600,9 @@ def _extract_identity(payload: dict[str, Any], route_family: str) -> dict[str, A
     change_marker = _change_marker(payload, resource_payload)
     business_event_key = None
     if resource and pms_resource_id and event_family:
-        business_event_key = f"{resource}:{pms_resource_id}:{event_family}:{change_marker or 'none'}"
+        business_event_key = (
+            f"{resource}:{pms_resource_id}:{event_family}:{change_marker or 'none'}"
+        )
     return {
         "resource_type": resource,
         "event_name": event_name,
@@ -700,6 +764,25 @@ def _extract_endpoint_id(raw: dict[str, Any]) -> str | None:
         first = next((item for item in data if isinstance(item, dict)), None)
         if first is not None and first.get("id") not in (None, ""):
             return str(first["id"])
+    return None
+
+
+def _extract_endpoint_secret_key(raw: dict[str, Any]) -> str | None:
+    data = raw.get("data") if isinstance(raw, dict) else None
+    candidates: list[Any] = []
+    if isinstance(data, dict):
+        candidates.extend(
+            data.get(key)
+            for key in ("secret_key", "secret", "signing_secret", "webhook_secret")
+        )
+    candidates.extend(
+        raw.get(key)
+        for key in ("secret_key", "secret", "signing_secret", "webhook_secret")
+        if isinstance(raw, dict)
+    )
+    for value in candidates:
+        if value not in (None, ""):
+            return str(value)
     return None
 
 

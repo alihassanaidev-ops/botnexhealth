@@ -8,7 +8,17 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -72,17 +82,24 @@ class NexHealthWebhookShadowEvent(Base):
     )
 
     api_contract: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="stable_v3", server_default=text("'stable_v3'")
+        String(32),
+        nullable=False,
+        default="stable_v3",
+        server_default=text("'stable_v3'"),
     )
     route_family: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    subdomain: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    subdomain: Mapped[str | None] = mapped_column(
+        String(160), nullable=True, index=True
+    )
     nexhealth_location_id: Mapped[str | None] = mapped_column(
         String(160), nullable=True, index=True
     )
     resource_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     event_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     event_family: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    pms_resource_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    pms_resource_id: Mapped[str | None] = mapped_column(
+        String(160), nullable=True, index=True
+    )
     change_marker: Mapped[str | None] = mapped_column(String(300), nullable=True)
     business_event_key: Mapped[str | None] = mapped_column(
         String(500), nullable=True, index=True
@@ -104,10 +121,17 @@ class NexHealthWebhookShadowEvent(Base):
     )
     parse_error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolution_status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="unresolved", server_default=text("'unresolved'")
+        String(32),
+        nullable=False,
+        default="unresolved",
+        server_default=text("'unresolved'"),
     )
-    resolution_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    extracted_identity: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    resolution_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    extracted_identity: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
 
     redacted_payload_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_payload_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -186,7 +210,10 @@ class NexHealthWebhookShadowSubscription(Base):
 
     route_family: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     api_contract: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="stable_v3", server_default=text("'stable_v3'")
+        String(32),
+        nullable=False,
+        default="stable_v3",
+        server_default=text("'stable_v3'"),
     )
     subdomain: Mapped[str] = mapped_column(String(160), nullable=False)
     nexhealth_location_id: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -198,6 +225,7 @@ class NexHealthWebhookShadowSubscription(Base):
     provider_subscription_ids: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    secret_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -233,3 +261,11 @@ class NexHealthWebhookShadowSubscription(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+    @property
+    def secret_key(self) -> str | None:
+        return decrypt_value(self.secret_key_encrypted)
+
+    @secret_key.setter
+    def secret_key(self, value: str | None) -> None:
+        self.secret_key_encrypted = encrypt_value(value) if value is not None else None

@@ -26,6 +26,8 @@ The cutover report is the repeatable evidence source for baseline, monitoring,
 rollback, and cleanup decisions:
 
 ```bash
+export DATABASE_ADMIN_URL=postgresql+asyncpg://...
+
 .venv/bin/python -m src.app.scripts.nexhealth_v3_cutover_report \
   --save-snapshot /tmp/nexhealth-v3-pre-rest.json
 ```
@@ -97,9 +99,14 @@ Optional enrichment differences are not rollback triggers by themselves.
   - `POST /api/v1/nexhealth/webhooks/shadow/appointments`
   - `POST /api/v1/nexhealth/webhooks/shadow/patients`
   - `POST /api/v1/nexhealth/webhooks/shadow/sync-status`
+- The returned NexHealth endpoint `secret_key` is stored encrypted on the shadow
+  subscription row and is used for that shadow endpoint's signature verification.
 - Shadow deliveries are stored in `nexhealth_webhook_shadow_events`, not the live `nexhealth_webhook_events` ledger. Lifecycle state is tracked separately in `nexhealth_webhook_shadow_subscriptions`.
 - Verify each event type extracts business event identity, institution/location resolution, patient id, appointment id, start time, provider id, appointment type id, cancellation state, event time, and dedup basis.
-- Shadow parse failures are captured with encrypted raw payloads, redacted payloads, payload hashes, and `parse_status=failed`, then acknowledged with 2xx so NexHealth does not disable validation endpoints.
+- Shadow parse failures and unresolved deliveries are counted with payload hashes
+  and `parse_status`/resolution status, then acknowledged with 2xx after
+  verification. Raw payloads and extracted PMS identity are retained only when
+  the delivery resolves to one institution.
 
 ## Webhook Cutover
 

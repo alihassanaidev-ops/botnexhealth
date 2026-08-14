@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -40,9 +41,11 @@ async def run_report(
         snapshot_to_dict,
     )
 
-    _ensure_db(settings)
+    _ensure_db()
     contract = normalize_nexhealth_api_contract(settings.nexhealth_api_version)
-    async with get_superadmin_system_db_session("nexhealth_v3_cutover_report") as session:
+    async with get_superadmin_system_db_session(
+        "nexhealth_v3_cutover_report"
+    ) as session:
         snapshot = await NexHealthCutoverService(
             session,
             app_env=settings.app_env,
@@ -75,11 +78,18 @@ def _load_snapshot(path: Path) -> Any:
     return snapshot_from_dict(json.loads(path.read_text()))
 
 
-def _ensure_db(settings: Any) -> None:
-    if not is_database_initialized() and settings.database_url:
-        init_database(settings.database_url, use_null_pool=True)
+def _ensure_db() -> None:
+    admin_url = _admin_database_url()
+    if not admin_url:
+        raise SystemExit("DATABASE_ADMIN_URL is required to collect a cutover report")
     if not is_database_initialized():
-        raise SystemExit("DATABASE_URL is required to collect a cutover report")
+        init_database(admin_url, use_null_pool=True)
+    if not is_database_initialized():
+        raise SystemExit("DATABASE_ADMIN_URL is required to collect a cutover report")
+
+
+def _admin_database_url() -> str | None:
+    return os.environ.get("DATABASE_ADMIN_URL")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -139,10 +149,7 @@ def main() -> int:
         )
     )
     print(json.dumps(report, indent=2, sort_keys=True))
-    if (
-        args.fail_on_rollback_signal
-        and report["assessment"]["rollback_recommended"]
-    ):
+    if args.fail_on_rollback_signal and report["assessment"]["rollback_recommended"]:
         logger.error("NexHealth cutover rollback signal detected")
         return 2
     return 0

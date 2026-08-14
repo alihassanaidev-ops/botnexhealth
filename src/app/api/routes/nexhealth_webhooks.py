@@ -23,6 +23,7 @@ from src.app.services.automation.nexhealth_shadow_webhook_service import (
     SHADOW_ROUTE_PATIENTS,
     SHADOW_ROUTE_SYNC_STATUS,
     parse_shadow_payload,
+    shadow_signature_secrets,
 )
 from src.app.services.sms_privacy import payload_hash, safe_error_summary
 
@@ -42,8 +43,12 @@ _ENROLL_EVENTS = frozenset(
 )
 _PATIENT_EVENTS = frozenset({"patient_created", "patient_updated"})
 _SYNC_STATUS_EVENTS = frozenset({"sync_status_read_change", "sync_status_write_change"})
-_CANCEL_EVENTS: frozenset[str] = frozenset()  # no distinct cancel event; derived from the `cancelled` flag
-_HANDLED_EVENTS = _ENROLL_EVENTS | _CANCEL_EVENTS | _PATIENT_EVENTS | _SYNC_STATUS_EVENTS
+_CANCEL_EVENTS: frozenset[str] = (
+    frozenset()
+)  # no distinct cancel event; derived from the `cancelled` flag
+_HANDLED_EVENTS = (
+    _ENROLL_EVENTS | _CANCEL_EVENTS | _PATIENT_EVENTS | _SYNC_STATUS_EVENTS
+)
 
 
 def _raw_payload_text(raw_body: bytes) -> str:
@@ -101,14 +106,15 @@ def _business_event_key(
     the business event itself: resource type, PMS resource id, event family, and
     a change marker that should be equal for the same v2/v3 event.
     """
-    marker = change_marker or f"payload:{_dedup_fallback(payload)}"
+    _ = payload
+    marker = change_marker or "none"
     key = f"{resource_type}:{pms_resource_id}:{event_family}:{marker}"
     if len(key) <= 300:
         return key
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
-    compact_resource_id = hashlib.sha256(
-        pms_resource_id.encode("utf-8")
-    ).hexdigest()[:16]
+    compact_resource_id = hashlib.sha256(pms_resource_id.encode("utf-8")).hexdigest()[
+        :16
+    ]
     return f"{resource_type}:{compact_resource_id}:{event_family}:hash:{digest}"
 
 
@@ -272,7 +278,10 @@ async def _cancel_runs_for_appointment(
     materialised for it is terminated and its scheduled timers cancelled so no
     send fires for a dead appointment. Returns the number of runs cancelled.
     """
-    from src.app.models.automation_workflow import AutomationRunStatus, AutomationWorkflowRun
+    from src.app.models.automation_workflow import (
+        AutomationRunStatus,
+        AutomationWorkflowRun,
+    )
     from src.app.services.automation.enrollment_service import (
         AutomationWorkflowEnrollmentService,
     )
@@ -313,6 +322,8 @@ def _verify_signature(
     raw_body: bytes,
     signature_header: str | None,
     timestamp_header: str | None,
+    *,
+    candidate_secrets: list[str] | None = None,
 ) -> None:
     """Raise 403 if HMAC-SHA256 signature does not match.
 
@@ -322,8 +333,13 @@ def _verify_signature(
     defend in depth here too: in production an unset secret rejects the request
     rather than accepting an unauthenticated, potentially cross-tenant enroll.
     """
-    secret = settings.nexhealth_webhook_secret
-    if not secret:
+    secrets = [secret for secret in candidate_secrets or [] if secret]
+    if not secrets:
+        secret = settings.nexhealth_webhook_secret
+        if secret:
+            secrets = [secret]
+
+    if not secrets:
         if settings.is_production:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -338,12 +354,17 @@ def _verify_signature(
     # NexHealth signs `{timestamp}.{base64(raw_body)}` with HMAC-SHA256 using the endpoint
     # secret_key (verified live/docs 2026-07-14). The `timestamp` header value is used verbatim.
     signed = f"{timestamp_header}.{base64.b64encode(raw_body).decode('ascii')}"
-    expected = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, signature_header.strip()):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid webhook signature",
-        )
+    provided = signature_header.strip()
+    for secret in secrets:
+        expected = hmac.new(
+            secret.encode(), signed.encode(), hashlib.sha256
+        ).hexdigest()
+        if hmac.compare_digest(expected, provided):
+            return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Invalid webhook signature",
+    )
 
 
 @router.post("/appointments", status_code=status.HTTP_200_OK)
@@ -362,7 +383,8 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     raw_body = await request.body()
     _verify_signature(
         raw_body,
-        request.headers.get("signature") or request.headers.get("X-NexHealth-Signature"),
+        request.headers.get("signature")
+        or request.headers.get("X-NexHealth-Signature"),
         request.headers.get("timestamp"),
     )
 
@@ -430,7 +452,8 @@ async def nexhealth_patient_webhook(request: Request) -> dict[str, Any]:
     raw_body = await request.body()
     _verify_signature(
         raw_body,
-        request.headers.get("signature") or request.headers.get("X-NexHealth-Signature"),
+        request.headers.get("signature")
+        or request.headers.get("X-NexHealth-Signature"),
         request.headers.get("timestamp"),
     )
 
@@ -460,7 +483,8 @@ async def nexhealth_sync_status_webhook(request: Request) -> dict[str, Any]:
     raw_body = await request.body()
     _verify_signature(
         raw_body,
-        request.headers.get("signature") or request.headers.get("X-NexHealth-Signature"),
+        request.headers.get("signature")
+        or request.headers.get("X-NexHealth-Signature"),
         request.headers.get("timestamp"),
     )
 
@@ -487,7 +511,9 @@ async def nexhealth_sync_status_webhook(request: Request) -> dict[str, Any]:
 @router.post("/shadow/appointments", status_code=status.HTTP_200_OK)
 async def nexhealth_shadow_appointment_webhook(request: Request) -> dict[str, Any]:
     """Capture v3 appointment shadow webhook deliveries without live side effects."""
-    return await _capture_shadow_webhook(request, route_family=SHADOW_ROUTE_APPOINTMENTS)
+    return await _capture_shadow_webhook(
+        request, route_family=SHADOW_ROUTE_APPOINTMENTS
+    )
 
 
 @router.post("/shadow/patients", status_code=status.HTTP_200_OK)
@@ -502,13 +528,10 @@ async def nexhealth_shadow_sync_status_webhook(request: Request) -> dict[str, An
     return await _capture_shadow_webhook(request, route_family=SHADOW_ROUTE_SYNC_STATUS)
 
 
-async def _capture_shadow_webhook(request: Request, *, route_family: str) -> dict[str, Any]:
+async def _capture_shadow_webhook(
+    request: Request, *, route_family: str
+) -> dict[str, Any]:
     raw_body = await request.body()
-    _verify_signature(
-        raw_body,
-        request.headers.get("signature") or request.headers.get("X-NexHealth-Signature"),
-        request.headers.get("timestamp"),
-    )
     parsed = parse_shadow_payload(raw_body)
     raw_payload = _raw_payload_text(raw_body)
     headers = {key.lower(): value for key, value in request.headers.items()}
@@ -518,6 +541,15 @@ async def _capture_shadow_webhook(request: Request, *, route_family: str) -> dic
         user_id="00000000-0000-0000-0000-000000000000",
         external_id=f"nexhealth_shadow:{route_family}",
     ) as session:
+        _verify_signature(
+            raw_body,
+            request.headers.get("signature")
+            or request.headers.get("X-NexHealth-Signature"),
+            request.headers.get("timestamp"),
+            candidate_secrets=await shadow_signature_secrets(
+                session, route_family=route_family
+            ),
+        )
         result = await NexHealthWebhookShadowCaptureService(session).capture(
             route_family=route_family,
             raw_payload=raw_payload,
@@ -770,7 +802,11 @@ async def _process_patient_event(
             nexhealth_location_ids,
             patient_id,
         )
-        return {"status": "ignored", "reason": "unknown_location", "patient_id": patient_id}
+        return {
+            "status": "ignored",
+            "reason": "unknown_location",
+            "patient_id": patient_id,
+        }
 
     institution_id = str(locations[0].institution_id)
     locations = [loc for loc in locations if str(loc.institution_id) == institution_id]
@@ -873,7 +909,9 @@ async def _process_appointment_event(
     nexhealth_patient_id: str | None = (
         str(appt["patient_id"]) if appt.get("patient_id") else None
     )
-    provider_id: str | None = str(appt["provider_id"]) if appt.get("provider_id") else None
+    provider_id: str | None = (
+        str(appt["provider_id"]) if appt.get("provider_id") else None
+    )
     appointment_type_id: str | None = (
         str(appt["appointment_type_id"]) if appt.get("appointment_type_id") else None
     )
@@ -966,7 +1004,9 @@ async def _process_appointment_event(
             await session.commit()
             logger.info(
                 "nexhealth_appointment_webhook: duplicate event institution=%s appt=%s dedup=%s",
-                institution_id, appointment_id, dedup_key,
+                institution_id,
+                appointment_id,
+                dedup_key,
             )
             return {"status": "duplicate", "appointment_id": appointment_id}
 
@@ -1006,7 +1046,10 @@ async def _process_appointment_event(
         )
         logger.info(
             "nexhealth_appointment_webhook: cancelled institution=%s appt=%s runs=%d event=%s",
-            institution_id, appointment_id, runs_cancelled, event,
+            institution_id,
+            appointment_id,
+            runs_cancelled,
+            event,
         )
         return {
             "status": "cancelled",
@@ -1019,7 +1062,9 @@ async def _process_appointment_event(
     # window, but no new enrollment needed — the existing run stands.
     if change == "unchanged":
         logger.info(
-            "nexhealth_appointment_webhook: unchanged institution=%s appt=%s", institution_id, appointment_id,
+            "nexhealth_appointment_webhook: unchanged institution=%s appt=%s",
+            institution_id,
+            appointment_id,
         )
         return {"status": "unchanged", "appointment_id": appointment_id}
 
@@ -1059,7 +1104,12 @@ async def _process_appointment_event(
 
     logger.info(
         "nexhealth_appointment_webhook: queued trigger institution=%s appt=%s event=%s change=%s contact=%s reenrolled_after_cancel=%d",
-        institution_id, appointment_id, event, change, contact_id or "none", runs_cancelled,
+        institution_id,
+        appointment_id,
+        event,
+        change,
+        contact_id or "none",
+        runs_cancelled,
     )
     return {
         "status": "queued",

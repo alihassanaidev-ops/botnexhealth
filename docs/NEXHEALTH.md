@@ -251,11 +251,16 @@ patient projections, or affect live subscription health.
 
 Shadow captures live in `nexhealth_webhook_shadow_events`. Raw payloads are
 encrypted and kept under the same short NexHealth webhook raw-payload retention
-window; redacted payloads, payload hashes, API contract, event/resource metadata,
-provider delivery/subscription ids when present, parse status, extracted business
-event identity, and institution/location resolution results are stored for
+window only after the delivery resolves to one institution. Unresolved or
+ambiguous shadow deliveries keep parse/resolution status and a keyed payload hash
+but do not retain raw payloads or extracted PMS resource identity. Redacted
+payloads, API contract, event/resource metadata, provider delivery/subscription
+ids when present, parse status, extracted business event identity, and
+institution/location resolution results are stored for institution-scoped
 validation. Shadow lifecycle rows live in
-`nexhealth_webhook_shadow_subscriptions`.
+`nexhealth_webhook_shadow_subscriptions` and store the returned NexHealth
+endpoint `secret_key` encrypted so each shadow endpoint can verify against its
+own signing secret.
 
 To create shadow lifecycle rows and optional provider subscriptions, set
 `NEXHEALTH_SHADOW_WEBHOOK_CALLBACK_BASE_URL` to the public API origin and run the
@@ -298,6 +303,10 @@ post-cutover snapshots against it:
   --save-snapshot /tmp/nexhealth-v3-post-rest.json \
   --fail-on-rollback-signal
 ```
+
+Run the report with `DATABASE_ADMIN_URL` set. It intentionally refuses to
+bootstrap from the app `DATABASE_URL` because it reads cross-tenant operational
+state.
 
 The report reads the existing subscription lifecycle rows, appointment and
 patient working sets, live webhook ledger, shadow webhook tables, sync-status

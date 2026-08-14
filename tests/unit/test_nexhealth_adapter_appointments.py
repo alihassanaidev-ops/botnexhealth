@@ -36,7 +36,9 @@ async def test_create_reuses_shared_nexhealth_client(monkeypatch: pytest.MonkeyP
         return shared_client
 
     monkeypatch.setattr(global_settings, "nexhealth_api_key", "test-api-key")
-    monkeypatch.setattr(dependencies, "get_nexhealth_client_dependency", fake_dependency)
+    monkeypatch.setattr(
+        dependencies, "get_nexhealth_client_dependency", fake_dependency
+    )
 
     adapter = await NexHealthAdapter.create(
         SimpleNamespace(),
@@ -55,7 +57,9 @@ async def test_create_reuses_shared_nexhealth_client(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_list_patients_uses_updated_since_and_location_params(monkeypatch: pytest.MonkeyPatch):
+async def test_list_patients_uses_updated_since_and_location_params(
+    monkeypatch: pytest.MonkeyPatch,
+):
     adapter = _make_adapter()
     calls: list[dict] = []
 
@@ -184,7 +188,9 @@ async def test_list_patients_uses_cursor_pagination_for_stable_v3(
 
 
 @pytest.mark.asyncio
-async def test_has_provider_appointments_scans_multiple_pages(monkeypatch: pytest.MonkeyPatch):
+async def test_has_provider_appointments_scans_multiple_pages(
+    monkeypatch: pytest.MonkeyPatch,
+):
     adapter = _make_adapter()
     calls: list[dict] = []
 
@@ -232,14 +238,31 @@ async def test_has_provider_appointments_scans_cursor_pages_for_stable_v3(
     result = await adapter.has_provider_appointments_on_date("nh-123", "2026-03-09")
 
     assert result is True
-    assert calls[0]["provider_id"] == "123"
+    assert calls[0]["provider_ids[]"] == ["123"]
     assert calls[0]["cancelled"] is False
     assert "page" not in calls[0]
     assert calls[1]["end_cursor"] == "cursor-1"
 
 
 @pytest.mark.asyncio
-async def test_has_provider_appointments_returns_false_when_all_cancelled(monkeypatch: pytest.MonkeyPatch):
+async def test_has_provider_appointments_accepts_nested_v2_appointment_payload(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+
+    async def fake_request(client, method, path, params=None, json=None):
+        return {"data": {"appointments": [{"id": 1, "cancelled": False}]}}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.has_provider_appointments_on_date("nh-123", "2026-03-09")
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_has_provider_appointments_returns_false_when_all_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+):
     adapter = _make_adapter()
 
     async def fake_request(client, method, path, params=None, json=None):
@@ -252,11 +275,13 @@ async def test_has_provider_appointments_returns_false_when_all_cancelled(monkey
 
 
 @pytest.mark.asyncio
-async def test_has_provider_appointments_safe_fallback_on_unexpected_payload(monkeypatch: pytest.MonkeyPatch):
+async def test_has_provider_appointments_safe_fallback_on_unexpected_payload(
+    monkeypatch: pytest.MonkeyPatch,
+):
     adapter = _make_adapter()
 
     async def fake_request(client, method, path, params=None, json=None):
-        return {"data": {"appointments": []}}
+        return {"data": {"unexpected": []}}
 
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
 
@@ -552,7 +577,10 @@ async def test_find_available_slots_surfaces_next_available_date(
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
 
     result = await adapter.find_available_slots(
-        start_date="2026-07-20", days=1, provider_id="nh-123", appointment_type_id="nh-50"
+        start_date="2026-07-20",
+        days=1,
+        provider_id="nh-123",
+        appointment_type_id="nh-50",
     )
 
     assert result.slots == []
@@ -571,7 +599,9 @@ async def test_find_available_slots_routes_to_available_slots_for_v3(
         captured["method"] = method
         captured["path"] = path
         captured["params"] = params
-        return {"data": [{"lid": 1, "pid": 123, "slots": [], "next_available_date": None}]}
+        return {
+            "data": [{"lid": 1, "pid": 123, "slots": [], "next_available_date": None}]
+        }
 
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
 
@@ -596,15 +626,28 @@ async def test_find_available_slots_returns_earliest_across_providers(
     async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
         return {
             "data": [
-                {"lid": 1, "pid": 123, "slots": [], "next_available_date": "2026-09-15"},
-                {"lid": 1, "pid": 456, "slots": [], "next_available_date": "2026-08-03"},
+                {
+                    "lid": 1,
+                    "pid": 123,
+                    "slots": [],
+                    "next_available_date": "2026-09-15",
+                },
+                {
+                    "lid": 1,
+                    "pid": 456,
+                    "slots": [],
+                    "next_available_date": "2026-08-03",
+                },
             ]
         }
 
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
 
     result = await adapter.find_available_slots(
-        start_date="2026-07-20", days=1, provider_id=["nh-123", "nh-456"], appointment_type_id="nh-50"
+        start_date="2026-07-20",
+        days=1,
+        provider_id=["nh-123", "nh-456"],
+        appointment_type_id="nh-50",
     )
 
     assert result.next_available_date == "2026-08-03"
@@ -622,12 +665,17 @@ async def test_find_available_slots_none_when_no_availability_in_window(
     adapter = _make_adapter()
 
     async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
-        return {"data": [{"lid": 1, "pid": 123, "slots": [], "next_available_date": None}]}
+        return {
+            "data": [{"lid": 1, "pid": 123, "slots": [], "next_available_date": None}]
+        }
 
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
 
     result = await adapter.find_available_slots(
-        start_date="2026-07-20", days=1, provider_id="nh-123", appointment_type_id="nh-50"
+        start_date="2026-07-20",
+        days=1,
+        provider_id="nh-123",
+        appointment_type_id="nh-50",
     )
 
     assert result.slots == []
@@ -651,7 +699,10 @@ async def test_get_available_slots_still_returns_plain_list(
                     "lid": 1,
                     "pid": 123,
                     "slots": [
-                        {"time": "2026-07-20T09:00:00-04:00", "end_time": "2026-07-20T09:30:00-04:00"}
+                        {
+                            "time": "2026-07-20T09:00:00-04:00",
+                            "end_time": "2026-07-20T09:30:00-04:00",
+                        }
                     ],
                     "next_available_date": None,
                 }
@@ -661,7 +712,10 @@ async def test_get_available_slots_still_returns_plain_list(
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
 
     slots = await adapter.get_available_slots(
-        start_date="2026-07-20", days=1, provider_id="nh-123", appointment_type_id="nh-50"
+        start_date="2026-07-20",
+        days=1,
+        provider_id="nh-123",
+        appointment_type_id="nh-50",
     )
 
     assert isinstance(slots, list)
@@ -713,7 +767,9 @@ async def test_book_appointment_revalidates_exact_selected_slot_before_post(
     calls: list[dict] = []
 
     async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
-        calls.append({"method": method, "path": path, "params": params or {}, "json": json})
+        calls.append(
+            {"method": method, "path": path, "params": params or {}, "json": json}
+        )
         if path == "/appointment_slots":
             return {"data": [_slot_group()]}
         if path == "/appointments":
@@ -972,13 +1028,19 @@ def _booking_request() -> "BookingRequest":  # noqa: F821
 
 
 @pytest.mark.asyncio
-async def test_reschedule_does_not_cancel_when_new_booking_fails(monkeypatch: pytest.MonkeyPatch):
+async def test_reschedule_does_not_cancel_when_new_booking_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """If the new slot cannot be booked, the existing appointment must be left intact."""
     from unittest.mock import AsyncMock
     from src.app.pms.models import BookingResult
 
     adapter = _make_adapter()
-    book_mock = AsyncMock(return_value=BookingResult(success=False, source="nexhealth", status="error", error="slot full"))
+    book_mock = AsyncMock(
+        return_value=BookingResult(
+            success=False, source="nexhealth", status="error", error="slot full"
+        )
+    )
     cancel_mock = AsyncMock()
     monkeypatch.setattr(adapter, "book_appointment", book_mock)
     monkeypatch.setattr(adapter, "cancel_appointment", cancel_mock)
@@ -991,7 +1053,9 @@ async def test_reschedule_does_not_cancel_when_new_booking_fails(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_reschedule_books_new_then_cancels_old_on_success(monkeypatch: pytest.MonkeyPatch):
+async def test_reschedule_books_new_then_cancels_old_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+):
     from src.app.pms.models import BookingResult
 
     adapter = _make_adapter()
@@ -999,7 +1063,9 @@ async def test_reschedule_books_new_then_cancels_old_on_success(monkeypatch: pyt
 
     async def fake_book(_req):
         call_order.append("book")
-        return BookingResult(success=True, source="nexhealth", status="booked", appointment_id="new-1")
+        return BookingResult(
+            success=True, source="nexhealth", status="booked", appointment_id="new-1"
+        )
 
     async def fake_cancel(_id):
         call_order.append("cancel")
@@ -1016,7 +1082,9 @@ async def test_reschedule_books_new_then_cancels_old_on_success(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_reschedule_returns_warning_when_cancel_fails_after_new_booked(monkeypatch: pytest.MonkeyPatch):
+async def test_reschedule_returns_warning_when_cancel_fails_after_new_booked(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """New slot is booked but cancel fails — we must surface the manual cleanup warning, not a clean success."""
     from unittest.mock import AsyncMock
     from src.app.pms.models import BookingResult
@@ -1025,12 +1093,26 @@ async def test_reschedule_returns_warning_when_cancel_fails_after_new_booked(mon
     monkeypatch.setattr(
         adapter,
         "book_appointment",
-        AsyncMock(return_value=BookingResult(success=True, source="nexhealth", status="booked", appointment_id="new-1")),
+        AsyncMock(
+            return_value=BookingResult(
+                success=True,
+                source="nexhealth",
+                status="booked",
+                appointment_id="new-1",
+            )
+        ),
     )
     monkeypatch.setattr(
         adapter,
         "cancel_appointment",
-        AsyncMock(return_value=BookingResult(success=False, source="nexhealth", status="error", error="appointment locked")),
+        AsyncMock(
+            return_value=BookingResult(
+                success=False,
+                source="nexhealth",
+                status="error",
+                error="appointment locked",
+            )
+        ),
     )
 
     result = await adapter.reschedule_appointment("old-1", _booking_request())
@@ -1041,7 +1123,9 @@ async def test_reschedule_returns_warning_when_cancel_fails_after_new_booked(mon
 
 
 @pytest.mark.asyncio
-async def test_confirm_appointment_patches_confirmed_true(monkeypatch: pytest.MonkeyPatch):
+async def test_confirm_appointment_patches_confirmed_true(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
@@ -1070,6 +1154,7 @@ async def test_confirm_appointment_patches_confirmed_true(monkeypatch: pytest.Mo
 # appointment_type". Reproduced live + verified against staging on
 # 2026-05-08; this test pins the wrap so the bug cannot regress silently.
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_create_appointment_type_wraps_body_under_appointment_type_key(

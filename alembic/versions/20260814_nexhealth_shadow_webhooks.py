@@ -165,6 +165,7 @@ def upgrade() -> None:
             event_types jsonb NOT NULL DEFAULT '[]'::jsonb,
             provider_endpoint_id varchar(160) NULL,
             provider_subscription_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+            secret_key_encrypted text NULL,
             status varchar(32) NOT NULL DEFAULT 'pending',
             last_health_check_at timestamptz NULL,
             last_event_at timestamptz NULL,

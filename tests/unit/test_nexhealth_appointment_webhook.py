@@ -108,7 +108,9 @@ def _patch_patient_projection(change="updated", contact_id="contact-patient-1"):
     inst = MagicMock()
     inst.claim_event = AsyncMock(return_value=True)
     inst.upsert_patient = AsyncMock(
-        return_value=SimpleNamespace(contact=SimpleNamespace(id=contact_id), change=change)
+        return_value=SimpleNamespace(
+            contact=SimpleNamespace(id=contact_id), change=change
+        )
     )
     inst.complete_event = AsyncMock()
     return patch(
@@ -199,7 +201,9 @@ def test_appointment_dedup_key_matches_v2_v3_overlap_payloads():
         },
     }
 
-    expected = "Appointment:appt-999:appointment_updated:updated_at:2026-08-14T12:00:00Z"
+    expected = (
+        "Appointment:appt-999:appointment_updated:updated_at:2026-08-14T12:00:00Z"
+    )
     assert (
         _appointment_dedup_key(
             event="appointment_updated",
@@ -251,6 +255,39 @@ def test_appointment_cancel_dedup_key_ignores_cancelled_spelling():
     )
 
 
+def test_appointment_dedup_key_uses_missing_marker_for_v2_v3_overlap():
+    v2_payload = {
+        "webhook_subscription_id": "legacy-sub",
+        "event_name": "appointment_updated.complete",
+        "data": {"appointment": {"id": "appt-1", "patient": {"id": "pat-1"}}},
+    }
+    v3_payload = {
+        "webhook_subscription_id": "stable-sub",
+        "event_name": "appointment_updated.complete",
+        "data": {"appointment": {"id": "appt-1"}},
+    }
+
+    expected = "Appointment:appt-1:appointment_updated:none"
+    assert (
+        _appointment_dedup_key(
+            event="appointment_updated",
+            appt=v2_payload["data"]["appointment"],
+            payload=v2_payload,
+            cancelled=False,
+        )
+        == expected
+    )
+    assert (
+        _appointment_dedup_key(
+            event="appointment_updated",
+            appt=v3_payload["data"]["appointment"],
+            payload=v3_payload,
+            cancelled=False,
+        )
+        == expected
+    )
+
+
 def test_patient_dedup_key_matches_v2_v3_overlap_payloads():
     v2_patient = {
         "id": "pat-1",
@@ -286,12 +323,15 @@ def test_sync_status_dedup_key_reads_current_syncstatus_envelope():
         },
     }
 
-    assert _sync_status_dedup_key(
-        event="sync_status_read_change",
-        subdomain="demo",
-        local_location_ids=["loc-1"],
-        payload=payload,
-    ) == "SyncStatus:demo:loc-1:sync_status_read_change:read_status_at:2026-08-14T10:00:00Z"
+    assert (
+        _sync_status_dedup_key(
+            event="sync_status_read_change",
+            subdomain="demo",
+            local_location_ids=["loc-1"],
+            payload=payload,
+        )
+        == "SyncStatus:demo:loc-1:sync_status_read_change:read_status_at:2026-08-14T10:00:00Z"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +390,20 @@ def test_verify_signature_passes_correct_signature():
         _verify_signature(body, sig, timestamp)  # should not raise
 
 
+def test_verify_signature_accepts_candidate_endpoint_secret():
+    body = b'{"event_name":"test"}'
+    timestamp = "1700000000"
+    sig = _sign(body, timestamp, "endpoint-secret")
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
+        mock_settings.nexhealth_webhook_secret = "global-secret"
+        _verify_signature(
+            body,
+            sig,
+            timestamp,
+            candidate_secrets=["endpoint-secret"],
+        )
+
+
 # ---------------------------------------------------------------------------
 # nexhealth_appointment_webhook — happy path
 # ---------------------------------------------------------------------------
@@ -363,14 +417,20 @@ async def test_webhook_queues_task_for_created_event():
     mock_session = _make_session(location=location, contact=contact)
     request = _make_request(_VALID_PAYLOAD)
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[mock_session, _make_cm_session()],
-    ), _patch_projection(change="new"), patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as mock_task, patch(
-        "src.app.tasks.automation_workflow.resume_reactivation_booking"
-    ) as mock_reactivation:
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            side_effect=[mock_session, _make_cm_session()],
+        ),
+        _patch_projection(change="new"),
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as mock_task,
+        patch(
+            "src.app.tasks.automation_workflow.resume_reactivation_booking"
+        ) as mock_reactivation,
+    ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
         mock_task.delay = MagicMock()
@@ -399,14 +459,20 @@ async def test_webhook_queues_task_with_no_contact():
     mock_session = _make_session(location=location, contact=None)
     request = _make_request(_VALID_PAYLOAD)
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[mock_session, _make_cm_session()],
-    ), _patch_projection(change="new"), patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as mock_task, patch(
-        "src.app.tasks.automation_workflow.resume_reactivation_booking"
-    ) as mock_reactivation:
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            side_effect=[mock_session, _make_cm_session()],
+        ),
+        _patch_projection(change="new"),
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as mock_task,
+        patch(
+            "src.app.tasks.automation_workflow.resume_reactivation_booking"
+        ) as mock_reactivation,
+    ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
         mock_task.delay = MagicMock()
@@ -443,14 +509,20 @@ async def test_webhook_queues_task_for_appointment_created_plural_payload():
     }
     request = _make_request(payload)
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[mock_session, _make_cm_session()],
-    ), _patch_projection(change="new"), patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as mock_task, patch(
-        "src.app.tasks.automation_workflow.resume_reactivation_booking"
-    ) as mock_reactivation:
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            side_effect=[mock_session, _make_cm_session()],
+        ),
+        _patch_projection(change="new"),
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as mock_task,
+        patch(
+            "src.app.tasks.automation_workflow.resume_reactivation_booking"
+        ) as mock_reactivation,
+    ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
         mock_task.delay = MagicMock()
@@ -493,15 +565,21 @@ async def test_live_appointment_webhook_claims_business_event_key_for_v3_overlap
     projection = MagicMock()
     projection.claim_event = AsyncMock(return_value=False)
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[mock_session, webhook_session],
-    ), patch(
-        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
-        return_value=projection,
-    ), _patch_subscription_lifecycle(), patch(
-        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
-    ) as mock_task:
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            side_effect=[mock_session, webhook_session],
+        ),
+        patch(
+            "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+            return_value=projection,
+        ),
+        _patch_subscription_lifecycle(),
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as mock_task,
+    ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
         mock_task.delay = MagicMock()
@@ -564,10 +642,15 @@ async def test_patient_event_refreshes_contact_projection_on_existing_appointmen
     }
     request = _make_request(payload)
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[lookup_session, webhook_session],
-    ), _patch_patient_projection(change="updated"), _patch_subscription_lifecycle():
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            side_effect=[lookup_session, webhook_session],
+        ),
+        _patch_patient_projection(change="updated"),
+        _patch_subscription_lifecycle(),
+    ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
         result = await nexhealth_appointment_webhook(request)
@@ -622,13 +705,18 @@ async def test_v3_patient_event_without_location_ids_processes_for_single_subdom
     )
     projection.complete_event = AsyncMock()
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[lookup_session, webhook_session],
-    ), patch(
-        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
-        return_value=projection,
-    ), _patch_subscription_lifecycle():
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            side_effect=[lookup_session, webhook_session],
+        ),
+        patch(
+            "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+            return_value=projection,
+        ),
+        _patch_subscription_lifecycle(),
+    ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
         result = await nexhealth_patient_webhook(request)
@@ -676,10 +764,16 @@ async def test_sync_status_event_processes_on_existing_appointment_url():
     }
     request = _make_request(payload)
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[lookup_session, webhook_session],
-    ), _patch_sync_status_service(location), _patch_projection(), _patch_subscription_lifecycle():
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            side_effect=[lookup_session, webhook_session],
+        ),
+        _patch_sync_status_service(location),
+        _patch_projection(),
+        _patch_subscription_lifecycle(),
+    ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
         result = await nexhealth_appointment_webhook(request)
@@ -748,15 +842,21 @@ async def test_webhook_cancels_runs_on_cancelled_update():
     mock_enroll_svc = AsyncMock()
     mock_scheduler = AsyncMock()
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[lookup_session, _make_cm_session(), cancel_session],
-    ), _patch_projection(change="cancelled"), patch(
-        "src.app.services.automation.enrollment_service.AutomationWorkflowEnrollmentService",
-        return_value=mock_enroll_svc,
-    ), patch(
-        "src.app.services.automation.scheduler_service.AutomationWorkflowSchedulerService",
-        return_value=mock_scheduler,
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            side_effect=[lookup_session, _make_cm_session(), cancel_session],
+        ),
+        _patch_projection(change="cancelled"),
+        patch(
+            "src.app.services.automation.enrollment_service.AutomationWorkflowEnrollmentService",
+            return_value=mock_enroll_svc,
+        ),
+        patch(
+            "src.app.services.automation.scheduler_service.AutomationWorkflowSchedulerService",
+            return_value=mock_scheduler,
+        ),
     ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
@@ -774,9 +874,12 @@ async def test_webhook_ignores_unknown_location():
     mock_session = _make_session(location=None)
     request = _make_request(_VALID_PAYLOAD)
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        return_value=mock_session,
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            return_value=mock_session,
+        ),
     ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
@@ -797,12 +900,18 @@ async def test_claimed_webhook_failure_is_dead_lettered_and_acknowledged():
     projection_patch, projection = _patch_failing_projection()
     capture_dead_letter = AsyncMock()
 
-    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
-        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
-        side_effect=[lookup_session, webhook_session],
-    ), projection_patch, _patch_subscription_lifecycle(), patch(
-        "src.app.api.routes.nexhealth_webhooks.capture_dead_letter",
-        new=capture_dead_letter,
+    with (
+        patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+            side_effect=[lookup_session, webhook_session],
+        ),
+        projection_patch,
+        _patch_subscription_lifecycle(),
+        patch(
+            "src.app.api.routes.nexhealth_webhooks.capture_dead_letter",
+            new=capture_dead_letter,
+        ),
     ):
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = False
