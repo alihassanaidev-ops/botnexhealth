@@ -117,6 +117,13 @@ booking we return success with a warning rather than unwinding the new booking
 There is no slot-level double-booking guard beyond what NexHealth/the PMS
 enforces; two agents racing for the same slot resolve at NexHealth's side.
 
+Appointment list reads always choose cancellation semantics explicitly during
+the v3 migration. Booking-critical reads such as the "has appointments today?"
+slot cutoff check send `cancelled=false` and only consider active appointments.
+Backfill/reconciliation scans fetch active and cancelled/deleted rows as two
+separate filtered reads (`cancelled=false` then `cancelled=true`) so stable v3's
+broader omitted-filter default cannot silently change workflow behavior.
+
 ## Caveats and edge cases
 
 Everything below was discovered the hard way and is encoded in the adapter
@@ -169,6 +176,11 @@ lists return rows directly under `data` and advance with
 resource name (`{"appointment_type": {...}}`) or you get `Missing parameter`
 back.
 
+Patient list projection no longer requires `location_ids`. Stable v3 omits that
+field, so location-scoped backfills grant contact visibility from the
+adapter-bound `InstitutionLocation` that produced the patient row. Legacy v2 rows
+that still carry `location_ids` continue to resolve those locations first.
+
 **Availability filtering is silent.** Windows with `active: false` and one-off
 windows whose `specific_date` has passed are dropped during mapping with no
 indication (`mappers.py:100-106`). `ignore_past_dates=True` is the default on
@@ -180,7 +192,7 @@ has-appointments-today check scans at most 10×50 appointments for latency
 reasons; a provider with >500 appointments in one day would be misread — and if
 the payload shape is unexpected (occasionally `data` is not a list) we log and
 assume appointments exist, because the failure mode of guessing wrong is hiding
-bookable slots (`adapter.py:280-306`).
+bookable slots.
 
 **Unconfigured operating hours mean no hour filtering.** If a location hasn't
 configured operating hours, slot filtering applies only the buffer — slots

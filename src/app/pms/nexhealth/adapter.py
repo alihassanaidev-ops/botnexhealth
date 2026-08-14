@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.nexhealth.api_contract import (
@@ -46,6 +46,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 PREFIX = "nh"
+AppointmentCancellationMode = Literal[
+    "active_only",
+    "cancelled_only",
+    "active_and_cancelled",
+]
 
 
 def _strip(prefixed_id: str) -> str:
@@ -109,6 +114,29 @@ def _normalize_phone_for_nexhealth(phone: str | None) -> str | None:
     # padded/odd shapes): first 10 chars, matching NexHealth's
     # silent storage truncation so that lookup and create agree.
     return digits[:10]
+
+
+def _appointment_cancelled_filters(
+    mode: AppointmentCancellationMode,
+) -> tuple[bool, ...]:
+    """Return explicit NexHealth ``cancelled`` filters for list reads.
+
+    Stable v3 changed the default ``GET /appointments`` behavior: omitting the
+    filter now returns active, cancelled, and EHR-deleted rows. Calling code must
+    choose a mode instead of inheriting that upstream default.
+    """
+    if mode == "active_only":
+        return (False,)
+    if mode == "cancelled_only":
+        return (True,)
+    if mode == "active_and_cancelled":
+        return (False, True)
+    raise ValueError(f"Unsupported appointment cancellation mode: {mode!r}")
+
+
+def _appointment_identity(appt: dict[str, Any]) -> str | None:
+    value = appt.get("id") or appt.get("appointment_id")
+    return str(value) if value not in (None, "") else None
 
 
 class NexHealthAdapter(
@@ -228,7 +256,7 @@ class NexHealthAdapter(
         else:
             params.setdefault("page", 1)
             params.setdefault("per_page", 10)
-        if kwargs.get("include"):
+        if kwargs.get("include") and self._api_contract is NexHealthAPIContract.LEGACY_V2:
             params["include[]"] = kwargs["include"]
 
         raw = await handle_nexhealth_request(self._client, "GET", "/patients", params=params)
@@ -383,6 +411,7 @@ class NexHealthAdapter(
                 params["start"] = date_str
                 params["end"] = date_str
                 params["provider_id"] = _strip(provider_id)
+                params["cancelled"] = False
                 params["per_page"] = per_page
                 if self._api_contract is NexHealthAPIContract.STABLE_V3:
                     if end_cursor:
@@ -457,36 +486,52 @@ class NexHealthAdapter(
         start_date: str,
         end_date: str,
         max_items: int = 1000,
+        cancellation_mode: AppointmentCancellationMode = "active_only",
     ) -> list[dict[str, Any]]:
         """List raw NexHealth appointments for this location/date window.
 
         Used by Plan 09 backfill and reconciliation. This intentionally returns
         raw appointment dictionaries because the projection only needs a small
-        scheduling subset and NexHealth payloads vary by PMS. The call still
-        goes through ``handle_nexhealth_request`` + ``fetch_all_pages`` so the
-        shared client, auth, and rate limiter remain authoritative.
+        scheduling subset and NexHealth payloads vary by PMS. ``cancellation_mode``
+        is explicit because stable v3 changed the omitted ``cancelled`` filter
+        to include EHR-deleted appointments. The call still goes through
+        ``handle_nexhealth_request`` + ``fetch_all_pages`` so the shared client,
+        auth, and rate limiter remain authoritative.
         """
         params = self._default_params()
+        all_rows: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
 
-        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
-            p = {
-                **params,
-                # NexHealth /appointments expects `start`/`end` (not start_date/end_date).
-                "start": start_date,
-                "end": end_date,
-                **page_params,
-            }
-            return await handle_nexhealth_request(
-                self._client, "GET", "/appointments", params=p
+        for cancelled in _appointment_cancelled_filters(cancellation_mode):
+            async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+                p = {
+                    **params,
+                    # NexHealth /appointments expects `start`/`end` (not start_date/end_date).
+                    "start": start_date,
+                    "end": end_date,
+                    "cancelled": cancelled,
+                    **page_params,
+                }
+                return await handle_nexhealth_request(
+                    self._client, "GET", "/appointments", params=p
+                )
+
+            rows = await fetch_all_pages(
+                fetch,
+                api_contract=self._api_contract,
+                collection_key="appointments",
+                per_page=50,
+                max_items=max_items,
             )
+            for row in rows:
+                identity = _appointment_identity(row)
+                if identity:
+                    if identity in seen_ids:
+                        continue
+                    seen_ids.add(identity)
+                all_rows.append(row)
 
-        return await fetch_all_pages(
-            fetch,
-            api_contract=self._api_contract,
-            collection_key="appointments",
-            per_page=50,
-            max_items=max_items,
-        )
+        return all_rows
 
     async def list_patient_recalls(self, *, max_items: int = 500) -> list[dict[str, Any]]:
         """List patient recall records for this location from NexHealth.

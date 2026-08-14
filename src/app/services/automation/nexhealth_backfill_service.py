@@ -175,6 +175,7 @@ class NexHealthAppointmentSyncService:
             appointments = await adapter.list_appointments(
                 start_date=today.isoformat(),
                 end_date=end.isoformat(),
+                cancellation_mode="active_and_cancelled",
             )
         finally:
             await adapter.close()
@@ -233,6 +234,10 @@ class NexHealthAppointmentSyncService:
             cancelled=cancelled,
             provider_id=_provider_id(appointment),
             appointment_type_id=_appointment_type_id(appointment),
+            appointment_reason=_appointment_reason(appointment),
+            is_confirmed=_confirmed(appointment),
+            is_preconfirmed=_preconfirmed(appointment),
+            status_source=f"nexhealth_{mode}",
         )
 
         cancelled_runs = 0
@@ -515,6 +520,39 @@ def _appointment_type_id(appt: dict[str, Any]) -> str | None:
     if value is None and isinstance(appt.get("appointment_type"), dict):
         value = appt["appointment_type"].get("id")
     return str(value) if value not in (None, "") else None
+
+
+def _appointment_reason(appt: dict[str, Any]) -> str | None:
+    value = appt.get("appointment_reason") or appt.get("reason")
+    if value is None and isinstance(appt.get("appointment_type"), dict):
+        value = appt["appointment_type"].get("name")
+    return str(value) if value not in (None, "") else None
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return bool(value)
+
+
+def _confirmed(appt: dict[str, Any]) -> bool | None:
+    return _bool_or_none(appt.get("confirmed")) if "confirmed" in appt else None
+
+
+def _preconfirmed(appt: dict[str, Any]) -> bool | None:
+    if "preconfirmed" in appt:
+        return _bool_or_none(appt.get("preconfirmed"))
+    if "pre_confirmed" in appt:
+        return _bool_or_none(appt.get("pre_confirmed"))
+    return None
 
 
 def _start_time(appt: dict[str, Any]) -> str | None:

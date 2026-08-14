@@ -121,6 +121,27 @@ async def test_search_patients_accepts_stable_v3_flat_data(
 
 
 @pytest.mark.asyncio
+async def test_search_patients_does_not_send_removed_includes_for_stable_v3(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    captured: dict = {}
+
+    async def fake_request(client, method, path, params=None, json=None):
+        captured["params"] = params or {}
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    await adapter.search_patients(
+        "Sam Lee",
+        include=["upcoming_appts", "last_visited_appointment"],
+    )
+
+    assert "include[]" not in captured["params"]
+
+
+@pytest.mark.asyncio
 async def test_list_patients_uses_cursor_pagination_for_stable_v3(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -183,6 +204,7 @@ async def test_has_provider_appointments_scans_multiple_pages(monkeypatch: pytes
     assert result is True
     assert len(calls) == 2
     assert calls[0]["provider_id"] == "123"
+    assert calls[0]["cancelled"] is False
 
 
 @pytest.mark.asyncio
@@ -210,6 +232,7 @@ async def test_has_provider_appointments_scans_cursor_pages_for_stable_v3(
 
     assert result is True
     assert calls[0]["provider_id"] == "123"
+    assert calls[0]["cancelled"] is False
     assert "page" not in calls[0]
     assert calls[1]["end_cursor"] == "cursor-1"
 
@@ -265,6 +288,7 @@ async def test_list_appointments_paginates_date_window(monkeypatch: pytest.Monke
     # the sandbox — start_date/end_date returns HTTP 400 "Missing parameter start").
     assert calls[0]["start"] == "2026-08-01"
     assert calls[0]["end"] == "2026-08-31"
+    assert calls[0]["cancelled"] is False
     assert calls[1]["page"] == 2
 
 
@@ -297,8 +321,44 @@ async def test_list_appointments_uses_cursor_pagination_for_stable_v3(
     assert result == [{"id": "appt-1"}, {"id": "appt-2"}]
     assert calls[0]["start"] == "2026-08-01"
     assert calls[0]["end"] == "2026-08-31"
+    assert calls[0]["cancelled"] is False
     assert "page" not in calls[0]
     assert calls[1]["end_cursor"] == "cursor-1"
+
+
+@pytest.mark.asyncio
+async def test_list_appointments_fetches_active_and_cancelled_modes_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(params or {})
+        if params["cancelled"] is False:
+            return {
+                "data": [{"id": "active-1", "cancelled": False}],
+                "page_info": {"has_next_page": False, "end_cursor": "active"},
+            }
+        return {
+            "data": [{"id": "cancelled-1", "cancelled": True}],
+            "page_info": {"has_next_page": False, "end_cursor": "cancelled"},
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.list_appointments(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+        cancellation_mode="active_and_cancelled",
+    )
+
+    assert result == [
+        {"id": "active-1", "cancelled": False},
+        {"id": "cancelled-1", "cancelled": True},
+    ]
+    assert [call["cancelled"] for call in calls] == [False, True]
+    assert all("page" not in call for call in calls)
 
 
 @pytest.mark.asyncio
