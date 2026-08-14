@@ -15,13 +15,16 @@ This runbook captures the stable operating procedure for moving NexHealth traffi
 - Confirm request headers are derived from the normalized contract target.
 - Confirm `/available_slots` and `/working_hours` routing is enabled for v3.
 - Confirm `/available_slots` shares the conservative appointment/slot read rate-limit class.
+- Confirm booking revalidates the exact selected slot through the contract-aware
+  slot endpoint before `POST /appointments`.
 - Run appointment and patient backfills before cutover to establish baseline counts.
 
 ## Staging REST Validation
 
 - Patient lookup.
 - Slot search.
-- Appointment booking.
+- Appointment booking, including stale selected-slot failure that returns
+  fresh-slot guidance.
 - Appointment cancellation.
 - Appointment confirmation.
 - Reschedule flow.

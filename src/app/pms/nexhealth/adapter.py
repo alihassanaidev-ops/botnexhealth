@@ -8,7 +8,8 @@ availability linking, subdomain/location_id) lives here.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from src.app.api.helpers import handle_nexhealth_request
@@ -51,6 +52,13 @@ AppointmentCancellationMode = Literal[
     "cancelled_only",
     "active_and_cancelled",
 ]
+
+
+@dataclass(frozen=True)
+class _SlotValidationResult:
+    ok: bool
+    end_time: str | None = None
+    error: str | None = None
 
 
 def _strip(prefixed_id: str) -> str:
@@ -137,6 +145,103 @@ def _appointment_cancelled_filters(
 def _appointment_identity(appt: dict[str, Any]) -> str | None:
     value = appt.get("id") or appt.get("appointment_id")
     return str(value) if value not in (None, "") else None
+
+
+def _parse_slot_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _has_utc_offset(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _same_slot_datetime(left: Any, right: Any) -> bool:
+    left_dt = _parse_slot_datetime(left)
+    right_dt = _parse_slot_datetime(right)
+    if left_dt and right_dt:
+        if _has_utc_offset(left_dt) and _has_utc_offset(right_dt):
+            return left_dt == right_dt
+        return left_dt.replace(tzinfo=None) == right_dt.replace(tzinfo=None)
+    return str(left).strip() == str(right).strip()
+
+
+def _slot_search_date(slot_start: str) -> str | None:
+    parsed = _parse_slot_datetime(slot_start)
+    if parsed:
+        return parsed.date().isoformat()
+    text = str(slot_start or "").strip()
+    if "T" in text:
+        return text.split("T", 1)[0] or None
+    if len(text) >= 10:
+        return text[:10]
+    return None
+
+
+def _format_slot_datetime(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _add_minutes(slot_start: str, minutes: int | None) -> datetime | None:
+    if not minutes:
+        return None
+    parsed = _parse_slot_datetime(slot_start)
+    if not parsed:
+        return None
+    return parsed + timedelta(minutes=minutes)
+
+
+def _raw_id(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return _strip(str(value))
+
+
+def _slot_core_matches_booking(slot: UniversalSlot, req: BookingRequest) -> bool:
+    if not _same_slot_datetime(slot.start, req.slot_start):
+        return False
+    if _raw_id(slot.provider_id) != _raw_id(req.provider_id):
+        return False
+    if (
+        req.appointment_type_id
+        and slot.appointment_type_id
+        and _raw_id(slot.appointment_type_id) != _raw_id(req.appointment_type_id)
+    ):
+        return False
+    if req.operatory_id and _raw_id(slot.operatory_id) != _raw_id(req.operatory_id):
+        return False
+    return True
+
+
+def _booking_end_time_for_slot(
+    slot: UniversalSlot,
+    req: BookingRequest,
+    duration_minutes: int | None,
+) -> str | None:
+    if req.slot_end:
+        if slot.end:
+            return req.slot_end if _same_slot_datetime(slot.end, req.slot_end) else None
+        computed = _add_minutes(slot.start, duration_minutes)
+        if computed and _same_slot_datetime(computed, req.slot_end):
+            return req.slot_end
+        return None
+
+    if slot.end:
+        return slot.end
+
+    computed = _add_minutes(slot.start, duration_minutes)
+    return _format_slot_datetime(computed) if computed else None
 
 
 class NexHealthAdapter(
@@ -645,9 +750,11 @@ class NexHealthAdapter(
         for group in raw.get("data", []):
             group_pid = group.get("pid")
             group_lid = group.get("lid")
+            group_operatory_id = group.get("operatory_id") or group.get("oid")
             for slot in group.get("slots", []):
                 slot["_pid"] = group_pid
                 slot["_lid"] = group_lid
+                slot["_operatory_id"] = group_operatory_id
                 result.append(mappers.to_slot(slot, appointment_type_id))
             next_date = group.get("next_available_date")
             if next_date and group_pid is not None:
@@ -662,14 +769,139 @@ class NexHealthAdapter(
 
     # ── Booking ──────────────────────────────────────────────────────────
 
+    async def _appointment_type_duration_minutes(
+        self, appointment_type_id: str | None
+    ) -> int | None:
+        if not appointment_type_id:
+            return None
+        wanted = _raw_id(appointment_type_id)
+        try:
+            appointment_types = await self.list_appointment_types()
+        except Exception as exc:
+            logger.warning(
+                "Failed to load appointment type duration for slot validation: %s",
+                exc,
+            )
+            return None
+
+        for appointment_type in appointment_types:
+            candidates = {
+                _raw_id(appointment_type.id),
+                _raw_id(appointment_type.source_id),
+                _raw_id(
+                    appointment_type.source_metadata.get("nh_appt_type_id")
+                    if appointment_type.source_metadata
+                    else None
+                ),
+            }
+            if wanted in candidates:
+                return appointment_type.duration_minutes
+        return None
+
+    def _match_selected_slot(
+        self,
+        slots: list[UniversalSlot],
+        req: BookingRequest,
+        duration_minutes: int | None,
+    ) -> str | None:
+        for slot in slots:
+            if not _slot_core_matches_booking(slot, req):
+                continue
+            end_time = _booking_end_time_for_slot(slot, req, duration_minutes)
+            if end_time:
+                return end_time
+        return None
+
+    async def _validate_selected_slot_before_booking(
+        self, req: BookingRequest
+    ) -> _SlotValidationResult:
+        start_date = _slot_search_date(req.slot_start)
+        if not start_date:
+            return _SlotValidationResult(
+                ok=False,
+                error="Selected appointment time is invalid. Please offer fresh slots.",
+            )
+
+        try:
+            slot_result = await self.find_available_slots(
+                start_date=start_date,
+                days=1,
+                provider_id=req.provider_id,
+                appointment_type_id=req.appointment_type_id,
+                operatory_ids=[req.operatory_id] if req.operatory_id else None,
+            )
+        except Exception as exc:
+            logger.warning("Failed to validate selected NexHealth slot: %s", exc)
+            return _SlotValidationResult(
+                ok=False,
+                error="Unable to validate the selected slot. Please offer fresh slots.",
+            )
+
+        duration_minutes = req.duration_min
+        end_time = self._match_selected_slot(slot_result.slots, req, duration_minutes)
+        if end_time:
+            return _SlotValidationResult(ok=True, end_time=end_time)
+
+        core_match = any(
+            _slot_core_matches_booking(slot, req) for slot in slot_result.slots
+        )
+        core_match_without_end = any(
+            _slot_core_matches_booking(slot, req) and not slot.end
+            for slot in slot_result.slots
+        )
+        if (
+            core_match_without_end
+            and duration_minutes is None
+            and req.appointment_type_id
+        ):
+            duration_minutes = await self._appointment_type_duration_minutes(
+                req.appointment_type_id
+            )
+            end_time = self._match_selected_slot(
+                slot_result.slots,
+                req,
+                duration_minutes,
+            )
+            if end_time:
+                return _SlotValidationResult(ok=True, end_time=end_time)
+
+        if core_match_without_end:
+            return _SlotValidationResult(
+                ok=False,
+                error=(
+                    "Unable to validate the selected slot duration. "
+                    "Please offer fresh slots."
+                ),
+            )
+
+        if core_match:
+            return _SlotValidationResult(
+                ok=False,
+                error="Selected slot is no longer available. Please offer fresh slots.",
+            )
+
+        return _SlotValidationResult(
+            ok=False,
+            error="Selected slot is no longer available. Please offer fresh slots.",
+        )
+
     async def book_appointment(self, req: BookingRequest) -> BookingResult:
         from src.app.api.models import CreateAppointmentBody, CreateAppointmentRequest
+
+        validation = await self._validate_selected_slot_before_booking(req)
+        if not validation.ok:
+            return BookingResult(
+                success=False,
+                source="nexhealth",
+                status="error",
+                error=validation.error or "Selected slot is no longer available.",
+            )
 
         body = CreateAppointmentBody(
             patient_id=_strip(req.patient_id),
             provider_id=_strip(req.provider_id),
             start_time=req.slot_start,
-            end_time=req.slot_end,
+            end_time=req.slot_end or validation.end_time,
             operatory_id=_strip(req.operatory_id) if req.operatory_id else None,
             appointment_type_id=_strip(req.appointment_type_id) if req.appointment_type_id else None,
             descriptor_ids=[_strip(d) for d in req.descriptor_ids] if req.descriptor_ids else None,
@@ -690,6 +922,7 @@ class NexHealthAdapter(
                     source="nexhealth",
                     status="error",
                     error=raw.get("error") or raw.get("description") or "Unknown error",
+                    message="Selected slot could not be booked. Please offer fresh slots.",
                 )
             result = mappers.to_booking_result(raw, success=True)
             # Carry the requested appointment type through so downstream

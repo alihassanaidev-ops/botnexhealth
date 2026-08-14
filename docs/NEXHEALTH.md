@@ -108,14 +108,20 @@ then filter locally
    appointments exist and leaves slots visible.
 
 Booking is `POST /appointments` (body wrapped under `"appt"`), cancel is
-`PATCH /appointments/{id}` with `cancelled: true`. **Reschedule books the new
-slot first, then cancels the old one** — if the new booking fails the patient
-keeps their original appointment; if the cancel fails after a successful
-booking we return success with a warning rather than unwinding the new booking
-(`src/app/pms/nexhealth/adapter.py`).
+`PATCH /appointments/{id}` with `cancelled: true`. Before posting a booking,
+the adapter re-queries the contract-aware slot endpoint for the selected day,
+provider, appointment type, and operatory, then only proceeds when the selected
+slot still matches exactly. The match checks start time and provider, checks
+appointment type and operatory when supplied, and pins the end time from the
+returned slot or from appointment-type duration when NexHealth omits `end_time`.
 
-There is no slot-level double-booking guard beyond what NexHealth/the PMS
-enforces; two agents racing for the same slot resolve at NexHealth's side.
+This validation is not a lock. Two agents can still race after validation; if
+the booking POST loses that race, the adapter returns a controlled failure so
+the caller can offer fresh slots instead of silently booking a different time.
+**Reschedule still books the new slot first, then cancels the old one** — if
+the new booking fails the patient keeps their original appointment; if the
+cancel fails after a successful booking we return success with a warning rather
+than unwinding the new booking (`src/app/pms/nexhealth/adapter.py`).
 
 Appointment list reads always choose cancellation semantics explicitly during
 the v3 migration. Booking-critical reads such as the "has appointments today?"
@@ -143,15 +149,17 @@ take 10 digits (`_normalize_phone_for_nexhealth`,
 **"Availabilities" are working windows, not bookable slots.** The stable
 API's naming is misleading: an "availability" is a provider's recurring or
 one-off *working window*; actual bookable slots are computed by NexHealth
-(windows minus existing appointments) and come from `GET /appointment_slots`.
-Don't reach for `/availabilities` when you mean "what can the patient book".
+(windows minus existing appointments) and come from the contract-aware slot
+path: `/appointment_slots` on legacy v2 and `/available_slots` on stable v3.
+Don't reach for `/availabilities` or `/working_hours` when you mean "what can
+the patient book".
 
 **`/availabilities` returns empty for PMS-synced schedules.** For providers
 whose schedule syncs from the PMS, the endpoint can return 200 with zero rows
 even though the provider has working hours. The same windows *are* embedded in
 `GET /providers?include[]=availabilities`, so `list_availabilities()` merges
-both sources by ID (`adapter.py:580-614`). Without this, the setup UI shows
-providers as having no hours.
+both sources by ID (`src/app/pms/nexhealth/adapter.py`). Without this, the setup
+UI shows providers as having no hours.
 
 **Working-window management must be enabled by NexHealth support.** Writing
 working windows ("availabilities") for a clinic is not self-serve on the

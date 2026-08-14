@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.app.pms.models import BookingRequest, SlotSearchResult, UniversalSlot
 from src.app.pms.nexhealth import adapter as adapter_module
 from src.app.pms.nexhealth.adapter import NexHealthAdapter
 
@@ -667,6 +668,292 @@ async def test_get_available_slots_still_returns_plain_list(
     assert len(slots) == 1
     assert isinstance(slots[0], UniversalSlot)
     assert slots[0].provider_id == "nh-123"
+
+
+# ── Booking: exact selected-slot validation ─────────────────────────────────
+
+
+def _valid_booking_request(**overrides) -> BookingRequest:
+    values = {
+        "patient_id": "nh-1",
+        "provider_id": "nh-123",
+        "slot_start": "2026-07-20T09:00:00-04:00",
+        "slot_end": "2026-07-20T09:30:00-04:00",
+        "appointment_type_id": "nh-50",
+        "operatory_id": "nh-789",
+    }
+    values.update(overrides)
+    return BookingRequest(**values)
+
+
+def _slot_group(
+    *,
+    pid=123,
+    operatory_id=789,
+    time="2026-07-20T09:00:00-04:00",
+    end_time="2026-07-20T09:30:00-04:00",
+) -> dict:
+    slot = {"time": time}
+    if end_time is not None:
+        slot["end_time"] = end_time
+    return {
+        "lid": 1,
+        "pid": pid,
+        "operatory_id": operatory_id,
+        "slots": [slot],
+        "next_available_date": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_revalidates_exact_selected_slot_before_post(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[dict] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append({"method": method, "path": path, "params": params or {}, "json": json})
+        if path == "/appointment_slots":
+            return {"data": [_slot_group()]}
+        if path == "/appointments":
+            return {
+                "data": {
+                    "appt": {
+                        "id": 900,
+                        "patient_id": 1,
+                        "provider_id": 123,
+                        "start_time": json["appt"]["start_time"],
+                        "end_time": json["appt"]["end_time"],
+                    }
+                }
+            }
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.book_appointment(_valid_booking_request())
+
+    assert result.success is True
+    assert result.id == "nh-900"
+    assert [call["path"] for call in calls] == ["/appointment_slots", "/appointments"]
+    assert calls[0]["params"]["start_date"] == "2026-07-20"
+    assert calls[0]["params"]["days"] == 1
+    assert calls[0]["params"]["pids[]"] == ["123"]
+    assert calls[0]["params"]["appointment_type_id"] == "50"
+    assert calls[0]["params"]["operatory_ids[]"] == ["789"]
+    assert calls[1]["json"]["appt"]["end_time"] == "2026-07-20T09:30:00-04:00"
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_validates_with_available_slots_for_v3(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    calls: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append(path)
+        if path == "/available_slots":
+            return {"data": [_slot_group()]}
+        if path == "/appointments":
+            return {"data": {"appt": {"id": 900}}}
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.book_appointment(_valid_booking_request())
+
+    assert result.success is True
+    assert calls == ["/available_slots", "/appointments"]
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_blocks_when_selected_start_is_not_available(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append(path)
+        return {"data": [_slot_group(time="2026-07-20T10:00:00-04:00")]}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.book_appointment(_valid_booking_request())
+
+    assert result.success is False
+    assert "no longer available" in (result.error or "")
+    assert calls == ["/appointment_slots"]
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_blocks_provider_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append(path)
+        return {"data": [_slot_group(pid=456)]}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.book_appointment(_valid_booking_request())
+
+    assert result.success is False
+    assert calls == ["/appointment_slots"]
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_blocks_appointment_type_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+
+    async def fake_slots(**_kwargs):
+        return SlotSearchResult(
+            slots=[
+                UniversalSlot(
+                    start="2026-07-20T09:00:00-04:00",
+                    end="2026-07-20T09:30:00-04:00",
+                    provider_id="nh-123",
+                    appointment_type_id="nh-51",
+                    operatory_id="nh-789",
+                )
+            ]
+        )
+
+    async def fail_post(*_args, **_kwargs):
+        raise AssertionError("booking POST should not run when slot validation fails")
+
+    monkeypatch.setattr(adapter, "find_available_slots", fake_slots)
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fail_post)
+
+    result = await adapter.book_appointment(_valid_booking_request())
+
+    assert result.success is False
+    assert "no longer available" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_blocks_operatory_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append(path)
+        return {"data": [_slot_group(operatory_id=456)]}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.book_appointment(_valid_booking_request())
+
+    assert result.success is False
+    assert calls == ["/appointment_slots"]
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_blocks_end_time_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append(path)
+        return {"data": [_slot_group(end_time="2026-07-20T09:45:00-04:00")]}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.book_appointment(_valid_booking_request())
+
+    assert result.success is False
+    assert calls == ["/appointment_slots"]
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_computes_end_from_duration_when_slot_omits_end(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[dict] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append({"path": path, "json": json})
+        if path == "/appointment_slots":
+            return {"data": [_slot_group(end_time=None)]}
+        if path == "/appointments":
+            return {"data": {"appt": {"id": 900}}}
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.book_appointment(
+        _valid_booking_request(slot_end=None, duration_min=45)
+    )
+
+    assert result.success is True
+    assert calls[1]["json"]["appt"]["end_time"] == "2026-07-20T09:45:00-04:00"
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_computes_end_from_appointment_type_duration(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[dict] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append({"path": path, "json": json})
+        if path == "/appointment_slots":
+            return {"data": [_slot_group(end_time=None)]}
+        if path == "/appointment_types":
+            return {"data": [{"id": 50, "name": "Cleaning", "minutes": 30}]}
+        if path == "/appointments":
+            return {"data": {"appt": {"id": 900}}}
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.book_appointment(_valid_booking_request(slot_end=None))
+
+    assert result.success is True
+    assert [call["path"] for call in calls] == [
+        "/appointment_slots",
+        "/appointment_types",
+        "/appointments",
+    ]
+    assert calls[2]["json"]["appt"]["end_time"] == "2026-07-20T09:30:00-04:00"
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_returns_controlled_failure_after_validation_race(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        calls.append(path)
+        if path == "/appointment_slots":
+            return {"data": [_slot_group()]}
+        if path == "/appointments":
+            return {"code": False, "error": "slot already taken"}
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.book_appointment(_valid_booking_request())
+
+    assert result.success is False
+    assert result.error == "slot already taken"
+    assert "fresh slots" in result.message
+    assert calls == ["/appointment_slots", "/appointments"]
 
 
 # ── Reschedule ordering: book new before cancelling old ─────────────────────
