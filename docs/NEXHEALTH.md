@@ -263,6 +263,24 @@ manual Celery task
 `src.app.tasks.automation_workflow.ensure_nexhealth_shadow_webhook_subscriptions`.
 The task is intentionally not scheduled in Celery beat.
 
+After shadow validation passes, v3 subscriptions can be pointed at the existing
+live handlers (`/appointments`, `/patients`, and `/sync-status`). The live
+`nexhealth_webhook_events` ledger deduplicates overlap by business event identity,
+not provider delivery id or subscription id, because the same PMS change can be
+delivered once by an old v2 subscription and once by a new v3 subscription.
+The key shape is:
+
+`Resource:pms_resource_id:event_family:change_marker`
+
+Appointment changes use the NexHealth appointment id and markers such as
+`start_time`, `updated_at`, or `cancelled:true`. Patient changes use the patient
+id and `updated_at`/`last_sync_time`/`event_time`. Sync-status changes use the
+subdomain plus resolved local locations and the read/write status timestamp. A
+v3 patient payload with no `location_ids` can still update the institution-level
+patient/contact projection when the subdomain resolves; location visibility is
+only granted when explicit location ids are present or the subdomain maps to one
+unambiguous local location.
+
 ## API contract selection
 
 NexHealth API versioning is selected by `NEXHEALTH_API_VERSION`, normalized at

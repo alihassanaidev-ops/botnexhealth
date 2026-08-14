@@ -531,6 +531,10 @@ def _extract_identity(payload: dict[str, Any], route_family: str) -> dict[str, A
     resource = _clean_str(payload.get("resource_type")) or _route_resource_type(route_family)
     resource_payload = _primary_resource_payload(payload, route_family)
     pms_resource_id = _clean_str(resource_payload.get("id")) if resource_payload else None
+    if route_family == SHADOW_ROUTE_SYNC_STATUS and not pms_resource_id:
+        subdomain = _clean_str(payload.get("subdomain")) or "unknown-subdomain"
+        location_ids = _sync_status_location_ids(resource_payload or {})
+        pms_resource_id = f"{subdomain}:{','.join(location_ids)}"
     change_marker = _change_marker(payload, resource_payload)
     business_event_key = None
     if resource and pms_resource_id and event_family:
@@ -576,6 +580,14 @@ def _primary_resource_payload(
         if data.get("id") is not None:
             return data
     if route_family == SHADOW_ROUTE_SYNC_STATUS:
+        for key in ("sync_status", "syncstatus"):
+            value = data.get(key)
+            if isinstance(value, dict):
+                return value
+        for key in ("sync_statuses", "syncstatuses"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return next((item for item in value if isinstance(item, dict)), None)
         return data if data else payload
     return None
 

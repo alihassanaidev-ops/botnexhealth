@@ -68,11 +68,142 @@ def _dedup_fallback(payload: dict[str, Any]) -> str:
     return payload_hash(payload)[:32]
 
 
+def _clean_str(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _event_family(event_name: str | None) -> str:
+    return str(event_name or "").split(".", 1)[0]
+
+
+def _change_marker(key: str, value: Any) -> str | None:
+    if isinstance(value, bool):
+        return f"{key}:{str(value).lower()}"
+    text = _clean_str(value)
+    return f"{key}:{text}" if text is not None else None
+
+
+def _business_event_key(
+    *,
+    resource_type: str,
+    pms_resource_id: str,
+    event_family: str,
+    change_marker: str | None,
+    payload: dict[str, Any],
+) -> str:
+    """Stable live idempotency key for v2/v3 webhook overlap.
+
+    NexHealth provider delivery ids and subscription ids differ between a legacy
+    v2 subscription and its v3 replacement. The live ledger therefore keys on
+    the business event itself: resource type, PMS resource id, event family, and
+    a change marker that should be equal for the same v2/v3 event.
+    """
+    marker = change_marker or f"payload:{_dedup_fallback(payload)}"
+    key = f"{resource_type}:{pms_resource_id}:{event_family}:{marker}"
+    if len(key) <= 300:
+        return key
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+    compact_resource_id = hashlib.sha256(
+        pms_resource_id.encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{resource_type}:{compact_resource_id}:{event_family}:hash:{digest}"
+
+
 def _appointment_is_cancelled(event: str, appt: dict) -> bool:
     """Whether this event represents a cancelled appointment."""
     if event in _CANCEL_EVENTS:
         return True
     return bool(appt.get("cancelled", False) or appt.get("canceled", False))
+
+
+def _appointment_dedup_key(
+    *, event: str, appt: dict[str, Any], payload: dict[str, Any], cancelled: bool
+) -> str:
+    if cancelled:
+        marker = "cancelled:true"
+    elif event in {"appointment_created", "appointment_insertion"}:
+        marker = (
+            _change_marker("start_time", appt.get("start_time"))
+            or _change_marker("updated_at", appt.get("updated_at"))
+            or _change_marker("event_time", payload.get("event_time"))
+        )
+    else:
+        marker = (
+            _change_marker("updated_at", appt.get("updated_at"))
+            or _change_marker("start_time", appt.get("start_time"))
+            or _change_marker("event_time", payload.get("event_time"))
+        )
+    return _business_event_key(
+        resource_type="Appointment",
+        pms_resource_id=str(appt.get("id") or ""),
+        event_family=event,
+        change_marker=marker,
+        payload=payload,
+    )
+
+
+def _patient_dedup_key(
+    *,
+    event: str,
+    patient: dict[str, Any],
+    payload: dict[str, Any],
+    event_time: str | None,
+) -> str:
+    marker = (
+        _change_marker("updated_at", patient.get("updated_at"))
+        or _change_marker("last_sync_time", patient.get("last_sync_time"))
+        or _change_marker("event_time", event_time)
+    )
+    return _business_event_key(
+        resource_type="Patient",
+        pms_resource_id=str(patient.get("id") or ""),
+        event_family=event,
+        change_marker=marker,
+        payload=payload,
+    )
+
+
+def _sync_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else None
+    if isinstance(data, dict):
+        for key in ("sync_status", "syncstatus"):
+            value = data.get(key)
+            if isinstance(value, dict):
+                return value
+        for key in ("sync_statuses", "syncstatuses"):
+            value = data.get(key)
+            if isinstance(value, list):
+                first = next((item for item in value if isinstance(item, dict)), None)
+                if first is not None:
+                    return first
+        return data
+    return payload
+
+
+def _sync_status_dedup_key(
+    *,
+    event: str,
+    subdomain: str,
+    local_location_ids: list[str],
+    payload: dict[str, Any],
+) -> str:
+    status_payload = _sync_status_payload(payload)
+    marker = (
+        _change_marker("read_status_at", status_payload.get("read_status_at"))
+        or _change_marker("write_status_at", status_payload.get("write_status_at"))
+        or _change_marker("event_time", payload.get("event_time"))
+    )
+    pms_resource_id = f"{subdomain}:{','.join(sorted(local_location_ids))}"
+    return _business_event_key(
+        resource_type="SyncStatus",
+        pms_resource_id=pms_resource_id,
+        event_family=event,
+        change_marker=marker,
+        payload=payload,
+    )
 
 
 def _appointment_payloads(payload: dict[str, Any], event: str) -> list[dict[str, Any]]:
@@ -246,7 +377,7 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     # NexHealth uses `event_name` (e.g. "appointment_insertion.complete"); normalize to the base
     # token. Fall back to `event` for backward compatibility with older/synthetic payloads.
     event_name: str = payload.get("event_name") or payload.get("event") or ""
-    event: str = event_name.split(".", 1)[0]
+    event = _event_family(event_name)
     if event not in _HANDLED_EVENTS:
         logger.debug("nexhealth_appointment_webhook: ignoring event=%s", event_name)
         return {"status": "ignored", "event": event_name}
@@ -312,7 +443,7 @@ async def nexhealth_patient_webhook(request: Request) -> dict[str, Any]:
     raw_payload = _raw_payload_text(raw_body)
 
     event_name: str = payload.get("event_name") or payload.get("event") or ""
-    event: str = event_name.split(".", 1)[0]
+    event = _event_family(event_name)
     if event not in _PATIENT_EVENTS:
         logger.debug("nexhealth_patient_webhook: ignoring event=%s", event_name)
         return {"status": "ignored", "event": event_name}
@@ -342,7 +473,7 @@ async def nexhealth_sync_status_webhook(request: Request) -> dict[str, Any]:
     raw_payload = _raw_payload_text(raw_body)
 
     event_name: str = payload.get("event_name") or payload.get("event") or ""
-    event: str = event_name.split(".", 1)[0]
+    event = _event_family(event_name)
     if event not in _SYNC_STATUS_EVENTS:
         logger.debug("nexhealth_sync_status_webhook: ignoring event=%s", event_name)
         return {"status": "ignored", "event": event_name}
@@ -444,14 +575,12 @@ async def _process_sync_status_webhook_payload(
     institution_id = str(locations[0].institution_id)
     locations = [loc for loc in locations if str(loc.institution_id) == institution_id]
     local_location_ids = [str(loc.id) for loc in locations]
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    dedup_basis = (
-        data.get("read_status_at")
-        or data.get("write_status_at")
-        or payload.get("event_time")
-        or _dedup_fallback(payload)
+    dedup_key = _sync_status_dedup_key(
+        event=event,
+        subdomain=subdomain,
+        local_location_ids=local_location_ids,
+        payload=payload,
     )
-    dedup_key = f"{event}:{subdomain}:{','.join(local_location_ids)}:{dedup_basis}"
 
     async with get_system_db_session(
         "nexhealth_webhooks", institution_id=institution_id, external_id=dedup_key
@@ -604,12 +733,16 @@ async def _process_patient_event(
         )
 
     nexhealth_location_ids = _patient_location_ids(patient)
-    if not nexhealth_location_ids:
+    if not nexhealth_location_ids and not subdomain:
         logger.warning(
-            "nexhealth_patient_webhook: patient=%s missing location_ids — skipping",
+            "nexhealth_patient_webhook: patient=%s missing location_ids and subdomain — skipping",
             patient_id,
         )
-        return {"status": "ignored", "reason": "missing_location_ids", "patient_id": patient_id}
+        return {
+            "status": "ignored",
+            "reason": "missing_location_context",
+            "patient_id": patient_id,
+        }
 
     async with get_system_db_session(
         "nexhealth_lookup", external_id=patient_id
@@ -619,9 +752,13 @@ async def _process_patient_event(
             .join(Institution, Institution.id == InstitutionLocation.institution_id)
             .where(
                 Institution.pms_type == "nexhealth",
-                InstitutionLocation.nexhealth_location_id.in_(nexhealth_location_ids),
+                InstitutionLocation.nexhealth_location_id.is_not(None),
             )
         )
+        if nexhealth_location_ids:
+            stmt = stmt.where(
+                InstitutionLocation.nexhealth_location_id.in_(nexhealth_location_ids)
+            )
         if subdomain:
             stmt = stmt.where(InstitutionLocation.nexhealth_subdomain == subdomain)
         loc_rows = await session.execute(stmt)
@@ -637,9 +774,16 @@ async def _process_patient_event(
 
     institution_id = str(locations[0].institution_id)
     locations = [loc for loc in locations if str(loc.institution_id) == institution_id]
-    local_location_ids = [str(loc.id) for loc in locations]
-    dedup_basis = patient.get("updated_at") or event_time or _dedup_fallback(payload)
-    dedup_key = f"{event}:{patient_id}:{dedup_basis}"
+    event_location_ids = [str(loc.id) for loc in locations]
+    local_location_ids = event_location_ids
+    if not nexhealth_location_ids and len(event_location_ids) > 1:
+        local_location_ids = []
+    dedup_key = _patient_dedup_key(
+        event=event,
+        patient=patient,
+        payload=payload,
+        event_time=event_time,
+    )
 
     from src.app.services.automation.nexhealth_projection_service import (
         NexHealthProjectionService,
@@ -652,7 +796,7 @@ async def _process_patient_event(
         "nexhealth_webhooks", institution_id=institution_id, external_id=patient_id
     ) as session:
         lifecycle = NexHealthSubscriptionLifecycleService(session)
-        for location_id in local_location_ids:
+        for location_id in event_location_ids:
             await lifecycle.record_event_seen(
                 institution_id=institution_id,
                 location_id=location_id,
@@ -785,9 +929,14 @@ async def _process_appointment_event(
                 contact_id = str(contact.id)
 
     # ── Event-ledger claim + projection upsert (Plan 09 D-1/D-2/D-4) ──
-    # dedup_key is the event's semantic identity: a redelivery of the same logical
-    # change collides (skipped); a genuine reschedule (new start_time) does not.
-    dedup_key = f"{event}:{appointment_id}:{'cancelled' if is_cancelled else (start_time or 'none')}"
+    # dedup_key is the event's business identity, not the provider delivery id:
+    # v2/v3 overlap deliveries for the same PMS appointment change collide.
+    dedup_key = _appointment_dedup_key(
+        event=event,
+        appt=appt,
+        payload=payload,
+        cancelled=is_cancelled,
+    )
 
     from src.app.services.automation.nexhealth_projection_service import (
         NexHealthProjectionService,

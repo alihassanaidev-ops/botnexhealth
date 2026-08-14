@@ -5,8 +5,9 @@ Mirrors ``retell_webhook_event``: a unique ``dedup_key`` acts as the processing
 claim, so a redelivered event is recognised at receipt instead of re-running the
 trigger and being deduped only downstream at ``enroll()``.
 
-``dedup_key`` is the *semantic* identity of the event — a redelivery of the same
-logical change collides; a genuine reschedule (new start_time) does not.
+``dedup_key`` is the business identity of the event — resource type, PMS resource
+id, event family, and a change marker. A v2/v3 overlap delivery for the same
+logical change collides; a genuine later change does not.
 """
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ class NexHealthWebhookEvent(Base):
         String(160), nullable=True, index=True
     )
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    # Semantic identity: "{event}:{appt_id}:{start_or_cancelled}".
+    # Business identity: "{resource}:{pms_id}:{event_family}:{change_marker}".
     dedup_key: Mapped[str] = mapped_column(String(300), nullable=False)
     source_event_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     payload_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)

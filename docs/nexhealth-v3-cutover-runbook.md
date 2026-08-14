@@ -67,7 +67,23 @@ Optional enrichment differences are not rollback triggers by themselves.
 ## Webhook Cutover
 
 - After shadow validation passes, point v3 subscriptions at the real handlers.
-- Deduplicate real overlap by business event identity, not provider delivery id.
+- Keep the v2-pinned subscriptions active during the initial live-v3 window so
+  overlap is observable and rollback is still practical.
+- Confirm live handlers accept v3-shaped appointment, patient, and sync-status
+  payloads on:
+  - `POST /api/v1/nexhealth/webhooks/appointments`
+  - `POST /api/v1/nexhealth/webhooks/patients`
+  - `POST /api/v1/nexhealth/webhooks/sync-status`
+- Deduplicate real overlap by business event identity, not provider delivery id
+  or provider subscription id. The live ledger key is
+  `Resource:pms_resource_id:event_family:change_marker`.
+- Verify duplicate v2/v3 deliveries for the same PMS change return
+  `status=duplicate` and do not enqueue a second workflow or rewrite the
+  projection.
+- For v3 patient payloads without `location_ids`, verify single-location
+  subdomains still update the patient/contact projection. Multi-location
+  subdomains without explicit location ids must not grant location visibility
+  blindly; use backfill/reconciliation to restore scoped visibility if needed.
 - Delete v2-pinned subscriptions only after v3 live handling passes monitoring.
 
 ## Cleanup Criteria

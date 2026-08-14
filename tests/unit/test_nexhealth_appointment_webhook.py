@@ -11,6 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.app.api.routes.nexhealth_webhooks import (
+    _appointment_dedup_key,
+    _patient_dedup_key,
+    _sync_status_dedup_key,
     _verify_signature,
     nexhealth_appointment_webhook,
     nexhealth_patient_webhook,
@@ -156,6 +159,139 @@ _VALID_PAYLOAD = {
         }
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Business event dedup keys
+# ---------------------------------------------------------------------------
+
+
+def test_appointment_dedup_key_matches_v2_v3_overlap_payloads():
+    v2_payload = {
+        "webhook_subscription_id": "legacy-sub",
+        "resource_type": "Appointment",
+        "event_name": "appointment_updated.complete",
+        "event_time": "2026-08-14T12:05:00Z",
+        "data": {
+            "appointment": {
+                "id": "appt-999",
+                "location_id": "nexloc-1",
+                "patient_id": "nexpat-42",
+                "start_time": "2026-08-15T10:00:00Z",
+                "updated_at": "2026-08-14T12:00:00Z",
+                "patient": {"id": "nexpat-42", "location_ids": ["nexloc-1"]},
+            }
+        },
+    }
+    v3_payload = {
+        "webhook_subscription_id": "stable-sub",
+        "resource_type": "Appointment",
+        "event_name": "appointment_updated.complete",
+        "event_time": "2026-08-14T12:05:03Z",
+        "data": {
+            "appointment": {
+                "id": "appt-999",
+                "location_id": "nexloc-1",
+                "patient_id": "nexpat-42",
+                "start_time": "2026-08-15T10:00:00Z",
+                "updated_at": "2026-08-14T12:00:00Z",
+            }
+        },
+    }
+
+    expected = "Appointment:appt-999:appointment_updated:updated_at:2026-08-14T12:00:00Z"
+    assert (
+        _appointment_dedup_key(
+            event="appointment_updated",
+            appt=v2_payload["data"]["appointment"],
+            payload=v2_payload,
+            cancelled=False,
+        )
+        == expected
+    )
+    assert (
+        _appointment_dedup_key(
+            event="appointment_updated",
+            appt=v3_payload["data"]["appointment"],
+            payload=v3_payload,
+            cancelled=False,
+        )
+        == expected
+    )
+
+
+def test_appointment_cancel_dedup_key_ignores_cancelled_spelling():
+    cancelled_payload = {
+        "event_name": "appointment_updated",
+        "data": {"appointment": {"id": "appt-1", "cancelled": True}},
+    }
+    canceled_payload = {
+        "event_name": "appointment_updated",
+        "data": {"appointment": {"id": "appt-1", "canceled": True}},
+    }
+
+    expected = "Appointment:appt-1:appointment_updated:cancelled:true"
+    assert (
+        _appointment_dedup_key(
+            event="appointment_updated",
+            appt=cancelled_payload["data"]["appointment"],
+            payload=cancelled_payload,
+            cancelled=True,
+        )
+        == expected
+    )
+    assert (
+        _appointment_dedup_key(
+            event="appointment_updated",
+            appt=canceled_payload["data"]["appointment"],
+            payload=canceled_payload,
+            cancelled=True,
+        )
+        == expected
+    )
+
+
+def test_patient_dedup_key_matches_v2_v3_overlap_payloads():
+    v2_patient = {
+        "id": "pat-1",
+        "updated_at": "2026-08-14T11:00:00Z",
+        "location_ids": ["nexloc-1"],
+    }
+    v3_patient = {"id": "pat-1", "updated_at": "2026-08-14T11:00:00Z"}
+    payload = {"event_name": "patient_updated", "data": {"patient": v2_patient}}
+
+    assert _patient_dedup_key(
+        event="patient_updated",
+        patient=v2_patient,
+        payload=payload,
+        event_time="2026-08-14T11:05:00Z",
+    ) == _patient_dedup_key(
+        event="patient_updated",
+        patient=v3_patient,
+        payload={"event_name": "patient_updated", "data": {"patient": v3_patient}},
+        event_time="2026-08-14T11:05:04Z",
+    )
+
+
+def test_sync_status_dedup_key_reads_current_syncstatus_envelope():
+    payload = {
+        "event_name": "sync_status_read_change.green",
+        "subdomain": "demo",
+        "data": {
+            "syncstatus": {
+                "read_status": "green",
+                "read_status_at": "2026-08-14T10:00:00Z",
+                "locations": [{"id": "nexloc-1"}],
+            }
+        },
+    }
+
+    assert _sync_status_dedup_key(
+        event="sync_status_read_change",
+        subdomain="demo",
+        local_location_ids=["loc-1"],
+        payload=payload,
+    ) == "SyncStatus:demo:loc-1:sync_status_read_change:read_status_at:2026-08-14T10:00:00Z"
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +465,57 @@ async def test_webhook_queues_task_for_appointment_created_plural_payload():
     assert kwargs["trigger_metadata"]["nexhealth_location_id"] == "nexloc-1"
 
 
+@pytest.mark.asyncio
+async def test_live_appointment_webhook_claims_business_event_key_for_v3_overlap():
+    location = _make_location()
+    contact = MagicMock()
+    contact.id = "contact-1"
+    mock_session = _make_session(location=location, contact=contact)
+    webhook_session = _make_cm_session()
+    payload = {
+        "webhook_subscription_id": "stable-v3-sub",
+        "resource_type": "Appointment",
+        "event_name": "appointment_updated.complete",
+        "event_time": "2026-08-14T12:05:00Z",
+        "data": {
+            "appointment": {
+                "id": "appt-999",
+                "location_id": "nexloc-1",
+                "patient_id": "nexpat-42",
+                "start_time": "2026-08-15T10:00:00Z",
+                "updated_at": "2026-08-14T12:00:00Z",
+                "provider_id": "prov-1",
+                "appointment_type_id": "type-1",
+            }
+        },
+    }
+    request = _make_request(payload)
+    projection = MagicMock()
+    projection.claim_event = AsyncMock(return_value=False)
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+        side_effect=[mock_session, webhook_session],
+    ), patch(
+        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+        return_value=projection,
+    ), _patch_subscription_lifecycle(), patch(
+        "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+    ) as mock_task:
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
+        mock_task.delay = MagicMock()
+        result = await nexhealth_appointment_webhook(request)
+
+    assert result == {"status": "duplicate", "appointment_id": "appt-999"}
+    projection.claim_event.assert_awaited_once()
+    assert projection.claim_event.call_args.kwargs["dedup_key"] == (
+        "Appointment:appt-999:appointment_updated:updated_at:2026-08-14T12:00:00Z"
+    )
+    assert projection.claim_event.call_args.kwargs["source_event_id"] is None
+    mock_task.delay.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # nexhealth_appointment_webhook — ignored cases
 # ---------------------------------------------------------------------------
@@ -390,6 +577,70 @@ async def test_patient_event_refreshes_contact_projection_on_existing_appointmen
     assert result["processed"] == 1
     assert result["results"][0]["patient_id"] == "pat-1"
     assert result["results"][0]["contact_id"] == "contact-patient-1"
+    webhook_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_v3_patient_event_without_location_ids_processes_for_single_subdomain_location():
+    location = _make_location()
+    lookup_session = AsyncMock()
+    lookup_session.__aenter__ = AsyncMock(return_value=lookup_session)
+    lookup_session.__aexit__ = AsyncMock(return_value=False)
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    lookup_session.execute = AsyncMock(return_value=loc_result)
+
+    webhook_session = _make_cm_session()
+    payload = {
+        "webhook_subscription_id": "stable-v3-sub",
+        "resource_type": "Patient",
+        "event_name": "patient_updated",
+        "subdomain": "silora-demo-practice",
+        "event_time": "2026-08-14T11:05:00Z",
+        "data": {
+            "patient": {
+                "id": "pat-1",
+                "updated_at": "2026-08-14T11:00:00Z",
+                "first_name": "Sam",
+                "last_name": "Lee",
+                "email": "sam@example.com",
+                "bio": {
+                    "phone_number": "+15551234567",
+                    "date_of_birth": "1990-01-01",
+                },
+            }
+        },
+    }
+    request = _make_request(payload)
+    projection = MagicMock()
+    projection.claim_event = AsyncMock(return_value=True)
+    projection.upsert_patient = AsyncMock(
+        return_value=MagicMock(
+            contact=MagicMock(id="contact-patient-1"),
+            change="updated",
+        )
+    )
+    projection.complete_event = AsyncMock()
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings, patch(
+        "src.app.api.routes.nexhealth_webhooks.get_system_db_session",
+        side_effect=[lookup_session, webhook_session],
+    ), patch(
+        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService",
+        return_value=projection,
+    ), _patch_subscription_lifecycle():
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
+        result = await nexhealth_patient_webhook(request)
+
+    assert result["status"] == "processed"
+    projection.claim_event.assert_awaited_once()
+    assert projection.claim_event.call_args.kwargs["dedup_key"] == (
+        "Patient:pat-1:patient_updated:updated_at:2026-08-14T11:00:00Z"
+    )
+    projection.upsert_patient.assert_awaited_once()
+    assert projection.upsert_patient.call_args.kwargs["local_location_ids"] == ["loc-1"]
+    assert projection.upsert_patient.call_args.kwargs["nexhealth_location_ids"] == []
     webhook_session.commit.assert_awaited_once()
 
 

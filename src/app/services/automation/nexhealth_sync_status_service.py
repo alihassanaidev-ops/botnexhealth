@@ -271,12 +271,14 @@ def _status_health(status: str | None) -> bool | None:
 def _sync_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
     data = payload.get("data") if isinstance(payload, dict) else None
     if isinstance(data, dict):
-        if isinstance(data.get("sync_status"), dict):
-            return data["sync_status"]
-        if isinstance(data.get("sync_statuses"), list) and data["sync_statuses"]:
-            first = data["sync_statuses"][0]
-            if isinstance(first, dict):
-                return first
+        for key in ("sync_status", "syncstatus"):
+            if isinstance(data.get(key), dict):
+                return data[key]
+        for key in ("sync_statuses", "syncstatuses"):
+            if isinstance(data.get(key), list) and data[key]:
+                first = data[key][0]
+                if isinstance(first, dict):
+                    return first
         return data
     return payload if isinstance(payload, dict) else {}
 
@@ -284,11 +286,12 @@ def _sync_status_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _sync_status_payloads(raw: dict[str, Any]) -> list[dict[str, Any]]:
     data = raw.get("data") if isinstance(raw, dict) else None
     if isinstance(data, dict):
-        values = data.get("sync_statuses") or data.get("sync_status")
-        if isinstance(values, list):
-            return [item for item in values if isinstance(item, dict)]
-        if isinstance(values, dict):
-            return [values]
+        for key in ("sync_statuses", "syncstatuses", "sync_status", "syncstatus"):
+            values = data.get(key)
+            if isinstance(values, list):
+                return [item for item in values if isinstance(item, dict)]
+            if isinstance(values, dict):
+                return [values]
         return [data]
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]

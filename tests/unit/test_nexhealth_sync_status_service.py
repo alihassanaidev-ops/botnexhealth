@@ -72,6 +72,43 @@ async def test_upsert_for_locations_stores_read_write_sync_state():
     assert row.last_event == "sync_status_write_change"
 
 
+@pytest.mark.asyncio
+async def test_upsert_for_locations_accepts_current_syncstatus_envelope():
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(None))
+    session.add = MagicMock()
+    location = SimpleNamespace(
+        id="loc-1",
+        institution_id="inst-1",
+        nexhealth_location_id="nh-loc-1",
+    )
+    payload = {
+        "data": {
+            "syncstatus": {
+                "sync_source_type": "pms",
+                "read_status": "green",
+                "read_status_at": "2026-08-14T10:00:00Z",
+                "write_status": "red",
+                "write_status_at": "2026-08-14T10:05:00Z",
+                "locations": [{"id": "nh-loc-1"}],
+            }
+        }
+    }
+
+    updated = await NexHealthSyncStatusService(session).upsert_for_locations(
+        event="sync_status_read_change",
+        subdomain="clinic-sub",
+        locations=[location],
+        payload=payload,
+    )
+
+    assert updated == 1
+    row = session.add.call_args.args[0]
+    assert row.read_status == "green"
+    assert row.write_status == "red"
+    assert row.read_status_at == datetime(2026, 8, 14, 10, 0, tzinfo=timezone.utc)
+
+
 def test_assess_sync_status_flags_unhealthy_and_stale_rows():
     row = SimpleNamespace(
         read_status="red",

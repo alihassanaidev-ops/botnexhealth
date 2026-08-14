@@ -189,6 +189,57 @@ async def test_shadow_service_stores_encrypted_raw_and_redacted_payload(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_shadow_service_extracts_syncstatus_business_identity(monkeypatch):
+    monkeypatch.setattr(settings, "encryption_key", "shadow-test-encryption-secret")
+    payload = {
+        "event_name": "sync_status_read_change.green",
+        "subdomain": "demo-subdomain",
+        "subscription_id": "sub-1",
+        "data": {
+            "syncstatus": {
+                "read_status": "green",
+                "read_status_at": "2026-08-14T10:00:00Z",
+                "locations": [{"id": "nexloc-1"}],
+            }
+        },
+    }
+    raw_payload = json.dumps(payload)
+    location = _location()
+    subscription = SimpleNamespace(
+        provider_endpoint_id="endpoint-1",
+        provider_subscription_ids=["sub-1"],
+        status=NexHealthWebhookShadowSubscriptionStatus.PENDING.value,
+        last_event_at=None,
+        last_health_check_at=None,
+        last_shadow_capture_id=None,
+        last_parse_success_at=None,
+        last_parse_failure_at=None,
+        parse_success_count=0,
+        parse_failure_count=0,
+        updated_at=None,
+    )
+    subscription_result = MagicMock()
+    subscription_result.scalars.return_value.all.return_value = [subscription]
+    session = _session_with_execute_results(
+        _scalar_locations_result([location]),
+        subscription_result,
+    )
+
+    result = await NexHealthWebhookShadowCaptureService(session).capture(
+        route_family=SHADOW_ROUTE_SYNC_STATUS,
+        raw_payload=raw_payload,
+        parsed=parse_shadow_payload(raw_payload.encode()),
+        headers={},
+    )
+
+    assert result.row.resource_type == "SyncStatus"
+    assert result.row.pms_resource_id == "demo-subdomain:nexloc-1"
+    assert result.row.business_event_key == (
+        "SyncStatus:demo-subdomain:nexloc-1:sync_status_read_change:read_status_at:2026-08-14T10:00:00Z"
+    )
+
+
+@pytest.mark.asyncio
 async def test_shadow_subscription_service_creates_distinct_pending_route_rows():
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
