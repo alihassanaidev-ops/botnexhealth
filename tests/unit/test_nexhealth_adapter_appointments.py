@@ -87,6 +87,81 @@ async def test_list_patients_uses_updated_since_and_location_params(monkeypatch:
 
 
 @pytest.mark.asyncio
+async def test_search_patients_accepts_stable_v3_flat_data(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(params or {})
+        return {
+            "data": [
+                {
+                    "id": "pat-1",
+                    "first_name": "Sam",
+                    "last_name": "Lee",
+                    "bio": {"date_of_birth": "1990-01-01"},
+                }
+            ],
+            "page_info": {"has_next_page": False, "end_cursor": "cursor-1"},
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    patients = await adapter.search_patients("Sam Lee")
+
+    assert [patient.id for patient in patients] == ["nh-pat-1"]
+    assert calls[0] == {
+        "subdomain": "test-subdomain",
+        "location_id": "test-location",
+        "name": "Sam Lee",
+        "per_page": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_patients_uses_cursor_pagination_for_stable_v3(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(params or {})
+        if "end_cursor" not in params:
+            return {
+                "data": [{"id": "pat-1"}],
+                "page_info": {"has_next_page": True, "end_cursor": "cursor-1"},
+            }
+        return {
+            "data": [{"id": "pat-2"}],
+            "page_info": {"has_next_page": False, "end_cursor": "cursor-2"},
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    patients = await adapter.list_patients(updated_since="2026-07-21T09:00:00Z")
+
+    assert patients == [{"id": "pat-1"}, {"id": "pat-2"}]
+    assert calls == [
+        {
+            "subdomain": "test-subdomain",
+            "location_id": "test-location",
+            "updated_since": "2026-07-21T09:00:00Z",
+            "per_page": 50,
+        },
+        {
+            "subdomain": "test-subdomain",
+            "location_id": "test-location",
+            "updated_since": "2026-07-21T09:00:00Z",
+            "per_page": 50,
+            "end_cursor": "cursor-1",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_has_provider_appointments_scans_multiple_pages(monkeypatch: pytest.MonkeyPatch):
     adapter = _make_adapter()
     calls: list[dict] = []
@@ -108,6 +183,35 @@ async def test_has_provider_appointments_scans_multiple_pages(monkeypatch: pytes
     assert result is True
     assert len(calls) == 2
     assert calls[0]["provider_id"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_has_provider_appointments_scans_cursor_pages_for_stable_v3(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(params or {})
+        if "end_cursor" not in params:
+            return {
+                "data": [{"id": i, "cancelled": True} for i in range(50)],
+                "page_info": {"has_next_page": True, "end_cursor": "cursor-1"},
+            }
+        return {
+            "data": [{"id": 999, "cancelled": False}],
+            "page_info": {"has_next_page": False, "end_cursor": "cursor-2"},
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.has_provider_appointments_on_date("nh-123", "2026-03-09")
+
+    assert result is True
+    assert calls[0]["provider_id"] == "123"
+    assert "page" not in calls[0]
+    assert calls[1]["end_cursor"] == "cursor-1"
 
 
 @pytest.mark.asyncio
@@ -162,6 +266,39 @@ async def test_list_appointments_paginates_date_window(monkeypatch: pytest.Monke
     assert calls[0]["start"] == "2026-08-01"
     assert calls[0]["end"] == "2026-08-31"
     assert calls[1]["page"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_appointments_uses_cursor_pagination_for_stable_v3(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(params or {})
+        if "end_cursor" not in params:
+            return {
+                "data": [{"id": "appt-1"}],
+                "page_info": {"has_next_page": True, "end_cursor": "cursor-1"},
+            }
+        return {
+            "data": [{"id": "appt-2"}],
+            "page_info": {"has_next_page": False, "end_cursor": "cursor-2"},
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.list_appointments(
+        start_date="2026-08-01",
+        end_date="2026-08-31",
+    )
+
+    assert result == [{"id": "appt-1"}, {"id": "appt-2"}]
+    assert calls[0]["start"] == "2026-08-01"
+    assert calls[0]["end"] == "2026-08-31"
+    assert "page" not in calls[0]
+    assert calls[1]["end_cursor"] == "cursor-1"
 
 
 @pytest.mark.asyncio

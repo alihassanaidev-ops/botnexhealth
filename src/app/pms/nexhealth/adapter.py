@@ -11,11 +11,12 @@ import logging
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from src.app.api.helpers import fetch_all_pages, handle_nexhealth_request
+from src.app.api.helpers import handle_nexhealth_request
 from src.app.nexhealth.api_contract import (
     NexHealthAPIContract,
     normalize_nexhealth_api_contract,
 )
+from src.app.nexhealth.pagination import extract_list_items, extract_page_info, fetch_all_pages
 from src.app.pms.base import (
     PMSAdapter,
     SupportsAppointmentConfirmation,
@@ -222,13 +223,16 @@ class NexHealthAdapter(
         if not any(k in params for k in ("email", "phone_number", "date_of_birth", "name")):
             params["name"] = query
 
-        params.setdefault("page", 1)
-        params.setdefault("per_page", 10)
+        if self._api_contract is NexHealthAPIContract.STABLE_V3:
+            params.setdefault("per_page", 10)
+        else:
+            params.setdefault("page", 1)
+            params.setdefault("per_page", 10)
         if kwargs.get("include"):
             params["include[]"] = kwargs["include"]
 
         raw = await handle_nexhealth_request(self._client, "GET", "/patients", params=params)
-        patients = raw.get("data", {}).get("patients", [])
+        patients = extract_list_items(raw, collection_key="patients")
 
         # Phone fallback: callers often dial from a number that isn't on their
         # record. NexHealth AND-combines criteria, so a mismatched phone excludes
@@ -246,7 +250,7 @@ class NexHealthAdapter(
             raw = await handle_nexhealth_request(
                 self._client, "GET", "/patients", params=retry_params
             )
-            patients = raw.get("data", {}).get("patients", [])
+            patients = extract_list_items(raw, collection_key="patients")
 
         return [mappers.to_patient(p) for p in patients]
 
@@ -286,11 +290,17 @@ class NexHealthAdapter(
         if updated_since:
             params["updated_since"] = updated_since
 
-        async def fetch(page: int, per_page: int) -> dict[str, Any]:
-            p = {**params, "page": page, "per_page": per_page}
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
             return await handle_nexhealth_request(self._client, "GET", "/patients", params=p)
 
-        return await fetch_all_pages(fetch, per_page=50, max_items=max_items)
+        return await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="patients",
+            per_page=50,
+            max_items=max_items,
+        )
 
     async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]:
         from src.app.api.models import (
@@ -331,7 +341,7 @@ class NexHealthAdapter(
         params = self._default_params()
         params["include[]"] = ["descriptors"]
         raw = await handle_nexhealth_request(self._client, "GET", "/appointment_types", params=params)
-        data = raw.get("data", [])
+        data = extract_list_items(raw, collection_key="appointment_types")
         return [mappers.to_appointment_type(at) for at in data]
 
     # ── Providers ────────────────────────────────────────────────────────
@@ -339,11 +349,21 @@ class NexHealthAdapter(
     async def list_providers(self) -> list[UniversalProvider]:
         params = self._default_params()
 
-        async def fetch(page: int, per_page: int) -> dict[str, Any]:
-            p = {**params, "page": page, "per_page": per_page, "include[]": ["availabilities", "appointment_types"]}
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {
+                **params,
+                **page_params,
+                "include[]": ["availabilities", "appointment_types"],
+            }
             return await handle_nexhealth_request(self._client, "GET", "/providers", params=p)
 
-        all_raw = await fetch_all_pages(fetch, per_page=50, max_items=200)
+        all_raw = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="providers",
+            per_page=50,
+            max_items=200,
+        )
         return [mappers.to_provider(p) for p in all_raw]
 
     # ── Appointment Queries ─────────────────────────────────────────────
@@ -356,31 +376,50 @@ class NexHealthAdapter(
             # Scan pages until we find at least one active appointment.
             # We keep this bounded for latency/cost safety.
             per_page = 50
+            end_cursor: str | None = None
             for page in range(1, 11):
                 params = self._default_params()
                 # NexHealth /appointments expects `start`/`end` (not start_date/end_date).
                 params["start"] = date_str
                 params["end"] = date_str
                 params["provider_id"] = _strip(provider_id)
-                params["page"] = page
                 params["per_page"] = per_page
+                if self._api_contract is NexHealthAPIContract.STABLE_V3:
+                    if end_cursor:
+                        params["end_cursor"] = end_cursor
+                else:
+                    params["page"] = page
 
                 raw = await handle_nexhealth_request(
                     self._client, "GET", "/appointments", params=params
                 )
-                data = raw.get("data", [])
-                if not isinstance(data, list):
+                if not isinstance(raw.get("data"), list):
                     logger.warning(
-                        f"Unexpected appointments payload type while checking provider schedule: {type(data)}"
+                        "Unexpected appointments payload type while checking provider schedule: %s",
+                        type(raw.get("data")),
                     )
                     return True
+                data = extract_list_items(raw)
 
                 for appt in data:
                     cancelled = bool(appt.get("cancelled", False) or appt.get("canceled", False))
                     if not cancelled:
                         return True
 
-                # No more pages to scan.
+                if self._api_contract is NexHealthAPIContract.STABLE_V3:
+                    page_info = extract_page_info(raw)
+                    if not page_info or not page_info.get("has_next_page"):
+                        break
+                    next_cursor = page_info.get("end_cursor")
+                    if not next_cursor:
+                        logger.warning(
+                            "Appointments cursor response has next page but no end_cursor"
+                        )
+                        break
+                    end_cursor = str(next_cursor)
+                    continue
+
+                # No more offset pages to scan.
                 if len(data) < per_page:
                     break
 
@@ -429,20 +468,25 @@ class NexHealthAdapter(
         """
         params = self._default_params()
 
-        async def fetch(page: int, per_page: int) -> dict[str, Any]:
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
             p = {
                 **params,
                 # NexHealth /appointments expects `start`/`end` (not start_date/end_date).
                 "start": start_date,
                 "end": end_date,
-                "page": page,
-                "per_page": per_page,
+                **page_params,
             }
             return await handle_nexhealth_request(
                 self._client, "GET", "/appointments", params=p
             )
 
-        return await fetch_all_pages(fetch, per_page=50, max_items=max_items)
+        return await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="appointments",
+            per_page=50,
+            max_items=max_items,
+        )
 
     async def list_patient_recalls(self, *, max_items: int = 500) -> list[dict[str, Any]]:
         """List patient recall records for this location from NexHealth.
@@ -455,18 +499,36 @@ class NexHealthAdapter(
         """
         params = self._default_params()
 
-        async def fetch(page: int, per_page: int) -> dict[str, Any]:
-            p = {**params, "page": page, "per_page": per_page}
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
             return await handle_nexhealth_request(self._client, "GET", "/recalls", params=p)
 
-        return await fetch_all_pages(fetch, per_page=50, max_items=max_items)
+        return await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="recalls",
+            per_page=50,
+            max_items=max_items,
+        )
 
     # ── Operatories ──────────────────────────────────────────────────────
 
     async def list_operatories(self) -> list[UniversalOperatory]:
-        params = {**self._default_params(), "page": 1, "per_page": 50}
-        raw = await handle_nexhealth_request(self._client, "GET", "/operatories", params=params)
-        data = raw.get("data", [])
+        params = self._default_params()
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client, "GET", "/operatories", params=p
+            )
+
+        data = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="operatories",
+            per_page=50,
+            max_items=500,
+        )
         return [mappers.to_operatory(op) for op in data]
 
     # ── Slots ────────────────────────────────────────────────────────────
@@ -844,15 +906,22 @@ class NexHealthAdapter(
         if "include[]" not in params:
             params["include[]"] = ["appointment_types"]
 
-        raw = await handle_nexhealth_request(
-            self._client,
-            "GET",
-            self._api_contract.working_windows_path,
-            params=params,
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                self._api_contract.working_windows_path,
+                params=p,
+            )
+
+        direct_items = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key=self._api_contract.working_windows_path.strip("/"),
+            per_page=100,
+            max_items=500,
         )
-        direct_items = raw.get("data", [])
-        if not isinstance(direct_items, list):
-            direct_items = []
 
         # NexHealth's /availabilities endpoint can return 200 with no rows for
         # normal PMS-synced provider schedules. Those same work windows are
@@ -878,16 +947,21 @@ class NexHealthAdapter(
     ) -> list[dict]:
         params = self._default_params()
 
-        async def fetch(page: int, per_page: int) -> dict[str, Any]:
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
             p = {
                 **params,
-                "page": page,
-                "per_page": per_page,
+                **page_params,
                 "include[]": ["availabilities", "appointment_types"],
             }
             return await handle_nexhealth_request(self._client, "GET", "/providers", params=p)
 
-        providers = await fetch_all_pages(fetch, per_page=50, max_items=200)
+        providers = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="providers",
+            per_page=50,
+            max_items=200,
+        )
         today = date.today().isoformat()
         items: list[dict] = []
 

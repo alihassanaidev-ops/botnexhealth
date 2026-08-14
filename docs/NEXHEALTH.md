@@ -158,13 +158,16 @@ depending on the path that produced them; we check both
 (`adapter.py:300`). Similarly "already cancelled" errors on cancel are detected
 by case-insensitive substring match and treated as success.
 
-**Inconsistent response nesting.** `GET /patients/{id}` may put the record
-under `data.user`, `data.patient`, or directly in `data` — we try all three
-(`adapter.py:211-215`). Patient phone/DOB may be top-level or under `bio`
-(`mappers.py:89-90`). Appointment-type duration arrives as `minutes` or
-`duration` (`mappers.py:139`). List endpoints nest under a plural key
-(`data.patients`), writes must wrap the body under the singular resource name
-(`{"appointment_type": {...}}`) or you get `Missing parameter` back.
+**Inconsistent response nesting and pagination.** `GET /patients/{id}` may put
+the record under `data.user`, `data.patient`, or directly in `data` — we try all
+three (`adapter.py`). Patient phone/DOB may be top-level or under `bio`
+(`mappers.py`). Appointment-type duration arrives as `minutes` or `duration`.
+List reads go through `src/app/nexhealth/pagination.py`: legacy v2 offset lists
+can nest rows under a plural key such as `data.patients`, while stable v3 cursor
+lists return rows directly under `data` and advance with
+`page_info.end_cursor`. Writes must still wrap the body under the singular
+resource name (`{"appointment_type": {...}}`) or you get `Missing parameter`
+back.
 
 **Availability filtering is silent.** Windows with `active: false` and one-off
 windows whose `specific_date` has passed are dropped during mapping with no
@@ -208,8 +211,8 @@ re-auth calls together, check Redis before checking NexHealth.
 
 Tests that pin this behavior: `tests/unit/test_nexhealth_token_manager.py`,
 `test_nexhealth_rate_limiter.py`, `test_nexhealth_phone_normalization.py`,
-`test_nexhealth_adapter_appointments.py`, `test_slot_filter.py`, and
-`tests/integration/test_slot_duration_edge_cases.py`.
+`test_nexhealth_pagination.py`, `test_nexhealth_adapter_appointments.py`,
+`test_slot_filter.py`, and `tests/integration/test_slot_duration_edge_cases.py`.
 
 ## API contract selection
 
