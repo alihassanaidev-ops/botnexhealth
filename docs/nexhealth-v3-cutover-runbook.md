@@ -18,6 +18,38 @@ This runbook captures the stable operating procedure for moving NexHealth traffi
 - Confirm booking revalidates the exact selected slot through the contract-aware
   slot endpoint before `POST /appointments`.
 - Run appointment and patient backfills before cutover to establish baseline counts.
+- Save a pre-cutover cutover-report snapshot after the backfills finish.
+
+## Cutover Report
+
+The cutover report is the repeatable evidence source for baseline, monitoring,
+rollback, and cleanup decisions:
+
+```bash
+.venv/bin/python -m src.app.scripts.nexhealth_v3_cutover_report \
+  --save-snapshot /tmp/nexhealth-v3-pre-rest.json
+```
+
+After a staging or production change, compare the current state to that baseline:
+
+```bash
+.venv/bin/python -m src.app.scripts.nexhealth_v3_cutover_report \
+  --baseline /tmp/nexhealth-v3-pre-rest.json \
+  --save-snapshot /tmp/nexhealth-v3-post-rest.json \
+  --fail-on-rollback-signal
+```
+
+The report reads existing operational state only. It captures:
+
+- normalized REST contract and emitted `Nex-Api-Version`;
+- live and shadow webhook subscription counts by status;
+- appointment and patient projection counts after backfill/reconciliation;
+- recent Retell function audit failures for appointment writes, patient lookup,
+  and slot search;
+- recent live webhook ledger failures;
+- shadow webhook parse/resolution counts;
+- NexHealth read/write sync-status health;
+- backfill and reconciliation watermarks.
 
 ## Staging REST Validation
 
@@ -31,6 +63,8 @@ This runbook captures the stable operating procedure for moving NexHealth traffi
 - Appointment backfill.
 - Patient backfill.
 - Sync-status polling.
+- Cutover-report comparison against the pre-cutover baseline returns no rollback
+  recommendation.
 
 ## Production REST Cutover
 
@@ -38,6 +72,7 @@ This runbook captures the stable operating procedure for moving NexHealth traffi
 - Deploy/restart with the v3 REST configuration.
 - Run production smoke tests for patient lookup, slot search, booking, cancel, confirm, and reschedule.
 - Run appointment and patient backfills after cutover and compare against baseline counts.
+- Run the cutover report with `--baseline` and `--fail-on-rollback-signal`.
 
 ## REST Rollback
 
@@ -48,7 +83,9 @@ Rollback triggers include:
 - Confirmed booking failures above baseline.
 - Patient lookup failures above baseline.
 - Slot-search failures.
-- Appointment projection gaps after post-cutover backfill.
+- Appointment or patient projection gaps after post-cutover backfill.
+- Live webhook/subscription failures above baseline after webhook cutover.
+- NexHealth read/write sync-status health regressions above baseline.
 
 Optional enrichment differences are not rollback triggers by themselves.
 
@@ -85,6 +122,9 @@ Optional enrichment differences are not rollback triggers by themselves.
   subdomains without explicit location ids must not grant location visibility
   blindly; use backfill/reconciliation to restore scoped visibility if needed.
 - Delete v2-pinned subscriptions only after v3 live handling passes monitoring.
+- Run the cutover report after live webhook cutover and verify there are no
+  increases in recent live webhook failures, disabled/failed subscriptions, or
+  projection gaps.
 
 ## Cleanup Criteria
 
@@ -95,3 +135,21 @@ After one stable production release cycle on v3, remove temporary migration scaf
 - legacy `Accept` header compatibility.
 - v2 webhook overlap code.
 - temporary migration metrics once exported dashboards no longer use them.
+
+Before removing scaffolding, run the report with a baseline and explicit
+operator confirmation that old v2-pinned webhook subscriptions have been
+deleted:
+
+```bash
+export STABLE_V3_SINCE_ISO="<actual-stable-v3-timestamp>"
+.venv/bin/python -m src.app.scripts.nexhealth_v3_cutover_report \
+  --baseline /tmp/nexhealth-v3-pre-rest.json \
+  --stable-since "$STABLE_V3_SINCE_ISO" \
+  --v2-overlap-removed
+```
+
+Cleanup is ready only when `assessment.cleanup_ready` is `true`. Blockers include
+non-v3 REST configuration, missing baseline comparison, an insufficient stable
+window, unconfirmed v2-overlap removal, open rollback signals, failed/disabled
+live subscription rows, active/pending shadow subscriptions, or remaining shadow
+parse failures.

@@ -281,6 +281,33 @@ patient/contact projection when the subdomain resolves; location visibility is
 only granted when explicit location ids are present or the subdomain maps to one
 unambiguous local location.
 
+## V3 cutover reporting
+
+The migration runbook uses
+`src.app.scripts.nexhealth_v3_cutover_report` as the repeatable baseline and
+monitoring check. It is an ad-hoc read-only script, not a scheduled job. Save a
+pre-cutover snapshot after appointment and patient backfills, then compare
+post-cutover snapshots against it:
+
+```bash
+.venv/bin/python -m src.app.scripts.nexhealth_v3_cutover_report \
+  --save-snapshot /tmp/nexhealth-v3-pre-rest.json
+
+.venv/bin/python -m src.app.scripts.nexhealth_v3_cutover_report \
+  --baseline /tmp/nexhealth-v3-pre-rest.json \
+  --save-snapshot /tmp/nexhealth-v3-post-rest.json \
+  --fail-on-rollback-signal
+```
+
+The report reads the existing subscription lifecycle rows, appointment and
+patient working sets, live webhook ledger, shadow webhook tables, sync-status
+rows, and Retell audit failures for appointment writes, patient lookup, and slot
+search. Its `assessment.rollback_recommended` flag is driven by count drops or
+failure increases relative to the saved baseline. Its `assessment.cleanup_ready`
+flag stays false until a baseline is supplied, the app is on `stable_v3`, the
+stable window has elapsed, v2-pinned webhook overlap removal is confirmed, and
+shadow/live failure signals are clean.
+
 ## API contract selection
 
 NexHealth API versioning is selected by `NEXHEALTH_API_VERSION`, normalized at
