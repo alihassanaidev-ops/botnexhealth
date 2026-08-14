@@ -1,0 +1,3 @@
+# Stage NexHealth v3 REST and webhook cutovers
+
+We will migrate NexHealth REST calls to `Nex-Api-Version: v3.0.0` separately from the webhook subscription cutover. REST payload compatibility, cursor pagination, slot validation, and renamed scheduling resources will be validated first without requiring new REST-side database schema; v3 webhook subscriptions will then be introduced through shadow/versioned handling before replacing the v2-pinned subscriptions. This keeps the booking path reversible while acknowledging that NexHealth pins webhook payload shape to the subscription version, not to the ordinary REST client version.
