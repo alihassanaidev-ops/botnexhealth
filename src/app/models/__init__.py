@@ -63,6 +63,12 @@ from src.app.models.nexhealth_webhook_subscription import (  # noqa: F401 — mo
     NexHealthWebhookSubscription,
     NexHealthWebhookSubscriptionStatus,
 )
+from src.app.models.nexhealth_webhook_shadow import (  # noqa: F401 — model registration
+    NexHealthWebhookShadowEvent,
+    NexHealthWebhookShadowParseStatus,
+    NexHealthWebhookShadowSubscription,
+    NexHealthWebhookShadowSubscriptionStatus,
+)
 from src.app.models.call_metrics_daily import (  # noqa: F401 — model registration
     CallMetricsDaily,
     NULL_LOCATION_SENTINEL,
@@ -212,6 +218,10 @@ __all__ = [
     "NexHealthSyncStatus",
     "NexHealthWebhookSubscription",
     "NexHealthWebhookSubscriptionStatus",
+    "NexHealthWebhookShadowEvent",
+    "NexHealthWebhookShadowParseStatus",
+    "NexHealthWebhookShadowSubscription",
+    "NexHealthWebhookShadowSubscriptionStatus",
     "UsageCostRollup",
     "UsageEvent",
     "UsageChannel",

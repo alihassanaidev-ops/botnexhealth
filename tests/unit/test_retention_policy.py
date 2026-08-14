@@ -15,6 +15,7 @@ from src.app.services.retention_policy import (
     build_expired_call_phi_update,
     build_expired_dead_letter_raw_update,
     build_expired_nexhealth_webhook_raw_update,
+    build_expired_nexhealth_shadow_webhook_raw_update,
     build_expired_notification_delete,
     build_expired_recording_select,
     build_expired_sms_body_update,
@@ -114,6 +115,13 @@ def test_retention_sql_builders_include_legal_hold_and_purge_guards() -> None:
     nexhealth_sql = _compile(build_expired_nexhealth_webhook_raw_update(now))
     assert "nexhealth_webhook_events.raw_payload_encrypted IS NOT NULL" in nexhealth_sql
     assert "nexhealth_webhook_events.raw_payload_purged_at IS NULL" in nexhealth_sql
+
+    shadow_sql = _compile(build_expired_nexhealth_shadow_webhook_raw_update(now))
+    assert (
+        "nexhealth_webhook_shadow_events.raw_payload_encrypted IS NOT NULL"
+        in shadow_sql
+    )
+    assert "nexhealth_webhook_shadow_events.raw_payload_purged_at IS NULL" in shadow_sql
 
 
 # ── #3: recordings are owned exclusively by purge_expired_recordings ──────────
@@ -243,8 +251,10 @@ async def test_apply_retention_policy_runs_every_step_in_order(
             "recordings/inst/call-1.wav"
         ),
     )
-    # One select (recordings) + ten counted statements.
-    session = _FakeSession(calls=[call], rowcounts=[2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    # One select (recordings) + eleven counted statements.
+    session = _FakeSession(
+        calls=[call], rowcounts=[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    )
     s3 = _FakeS3()
 
     summary = await RetentionPolicyService(session, s3_client=s3).apply(_NOW)
@@ -263,11 +273,12 @@ async def test_apply_retention_policy_runs_every_step_in_order(
         "notifications_deleted": 4,
         "dead_letter_raw_payloads_purged": 5,
         "nexhealth_webhook_raw_payloads_purged": 6,
-        "gotracker_webhook_raw_payloads_purged": 7,
-        "call_phi_purged": 8,
-        "call_custom_fields_deleted": 9,
-        "contacts_anonymized": 10,
-        "contact_custom_fields_deleted": 11,
+        "nexhealth_shadow_webhook_raw_payloads_purged": 7,
+        "gotracker_webhook_raw_payloads_purged": 8,
+        "call_phi_purged": 9,
+        "call_custom_fields_deleted": 10,
+        "contacts_anonymized": 11,
+        "contact_custom_fields_deleted": 12,
     }
 
     # The call-PHI update must run before the call custom-field delete, and
@@ -284,7 +295,7 @@ async def test_apply_retention_policy_runs_every_step_in_order(
 
 @pytest.mark.asyncio
 async def test_apply_commits_even_when_nothing_expired() -> None:
-    session = _FakeSession(calls=[], rowcounts=[0] * 10)
+    session = _FakeSession(calls=[], rowcounts=[0] * 11)
 
     summary = await RetentionPolicyService(session, s3_client=None).apply(_NOW)
 
@@ -307,7 +318,7 @@ async def test_apply_clears_db_reference_when_s3_object_already_gone(
             "recordings/inst/call-1.wav"
         ),
     )
-    session = _FakeSession(calls=[call], rowcounts=[0] * 10)
+    session = _FakeSession(calls=[call], rowcounts=[0] * 11)
 
     summary = await RetentionPolicyService(session, s3_client=_FakeS3()).apply(_NOW)
 

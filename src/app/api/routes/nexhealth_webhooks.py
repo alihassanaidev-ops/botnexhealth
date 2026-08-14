@@ -17,6 +17,13 @@ from src.app.models.contact import Contact
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.dead_letter import capture_dead_letter
+from src.app.services.automation.nexhealth_shadow_webhook_service import (
+    NexHealthWebhookShadowCaptureService,
+    SHADOW_ROUTE_APPOINTMENTS,
+    SHADOW_ROUTE_PATIENTS,
+    SHADOW_ROUTE_SYNC_STATUS,
+    parse_shadow_payload,
+)
 from src.app.services.sms_privacy import payload_hash, safe_error_summary
 
 logger = logging.getLogger(__name__)
@@ -344,6 +351,57 @@ async def nexhealth_sync_status_webhook(request: Request) -> dict[str, Any]:
         payload=payload,
         raw_payload=raw_payload,
     )
+
+
+@router.post("/shadow/appointments", status_code=status.HTTP_200_OK)
+async def nexhealth_shadow_appointment_webhook(request: Request) -> dict[str, Any]:
+    """Capture v3 appointment shadow webhook deliveries without live side effects."""
+    return await _capture_shadow_webhook(request, route_family=SHADOW_ROUTE_APPOINTMENTS)
+
+
+@router.post("/shadow/patients", status_code=status.HTTP_200_OK)
+async def nexhealth_shadow_patient_webhook(request: Request) -> dict[str, Any]:
+    """Capture v3 patient shadow webhook deliveries without live side effects."""
+    return await _capture_shadow_webhook(request, route_family=SHADOW_ROUTE_PATIENTS)
+
+
+@router.post("/shadow/sync-status", status_code=status.HTTP_200_OK)
+async def nexhealth_shadow_sync_status_webhook(request: Request) -> dict[str, Any]:
+    """Capture v3 sync-status shadow webhook deliveries without live side effects."""
+    return await _capture_shadow_webhook(request, route_family=SHADOW_ROUTE_SYNC_STATUS)
+
+
+async def _capture_shadow_webhook(request: Request, *, route_family: str) -> dict[str, Any]:
+    raw_body = await request.body()
+    _verify_signature(
+        raw_body,
+        request.headers.get("signature") or request.headers.get("X-NexHealth-Signature"),
+        request.headers.get("timestamp"),
+    )
+    parsed = parse_shadow_payload(raw_body)
+    raw_payload = _raw_payload_text(raw_body)
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    async with get_system_db_session(
+        "user",
+        role="SUPER_ADMIN",
+        user_id="00000000-0000-0000-0000-000000000000",
+        external_id=f"nexhealth_shadow:{route_family}",
+    ) as session:
+        result = await NexHealthWebhookShadowCaptureService(session).capture(
+            route_family=route_family,
+            raw_payload=raw_payload,
+            parsed=parsed,
+            headers=headers,
+        )
+        await session.commit()
+
+    return {
+        "status": "captured",
+        "shadow_event_id": result.row.id,
+        "parse_status": result.parse_status,
+        "event": result.row.event_name,
+        "resolution_status": result.row.resolution_status,
+    }
 
 
 async def _process_sync_status_webhook_payload(

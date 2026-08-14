@@ -57,6 +57,9 @@ from src.app.services.automation.nexhealth_backfill_service import (
 from src.app.services.automation.nexhealth_subscription_service import (
     NexHealthSubscriptionLifecycleService,
 )
+from src.app.services.automation.nexhealth_shadow_webhook_service import (
+    NexHealthWebhookShadowSubscriptionService,
+)
 from src.app.services.automation.nexhealth_sync_status_service import (
     NexHealthSyncStatusService,
 )
@@ -1376,6 +1379,49 @@ async def _ensure_nexhealth_webhook_subscriptions_async() -> dict:
         "health_disabled": health.disabled,
         "health_failed": health.failed,
         "stale_marked": health.stale_marked,
+    }
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.ensure_nexhealth_shadow_webhook_subscriptions",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def ensure_nexhealth_shadow_webhook_subscriptions(self) -> dict:
+    """Ensure v3 shadow subscription rows and optionally create provider subscriptions.
+
+    This task is intentionally not scheduled in Celery beat. Operators run it
+    explicitly during NexHealth v3 webhook validation.
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(_ensure_nexhealth_shadow_webhook_subscriptions_async())
+    except Exception as exc:
+        logger.exception("ensure_nexhealth_shadow_webhook_subscriptions failed: %s", exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _ensure_nexhealth_shadow_webhook_subscriptions_async() -> dict:
+    from src.app.config import settings
+
+    async with _superadmin_system_session(
+        "nexhealth_shadow_subscription_lifecycle"
+    ) as session:
+        svc = NexHealthWebhookShadowSubscriptionService(session)
+        ensure_summary = await svc.ensure_for_configured_locations(
+            callback_base_url=settings.nexhealth_shadow_webhook_callback_base_url,
+        )
+        health = await svc.health_check()
+        await session.commit()
+
+    return {
+        **ensure_summary,
+        "health_total": health.total,
+        "health_active": health.active,
+        "health_pending": health.pending,
+        "health_disabled": health.disabled,
+        "health_failed": health.failed,
     }
 
 

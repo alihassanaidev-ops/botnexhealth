@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     nexhealth_location_id: str | None = None
     nexhealth_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound webhook signatures
     nexhealth_webhook_callback_url: str | None = None
+    nexhealth_shadow_webhook_callback_base_url: str | None = None
     gotracker_base_url: str = "https://synchronizer.scalenexus.ai"
     gotracker_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound GoTracker webhooks
     gotracker_webhook_callback_base_url: str | None = None
@@ -307,6 +308,14 @@ class Settings(BaseSettings):
             and urlparse(self.nexhealth_webhook_callback_url).scheme != "https"
         ):
             raise ValueError("NEXHEALTH_WEBHOOK_CALLBACK_URL must use https in production")
+        if (
+            self.is_production
+            and self.nexhealth_shadow_webhook_callback_base_url
+            and urlparse(self.nexhealth_shadow_webhook_callback_base_url).scheme != "https"
+        ):
+            raise ValueError(
+                "NEXHEALTH_SHADOW_WEBHOOK_CALLBACK_BASE_URL must use https in production"
+            )
 
         for cidr in self._split_csv(self.trusted_proxy_cidrs):
             ipaddress.ip_network(cidr, strict=False)

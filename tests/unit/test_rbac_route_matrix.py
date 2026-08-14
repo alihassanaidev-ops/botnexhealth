@@ -67,6 +67,9 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/v1/nexhealth/webhooks/appointments",
         "POST /api/v1/nexhealth/webhooks/patients",
         "POST /api/v1/nexhealth/webhooks/sync-status",
+        "POST /api/v1/nexhealth/webhooks/shadow/appointments",
+        "POST /api/v1/nexhealth/webhooks/shadow/patients",
+        "POST /api/v1/nexhealth/webhooks/shadow/sync-status",
         "POST /api/v1/gotracker/webhooks/{location_id}",
         "POST /api/email/webhooks/resend",
     ),
@@ -269,6 +272,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
     ),
     INSTITUTION_OR_LOCATION_ADMIN: (
         "GET /api/automation/workflows/merge-fields",
+        "GET /api/automation/workflows/llm-models",
         "GET /api/automation/workflows/{workflow_id}/launch-checklist",
         "GET /api/automation/workflows/{workflow_id}/overview",
         "GET /api/automation/workflows/{workflow_id}/versions",
@@ -343,6 +347,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/sms/logs/{sms_id}",
         "POST /api/institution/sms/logs/{sms_id}/reveal-phone",
         "POST /api/institution/sms/logs/{sms_id}/reveal-body",
+        "GET /api/institution/appointment-sync",
     ),
     GROUP: (
         "GET /api/group/me",

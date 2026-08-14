@@ -234,6 +234,35 @@ Tests that pin this behavior: `tests/unit/test_nexhealth_token_manager.py`,
 `test_nexhealth_pagination.py`, `test_nexhealth_adapter_appointments.py`,
 `test_slot_filter.py`, and `tests/integration/test_slot_duration_edge_cases.py`.
 
+## V3 webhook shadow validation
+
+REST cutover and webhook cutover stay separate. Existing live subscriptions
+continue to deliver v2-shaped payloads until they are replaced, while v3
+validation traffic is sent to shadow-only endpoints:
+
+- `POST /api/v1/nexhealth/webhooks/shadow/appointments`
+- `POST /api/v1/nexhealth/webhooks/shadow/patients`
+- `POST /api/v1/nexhealth/webhooks/shadow/sync-status`
+
+These routes verify the NexHealth signature, capture the delivery, and return
+2xx after capture even when JSON parsing fails. They do not write to the live
+`nexhealth_webhook_events` ledger, enqueue workflows, update appointment or
+patient projections, or affect live subscription health.
+
+Shadow captures live in `nexhealth_webhook_shadow_events`. Raw payloads are
+encrypted and kept under the same short NexHealth webhook raw-payload retention
+window; redacted payloads, payload hashes, API contract, event/resource metadata,
+provider delivery/subscription ids when present, parse status, extracted business
+event identity, and institution/location resolution results are stored for
+validation. Shadow lifecycle rows live in
+`nexhealth_webhook_shadow_subscriptions`.
+
+To create shadow lifecycle rows and optional provider subscriptions, set
+`NEXHEALTH_SHADOW_WEBHOOK_CALLBACK_BASE_URL` to the public API origin and run the
+manual Celery task
+`src.app.tasks.automation_workflow.ensure_nexhealth_shadow_webhook_subscriptions`.
+The task is intentionally not scheduled in Celery beat.
+
 ## API contract selection
 
 NexHealth API versioning is selected by `NEXHEALTH_API_VERSION`, normalized at

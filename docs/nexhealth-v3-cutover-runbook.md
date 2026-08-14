@@ -54,10 +54,15 @@ Optional enrichment differences are not rollback triggers by themselves.
 
 ## Webhook Shadow Validation
 
-- Create v3 shadow webhook subscriptions that point to distinct shadow routes.
-- Store shadow deliveries outside the live NexHealth webhook event ledger.
-- Verify each event type extracts business event identity, institution/location, patient id, appointment id, start time, provider id, appointment type id, cancellation state, event time, and dedup basis.
-- Return 2xx after safely capturing shadow parse failures so NexHealth does not disable validation endpoints.
+- Configure `NEXHEALTH_SHADOW_WEBHOOK_CALLBACK_BASE_URL` to the public API origin.
+- Manually run `src.app.tasks.automation_workflow.ensure_nexhealth_shadow_webhook_subscriptions` when staging is ready. This task is not in Celery beat; shadow subscriptions must be created intentionally.
+- Shadow subscriptions use stable-v3 request headers and point event groups at distinct routes:
+  - `POST /api/v1/nexhealth/webhooks/shadow/appointments`
+  - `POST /api/v1/nexhealth/webhooks/shadow/patients`
+  - `POST /api/v1/nexhealth/webhooks/shadow/sync-status`
+- Shadow deliveries are stored in `nexhealth_webhook_shadow_events`, not the live `nexhealth_webhook_events` ledger. Lifecycle state is tracked separately in `nexhealth_webhook_shadow_subscriptions`.
+- Verify each event type extracts business event identity, institution/location resolution, patient id, appointment id, start time, provider id, appointment type id, cancellation state, event time, and dedup basis.
+- Shadow parse failures are captured with encrypted raw payloads, redacted payloads, payload hashes, and `parse_status=failed`, then acknowledged with 2xx so NexHealth does not disable validation endpoints.
 
 ## Webhook Cutover
 
