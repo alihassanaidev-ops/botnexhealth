@@ -244,8 +244,9 @@ details in [NEXHEALTH.md](NEXHEALTH.md)):
    bookable options (these are a local cache of PMS reference data, synced on
    demand by `sync_service.py`).
 3. **Offer times** — `find_appointment_slots` queries the location's PMS adapter,
-   then `slot_filter.py` trims results to the location's operating hours/breaks
-   before the agent reads them out.
+   fills missing provider names from the location-scoped ScaleNexus provider
+   cache, then `slot_filter.py` trims results to the location's operating
+   hours/breaks before the agent reads them out.
 4. **Book** — `book_appointment` (idempotency-wrapped) writes the booking back
    through the PMS adapter. `cancel_appointment` / `reschedule_appointment`
    handle changes.

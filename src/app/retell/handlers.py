@@ -240,6 +240,44 @@ def _strip_source_prefix(value: str | None) -> str | None:
     return raw_id if prefix in {"nh", "gt"} else value
 
 
+def _provider_display_name(row: Any) -> str | None:
+    name = str(getattr(row, "name", "") or "").strip()
+    if not name:
+        name = " ".join(
+            str(part).strip()
+            for part in (
+                getattr(row, "first_name", None),
+                getattr(row, "last_name", None),
+            )
+            if part
+        ).strip()
+    return name or None
+
+
+def _missing_provider_source_ids(source: str, slots: list[Any]) -> set[str]:
+    source_ids: set[str] = set()
+    for slot in slots:
+        if str(getattr(slot, "provider_name", "") or "").strip():
+            continue
+        provider_id = str(getattr(slot, "provider_id", "") or "").strip()
+        source_id = _source_id_for_pms(source, provider_id)
+        if source_id:
+            source_ids.add(source_id)
+    return source_ids
+
+
+def _apply_provider_names_to_slots(
+    source: str, slots: list[Any], provider_names: dict[str, str]
+) -> None:
+    for slot in slots:
+        if str(getattr(slot, "provider_name", "") or "").strip():
+            continue
+        provider_id = str(getattr(slot, "provider_id", "") or "").strip()
+        source_id = _source_id_for_pms(source, provider_id)
+        if source_id and provider_names.get(source_id):
+            slot.provider_name = provider_names[source_id]
+
+
 # ============================================================================
 # Location Functions (auto-routed)
 # ============================================================================
@@ -851,6 +889,7 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         )
         provider_source_id = _source_id_for_pms(ctx.adapter.source, provider_id)
         provider_cutoff = None
+        provider_names: dict[str, str] = {}
 
         if ctx.location:
             async with get_system_db_session(
@@ -876,6 +915,39 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
                             buffer_minutes, provider_buffer
                         )
                         provider_cutoff = prov.same_day_cutoff_time
+
+                provider_source_ids = _missing_provider_source_ids(
+                    ctx.adapter.source, slots
+                )
+                if provider_source_ids:
+                    provider_rows = (
+                        (
+                            await session.execute(
+                                select(
+                                    InstitutionProvider.source_id,
+                                    InstitutionProvider.name,
+                                    InstitutionProvider.first_name,
+                                    InstitutionProvider.last_name,
+                                ).where(
+                                    InstitutionProvider.institution_id
+                                    == str(ctx.institution.id),
+                                    InstitutionProvider.location_id
+                                    == str(ctx.location.id),
+                                    InstitutionProvider.source == ctx.adapter.source,
+                                    InstitutionProvider.source_id.in_(
+                                        sorted(provider_source_ids)
+                                    ),
+                                    InstitutionProvider.is_active.is_(True),
+                                )
+                            )
+                        )
+                        .all()
+                    )
+                    provider_names = {
+                        row.source_id: display_name
+                        for row in provider_rows
+                        if (display_name := _provider_display_name(row))
+                    }
 
                 # Per-location operating hours + breaks (lunch / blackout
                 # windows). Loaded regardless of provider so the voice agent
@@ -917,6 +989,9 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             )
         elif buffer_minutes > 0:
             slots = apply_buffer(slots, buffer_minutes)
+
+        if provider_names:
+            _apply_provider_names_to_slots(ctx.adapter.source, slots, provider_names)
 
         # Apply same-day cutoff time restriction
         if provider_cutoff and normalized_provider_id and ctx.location:

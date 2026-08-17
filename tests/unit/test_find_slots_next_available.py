@@ -189,6 +189,84 @@ async def test_gotracker_slots_use_clinic_tz_offset(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_nexhealth_slots_get_provider_name_from_scalenexus_cache(monkeypatch):
+    slot = UniversalSlot(
+        start="2026-07-20T09:00:00-04:00",
+        end="2026-07-20T09:30:00-04:00",
+        provider_id="nh-123",
+        provider_name="",
+    )
+    adapter = MagicMock()
+    adapter.source = "nexhealth"
+    adapter.find_available_slots = AsyncMock(
+        return_value=SlotSearchResult(slots=[slot], next_available_date=None)
+    )
+    ctx = SimpleNamespace(
+        institution=SimpleNamespace(id="11111111-1111-1111-1111-111111111111"),
+        location=SimpleNamespace(
+            id="22222222-2222-2222-2222-222222222222",
+            timezone="America/New_York",
+        ),
+        adapter=adapter,
+    )
+
+    class _QueryResult:
+        def __init__(self, items):
+            self._items = items
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return list(self._items)
+
+        def one_or_none(self):
+            return self._items[0] if self._items else None
+
+    class _FakeSession:
+        def __init__(self):
+            self._results = [
+                _QueryResult(
+                    [
+                        SimpleNamespace(
+                            source_id="nh-123",
+                            name="Dr. Ada Lovelace",
+                            first_name=None,
+                            last_name=None,
+                        )
+                    ]
+                ),
+                _QueryResult([]),
+                _QueryResult([]),
+            ]
+
+        async def execute(self, *_a, **_k):
+            return self._results.pop(0)
+
+    class _FakeSessionCtx:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+    monkeypatch.setattr(
+        handlers, "get_system_db_session", lambda *a, **k: _FakeSessionCtx()
+    )
+
+    result = await _find_slots(
+        {"start_date": "2026-07-20", "appointment_type_id": "nh-50"}
+    )
+
+    assert result["slots_count"] == 1
+    assert result["slots"][0]["provider_name"] == "Dr. Ada Lovelace"
+
+
+@pytest.mark.asyncio
 async def test_hint_suppressed_when_slots_exist(monkeypatch):
     slot = UniversalSlot(
         start="2026-07-20T09:00:00-04:00",

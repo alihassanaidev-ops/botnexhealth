@@ -98,6 +98,10 @@ flattens the nested per-location/provider response into universal slots. We
 then filter locally
 (`src/app/services/slot_filter.py`):
 
+Before Retell returns slot results, blank provider names are enriched from the
+location-scoped ScaleNexus `institution_providers` cache because NexHealth slot
+groups reliably include provider IDs but not provider names.
+
 1. Buffer: drop slots starting before `now + provider.buffer_minutes`.
 2. Operating hours + breaks: per-day windows configured on the location,
    evaluated in the clinic's timezone.
