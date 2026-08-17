@@ -154,6 +154,13 @@ path: `/appointment_slots` on legacy v2 and `/available_slots` on stable v3.
 Don't reach for `/availabilities` or `/working_hours` when you mean "what can
 the patient book".
 
+**Setup can bulk-link next week's dated work windows.** The provider scheduling
+page has a "Link next week" action that reads real NexHealth working-window
+records, filters them to dated rows whose `specific_date` falls next week for
+the selected provider/operatories, and PATCHes those records with the selected
+appointment types. It deliberately does not patch recurring rows with only
+`days`, because that would affect future weeks too, not just the selected range.
+
 **`/availabilities` returns empty for PMS-synced schedules.** For providers
 whose schedule syncs from the PMS, the endpoint can return 200 with zero rows
 even though the provider has working hours. The same windows *are* embedded in

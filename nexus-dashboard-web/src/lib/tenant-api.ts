@@ -143,14 +143,41 @@ export async function listDescriptors(locationId?: string): Promise<CachedDescri
 
 export async function listAvailabilities(
     locationId?: string,
-    providerSourceId?: string
+    providerSourceId?: string,
+    options?: {
+        startDate?: string;
+        days?: number;
+    }
 ): Promise<CachedAvailability[]> {
     const params = new URLSearchParams();
     if (locationId) params.set("location_id", locationId);
     if (providerSourceId) params.set("provider_source_id", providerSourceId);
+    if (options?.startDate) params.set("start_date", options.startDate);
+    if (options?.days) params.set("days", String(options.days));
     const q = params.toString() ? `?${params.toString()}` : "";
     const { data } = await api.get<unknown>(`${BASE}/availabilities${q}`);
     return unwrapArray<CachedAvailability>(data, `${BASE}/availabilities`);
+}
+
+export async function bulkLinkNextWeekAvailabilities(
+    payload: {
+        provider_id: string;
+        appointment_type_ids: string[];
+        operatory_id?: string | null;
+    },
+    locationId?: string
+): Promise<{
+    matched_count: number;
+    updated_count: number;
+    skipped_count: number;
+    windows: CachedAvailability[];
+    errors: string[];
+}> {
+    const { data } = await api.post(
+        `${BASE}/availabilities/bulk-link-next-week${qs(locationId)}`,
+        payload
+    );
+    return data;
 }
 
 export async function createAvailability(

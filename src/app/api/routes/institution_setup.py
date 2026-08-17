@@ -8,7 +8,7 @@ Proxies mutations to PMS and refreshes the local cache.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
@@ -300,6 +300,64 @@ def _date_from_iso(value: str | None) -> str | None:
     return str(value).split("T", 1)[0]
 
 
+def _next_week_start_for_location(location: InstitutionLocation) -> str:
+    timezone_name = location.timezone or "UTC"
+    try:
+        today = datetime.now(ZoneInfo(timezone_name)).date()
+    except Exception:
+        today = datetime.utcnow().date()
+    days_until_next_monday = 7 - today.weekday()
+    return (today + timedelta(days=days_until_next_monday)).isoformat()
+
+
+def _day_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value).strftime("%A")
+    except ValueError:
+        return None
+
+
+def _strip_source_prefix(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value)
+    if "-" in text:
+        prefix, rest = text.split("-", 1)
+        if prefix in {"nh", "gt"}:
+            return rest
+    return text
+
+
+def _same_source_id(left: Any, right: Any) -> bool:
+    left_id = _strip_source_prefix(left)
+    right_id = _strip_source_prefix(right)
+    return bool(left_id and right_id and left_id == right_id)
+
+
+def _next_week_dates(location: InstitutionLocation) -> list[str]:
+    start = date.fromisoformat(_next_week_start_for_location(location))
+    return [(start + timedelta(days=offset)).isoformat() for offset in range(7)]
+
+
+def _availability_matches_dates(item: dict[str, Any], dates: set[str]) -> bool:
+    if item.get("active") is False:
+        return False
+    specific_date = item.get("specific_date")
+    return bool(specific_date and str(specific_date) in dates)
+
+
+def _availability_with_linked_types(
+    item: dict[str, Any],
+    appointment_type_ids: list[str],
+) -> dict[str, Any]:
+    out = dict(item)
+    out["appointment_type_ids"] = [_strip_source_prefix(type_id) for type_id in appointment_type_ids]
+    out.pop("appointment_types", None)
+    return out
+
+
 def _availability_response_from_slot(slot: Any, *, index: int) -> CachedAvailabilityResponse:
     source_id = f"gt-slot-{slot.provider_id or 'provider'}-{slot.operatory_id or 'operatory'}-{slot.start or index}"
     appointment_type_ids = [slot.appointment_type_id] if slot.appointment_type_id else []
@@ -385,6 +443,20 @@ class UpdateAvailabilityRequest(BaseModel):
     end_time: str | None = None
     operatory_id: str | None = None
     active: bool | None = None
+
+
+class BulkLinkNextWeekAvailabilityRequest(BaseModel):
+    provider_id: str
+    appointment_type_ids: list[str]
+    operatory_id: str | None = None
+
+
+class BulkLinkNextWeekAvailabilityResponse(BaseModel):
+    matched_count: int
+    updated_count: int
+    skipped_count: int
+    windows: list[CachedAvailabilityResponse]
+    errors: list[str] = []
 
 
 # ── Overview ─────────────────────────────────────────────────────────────
@@ -858,6 +930,11 @@ async def list_availabilities(
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_id: str | None = Query(None),
     provider_source_id: str | None = Query(None, description="Filter by provider"),
+    start_date: str | None = Query(
+        None,
+        description="YYYY-MM-DD start date for slot-derived availability on PMSs without work windows.",
+    ),
+    days: int = Query(7, ge=1, le=31),
 ):
     """Fetch schedule availability live from PMS for the institution location."""
     async with get_db_session() as session:
@@ -875,8 +952,8 @@ async def list_availabilities(
                 return [_availability_response_from_raw(item) for item in raw_items]
 
             slot_result = await adapter.find_available_slots(
-                start_date=_today_for_location(location),
-                days=7,
+                start_date=start_date or _today_for_location(location),
+                days=days,
                 provider_id=provider_source_id,
             )
             return [
@@ -892,6 +969,95 @@ async def list_availabilities(
                 status.HTTP_502_BAD_GATEWAY,
                 "Failed to fetch availabilities",
             )
+
+
+@router.post(
+    "/availabilities/bulk-link-next-week",
+    response_model=BulkLinkNextWeekAvailabilityResponse,
+)
+async def bulk_link_next_week_availabilities(
+    req: BulkLinkNextWeekAvailabilityRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
+):
+    """Link appointment types to real PMS work windows that occur next week."""
+    if not req.appointment_type_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "appointment_type_ids is required")
+
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
+
+        if not isinstance(adapter, SupportsAvailabilityLinking):
+            raise HTTPException(400, "This PMS does not support availability updates")
+
+        next_week_dates = set(_next_week_dates(location))
+        raw_items = await adapter.list_availabilities(
+            provider_id=req.provider_id,
+            ignore_past_dates=False,
+        )
+        matched_items = [
+            item for item in raw_items
+            if _availability_matches_dates(item, next_week_dates)
+            and (
+                req.operatory_id is None
+                or _same_source_id(item.get("operatory_id"), req.operatory_id)
+            )
+        ]
+
+        updated_windows: list[CachedAvailabilityResponse] = []
+        errors: list[str] = []
+        for item in matched_items:
+            raw_id = item.get("id")
+            source_id = _prefixed_nexhealth_id(raw_id)
+            if not source_id:
+                errors.append("Skipped availability without an id")
+                continue
+            try:
+                await adapter.update_availability(
+                    availability_id=source_id,
+                    appointment_type_ids=req.appointment_type_ids,
+                )
+                updated_windows.append(
+                    _availability_response_from_raw(
+                        _availability_with_linked_types(item, req.appointment_type_ids),
+                        fallback_source_id=source_id,
+                    )
+                )
+            except Exception as exc:
+                errors.append(f"{source_id}: {safe_error_summary(exc)}")
+
+        loc_slug = location.slug
+        institution_id = institution.id
+        matched_count = len(matched_items)
+        updated_count = len(updated_windows)
+        skipped_count = matched_count - updated_count
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/availabilities:next_week",
+        outcome=AuditOutcome.SUCCESS if not errors else AuditOutcome.FAILURE_EXTERNAL_API,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "bulk_link_next_week_availabilities",
+            "provider_id": req.provider_id,
+            "operatory_id": req.operatory_id,
+            "appointment_type_ids": req.appointment_type_ids,
+            "matched_count": matched_count,
+            "updated_count": updated_count,
+            "skipped_count": skipped_count,
+        },
+        institution_id=institution_id,
+    )
+    return BulkLinkNextWeekAvailabilityResponse(
+        matched_count=matched_count,
+        updated_count=updated_count,
+        skipped_count=skipped_count,
+        windows=updated_windows,
+        errors=errors,
+    )
 
 
 @router.post("/availabilities", response_model=CachedAvailabilityResponse, status_code=201)

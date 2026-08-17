@@ -18,6 +18,8 @@ class _FakeSession:
 class _FakeAvailabilityAdapter(SupportsAvailabilityLinking):
     def __init__(self):
         self.created_payload = None
+        self.updated_payloads = []
+        self.availabilities = []
 
     async def link_availability(
         self,
@@ -48,11 +50,13 @@ class _FakeAvailabilityAdapter(SupportsAvailabilityLinking):
             }
         }
 
-    async def update_availability(self, *args, **kwargs):
-        raise NotImplementedError
+    async def update_availability(self, availability_id, **kwargs):
+        self.updated_payloads.append({"availability_id": availability_id, **kwargs})
+        return {"id": availability_id, **kwargs}
 
     async def list_availabilities(self, **kwargs):
-        return []
+        self.list_kwargs = kwargs
+        return self.availabilities
 
 
 def _monkeypatch_route_context(monkeypatch, adapter):
@@ -63,7 +67,7 @@ def _monkeypatch_route_context(monkeypatch, adapter):
     async def fake_resolve(_current_user, _session, _location_id):
         return (
             SimpleNamespace(id="inst-1"),
-            SimpleNamespace(id="loc-1", slug="loc-1"),
+            SimpleNamespace(id="loc-1", slug="loc-1", timezone="America/Toronto"),
         )
 
     async def fake_get_adapter(*_args, **_kwargs):
@@ -104,3 +108,66 @@ async def test_create_availability_returns_cached_response_shape(monkeypatch):
     assert result.source_id == "nh-999"
     assert result.provider_source_id == "nh-123"
     assert result.appointment_type_ids == ["nh-50"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_link_next_week_updates_matching_real_work_windows(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = [
+        {
+            "id": 101,
+            "provider_id": 2,
+            "operatory_id": 4,
+            "begin_time": "08:00",
+            "end_time": "17:00",
+            "specific_date": "2026-08-24",
+            "days": ["Monday"],
+            "active": True,
+        },
+        {
+            "id": 102,
+            "provider_id": 2,
+            "operatory_id": 4,
+            "begin_time": "08:00",
+            "end_time": "17:00",
+            "specific_date": "2026-09-01",
+            "days": ["Tuesday"],
+            "active": True,
+        },
+        {
+            "id": 103,
+            "provider_id": 2,
+            "operatory_id": 9,
+            "begin_time": "08:00",
+            "end_time": "17:00",
+            "days": ["Wednesday"],
+            "active": True,
+        },
+    ]
+    _monkeypatch_route_context(monkeypatch, adapter)
+    monkeypatch.setattr(route, "_next_week_start_for_location", lambda _location: "2026-08-24")
+
+    result = await route.bulk_link_next_week_availabilities(
+        req=route.BulkLinkNextWeekAvailabilityRequest(
+            provider_id="nh-2",
+            operatory_id="nh-4",
+            appointment_type_ids=["nh-50", "nh-51"],
+        ),
+        current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
+        location_id=None,
+    )
+
+    assert adapter.list_kwargs == {
+        "provider_id": "nh-2",
+        "ignore_past_dates": False,
+    }
+    assert adapter.updated_payloads == [
+        {
+            "availability_id": "nh-101",
+            "appointment_type_ids": ["nh-50", "nh-51"],
+        }
+    ]
+    assert result.matched_count == 1
+    assert result.updated_count == 1
+    assert result.windows[0].source_id == "nh-101"
+    assert result.windows[0].appointment_type_ids == ["nh-50", "nh-51"]

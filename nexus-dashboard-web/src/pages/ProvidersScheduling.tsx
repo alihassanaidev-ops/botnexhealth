@@ -7,7 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
-import { RefreshCcw, AlertTriangle, Clock, Calendar, MapPin, UserCog } from "lucide-react"
+import { RefreshCcw, AlertTriangle, Clock, Calendar, CalendarDays, MapPin, UserCog } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
 import { Input } from "@/components/ui/input"
@@ -19,6 +19,7 @@ import {
     listOperatories,
     createAvailability,
     updateAvailability,
+    bulkLinkNextWeekAvailabilities,
     updateProvider,
     triggerSync,
 } from "@/lib/tenant-api"
@@ -64,6 +65,8 @@ export default function ProvidersScheduling() {
     const [maxAge, setMaxAge] = useState<number | "">("")
     const [savingSettings, setSavingSettings] = useState(false)
     const [canLinkAvailability, setCanLinkAvailability] = useState(false)
+    const [bulkDialogOpen, setBulkDialogOpen] = useState(false)
+    const [bulkTypeIds, setBulkTypeIds] = useState<string[]>([])
 
     // Load providers + appointment types once on mount
     const fetchData = useCallback(async () => {
@@ -99,6 +102,7 @@ export default function ProvidersScheduling() {
     const fetchAvailabilities = useCallback(async () => {
         if (!selectedProviderId || !locationId) return
         setLoadingAvailabilities(true)
+        setAvailabilities([])
         try {
             const data = await listAvailabilities(locationId, selectedProviderId)
             setAvailabilities(data)
@@ -197,6 +201,46 @@ export default function ProvidersScheduling() {
                 ? prev.filter((id) => id !== typeId)
                 : [...prev, typeId]
         )
+    }
+
+    const toggleBulkTypeId = (typeId: string) => {
+        setBulkTypeIds((prev) =>
+            prev.includes(typeId)
+                ? prev.filter((id) => id !== typeId)
+                : [...prev, typeId]
+        )
+    }
+
+    const handleBulkLinkNextWeek = async () => {
+        if (!canManage || !selectedProviderId || !locationId) return
+        if (bulkTypeIds.length === 0) {
+            toast.error("Please select at least one appointment type")
+            return
+        }
+        setSaving(true)
+        try {
+            const result = await bulkLinkNextWeekAvailabilities({
+                provider_id: selectedProviderId,
+                appointment_type_ids: bulkTypeIds,
+                operatory_id: selectedOperatoryId === "all" ? null : selectedOperatoryId,
+            }, locationId)
+            if (result.updated_count > 0) {
+                toast.success(`Linked ${result.updated_count} next-week work window${result.updated_count === 1 ? "" : "s"}`)
+            } else {
+                toast.warning("No next-week work windows matched the current provider and operatory filters")
+            }
+            if (result.errors.length > 0) {
+                toast.error(`${result.errors.length} work window${result.errors.length === 1 ? "" : "s"} failed to update`)
+            }
+            setBulkDialogOpen(false)
+            setBulkTypeIds([])
+            await fetchAvailabilities()
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to link next week's work windows"
+            toast.error(message)
+        } finally {
+            setSaving(false)
+        }
     }
 
     const handleSaveEdit = async () => {
@@ -366,6 +410,16 @@ export default function ProvidersScheduling() {
                 actions={
                     canManage ? (
                         <>
+                            {canLinkAvailability && (
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setBulkDialogOpen(true)}
+                                    disabled={loading || !selectedProviderId}
+                                >
+                                    <CalendarDays className="h-4 w-4" />
+                                    Link next week
+                                </Button>
+                            )}
                             {canLinkAvailability && (
                                 <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
                                     Create Work Window
@@ -590,7 +644,7 @@ export default function ProvidersScheduling() {
                                 {filteredAvailabilities.length} {canLinkAvailability ? "schedule" : "slot"}{filteredAvailabilities.length !== 1 ? "s" : ""} found
                                 {selectedApptTypeId !== "all" ? " (filtered)" : ""}.
                                 {canLinkAvailability && canManage
-                                    ? ' Click "Edit Linking" to associate appointment types, or create a custom Work Window.'
+                                    ? ' Click "Edit Linking" to associate appointment types, or use "Link next week" to bulk-link matching windows.'
                                     : canLinkAvailability
                                         ? " Read-only view."
                                         : " These are read directly from your PMS."}
@@ -719,6 +773,60 @@ export default function ProvidersScheduling() {
 
             {canManage && canLinkAvailability && (
                 <>
+                    {/* Bulk Link Next Week Dialog */}
+                    <Dialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
+                        <DialogContent className="max-w-md">
+                            <DialogHeader>
+                                <DialogTitle>Link Next Week</DialogTitle>
+                                <DialogDescription>
+                                    Apply appointment types to real PMS work windows for next week.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-3 py-2">
+                                <div className="rounded-md border border-border/70 p-3 text-sm text-muted-foreground">
+                                    <div>Provider: {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}</div>
+                                    <div>
+                                        Operatory: {selectedOperatoryId === "all"
+                                            ? "All operatories"
+                                            : operatoryNameBySourceId.get(selectedOperatoryId) ?? selectedOperatoryId}
+                                    </div>
+                                    <div>Range: next week</div>
+                                </div>
+                                {appointmentTypes.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">
+                                        No appointment types configured. Create some first.
+                                    </p>
+                                ) : (
+                                    <div className="border rounded-md max-h-64 overflow-y-auto">
+                                        {appointmentTypes.map((at) => (
+                                            <label
+                                                key={at.source_id}
+                                                className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                            >
+                                                <Checkbox
+                                                    checked={bulkTypeIds.includes(at.source_id)}
+                                                    onCheckedChange={() => toggleBulkTypeId(at.source_id)}
+                                                />
+                                                <span className="text-sm">{at.name}</span>
+                                                {at.duration_minutes && (
+                                                    <span className="text-xs text-muted-foreground ml-auto">
+                                                        {at.duration_minutes} min
+                                                    </span>
+                                                )}
+                                            </label>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <DialogFooter>
+                                <Button variant="outline" onClick={() => setBulkDialogOpen(false)}>Cancel</Button>
+                                <Button onClick={handleBulkLinkNextWeek} disabled={saving || bulkTypeIds.length === 0}>
+                                    {saving ? "Linking..." : "Link Next Week"}
+                                </Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
+
                     {/* Edit Linking Dialog */}
                     <Dialog open={!!editTarget} onOpenChange={() => setEditTarget(null)}>
                         <DialogContent className="max-w-md">
