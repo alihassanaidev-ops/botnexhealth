@@ -23,13 +23,11 @@ import {
     triggerSync,
 } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
-import { useSelectedLocationId, useLocationContext } from "@/context/LocationContext"
-import SchedulerCalendar from "@/components/scheduling/SchedulerCalendar"
+import { useSelectedLocationId } from "@/context/LocationContext"
 
 export default function ProvidersScheduling() {
     const { user } = useAuth()
     const locationId = useSelectedLocationId()
-    const { selectedLocation } = useLocationContext()
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [providers, setProviders] = useState<CachedProvider[]>([])
     const [availabilities, setAvailabilities] = useState<CachedAvailability[]>([])
@@ -39,12 +37,6 @@ export default function ProvidersScheduling() {
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
     const [showExpired, setShowExpired] = useState(false)
-    const [view, setView] = useState<"list" | "calendar">("list")
-    // Calendar view is still under test — expose it on staging/local only and keep
-    // it out of production until validated. Remove this gate to launch everywhere.
-    const calendarEnabled =
-        typeof window !== "undefined" &&
-        (window.location.hostname.includes("staging") || window.location.hostname.includes("localhost"))
     const [loading, setLoading] = useState(true)
     const [loadingAvailabilities, setLoadingAvailabilities] = useState(false)
     const [syncing, setSyncing] = useState(false)
@@ -372,33 +364,18 @@ export default function ProvidersScheduling() {
                         : "Review live bookable slots from your PMS and configure provider scheduling rules."
                 }
                 actions={
-                    <>
-                        {calendarEnabled && (
-                            <div className="inline-flex overflow-hidden rounded-md border">
-                                {(["list", "calendar"] as const).map((v) => (
-                                    <button
-                                        key={v}
-                                        onClick={() => setView(v)}
-                                        className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground"}`}
-                                    >
-                                        {v}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                        {canManage && view === "list" && (
-                            <>
-                                {canLinkAvailability && (
+                    canManage ? (
+                        <>
+                            {canLinkAvailability && (
                                 <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
                                     Create Work Window
                                 </Button>
-                                )}
-                                <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
-                                    <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                                </Button>
-                            </>
-                        )}
-                    </>
+                            )}
+                            <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
+                                <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                            </Button>
+                        </>
+                    ) : undefined
                 }
             />
 
@@ -433,14 +410,6 @@ export default function ProvidersScheduling() {
                         </p>
                     </CardContent>
                 </Card>
-            ) : view === "calendar" && calendarEnabled ? (
-                <SchedulerCalendar
-                    locationId={locationId}
-                    operatories={operatories}
-                    appointmentTypes={appointmentTypes}
-                    canManage={canManage}
-                    timezone={selectedLocation?.timezone ?? undefined}
-                />
             ) : (
                 <>
                     {/* Filters: Provider → Appointment Type */}
