@@ -17,10 +17,8 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
     deleteWorkflow,
-    getChannelReadiness,
     getWorkflow,
     pauseWorkflow,
-    previewLaunchChecklist,
     publishWorkflow,
     resumeWorkflow,
 } from "@/lib/workflow-api"
@@ -41,21 +39,15 @@ import {
     type FlowNode,
 } from "@/lib/workflow/graph"
 import { validateDefinition } from "@/lib/workflow/validation"
-import { usedChannelStatuses } from "@/lib/workflow/readiness"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
 import WorkflowPalette from "@/components/workflow/WorkflowPalette"
 import StepConfigPanel from "@/components/workflow/StepConfigPanel"
 import WorkflowValidationPanel from "@/components/workflow/WorkflowValidationPanel"
 import WorkflowPublishControls from "@/components/workflow/WorkflowPublishControls"
-import ComplianceSettings from "@/components/workflow/ComplianceSettings"
-import LaunchChecklistPanel from "@/components/workflow/LaunchChecklistPanel"
 import TestRunDialog from "@/components/workflow/TestRunDialog"
 import type { AutomationWorkflow } from "@/types"
 import type { OutboundVoiceProfile } from "@/types"
 import type {
-    ChannelReadiness,
-    ComplianceMetadata,
-    LaunchChecklist,
     NodeType,
     ValidationIssue,
     WorkflowDefinition,
@@ -87,10 +79,7 @@ export default function WorkflowBuilder() {
     const [panelOpen, setPanelOpen] = useState(false)
     const [testOpen, setTestOpen] = useState(false)
     const [backendIssues, setBackendIssues] = useState<ValidationIssue[]>([])
-    const [readiness, setReadiness] = useState<ChannelReadiness | null>(null)
     const [voiceProfiles, setVoiceProfiles] = useState<OutboundVoiceProfile[]>([])
-    const [launchChecklist, setLaunchChecklist] = useState<LaunchChecklist | null>(null)
-    const [launchChecklistLoading, setLaunchChecklistLoading] = useState(false)
     const serverDef = useRef<WorkflowDefinition | null>(null)
 
     const readOnly = workflow?.status === "archived"
@@ -135,23 +124,12 @@ export default function WorkflowBuilder() {
     const locationId = workflow?.location_id ?? null
     useEffect(() => {
         if (!locationId) {
-            setReadiness(null)
             setVoiceProfiles([])
             return
         }
         let cancelled = false
-        setReadiness(null)
         setVoiceProfiles([])
 
-        // These are independent advisory lookups. A readiness outage must not
-        // hide otherwise usable voice profiles (and vice versa).
-        void getChannelReadiness(locationId)
-            .then((result) => {
-                if (!cancelled) setReadiness(result)
-            })
-            .catch(() => {
-                if (!cancelled) setReadiness(null)
-            })
         void listOutboundVoiceProfiles({ locationId, isActive: true })
             .then((profiles) => {
                 if (!cancelled) setVoiceProfiles(Array.isArray(profiles) ? profiles : [])
@@ -178,44 +156,6 @@ export default function WorkflowBuilder() {
 
     const issues = useMemo(() => (def ? validateDefinition(def) : []), [def])
     const errorCount = issues.filter((i) => i.severity === "error").length
-
-    // Readiness of the channels this definition actually uses (empty when no
-    // location or no readiness report yet). Unready channels warn but never block.
-    const channelStatuses = useMemo(
-        () => (def && readiness ? usedChannelStatuses(def, readiness) : []),
-        [def, readiness],
-    )
-    const readinessWarning = useMemo(() => {
-        const unready = channelStatuses.filter((s) => !s.ready)
-        if (unready.length === 0) return null
-        const names = unready.map((s) => s.label).join(", ")
-        return `${names} ${unready.length > 1 ? "are" : "is"} not set up for this location. You can still publish, but those steps won't send until it's configured.`
-    }, [channelStatuses])
-
-    useEffect(() => {
-        if (!id || !def) {
-            setLaunchChecklist(null)
-            return
-        }
-        let cancelled = false
-        setLaunchChecklistLoading(true)
-        const handle = window.setTimeout(() => {
-            previewLaunchChecklist(id, serializeDefinition(def), { locationId })
-                .then((checklist) => {
-                    if (!cancelled) setLaunchChecklist(checklist)
-                })
-                .catch(() => {
-                    if (!cancelled) setLaunchChecklist(null)
-                })
-                .finally(() => {
-                    if (!cancelled) setLaunchChecklistLoading(false)
-                })
-        }, 350)
-        return () => {
-            cancelled = true
-            window.clearTimeout(handle)
-        }
-    }, [id, def, locationId])
 
     const flow = useMemo(() => {
         if (!def) return { nodes: [] as FlowNode[], edges: [] }
@@ -264,12 +204,7 @@ export default function WorkflowBuilder() {
         },
         [def, applyDef],
     )
-    const onComplianceChange = useCallback(
-        (compliance: ComplianceMetadata) => {
-            if (def) applyDef({ ...def, compliance })
-        },
-        [def, applyDef],
-    )
+    // Compliance classification is currently managed by Retell, not this builder.
     const onDeleteNode = useCallback(
         (nodeId: string) => {
             if (!def) return
@@ -450,9 +385,6 @@ export default function WorkflowBuilder() {
                         dirty={dirty}
                         errorCount={errorCount}
                         busy={busy}
-                        readinessWarning={readinessWarning}
-                        launchChecklist={launchChecklist}
-                        launchChecklistLoading={launchChecklistLoading}
                         onPublish={onPublish}
                         onDiscard={onDiscard}
                         onPause={() => runLifecycle(pauseWorkflow, "Campaign paused")}
@@ -489,21 +421,11 @@ export default function WorkflowBuilder() {
                 </div>
 
                 <aside className="w-72 shrink-0 space-y-3 overflow-y-auto border-l border-border p-3">
-                    <ComplianceSettings
-                        compliance={def.compliance}
-                        onChange={onComplianceChange}
-                        disabled={readOnly}
-                    />
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Validation</h3>
                     <WorkflowValidationPanel
                         issues={issues}
                         backendIssues={backendIssues}
-                        readiness={channelStatuses}
                         onSelectNode={onSelect}
-                    />
-                    <LaunchChecklistPanel
-                        checklist={launchChecklist}
-                        loading={launchChecklistLoading}
                     />
                     {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </aside>

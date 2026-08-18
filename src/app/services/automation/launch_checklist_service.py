@@ -30,7 +30,6 @@ from src.app.models.nexhealth_webhook_subscription import (
 )
 from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
 from src.app.services.automation.channel_readiness import ChannelReadinessService
-from src.app.services.automation.content_compliance_validator import ContentComplianceValidator
 from src.app.services.automation.definition_schema import (
     ConditionNode,
     ExitNode,
@@ -102,7 +101,7 @@ class CampaignLaunchChecklistService:
         items: list[CampaignLaunchChecklistItem] = []
         issues = await WorkflowValidationService(
             self.session,
-            content_validator=ContentComplianceValidator(),
+            # Compliance classification/content checks are managed by Retell.
             readiness_checker=ChannelReadinessService(self.session),
         ).validate(
             effective_definition or {},
@@ -151,7 +150,8 @@ class CampaignLaunchChecklistService:
             institution_id=institution_id,
             location_id=location_id_text,
         )
-        items += self._compliance_items(definition, send_nodes, errors, warnings)
+        # Compliance classification is managed by Retell for now.
+        # items += self._compliance_items(definition, send_nodes, errors, warnings)
         items += self._quiet_hours_item(send_nodes)
         items += self._callback_items(definition)
         items += await self._pms_capability_items(

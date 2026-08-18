@@ -27,7 +27,6 @@ from src.app.models.user import User
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
 from src.app.services.automation.channel_readiness import ChannelReadinessService
-from src.app.services.automation.content_compliance_validator import ContentComplianceValidator
 from src.app.services.automation.dry_run import simulate_run
 from src.app.services.automation.launch_checklist_service import (
     CampaignLaunchChecklist,
@@ -702,7 +701,6 @@ async def validate_definition(
     # too — the builder sees the same content issues publish will enforce.
     issues = await WorkflowValidationService(
         session=None,
-        content_validator=ContentComplianceValidator(),
         readiness_checker=ChannelReadinessService(None),
     ).validate(data.definition, institution_id=inst_id)
     responses = [

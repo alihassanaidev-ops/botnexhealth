@@ -86,6 +86,10 @@ def instantiate_definition(
 ) -> dict[str, Any]:
     """Return a clone-ready definition with setup-time substitutions applied."""
     definition = copy.deepcopy(template.definition)
+    # Compliance classification is owned by Retell. Keep template metadata
+    # compatibility elsewhere, but never copy the legacy workflow-level block
+    # into a newly instantiated outbound workflow.
+    definition.pop("compliance", None)
     setup_options = setup_options or {}
     requires_voice = any(
         node.get("type") == "send_voice"

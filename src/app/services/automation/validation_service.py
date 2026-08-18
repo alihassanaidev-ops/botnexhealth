@@ -144,11 +144,14 @@ class WorkflowValidationService:
 
         issues: list[ValidationIssue] = []
         issues += self._unreachable_nodes(definition)
-        issues += self._consent_and_content(definition)
+        # Compliance classification/content checks are managed by Retell for now.
+        # Keep the schema fields for backwards compatibility, but do not enforce
+        # them in this workflow builder validation path.
+        # issues += self._consent_and_content(definition)
         issues += self._merge_field_issues(definition)
-        issues += await self.content_validator.validate(
-            definition, institution_id=institution_id, location_id=location_id
-        )
+        # issues += await self.content_validator.validate(
+        #     definition, institution_id=institution_id, location_id=location_id
+        # )
         issues += await self.readiness_checker.check(
             definition, institution_id=institution_id, location_id=location_id
         )

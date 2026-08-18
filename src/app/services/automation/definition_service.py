@@ -32,7 +32,6 @@ from src.app.models.patient_workflow_status import PatientWorkflowStatusEvent
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.channel_readiness import ChannelReadinessService
-from src.app.services.automation.content_compliance_validator import ContentComplianceValidator
 from src.app.services.automation.validation_service import WorkflowValidationService
 
 logger = logging.getLogger(__name__)
@@ -165,11 +164,16 @@ class AutomationWorkflowDefinitionService:
                 )
             definition = workflow.current_version.definition
 
+        # Compliance classification is owned by Retell. Strip the legacy
+        # workflow-level block before validation, checksumming, and persistence.
+        # All executable nodes, including GoTracker steps, remain unchanged.
+        definition = dict(definition)
+        definition.pop("compliance", None)
+
         # Authoritative validation: structural + consent/content-class + the
         # Plan-12/Plan-10 seams. Publish is fail-closed on any error-severity issue.
         issues = await WorkflowValidationService(
             self.session,
-            content_validator=ContentComplianceValidator(),
             readiness_checker=ChannelReadinessService(self.session),
         ).validate(
             definition,
