@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import api from "@/lib/api";
-import type { InstitutionDetail, Location } from "@/types";
+import type { InstitutionDetail } from "@/types";
 
 const credentialsSchema = z.object({
     credential_mode: z.enum(["platform", "institution"]),
@@ -45,9 +45,8 @@ interface InstitutionCredentialsFormProps {
 export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCredentialsFormProps) {
     const [editingSection, setEditingSection] = useState<SectionKey | null>(null);
     const [isSaving, setIsSaving] = useState(false);
-    const [locations, setLocations] = useState<Location[]>([]);
-    const [selectedLocationId, setSelectedLocationId] = useState<string>("");
     const [isVerifying, setIsVerifying] = useState(false);
+    const [verifiedKey, setVerifiedKey] = useState<string | null>(null);
     const [verification, setVerification] = useState<{
         ok: boolean;
         message: string;
@@ -63,6 +62,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
         },
     });
     const credentialMode = form.watch("credential_mode");
+    const clinicApiKey = form.watch("nexhealth_api_key")?.trim() || "";
 
     // Reset form when institution data is refreshed (e.g. after save)
     useEffect(() => {
@@ -70,33 +70,9 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
             credential_mode: institution.has_nexhealth_key ? "institution" : "platform",
             nexhealth_api_key: "",
         });
+        setVerifiedKey(null);
         setVerification(null);
     }, [institution, form]);
-
-    useEffect(() => {
-        let cancelled = false;
-
-        async function fetchLocations() {
-            try {
-                const { data } = await api.get<Location[]>(
-                    `/admin/institutions/${institution.slug}/locations`
-                );
-                if (cancelled) return;
-                setLocations(data);
-                const firstNexHealthLocation = data.find(
-                    (loc) => loc.nexhealth_subdomain && loc.nexhealth_location_id
-                );
-                setSelectedLocationId(firstNexHealthLocation?.id || data[0]?.id || "");
-            } catch {
-                if (!cancelled) setLocations([]);
-            }
-        }
-
-        fetchLocations();
-        return () => {
-            cancelled = true;
-        };
-    }, [institution.slug]);
 
     async function onSubmit(values: CredentialsFormValues) {
         setIsSaving(true);
@@ -119,6 +95,17 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
             if (editingSection === "nexhealth" && values.credential_mode === "platform") {
                 payload.nexhealth_api_key = null;
             }
+            if (editingSection === "nexhealth" && values.credential_mode === "institution") {
+                const key = values.nexhealth_api_key?.trim() || "";
+                if (!institution.has_nexhealth_key && !key) {
+                    toast.error("Enter and verify a clinic API key before saving");
+                    return;
+                }
+                if (key && verifiedKey !== key) {
+                    toast.error("Verify this clinic API key before saving");
+                    return;
+                }
+            }
 
             if (Object.keys(payload).length === 0) {
                 toast.info("No changes to save");
@@ -129,6 +116,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
             await api.patch(`/admin/institutions/${institution.slug}`, payload);
             toast.success("Credentials updated");
             setEditingSection(null);
+            setVerifiedKey(null);
             setVerification(null);
             onUpdated();
         } catch (err: unknown) {
@@ -162,27 +150,22 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
     };
 
     async function handleVerify() {
-        const selectedLocation = locations.find((loc) => loc.id === selectedLocationId);
         const apiKey = form.getValues("nexhealth_api_key")?.trim();
         if (credentialMode === "institution" && !institution.has_nexhealth_key && !apiKey) {
             toast.error("Enter an API key before verifying");
             return;
         }
-        if (selectedLocation && (!selectedLocation.nexhealth_subdomain || !selectedLocation.nexhealth_location_id)) {
-            toast.error("Select a location with NexHealth subdomain and location ID");
-            return;
-        }
 
         setIsVerifying(true);
+        setVerifiedKey(null);
         setVerification(null);
         try {
             const { data } = await api.post(`/admin/institutions/${institution.slug}/nexhealth/verify`, {
                 nexhealth_api_key: apiKey || undefined,
-                subdomain: selectedLocation?.nexhealth_subdomain || undefined,
-                location_id: selectedLocation?.nexhealth_location_id || undefined,
             });
             setVerification(data);
             if (data.ok) {
+                setVerifiedKey(apiKey || "__stored_or_platform__");
                 toast.success("NexHealth credentials verified");
             } else {
                 toast.error(data.message || "NexHealth verification failed");
@@ -278,6 +261,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 value={credentialMode}
                                 onValueChange={(value) => {
                                     form.setValue("credential_mode", value as CredentialsFormValues["credential_mode"]);
+                                    setVerifiedKey(null);
                                     setVerification(null);
                                 }}
                             >
@@ -305,7 +289,15 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                             <Input
                                                 type="password"
                                                 placeholder={institution.has_nexhealth_key ? "••••••••" : "Enter API key"}
-                                                {...field}
+                                                onChange={(event) => {
+                                                    field.onChange(event);
+                                                    setVerifiedKey(null);
+                                                    setVerification(null);
+                                                }}
+                                                value={field.value}
+                                                onBlur={field.onBlur}
+                                                name={field.name}
+                                                ref={field.ref}
                                             />
                                         </FormControl>
                                         <FormMessage />
@@ -313,25 +305,6 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 )}
                             />
                         )}
-                        <div className="grid gap-2">
-                            <Label>Verify Against Location</Label>
-                            <Select
-                                value={selectedLocationId}
-                                onValueChange={setSelectedLocationId}
-                                disabled={locations.length === 0}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder={locations.length === 0 ? "No locations yet" : "Select a location"} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {locations.map((loc) => (
-                                        <SelectItem key={loc.id} value={loc.id}>
-                                            {loc.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
                         <div className="flex flex-wrap items-center gap-3">
                             <Button
                                 type="button"
@@ -347,7 +320,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 ) : (
                                     <AlertCircle className="mr-2 h-4 w-4" />
                                 )}
-                                {isVerifying ? "Verifying..." : selectedLocationId ? "Verify" : "Verify Key"}
+                                {isVerifying ? "Verifying..." : "Verify Key"}
                             </Button>
                             {verification && (
                                 <span className={`text-xs font-medium ${verification.ok ? "text-green-600" : "text-destructive"}`}>
@@ -361,7 +334,21 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
 
                 {editingSection && (
                     <div className="flex items-center justify-end pt-2">
-                        <Button type="submit" disabled={isSaving} size="sm">
+                        <Button
+                            type="submit"
+                            disabled={
+                                isSaving ||
+                                (
+                                    editingSection === "nexhealth" &&
+                                    credentialMode === "institution" &&
+                                    (
+                                        (!institution.has_nexhealth_key && !clinicApiKey) ||
+                                        (!!clinicApiKey && verifiedKey !== clinicApiKey)
+                                    )
+                                )
+                            }
+                            size="sm"
+                        >
                             {isSaving ? "Saving..." : "Save Changes"}
                         </Button>
                     </div>
