@@ -159,7 +159,7 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
 
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
-    { title: "Channels", group: "channel", types: ["send_sms", "send_voice", "send_email"] },
+    { title: "Channels", group: "channel", types: ["send_voice"] },
     { title: "Actions", group: "action", types: ["drip", "llm", "update_gotracker_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },
