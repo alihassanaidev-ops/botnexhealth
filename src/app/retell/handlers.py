@@ -178,21 +178,26 @@ async def _validate_appointment_type_for_provider(
 
 
 def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
-    """Return only the verified record ID and appointment context.
-
-    The caller already stated their identity claims. Echoing the canonical PMS
-    name, contact details, or DOB back to the voice model adds disclosure risk
-    without helping the booking flow, so those fields are deliberately absent.
-    """
+    """Return complete patient details after server-side identity verification."""
     patient_extra = patient.extra if isinstance(patient.extra, dict) else {}
-    scheduling_details = {
+    allowed_details = {
         key: patient_extra[key]
-        for key in ("upcoming_appointments", "last_visit")
+        for key in (
+            "upcoming_appointments",
+            "last_visit",
+            "recent_procedures",
+            "insurance_coverages",
+        )
         if key in patient_extra
     }
     return {
         "id": patient.id,
-        **scheduling_details,
+        "first_name": patient.first_name,
+        "last_name": patient.last_name,
+        "email": patient.email,
+        "phone_number": patient.phone,
+        "date_of_birth": patient.date_of_birth,
+        **allowed_details,
     }
 
 
@@ -596,6 +601,8 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     full_detail_include = [
         "upcoming_appts",
         "last_visited_appointment",
+        "procedures",
+        "insurance_coverages",
     ]
 
     try:
