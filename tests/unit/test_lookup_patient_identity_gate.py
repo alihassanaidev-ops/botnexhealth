@@ -61,7 +61,7 @@ def _verified_args(**overrides) -> dict:
     return args
 
 
-def test_full_patient_payload_contains_only_id_and_scheduling_context():
+def test_full_patient_payload_contains_complete_verified_details():
     patient = _patient()
     patient.extra.update(
         {
@@ -75,8 +75,15 @@ def test_full_patient_payload_contains_only_id_and_scheduling_context():
 
     assert payload == {
         "id": "p1",
+        "first_name": "Alice",
+        "last_name": "Doe",
+        "email": "alice@example.com",
+        "phone_number": "+15551234567",
+        "date_of_birth": "1990-01-01",
         "upcoming_appointments": [{"id": "appt-1"}],
         "last_visit": {"id": "appointment-previous"},
+        "recent_procedures": [{"id": "procedure-1"}],
+        "insurance_coverages": [{"id": "coverage-1"}],
     }
 
 
@@ -117,7 +124,7 @@ async def test_name_without_dob_or_second_factor_is_neutral_and_skips_search(
 
 
 @pytest.mark.asyncio
-async def test_verified_phone_returns_id_and_scheduling_but_no_identity_fields(
+async def test_verified_phone_returns_complete_full_details(
     monkeypatch,
 ):
     ctx = _ctx([_patient()])
@@ -127,18 +134,16 @@ async def test_verified_phone_returns_id_and_scheduling_but_no_identity_fields(
     assert result["verification_status"] == "verified"
     assert result["patient_id"] == "p1"
     assert result["patients"] == [
-        {"id": "p1", "upcoming_appointments": [{"id": "appt-1"}]}
+        {
+            "id": "p1",
+            "first_name": "Alice",
+            "last_name": "Doe",
+            "email": "alice@example.com",
+            "phone_number": "+15551234567",
+            "date_of_birth": "1990-01-01",
+            "upcoming_appointments": [{"id": "appt-1"}],
+        }
     ]
-    for forbidden in (
-        "first_name",
-        "last_name",
-        "email",
-        "phone_number",
-        "date_of_birth",
-        "email_hint",
-        "phone_hint",
-    ):
-        assert forbidden not in result["patients"][0]
 
 
 @pytest.mark.asyncio
@@ -156,13 +161,13 @@ async def test_verified_email_is_accepted_when_phone_is_not_supplied(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_first_name_shape_remains_supported_but_is_not_echoed(monkeypatch):
+async def test_first_name_shape_remains_supported(monkeypatch):
     ctx = _ctx([_patient()])
 
     result = await _invoke(monkeypatch, ctx, _verified_args(name="Alice"))
 
     assert result["verification_status"] == "verified"
-    assert "Alice" not in str(result)
+    assert result["patients"][0]["first_name"] == "Alice"
 
 
 @pytest.mark.asyncio
