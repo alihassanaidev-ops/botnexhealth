@@ -290,27 +290,6 @@ beforeEach(() => {
     remove.mockResolvedValue(undefined)
 })
 
-describe("CampaignDetail analytics tab", () => {
-    it("renders normalized outcome labels and channel trend", async () => {
-        const user = userEvent.setup()
-        render(
-            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
-                <Routes>
-                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
-                </Routes>
-            </MemoryRouter>,
-        )
-
-        await screen.findByText("Recall campaign")
-        await user.click(screen.getByRole("tab", { name: "Analytics" }))
-
-        expect(await screen.findByText("Recall Booked")).toBeInTheDocument()
-        expect(screen.getByText("25%")).toBeInTheDocument()
-        expect(screen.getByText("Channel funnel")).toBeInTheDocument()
-        expect(screen.getByText("2026-07-18")).toBeInTheDocument()
-    })
-})
-
 describe("CampaignDetail lifecycle actions", () => {
     it("deletes a campaign after confirmation and returns to the campaign list", async () => {
         const user = userEvent.setup()
@@ -324,37 +303,14 @@ describe("CampaignDetail lifecycle actions", () => {
         )
 
         await screen.findByText("Recall campaign")
-        await user.click(screen.getByRole("button", { name: "Delete" }))
+        await user.click(screen.getByRole("button", { name: /more actions/i }))
+        await user.click(await screen.findByRole("menuitem", { name: /delete campaign/i }))
         await user.click(screen.getByRole("button", { name: "Delete campaign" }))
 
         await waitFor(() => {
             expect(remove).toHaveBeenCalledWith("wf-1")
         })
         expect(await screen.findByText("Campaign list")).toBeInTheDocument()
-    })
-})
-
-describe("CampaignDetail audience tab", () => {
-    it("previews counts, exclusions, and masked samples", async () => {
-        const user = userEvent.setup()
-        render(
-            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
-                <Routes>
-                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
-                </Routes>
-            </MemoryRouter>,
-        )
-
-        await screen.findByText("Recall campaign")
-        await user.click(screen.getByRole("tab", { name: "Audience" }))
-        await user.click(screen.getByRole("button", { name: "Preview" }))
-
-        expect(await screen.findByText("Jordan Rivera")).toBeInTheDocument()
-        expect(screen.getByText("Taylor Kim")).toBeInTheDocument()
-        expect(screen.getAllByText("do not contact").length).toBeGreaterThanOrEqual(1)
-        expect(screen.getByText("already booked")).toBeInTheDocument()
-        expect(screen.getByText("(***) ***-1010")).toBeInTheDocument()
-        expect(screen.queryByText("+15550101010")).not.toBeInTheDocument()
     })
 })
 

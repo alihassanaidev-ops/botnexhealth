@@ -1,5 +1,10 @@
 # Essential 2 - Campaign Launch Checklist Implementation Plan
 
+> **Status (2026-08-19): checklist surfaces removed from campaign detail.** The
+> Readiness tile and the Checklist blockers/warnings rows were removed — nothing
+> on that page explained what the counts meant, so they read as permanent
+> unactionable numbers. The checklist service and endpoints are untouched.
+
 ## What Needs To Be Built
 
 Build a launch readiness checklist that runs before publish/activation and explains whether a campaign is safe to launch. The checklist should cover channel readiness, compliance, merge fields, audience size, exclusions, quiet hours, frequency caps, estimated sends, estimated cost, NexHealth data freshness, and staff handoff configuration.

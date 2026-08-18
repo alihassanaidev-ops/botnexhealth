@@ -1,5 +1,11 @@
 # Essential 7 - Audience Preview And Simple Segmentation Implementation Plan
 
+> **Status (2026-08-19): campaign-detail Audience tab retired.** Removed when the
+> product narrowed to the two GoTracker launch templates, which enroll from
+> appointment events rather than a hand-picked segment. The audience service and
+> its endpoints are untouched, and the manual single-patient Enroll dialog in the
+> campaign header remains.
+
 ## What Needs To Be Built
 
 Build an audience preview and simple segmentation layer so clinic admins can see who a campaign will contact, who will be excluded, and why before launch.

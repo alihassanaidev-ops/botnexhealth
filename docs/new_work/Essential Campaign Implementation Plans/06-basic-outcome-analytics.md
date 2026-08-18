@@ -1,5 +1,12 @@
 # Essential 6 - Basic Outcome Analytics Implementation Plan
 
+> **Status (2026-08-19): campaign-detail Analytics tab retired.** Removed when the
+> product narrowed to the two GoTracker launch templates — its SMS/email funnels
+> were structurally zero for voice-only campaigns and the `appointment_ops`
+> outcome set restated the Overview tiles while omitting the templates' real
+> outcome labels. The analytics service and endpoints are untouched; re-map
+> `_OUTCOME_DEFINITIONS["appointment_ops"]` before bringing the tab back.
+
 ## What Needs To Be Built
 
 Build a basic campaign analytics layer that proves campaign impact without waiting for full ROI attribution. It should show enrollment volume, send attempts, delivery/failure rates, patient responses, confirmations, bookings, callbacks, handoffs, opt-outs, and channel cost.

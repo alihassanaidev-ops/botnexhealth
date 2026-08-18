@@ -210,11 +210,13 @@ export async function getUsageSummary(
 export async function getUsageByCampaign(
     range?: { startDate?: string; endDate?: string },
     limit = 50,
+    opts?: { workflowId?: string },
 ): Promise<CampaignUsageReport> {
     const params = new URLSearchParams()
     if (range?.startDate) params.set("start_date", range.startDate)
     if (range?.endDate) params.set("end_date", range.endDate)
     params.set("limit", String(limit))
+    if (opts?.workflowId) params.set("workflow_id", opts.workflowId)
     const { data } = await api.get<CampaignUsageReport>(
         `/institution/usage/by-campaign?${params.toString()}`,
     )

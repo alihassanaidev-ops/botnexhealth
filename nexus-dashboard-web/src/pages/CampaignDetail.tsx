@@ -4,26 +4,22 @@ import {
     ActivitySquare,
     ArrowLeft,
     Ban,
-    BarChart3,
-    CalendarDays,
     CheckCircle2,
+    ChevronDown,
     ChevronRight,
-    Clock3,
-    Filter,
     Hash,
     Loader2,
-    Mail,
     MessageSquare,
+    MoreHorizontal,
     Pause,
+    Pencil,
     Phone,
     Play,
     RefreshCcw,
     Search,
     ShieldAlert,
-    TrendingUp,
     Trash2,
     UserPlus,
-    Users,
     XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -31,7 +27,6 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
     Dialog,
     DialogContent,
@@ -40,6 +35,13 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import {
     Select,
@@ -60,11 +62,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
     cancelCampaignRun,
     deleteCampaign,
-    enrollCampaignAudience,
     enrollContactInCampaign,
     emergencyHaltCampaign,
-    getCampaignAudience,
-    getCampaignAnalytics,
     getCampaign,
     getCampaignOperations,
     getCampaignOverview,
@@ -72,19 +71,13 @@ import {
     getUsageByCampaign,
     listCampaignRuns,
     pauseCampaign,
-    previewCampaignAudience,
     resumeCampaign,
-    saveCampaignAudience,
 } from "@/lib/automation-api"
 import { listContacts, type ContactListItem } from "@/lib/contacts-api"
 import { cn } from "@/lib/utils"
 import type {
     AutomationWorkflow,
     AutomationWorkflowRun,
-    CampaignAnalytics,
-    CampaignAudienceExclusions,
-    CampaignAudienceFilters,
-    CampaignAudiencePreview,
     CampaignOperationItem,
     CampaignOperations,
     CampaignOverview,
@@ -127,28 +120,6 @@ const CHANNEL_LABELS: Record<string, string> = {
     voice: "Voice",
 }
 
-const DEFAULT_AUDIENCE_FILTERS: CampaignAudienceFilters = {
-    has_no_future_appointment: false,
-    recall_due_before: null,
-    last_visit_before: null,
-    appointment_type_id_in: [],
-    provider_id_in: [],
-    location_id_in: [],
-    preferred_language_in: [],
-    contact_channel_available: [],
-}
-
-const DEFAULT_AUDIENCE_EXCLUSIONS: CampaignAudienceExclusions = {
-    no_consent: true,
-    do_not_contact: true,
-    suppressed: true,
-    contacted_within_days: 1,
-    max_contacts_per_rolling_7_days: 3,
-    already_enrolled_active: true,
-    already_booked: true,
-    missing_required_merge_context: true,
-}
-
 function fmt(iso: string | null): string {
     if (!iso) return "-"
     return new Date(iso).toLocaleString(undefined, {
@@ -175,25 +146,9 @@ function number(value: number | undefined): string {
     return new Intl.NumberFormat().format(value ?? 0)
 }
 
-function percent(value: number | null | undefined): string {
-    if (value === null || value === undefined) return "-"
-    return `${Math.round(value * 100)}%`
-}
-
 function label(value: string | null | undefined): string {
     if (!value) return "-"
     return value.replace(/_/g, " ")
-}
-
-function csv(value: string[] | undefined): string {
-    return (value ?? []).join(", ")
-}
-
-function fromCsv(value: string): string[] {
-    return value
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean)
 }
 
 function isCancelable(run: Pick<CampaignRunListItem, "status">): boolean {
@@ -381,7 +336,6 @@ function OverviewTab({
     const runCounts = overview?.run_counts ?? {}
     const responseCounts = overview?.response_counts ?? {}
     const responseTotal = Object.values(responseCounts).reduce((sum, count) => sum + count, 0)
-    const readiness = overview?.readiness
     return (
         <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-4">
@@ -393,7 +347,6 @@ function OverviewTab({
                         <Stat icon={<CheckCircle2 className="h-3.5 w-3.5" />} label="Completed" value={number(runCounts.completed)} tone="text-emerald-600" />
                         <Stat icon={<XCircle className="h-3.5 w-3.5" />} label="Failed or blocked" value={number((runCounts.failed ?? 0) + (runCounts.blocked ?? 0))} tone="text-red-600" />
                         <Stat icon={<MessageSquare className="h-3.5 w-3.5" />} label="Responses" value={number(responseTotal)} />
-                        <Stat icon={<Clock3 className="h-3.5 w-3.5" />} label="Readiness" value={label(readiness?.overall_status)} />
                     </>
                 )}
             </div>
@@ -405,10 +358,6 @@ function OverviewTab({
                     <CardContent className="grid gap-3 text-sm md:grid-cols-2">
                         <InfoRow label="Latest version" value={overview?.latest_version ? `v${overview.latest_version.version_number}` : "-"} />
                         <InfoRow label="Trigger" value={overview?.trigger_type ? (TRIGGER_LABELS[overview.trigger_type] ?? overview.trigger_type) : "-"} />
-                        <InfoRow label="Channels" value={overview?.channels.length ? overview.channels.map((c) => CHANNEL_LABELS[c] ?? c).join(", ") : "-"} />
-                        <InfoRow label="Content class" value={label(overview?.latest_version?.content_classification)} />
-                        <InfoRow label="Checklist blockers" value={number(readiness?.blockers_count)} />
-                        <InfoRow label="Checklist warnings" value={number((readiness?.warnings_count ?? 0) + (readiness?.unknown_count ?? 0))} />
                         <InfoRow label="Open handoffs" value={number(overview?.open_handoff_count)} />
                     </CardContent>
                 </Card>
@@ -439,17 +388,15 @@ function OverviewTab({
                 </CardHeader>
                 <CardContent>
                     {loading ? (
-                        <div className="grid gap-3 md:grid-cols-4">
-                            {Array.from({ length: 4 }).map((_, i) => (
+                        <div className="grid gap-3 md:grid-cols-2">
+                            {Array.from({ length: 2 }).map((_, i) => (
                                 <Skeleton key={i} className="h-20 w-full" />
                             ))}
                         </div>
                     ) : (
-                        <div className="grid gap-3 md:grid-cols-4">
+                        <div className="grid gap-3 md:grid-cols-2">
                             <Stat icon={<Hash className="h-3.5 w-3.5" />} label="Events" value={number(campaignUsage?.event_count)} />
-                            <Stat icon={<MessageSquare className="h-3.5 w-3.5" />} label="SMS segments" value={number(campaignUsage?.total_segments)} />
                             <Stat icon={<Phone className="h-3.5 w-3.5" />} label="Voice minutes" value={number(campaignUsage?.total_minutes)} />
-                            <Stat icon={<Mail className="h-3.5 w-3.5" />} label="Emails" value={number(campaignUsage?.total_emails)} />
                         </div>
                     )}
                 </CardContent>
@@ -667,57 +614,69 @@ function RunFilters({
     onChange: (filters: CampaignRunFilters) => void
 }) {
     const set = (patch: CampaignRunFilters) => onChange({ ...filters, cursor: undefined, ...patch })
+    // Keep the extra filters open if the caller arrived with any of them set.
+    const [showMore, setShowMore] = useState(
+        Boolean(filters.outcome || filters.current_node || filters.failure_reason || filters.next_due_to),
+    )
     return (
-        <div className="grid gap-2 md:grid-cols-[130px_130px_130px_1fr_1fr_1fr_1fr]">
-            <Select value={filters.status ?? "all"} onValueChange={(value) => set({ status: value === "all" ? undefined : value })}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="all">All statuses</SelectItem>
-                    {["pending", "running", "waiting", "completed", "cancelled", "failed", "blocked"].map((status) => (
-                        <SelectItem key={status} value={status}>{label(status)}</SelectItem>
-                    ))}
-                </SelectContent>
-            </Select>
-            <Select value={filters.channel ?? "all"} onValueChange={(value) => set({ channel: value === "all" ? undefined : value as "sms" | "email" | "voice" })}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="all">All channels</SelectItem>
-                    <SelectItem value="sms">SMS</SelectItem>
-                    <SelectItem value="email">Email</SelectItem>
-                    <SelectItem value="voice">Voice</SelectItem>
-                </SelectContent>
-            </Select>
-            <Select value={filters.next_due_to ? "due" : "all"} onValueChange={(value) => set(value === "due" ? { next_due_to: new Date().toISOString() } : { next_due_to: undefined })}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="all">Any due time</SelectItem>
-                    <SelectItem value="due">Due now</SelectItem>
-                </SelectContent>
-            </Select>
-            <Input
-                className="h-8 text-xs"
-                placeholder="Outcome"
-                value={filters.outcome ?? ""}
-                onChange={(event) => set({ outcome: event.target.value || undefined })}
-            />
-            <Input
-                className="h-8 text-xs"
-                placeholder="Current step"
-                value={filters.current_node ?? ""}
-                onChange={(event) => set({ current_node: event.target.value || undefined })}
-            />
-            <Input
-                className="h-8 text-xs"
-                placeholder="Patient"
-                value={filters.contact_search ?? ""}
-                onChange={(event) => set({ contact_search: event.target.value || undefined })}
-            />
-            <Input
-                className="h-8 text-xs"
-                placeholder="Failure reason"
-                value={filters.failure_reason ?? ""}
-                onChange={(event) => set({ failure_reason: event.target.value || undefined })}
-            />
+        <div className="space-y-2">
+            <div className="grid gap-2 md:grid-cols-[150px_1fr_auto]">
+                <Select value={filters.status ?? "all"} onValueChange={(value) => set({ status: value === "all" ? undefined : value })}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">All statuses</SelectItem>
+                        {["pending", "running", "waiting", "completed", "cancelled", "failed", "blocked"].map((status) => (
+                            <SelectItem key={status} value={status}>{label(status)}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <Input
+                    className="h-8 text-xs"
+                    placeholder="Patient"
+                    value={filters.contact_search ?? ""}
+                    onChange={(event) => set({ contact_search: event.target.value || undefined })}
+                />
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    aria-expanded={showMore}
+                    onClick={() => setShowMore((open) => !open)}
+                >
+                    More filters
+                    <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showMore && "rotate-180")} />
+                </Button>
+            </div>
+            {showMore && (
+                <div className="grid gap-2 md:grid-cols-[130px_1fr_1fr_1fr]">
+                    <Select value={filters.next_due_to ? "due" : "all"} onValueChange={(value) => set(value === "due" ? { next_due_to: new Date().toISOString() } : { next_due_to: undefined })}>
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">Any due time</SelectItem>
+                            <SelectItem value="due">Due now</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Input
+                        className="h-8 text-xs"
+                        placeholder="Outcome"
+                        value={filters.outcome ?? ""}
+                        onChange={(event) => set({ outcome: event.target.value || undefined })}
+                    />
+                    <Input
+                        className="h-8 text-xs"
+                        placeholder="Current step"
+                        value={filters.current_node ?? ""}
+                        onChange={(event) => set({ current_node: event.target.value || undefined })}
+                    />
+                    <Input
+                        className="h-8 text-xs"
+                        placeholder="Failure reason"
+                        value={filters.failure_reason ?? ""}
+                        onChange={(event) => set({ failure_reason: event.target.value || undefined })}
+                    />
+                </div>
+            )}
         </div>
     )
 }
@@ -789,457 +748,6 @@ function OperationRow({
                 </Button>
             </div>
         </li>
-    )
-}
-
-function AudienceTab({ campaign }: { campaign: AutomationWorkflow | null }) {
-    const [filters, setFilters] = useState<CampaignAudienceFilters>(DEFAULT_AUDIENCE_FILTERS)
-    const [exclusions, setExclusions] = useState<CampaignAudienceExclusions>(DEFAULT_AUDIENCE_EXCLUSIONS)
-    const [preview, setPreview] = useState<CampaignAudiencePreview | null>(null)
-    const [loading, setLoading] = useState(false)
-    const [saving, setSaving] = useState(false)
-    const [enrolling, setEnrolling] = useState(false)
-
-    useEffect(() => {
-        let cancelled = false
-        async function load() {
-            if (!campaign) return
-            setLoading(true)
-            try {
-                const definition = await getCampaignAudience(campaign.id)
-                if (cancelled) return
-                setFilters({ ...DEFAULT_AUDIENCE_FILTERS, ...definition.segment })
-                setExclusions({ ...DEFAULT_AUDIENCE_EXCLUSIONS, ...definition.exclusions })
-            } catch {
-                if (!cancelled) toast.error("Failed to load audience")
-            } finally {
-                if (!cancelled) setLoading(false)
-            }
-        }
-        load()
-        return () => {
-            cancelled = true
-        }
-    }, [campaign])
-
-    if (!campaign) {
-        return <Card><CardContent className="p-6 text-sm text-muted-foreground">Campaign not found.</CardContent></Card>
-    }
-    const activeCampaign = campaign
-
-    const patchFilters = (patch: CampaignAudienceFilters) => {
-        setFilters((current) => ({ ...current, ...patch }))
-        setPreview(null)
-    }
-    const patchExclusions = (patch: CampaignAudienceExclusions) => {
-        setExclusions((current) => ({ ...current, ...patch }))
-        setPreview(null)
-    }
-    const channelSet = new Set(filters.contact_channel_available ?? [])
-    const reasons = Object.entries(preview?.counts_by_reason ?? {}).sort((a, b) => b[1] - a[1])
-
-    async function handleSave() {
-        setSaving(true)
-        try {
-            await saveCampaignAudience(activeCampaign.id, { filters, exclusions })
-            toast.success("Audience saved")
-        } catch {
-            toast.error("Failed to save audience")
-        } finally {
-            setSaving(false)
-        }
-    }
-
-    async function handlePreview() {
-        setLoading(true)
-        try {
-            setPreview(await previewCampaignAudience(activeCampaign.id, { filters, exclusions, sample_limit: 40 }))
-        } catch {
-            toast.error("Failed to preview audience")
-        } finally {
-            setLoading(false)
-        }
-    }
-
-    async function handleEnroll() {
-        if (!preview) return
-        setEnrolling(true)
-        try {
-            const result = await enrollCampaignAudience(activeCampaign.id, {
-                preview_id: preview.preview_id,
-                max_enrollments: 500,
-            })
-            toast.success(`${number(result.enqueued)} patient${result.enqueued === 1 ? "" : "s"} queued`)
-            setPreview(await previewCampaignAudience(activeCampaign.id, { filters, exclusions, sample_limit: 40 }))
-        } catch {
-            toast.error("Audience enrollment is blocked")
-        } finally {
-            setEnrolling(false)
-        }
-    }
-
-    return (
-        <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-4">
-                <Stat icon={<Users className="h-3.5 w-3.5" />} label="Included" value={number(preview?.included_count)} tone="text-emerald-600" />
-                <Stat icon={<Ban className="h-3.5 w-3.5" />} label="Excluded" value={number(preview?.excluded_count)} tone="text-red-600" />
-                <Stat icon={<Hash className="h-3.5 w-3.5" />} label="Candidates" value={number(preview?.total_candidates)} />
-                <Stat icon={<CalendarDays className="h-3.5 w-3.5" />} label="Preview expires" value={preview ? fmt(preview.expires_at) : "-"} />
-            </div>
-
-            <Card>
-                <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center gap-2 text-base font-semibold">
-                        <Filter className="h-4 w-4" />
-                        Audience
-                    </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                    <div className="grid gap-3 md:grid-cols-3">
-                        <label className="space-y-1.5 text-sm">
-                            <span className="text-xs font-medium text-muted-foreground">Recall due before</span>
-                            <Input
-                                type="date"
-                                value={filters.recall_due_before ?? ""}
-                                onChange={(event) => patchFilters({ recall_due_before: event.target.value || null })}
-                            />
-                        </label>
-                        <label className="space-y-1.5 text-sm">
-                            <span className="text-xs font-medium text-muted-foreground">Last visit before</span>
-                            <Input
-                                type="date"
-                                value={filters.last_visit_before ?? ""}
-                                onChange={(event) => patchFilters({ last_visit_before: event.target.value || null })}
-                            />
-                        </label>
-                        <label className="space-y-1.5 text-sm">
-                            <span className="text-xs font-medium text-muted-foreground">Contacted within days</span>
-                            <Input
-                                type="number"
-                                min={0}
-                                max={365}
-                                value={exclusions.contacted_within_days ?? ""}
-                                onChange={(event) => patchExclusions({ contacted_within_days: event.target.value === "" ? null : Number(event.target.value) })}
-                            />
-                        </label>
-                        <label className="space-y-1.5 text-sm">
-                            <span className="text-xs font-medium text-muted-foreground">Appointment type IDs</span>
-                            <Input
-                                value={csv(filters.appointment_type_id_in)}
-                                onChange={(event) => patchFilters({ appointment_type_id_in: fromCsv(event.target.value) })}
-                                placeholder="type-1, type-2"
-                            />
-                        </label>
-                        <label className="space-y-1.5 text-sm">
-                            <span className="text-xs font-medium text-muted-foreground">Provider IDs</span>
-                            <Input
-                                value={csv(filters.provider_id_in)}
-                                onChange={(event) => patchFilters({ provider_id_in: fromCsv(event.target.value) })}
-                                placeholder="provider-1"
-                            />
-                        </label>
-                        <label className="space-y-1.5 text-sm">
-                            <span className="text-xs font-medium text-muted-foreground">Location IDs</span>
-                            <Input
-                                value={csv(filters.location_id_in)}
-                                onChange={(event) => patchFilters({ location_id_in: fromCsv(event.target.value) })}
-                                placeholder="location-1"
-                            />
-                        </label>
-                    </div>
-
-                    <div className="grid gap-4 lg:grid-cols-2">
-                        <div className="space-y-3">
-                            <p className="text-xs font-medium text-muted-foreground">Filters</p>
-                            <CheckRow
-                                label="No future appointment"
-                                checked={Boolean(filters.has_no_future_appointment)}
-                                onChecked={(checked) => patchFilters({ has_no_future_appointment: checked })}
-                            />
-                            <div className="flex flex-wrap gap-3">
-                                {(["sms", "email", "voice"] as const).map((channel) => (
-                                    <CheckRow
-                                        key={channel}
-                                        label={`${CHANNEL_LABELS[channel]} available`}
-                                        checked={channelSet.has(channel)}
-                                        onChecked={(checked) => {
-                                            const next = new Set(channelSet)
-                                            if (checked) next.add(channel)
-                                            else next.delete(channel)
-                                            patchFilters({ contact_channel_available: Array.from(next) })
-                                        }}
-                                    />
-                                ))}
-                            </div>
-                        </div>
-                        <div className="space-y-3">
-                            <p className="text-xs font-medium text-muted-foreground">Exclusions</p>
-                            <div className="grid gap-2 sm:grid-cols-2">
-                                <CheckRow label="No consent" checked={Boolean(exclusions.no_consent)} onChecked={(checked) => patchExclusions({ no_consent: checked })} />
-                                <CheckRow label="Do not contact" checked={Boolean(exclusions.do_not_contact)} onChecked={(checked) => patchExclusions({ do_not_contact: checked })} />
-                                <CheckRow label="Suppressed" checked={Boolean(exclusions.suppressed)} onChecked={(checked) => patchExclusions({ suppressed: checked })} />
-                                <CheckRow label="Already enrolled" checked={Boolean(exclusions.already_enrolled_active)} onChecked={(checked) => patchExclusions({ already_enrolled_active: checked })} />
-                                <CheckRow label="Already booked" checked={Boolean(exclusions.already_booked)} onChecked={(checked) => patchExclusions({ already_booked: checked })} />
-                                <CheckRow label="Missing context" checked={Boolean(exclusions.missing_required_merge_context)} onChecked={(checked) => patchExclusions({ missing_required_merge_context: checked })} />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="flex flex-wrap justify-end gap-2">
-                        <Button variant="outline" onClick={handleSave} disabled={saving || loading}>
-                            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            Save
-                        </Button>
-                        <Button variant="outline" onClick={handlePreview} disabled={loading || saving}>
-                            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            Preview
-                        </Button>
-                        <Button onClick={handleEnroll} disabled={!preview || preview.included_count === 0 || activeCampaign.status !== "active" || enrolling}>
-                            {enrolling && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            Enroll preview
-                        </Button>
-                    </div>
-                </CardContent>
-            </Card>
-
-            {preview && (
-                <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
-                    <Card>
-                        <CardHeader className="pb-3">
-                            <CardTitle className="text-base font-semibold">Exclusions</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            {reasons.length ? (
-                                <ul className="space-y-2">
-                                    {reasons.map(([reason, count]) => (
-                                        <li key={reason} className="flex items-center justify-between gap-3 text-sm">
-                                            <span className="capitalize text-muted-foreground">{label(reason)}</span>
-                                            <span className="font-medium tabular-nums">{number(count)}</span>
-                                        </li>
-                                    ))}
-                                </ul>
-                            ) : (
-                                <p className="text-sm text-muted-foreground">No exclusions in the latest preview.</p>
-                            )}
-                            {preview.warnings.length > 0 && (
-                                <div className="mt-4 space-y-1 border-t border-border pt-3 text-xs text-muted-foreground">
-                                    {preview.warnings.map((warning) => <p key={warning}>{warning}</p>)}
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="pb-3">
-                            <CardTitle className="text-base font-semibold">Sample patients</CardTitle>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            {preview.samples.length === 0 ? (
-                                <p className="p-6 text-sm text-muted-foreground">No sample rows returned.</p>
-                            ) : (
-                                <ul className="divide-y divide-border">
-                                    {preview.samples.map((sample) => (
-                                        <li key={`${sample.status}:${sample.contact_id}`} className="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_140px_190px] sm:items-center">
-                                            <div className="min-w-0">
-                                                <p className="truncate text-sm font-medium">{sample.display_name ?? "Unnamed patient"}</p>
-                                                <p className="text-xs text-muted-foreground">{sample.phone_masked ?? sample.email_masked ?? "No channel on file"}</p>
-                                            </div>
-                                            <Badge variant="outline" className={cn("w-fit capitalize", sample.status === "included" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}>
-                                                {sample.status}
-                                            </Badge>
-                                            <span className="text-xs capitalize text-muted-foreground">
-                                                {sample.reasons.length ? sample.reasons.map(label).join(", ") : "Ready"}
-                                            </span>
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
-                        </CardContent>
-                    </Card>
-                </div>
-            )}
-        </div>
-    )
-}
-
-function CheckRow({
-    label: text,
-    checked,
-    onChecked,
-}: {
-    label: string
-    checked: boolean
-    onChecked: (checked: boolean) => void
-}) {
-    return (
-        <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={checked} onCheckedChange={(value) => onChecked(value === true)} />
-            <span>{text}</span>
-        </label>
-    )
-}
-
-function AnalyticsTab({
-    analytics,
-    loading,
-}: {
-    analytics: CampaignAnalytics | null
-    loading: boolean
-}) {
-    const summary = analytics?.summary ?? {}
-    const totalSends =
-        (summary.sms_sent ?? 0) +
-        (summary.voice_attempted ?? 0) +
-        (summary.email_sent ?? 0)
-    const totalResponses =
-        (summary.sms_replied ?? 0) +
-        (summary.voice_answered ?? 0) +
-        (summary.email_clicked ?? 0)
-    return (
-        <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-5">
-                {loading ? (
-                    Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)
-                ) : (
-                    <>
-                        <Stat icon={<UserPlus className="h-3.5 w-3.5" />} label="Enrollments" value={number(summary.enrollments)} />
-                        <Stat icon={<BarChart3 className="h-3.5 w-3.5" />} label="Send attempts" value={number(totalSends)} />
-                        <Stat icon={<MessageSquare className="h-3.5 w-3.5" />} label="Responses" value={number(totalResponses)} />
-                        <Stat icon={<CheckCircle2 className="h-3.5 w-3.5" />} label="Confirmed" value={number(summary.confirmed)} tone="text-emerald-600" />
-                    </>
-                )}
-            </div>
-            <Card>
-                <CardHeader className="pb-3">
-                    <CardTitle className="flex items-center gap-2 text-base font-semibold">
-                        <TrendingUp className="h-4 w-4" />
-                        Outcome analytics
-                    </CardTitle>
-                </CardHeader>
-                <CardContent>
-                    {loading ? (
-                        <div className="grid gap-3 md:grid-cols-2">
-                            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
-                        </div>
-                    ) : analytics?.outcomes.length ? (
-                        <div className="grid gap-3 md:grid-cols-2">
-                            {analytics.outcomes.map((outcome) => (
-                                <div key={outcome.key} className="rounded-md border border-border p-4">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0">
-                                            <p className="truncate text-sm font-medium">{outcome.label}</p>
-                                            <p className="mt-1 text-xs text-muted-foreground">{outcome.description}</p>
-                                        </div>
-                                        <Badge variant="outline" className="capitalize">{label(outcome.group)}</Badge>
-                                    </div>
-                                    <div className="mt-4 flex items-end justify-between gap-3">
-                                        <span className="text-2xl font-semibold tabular-nums">{number(outcome.count)}</span>
-                                        <span className="text-sm text-muted-foreground">{percent(outcome.rate)}</span>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    ) : (
-                        <p className="text-sm text-muted-foreground">No analytics rollup rows for this range.</p>
-                    )}
-                </CardContent>
-            </Card>
-            <div className="grid gap-4 lg:grid-cols-2">
-                <Card>
-                    <CardHeader className="pb-3">
-                        <CardTitle className="text-base font-semibold">Channel funnel</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        {loading ? (
-                            Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)
-                        ) : analytics?.channels.length ? (
-                            analytics.channels.map((channel) => <ChannelFunnel key={channel.channel} channel={channel} />)
-                        ) : (
-                            <p className="text-sm text-muted-foreground">No channel activity yet.</p>
-                        )}
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="pb-3">
-                        <CardTitle className="text-base font-semibold">Daily trend</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        {loading ? (
-                            <div className="space-y-2">
-                                {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
-                            </div>
-                        ) : analytics?.trend.length ? (
-                            <div className="overflow-x-auto">
-                                <table className="w-full min-w-[560px] text-sm">
-                                    <thead className="text-xs text-muted-foreground">
-                                        <tr className="border-b border-border">
-                                            <th className="py-2 text-left font-medium">Date</th>
-                                            <th className="py-2 text-right font-medium">Enroll</th>
-                                            <th className="py-2 text-right font-medium">Sends</th>
-                                            <th className="py-2 text-right font-medium">Responses</th>
-                                            <th className="py-2 text-right font-medium">Confirmed</th>
-                                            <th className="py-2 text-right font-medium">Booked</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {analytics.trend.map((point) => (
-                                            <tr key={point.date} className="border-b border-border/60 last:border-0">
-                                                <td className="py-2">{point.date}</td>
-                                                <td className="py-2 text-right tabular-nums">{number(point.enrollments)}</td>
-                                                <td className="py-2 text-right tabular-nums">{number(point.sends)}</td>
-                                                <td className="py-2 text-right tabular-nums">{number(point.responses)}</td>
-                                                <td className="py-2 text-right tabular-nums">{number(point.confirmed)}</td>
-                                                <td className="py-2 text-right tabular-nums">{number(point.booked)}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        ) : (
-                            <p className="text-sm text-muted-foreground">No daily metrics in this range.</p>
-                        )}
-                    </CardContent>
-                </Card>
-            </div>
-        </div>
-    )
-}
-
-function ChannelFunnel({
-    channel,
-}: {
-    channel: CampaignAnalytics["channels"][number]
-}) {
-    const max = Math.max(channel.attempted, channel.delivered, channel.responded, channel.failed, 1)
-    const rows = [
-        ["Attempted", channel.attempted],
-        ["Delivered", channel.delivered],
-        ["Responded", channel.responded],
-        ["Failed", channel.failed],
-    ] as const
-    return (
-        <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium">{CHANNEL_LABELS[channel.channel] ?? label(channel.channel)}</p>
-                <span className="text-xs text-muted-foreground">{number(channel.attempted)} attempts</span>
-            </div>
-            <div className="space-y-1.5">
-                {rows.map(([name, value]) => (
-                    <div key={name} className="grid grid-cols-[82px_minmax(0,1fr)_56px] items-center gap-2 text-xs">
-                        <span className="text-muted-foreground">{name}</span>
-                        <span className="h-2 overflow-hidden rounded-sm bg-muted">
-                            <span
-                                className={cn(
-                                    "block h-full rounded-sm",
-                                    name === "Failed" ? "bg-red-500" : "bg-emerald-500",
-                                )}
-                                style={{ width: `${Math.max((value / max) * 100, value > 0 ? 4 : 0)}%` }}
-                            />
-                        </span>
-                        <span className="text-right tabular-nums">{number(value)}</span>
-                    </div>
-                ))}
-            </div>
-        </div>
     )
 }
 
@@ -1351,7 +859,6 @@ export default function CampaignDetail() {
     const navigate = useNavigate()
     const [campaign, setCampaign] = useState<AutomationWorkflow | null>(null)
     const [overview, setOverview] = useState<CampaignOverview | null>(null)
-    const [analytics, setAnalytics] = useState<CampaignAnalytics | null>(null)
     const [runs, setRuns] = useState<CampaignRunListItem[]>([])
     const [nextCursor, setNextCursor] = useState<string | null>(null)
     const [operations, setOperations] = useState<CampaignOperations | null>(null)
@@ -1373,35 +880,30 @@ export default function CampaignDetail() {
         (overview?.run_counts.running ?? 0) +
         (overview?.run_counts.waiting ?? 0)
 
+    // Deliberately independent of `filters`: changing a run filter must refetch
+    // runs only, not the overview / operations / usage panels alongside them.
     const refreshAll = useCallback(async () => {
         if (!id) return
         setLoading(true)
-        setRunsLoading(true)
         setOperationsLoading(true)
         try {
-            const [wf, ov, analyticsData, runPage, ops, byCampaign] = await Promise.all([
+            const [wf, ov, ops, byCampaign] = await Promise.all([
                 getCampaign(id),
                 getCampaignOverview(id),
-                getCampaignAnalytics(id),
-                listCampaignRuns(id, { ...filters, cursor: undefined }),
                 getCampaignOperations(id),
-                getUsageByCampaign(undefined, 200),
+                getUsageByCampaign(undefined, 1, { workflowId: id }),
             ])
             setCampaign(wf)
             setOverview(ov)
-            setAnalytics(analyticsData)
-            setRuns(runPage.items)
-            setNextCursor(runPage.next_cursor)
             setOperations(ops)
             setCampaignUsage(byCampaign.campaigns.find((row) => row.workflow_id === id) ?? null)
         } catch {
             toast.error("Failed to load campaign")
         } finally {
             setLoading(false)
-            setRunsLoading(false)
             setOperationsLoading(false)
         }
-    }, [id, filters])
+    }, [id])
 
     const refreshRuns = useCallback(async (next?: string | null) => {
         if (!id) return
@@ -1420,6 +922,11 @@ export default function CampaignDetail() {
     useEffect(() => {
         refreshAll()
     }, [refreshAll])
+
+    // Runs reload on their own whenever the filter set changes.
+    useEffect(() => {
+        refreshRuns()
+    }, [refreshRuns])
 
     async function handlePause() {
         if (!campaign) return
@@ -1558,9 +1065,11 @@ export default function CampaignDetail() {
                         </div>
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
-                        <Button variant="outline" size="sm" onClick={refreshAll} disabled={loading || acting !== null} className="gap-1.5">
-                            <RefreshCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-                            Refresh
+                        <Button variant="outline" size="sm" asChild className="gap-1.5">
+                            <Link to={`/institution-admin/campaigns/${campaign.id}/builder`}>
+                                <Pencil className="h-3.5 w-3.5" />
+                                Edit workflow
+                            </Link>
                         </Button>
                         {campaign.status === "active" && (
                             <Button variant="outline" size="sm" disabled={acting !== null} onClick={handlePause} className="gap-1.5">
@@ -1575,28 +1084,43 @@ export default function CampaignDetail() {
                             </Button>
                         )}
                         {campaign.status !== "archived" && (
-                            <>
-                                <Button variant="outline" size="sm" disabled={acting !== null || campaign.status !== "active"} onClick={() => setEnrollOpen(true)} className="gap-1.5">
-                                    <UserPlus className="h-3.5 w-3.5" />
-                                    Enroll
-                                </Button>
-                                <Button variant="destructive" size="sm" disabled={acting !== null} onClick={() => setHaltOpen(true)} className="gap-1.5">
-                                    <ShieldAlert className="h-3.5 w-3.5" />
-                                    Halt
-                                </Button>
-                            </>
+                            <Button variant="outline" size="sm" disabled={acting !== null || campaign.status !== "active"} onClick={() => setEnrollOpen(true)} className="gap-1.5">
+                                <UserPlus className="h-3.5 w-3.5" />
+                                Enroll
+                            </Button>
                         )}
-                        <Button
-                            type="button"
-                            variant="destructive"
-                            size="sm"
-                            disabled={acting !== null}
-                            onClick={() => setDeleteOpen(true)}
-                            className="gap-1.5"
-                        >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Delete
-                        </Button>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-8 w-8" disabled={acting !== null} aria-label="More actions">
+                                    <MoreHorizontal className="h-4 w-4" />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                                <DropdownMenuItem disabled={loading} onSelect={() => refreshAll()}>
+                                    <RefreshCcw className={cn("mr-2 h-3.5 w-3.5", loading && "animate-spin")} />
+                                    Refresh
+                                </DropdownMenuItem>
+                                {campaign.status !== "archived" && (
+                                    <>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem
+                                            className="text-destructive focus:text-destructive"
+                                            onSelect={() => setHaltOpen(true)}
+                                        >
+                                            <ShieldAlert className="mr-2 h-3.5 w-3.5" />
+                                            Emergency halt
+                                        </DropdownMenuItem>
+                                    </>
+                                )}
+                                <DropdownMenuItem
+                                    className="text-destructive focus:text-destructive"
+                                    onSelect={() => setDeleteOpen(true)}
+                                >
+                                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                                    Delete campaign
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
                     </div>
                 </div>
             ) : (
@@ -1606,10 +1130,8 @@ export default function CampaignDetail() {
             <Tabs defaultValue="overview" className="space-y-4">
                 <TabsList>
                     <TabsTrigger value="overview">Overview</TabsTrigger>
-                    <TabsTrigger value="audience">Audience</TabsTrigger>
                     <TabsTrigger value="runs">Runs</TabsTrigger>
                     <TabsTrigger value="operations">Operations</TabsTrigger>
-                    <TabsTrigger value="analytics">Analytics</TabsTrigger>
                 </TabsList>
                 <TabsContent value="overview">
                     <OverviewTab
@@ -1617,9 +1139,6 @@ export default function CampaignDetail() {
                         campaignUsage={campaignUsage}
                         loading={loading}
                     />
-                </TabsContent>
-                <TabsContent value="audience">
-                    <AudienceTab campaign={campaign} />
                 </TabsContent>
                 <TabsContent value="runs">
                     <RunsTab
@@ -1640,9 +1159,6 @@ export default function CampaignDetail() {
                         loading={operationsLoading}
                         onSelectRun={openTimelineById}
                     />
-                </TabsContent>
-                <TabsContent value="analytics">
-                    <AnalyticsTab analytics={analytics} loading={loading} />
                 </TabsContent>
             </Tabs>
 

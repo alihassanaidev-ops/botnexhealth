@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -174,8 +175,13 @@ async def get_usage_by_campaign(
     start_date: date | None = Query(None, description="Inclusive range start (YYYY-MM-DD)"),
     end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
     limit: int = Query(50, ge=1, le=200),
+    workflow_id: UUID | None = Query(None, description="Restrict the report to one workflow"),
 ) -> CampaignUsageReport:
-    """Top workflows by spend over the range, from raw usage_events (workflow_id-tagged)."""
+    """Top workflows by spend over the range, from raw usage_events (workflow_id-tagged).
+
+    `workflow_id` narrows the report to a single campaign so a campaign detail
+    view does not have to pull the whole institution's table to find one row.
+    """
     if not current_user.institution_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "User is not associated with an institution")
 
@@ -200,6 +206,7 @@ async def get_usage_by_campaign(
                 UsageEvent.workflow_id.is_not(None),
                 UsageEvent.occurred_at >= start,
                 UsageEvent.occurred_at < end_cap,
+                *([UsageEvent.workflow_id == workflow_id] if workflow_id else []),
             )
             .group_by(UsageEvent.workflow_id)
             .order_by(func.coalesce(func.sum(UsageEvent.cost_amount), 0).desc())
