@@ -168,7 +168,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
             toast.error("Enter an API key before verifying");
             return;
         }
-        if (!selectedLocation?.nexhealth_subdomain || !selectedLocation.nexhealth_location_id) {
+        if (selectedLocation && (!selectedLocation.nexhealth_subdomain || !selectedLocation.nexhealth_location_id)) {
             toast.error("Select a location with NexHealth subdomain and location ID");
             return;
         }
@@ -178,8 +178,8 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
         try {
             const { data } = await api.post(`/admin/institutions/${institution.slug}/nexhealth/verify`, {
                 nexhealth_api_key: apiKey || undefined,
-                subdomain: selectedLocation.nexhealth_subdomain,
-                location_id: selectedLocation.nexhealth_location_id,
+                subdomain: selectedLocation?.nexhealth_subdomain || undefined,
+                location_id: selectedLocation?.nexhealth_location_id || undefined,
             });
             setVerification(data);
             if (data.ok) {
@@ -318,9 +318,10 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                             <Select
                                 value={selectedLocationId}
                                 onValueChange={setSelectedLocationId}
+                                disabled={locations.length === 0}
                             >
                                 <SelectTrigger>
-                                    <SelectValue placeholder="Select a location" />
+                                    <SelectValue placeholder={locations.length === 0 ? "No locations yet" : "Select a location"} />
                                 </SelectTrigger>
                                 <SelectContent>
                                     {locations.map((loc) => (
@@ -337,7 +338,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 variant="outline"
                                 size="sm"
                                 onClick={handleVerify}
-                                disabled={isVerifying || !selectedLocationId}
+                                disabled={isVerifying}
                             >
                                 {isVerifying ? (
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -346,7 +347,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 ) : (
                                     <AlertCircle className="mr-2 h-4 w-4" />
                                 )}
-                                {isVerifying ? "Verifying..." : "Verify"}
+                                {isVerifying ? "Verifying..." : selectedLocationId ? "Verify" : "Verify Key"}
                             </Button>
                             {verification && (
                                 <span className={`text-xs font-medium ${verification.ok ? "text-green-600" : "text-destructive"}`}>

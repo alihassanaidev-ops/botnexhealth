@@ -68,7 +68,10 @@ In Super Admin:
 5. Choose credential mode:
    - **Platform key**: leave clinic API key disabled/empty.
    - **Clinic-owned key**: paste the clinic/DSO NexHealth API key.
-6. Save credentials.
+6. For clinic-owned mode, click **Verify Key** before locations exist. This
+   checks that the API key authenticates with NexHealth, but it does not prove
+   access to a specific subdomain/location yet.
+7. Save credentials.
 
 ### 4. Add the Location in Nexus
 
@@ -76,12 +79,18 @@ In Super Admin:
 
 1. Go to **Locations**.
 2. Add the physical office.
-3. Set:
+3. Use **Import from NexHealth** when available. The import list uses the
+   institution's selected credential:
+   - Platform key mode shows locations visible to the platform key.
+   - Clinic-owned key mode shows locations visible to the clinic-owned key.
+   - If a clinic-owned key is invalid, the import list should not show platform
+     locations as a fallback.
+4. Set or confirm:
    - `nexhealth_subdomain`
    - `nexhealth_location_id`
    - Retell agent ID, if voice is live
    - Twilio sender number, if SMS is live
-4. Save the location.
+5. Save the location.
 
 For multi-location institutions, repeat this for every physical office. Nexus
 requires explicit `location_id` on PMS-touching routes so it does not route a
@@ -97,9 +106,14 @@ In Super Admin:
 4. Select a location under **Verify Against Location**.
 5. Click **Verify**.
 
-Verification authenticates with the selected key, calls NexHealth `/locations`
-with the location's subdomain, and checks that the configured NexHealth
-`location_id` is visible to that key.
+There are two verification levels:
+
+- **Verify Key** appears when there is no local Nexus location selected yet.
+  It authenticates with the selected NexHealth key only.
+- **Verify** appears after a local Nexus location is available. It authenticates
+  with the selected key, calls NexHealth `/locations` with the location's
+  subdomain, and checks that the configured NexHealth `location_id` is visible
+  to that key.
 
 If verification fails:
 
@@ -164,6 +178,7 @@ clinic-owned key.
 |---|---|---|
 | Verify returns auth failure | Bad/rotated API key | Re-enter the key or confirm it in NexHealth Developer Portal |
 | Verify authenticates but location not found | Key lacks access to subdomain/location | Confirm subdomain/location ID and NexHealth account access |
+| Import list is empty in clinic-owned mode | Key is invalid or has no visible NexHealth locations | Run Verify Key, then confirm the NexHealth developer account has the clinic's institution/location |
 | Booking returns 403 | Request is using a key without access to that location | Check credential mode and location mapping |
 | Webhook ensure returns 403/404 | Endpoint/subscription was created under another API key | Manage it with the owning key or create a new subscription under the selected key |
 | 429 rate limits continue | Clinic is still using platform key or NexHealth did not issue a separate key | Confirm credential mode and API-key ownership with NexHealth |

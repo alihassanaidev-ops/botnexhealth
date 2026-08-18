@@ -384,6 +384,31 @@ async def list_nexhealth_locations(
     return await handle_nexhealth_request(client, "GET", "/locations", params=params)
 
 
+@router.get("/{slug}/nexhealth/locations", response_model=InstitutionBasicListResponse)
+async def list_institution_nexhealth_locations(
+    slug: str,
+    _: User = Depends(get_current_admin),
+    subdomain: str | None = None,
+) -> dict[str, Any]:
+    """List NexHealth locations using this institution's selected credential."""
+    async with get_db_session() as session:
+        institution = await InstitutionService(session).get_by_slug(
+            slug, include_inactive=True
+        )
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        credential = resolve_nexhealth_credential(institution)
+        client = await get_nexhealth_client_for_credential(credential)
+        params = {}
+        if subdomain:
+            params["subdomain"] = subdomain
+        return await handle_nexhealth_request(client, "GET", "/locations", params=params)
+
+
 def _nexhealth_location_response_contains_id(
     payload: dict[str, Any],
     location_id: str | None,
