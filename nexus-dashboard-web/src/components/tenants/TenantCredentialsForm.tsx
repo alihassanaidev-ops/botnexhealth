@@ -294,24 +294,25 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 </SelectContent>
                             </Select>
                         </div>
-                        <FormField
-                            control={form.control}
-                            name="nexhealth_api_key"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>Clinic API Key</FormLabel>
-                                    <FormControl>
-                                        <Input
-                                            type="password"
-                                            placeholder={institution.has_nexhealth_key ? "••••••••" : "Enter API key"}
-                                            disabled={credentialMode === "platform"}
-                                            {...field}
-                                        />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
+                        {credentialMode === "institution" && (
+                            <FormField
+                                control={form.control}
+                                name="nexhealth_api_key"
+                                render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>Clinic API Key</FormLabel>
+                                        <FormControl>
+                                            <Input
+                                                type="password"
+                                                placeholder={institution.has_nexhealth_key ? "••••••••" : "Enter API key"}
+                                                {...field}
+                                            />
+                                        </FormControl>
+                                        <FormMessage />
+                                    </FormItem>
+                                )}
+                            />
+                        )}
                         <div className="grid gap-2">
                             <Label>Verify Against Location</Label>
                             <Select
