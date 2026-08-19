@@ -318,9 +318,9 @@ async def test_list_providers_filters_by_age(monkeypatch):
 
     # Mock DB query for age rules
     age_rows = [
-        SimpleNamespace(source_id="nh-100", min_age=0, max_age=17),
-        SimpleNamespace(source_id="nh-200", min_age=18, max_age=65),
-        SimpleNamespace(source_id="nh-300", min_age=None, max_age=None),
+        SimpleNamespace(source_id="nh-100", min_age=0, max_age=17, is_hidden=False, is_active=True),
+        SimpleNamespace(source_id="nh-200", min_age=18, max_age=65, is_hidden=False, is_active=True),
+        SimpleNamespace(source_id="nh-300", min_age=None, max_age=None, is_hidden=False, is_active=True),
     ]
 
     @asynccontextmanager
@@ -370,9 +370,9 @@ async def test_list_providers_adult_patient(monkeypatch):
     monkeypatch.setattr(handlers, "_resolve_context", mock_resolve)
 
     age_rows = [
-        SimpleNamespace(source_id="nh-100", min_age=0, max_age=17),
-        SimpleNamespace(source_id="nh-200", min_age=18, max_age=65),
-        SimpleNamespace(source_id="nh-300", min_age=None, max_age=None),
+        SimpleNamespace(source_id="nh-100", min_age=0, max_age=17, is_hidden=False, is_active=True),
+        SimpleNamespace(source_id="nh-200", min_age=18, max_age=65, is_hidden=False, is_active=True),
+        SimpleNamespace(source_id="nh-300", min_age=None, max_age=None, is_hidden=False, is_active=True),
     ]
 
     @asynccontextmanager
@@ -416,6 +416,14 @@ async def test_list_providers_no_dob_returns_all(monkeypatch):
 
     monkeypatch.setattr(handlers, "_resolve_context", mock_resolve)
 
+    # list_providers always reads the local provider cache now (hidden providers
+    # must be dropped with or without a DOB), so the session must be stubbed.
+    @asynccontextmanager
+    async def fake_db(*_args, **_kwargs):
+        yield _FakeDBSession([])
+
+    monkeypatch.setattr(handlers, "get_system_db_session", fake_db)
+
     result = await handlers.list_providers({})
 
     assert result["count"] == 2
@@ -444,6 +452,12 @@ async def test_list_providers_invalid_dob_returns_all(monkeypatch):
         )
 
     monkeypatch.setattr(handlers, "_resolve_context", mock_resolve)
+
+    @asynccontextmanager
+    async def fake_db(*_args, **_kwargs):
+        yield _FakeDBSession([])
+
+    monkeypatch.setattr(handlers, "get_system_db_session", fake_db)
 
     result = await handlers.list_providers({"date_of_birth": "not-a-date"})
 
