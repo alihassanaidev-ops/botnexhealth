@@ -147,6 +147,7 @@ class CachedProviderResponse(BaseModel):
     last_name: str | None = None
     specialty: str | None = None
     is_active: bool = True
+    is_hidden: bool = False
     buffer_minutes: int = 0
     same_day_cutoff_time: str | None = None
     min_age: int | None = None
@@ -165,6 +166,7 @@ class CachedProviderResponse(BaseModel):
             last_name=p.last_name,
             specialty=p.specialty,
             is_active=p.is_active,
+            is_hidden=bool(getattr(p, "is_hidden", False)),
             buffer_minutes=p.buffer_minutes,
             same_day_cutoff_time=p.same_day_cutoff_time.strftime("%H:%M") if p.same_day_cutoff_time else None,
             min_age=p.min_age,
@@ -750,6 +752,8 @@ class UpdateProviderRequest(BaseModel):
     same_day_cutoff_time: str | None = None  # "HH:MM" or null to clear
     min_age: int | None = None  # minimum patient age (inclusive), null to clear
     max_age: int | None = None  # maximum patient age (inclusive), null to clear
+    # Hide this provider from the Retell list_providers tool for this location.
+    is_hidden: bool | None = None
 
 
 @router.patch("/providers/{provider_id}", response_model=CachedProviderResponse)
@@ -759,7 +763,7 @@ async def update_provider(
     current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     location_id: str | None = Query(None),
 ):
-    """Update provider settings (buffer_minutes, same_day_cutoff_time)."""
+    """Update provider settings (buffer_minutes, same_day_cutoff_time, age range, visibility)."""
     from datetime import datetime
 
     async with get_db_session() as session:
@@ -791,6 +795,12 @@ async def update_provider(
                     ).time()
                 except ValueError:
                     raise HTTPException(status.HTTP_400_BAD_REQUEST, "same_day_cutoff_time must be HH:MM format")
+
+        # ── Visibility ───────────────────────────────────────────────
+        # Operator-owned; the PMS sync never touches this, so hiding survives
+        # the next provider sync (unlike is_active, which sync rewrites).
+        if "is_hidden" in req.model_fields_set and req.is_hidden is not None:
+            provider.is_hidden = req.is_hidden
 
         # ── Age-group fields ─────────────────────────────────────────
         if "min_age" in req.model_fields_set:

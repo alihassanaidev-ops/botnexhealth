@@ -47,7 +47,18 @@ class InstitutionProvider(Base):
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     specialty: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
+    # Set to True by the PMS sync for every provider it sees (see
+    # SyncService._upsert_provider), so this means "present in the last sync",
+    # not "the clinic wants this provider offered". Use is_hidden for that.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    is_hidden: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False,
+        comment=(
+            "Operator-owned. When True this provider is not offered by the Retell "
+            "list_providers tool. Never written by the PMS sync, unlike is_active."
+        ),
+    )
 
     buffer_minutes: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False,

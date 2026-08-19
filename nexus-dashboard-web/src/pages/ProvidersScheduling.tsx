@@ -927,6 +927,7 @@ export default function ProvidersScheduling() {
                                     <SelectItem key={p.source_id} value={p.source_id}>
                                         {p.name || `${p.first_name} ${p.last_name}`}
                                         {p.specialty ? ` (${p.specialty})` : ""}
+                                        {p.is_hidden ? " — hidden from voice agent" : ""}
                                     </SelectItem>
                                 ))}
                             </SelectContent>

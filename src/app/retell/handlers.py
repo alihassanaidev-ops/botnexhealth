@@ -1339,6 +1339,10 @@ async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
 async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
     """List providers at the practice, optionally filtered by patient age.
 
+    Providers the clinic has marked hidden for this location are never returned,
+    regardless of the arguments — NexHealth reports a practice's full historical
+    roster and only some of those rows are real bookable staff.
+
     If ``date_of_birth`` (YYYY-MM-DD) is supplied, only providers whose
     configured age range covers the patient's age are returned.  Providers
     with no age-range configured are always included.
@@ -1350,6 +1354,53 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
 
     try:
         providers = await ctx.adapter.list_providers()
+
+        # ── Local per-location provider rules ────────────────────────
+        # One lookup feeds both filters below. Runs unconditionally: hidden
+        # providers must be dropped whether or not the caller gave a DOB.
+        #
+        # Hidden is read regardless of is_active, because is_active only records
+        # "seen in the last PMS sync" (SyncService._upsert_provider rewrites it
+        # to True every run) while is_hidden is the clinic's own decision. Age
+        # rules keep their original is_active-only semantics.
+        hidden_source_ids: set[str] = set()
+        age_rules: dict[str, tuple[int | None, int | None]] = {}
+        if ctx.location:
+            async with get_system_db_session(
+                "retell",
+                institution_id=str(ctx.institution.id),
+                location_id=str(ctx.location.id),
+            ) as session:
+                rows = (
+                    await session.execute(
+                        select(
+                            InstitutionProvider.source_id,
+                            InstitutionProvider.is_hidden,
+                            InstitutionProvider.is_active,
+                            InstitutionProvider.min_age,
+                            InstitutionProvider.max_age,
+                        ).where(
+                            InstitutionProvider.location_id == str(ctx.location.id),
+                        )
+                    )
+                ).all()
+                for row in rows:
+                    if row.is_hidden:
+                        hidden_source_ids.add(row.source_id)
+                    elif row.is_active:
+                        age_rules[row.source_id] = (row.min_age, row.max_age)
+
+        # Providers the clinic has hidden are never offered to a caller. Probe
+        # both id forms for the same reason the age lookup below does: the PMS
+        # mapper prefixes ids ("nh-123") and that is what sync stores, but the
+        # bare id is tolerated too.
+        if hidden_source_ids:
+            providers = [
+                p
+                for p in providers
+                if str(p.id) not in hidden_source_ids
+                and f"nh-{p.id}" not in hidden_source_ids
+            ]
 
         # ── Age-group filtering ──────────────────────────────────────
         patient_dob = args.get("date_of_birth")
@@ -1369,28 +1420,6 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
                 )
 
         if patient_age is not None and ctx.location:
-            # Look up age-group rules from local cache
-            age_rules: dict[str, tuple[int | None, int | None]] = {}
-            async with get_system_db_session(
-                "retell",
-                institution_id=str(ctx.institution.id),
-                location_id=str(ctx.location.id),
-            ) as session:
-                rows = (
-                    await session.execute(
-                        select(
-                            InstitutionProvider.source_id,
-                            InstitutionProvider.min_age,
-                            InstitutionProvider.max_age,
-                        ).where(
-                            InstitutionProvider.location_id == str(ctx.location.id),
-                            InstitutionProvider.is_active.is_(True),
-                        )
-                    )
-                ).all()
-                for row in rows:
-                    age_rules[row.source_id] = (row.min_age, row.max_age)
-
             filtered = []
             for p in providers:
                 rule = age_rules.get(p.id) or age_rules.get(
