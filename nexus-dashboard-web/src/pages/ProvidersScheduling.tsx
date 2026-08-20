@@ -28,6 +28,7 @@ import { UpcomingRangePicker } from "@/components/scheduling/UpcomingRangePicker
 import {
     allUpcomingRange,
     byDateThenTime,
+    isActive,
     isExpired,
     isRecurring,
     matchesRange,
@@ -326,6 +327,7 @@ export default function ProvidersScheduling() {
     const visibleAvailabilities = useMemo(
         () =>
             availabilities
+                .filter(isActive)
                 .filter((av) => matchesRange(av, dateRange))
                 .filter(
                     (av) =>
@@ -382,6 +384,9 @@ export default function ProvidersScheduling() {
         () =>
             availabilities.filter(
                 (av) =>
+                    // An inactive window generates no slots, so an unlinked one
+                    // isn't a problem to warn about.
+                    isActive(av) &&
                     !isExpired(av, today) &&
                     (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
             ).length,

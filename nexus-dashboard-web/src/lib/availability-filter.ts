@@ -68,6 +68,22 @@ export function isExpired(av: CachedAvailability, today: string = todayISO()): b
 }
 
 /**
+ * An inactive window generates no bookable slots, so neither view should show
+ * one. Both backend paths already exclude them today — the embedded path drops
+ * them in our adapter, the direct one relies on the PMS doing it — but the
+ * calendar filtered here and the list did not, so the two views would have
+ * disagreed the moment an inactive row slipped through. This is the shared
+ * answer for both.
+ *
+ * NexHealth deactivates rather than deletes: when their team cleaned up ~1,000
+ * duplicate work windows for a clinic, the rows came back with `active: false`
+ * rather than disappearing.
+ */
+export function isActive(av: CachedAvailability): boolean {
+    return av.active !== false
+}
+
+/**
  * Does this window fall inside the range?
  *
  * Recurring rules always match: they repeat every week forever, so they are
@@ -88,7 +104,7 @@ export function matchesRange(av: CachedAvailability, range: UpcomingRange): bool
  * band to render, so they never match.
  */
 export function matchesDate(av: CachedAvailability, isoDate: string): boolean {
-    if (av.active === false) return false
+    if (!isActive(av)) return false
     if (toMinutes(av.begin_time) == null || toMinutes(av.end_time) == null) return false
     if (av.specific_date) return av.specific_date === isoDate
     return (av.days || []).includes(weekdayName(isoDate))

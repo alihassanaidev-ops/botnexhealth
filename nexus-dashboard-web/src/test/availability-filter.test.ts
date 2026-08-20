@@ -14,6 +14,7 @@ import {
     addDays,
     allUpcomingRange,
     byDateThenTime,
+    isActive,
     isExpired,
     isRecurring,
     matchesDate,
@@ -144,6 +145,19 @@ describe("isExpired", () => {
 
     it("never expires a recurring rule", () => {
         expect(isExpired(av({ specific_date: null, days: ["Monday"] }), "2026-08-20")).toBe(false)
+    })
+})
+
+describe("isActive", () => {
+    it("treats an explicit false as inactive and everything else as active", () => {
+        expect(isActive(av({ active: false }))).toBe(false)
+        expect(isActive(av({ active: true }))).toBe(true)
+    })
+
+    it("defaults to active when the flag is absent, rather than hiding the row", () => {
+        const noFlag = av()
+        delete (noFlag as Partial<CachedAvailability>).active
+        expect(isActive(noFlag)).toBe(true)
     })
 })
 

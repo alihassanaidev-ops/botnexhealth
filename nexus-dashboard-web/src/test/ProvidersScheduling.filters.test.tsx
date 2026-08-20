@@ -261,6 +261,37 @@ describe("Past-dated windows", () => {
     })
 })
 
+describe("Inactive windows", () => {
+    it("are hidden from the list, matching what the calendar already did", async () => {
+        // NexHealth deactivates rather than deletes — a duplicate cleanup comes
+        // back as active:false rather than disappearing. Both backend paths drop
+        // these today, but the list must not depend on that.
+        mountWith([
+            makeAvailability({ source_id: "live-1", specific_date: addDays(todayISO(), 1) }),
+            makeAvailability({ source_id: "dead-1", specific_date: addDays(todayISO(), 1), active: false }),
+            makeAvailability({ source_id: "dead-2", specific_date: addDays(todayISO(), 2), active: false }),
+        ])
+
+        await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
+        await waitFor(() => expect(rowCount()).toBe(1))
+    })
+
+    it("do not count toward the unlinked-appointment-types warning", async () => {
+        mountWith([
+            makeAvailability({
+                source_id: "dead-unlinked",
+                specific_date: addDays(todayISO(), 1),
+                active: false,
+                appointment_type_ids: [],
+                appointment_type_names: [],
+            }),
+        ])
+
+        await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
+        expect(screen.queryByText(/without linked/i)).not.toBeInTheDocument()
+    })
+})
+
 describe("Date range filter", () => {
     it("narrows the list to the chosen window and resets to page 1", async () => {
         const user = userEvent.setup()
