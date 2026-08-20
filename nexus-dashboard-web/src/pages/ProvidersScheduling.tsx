@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback, useRef, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -7,7 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
-import { RefreshCcw, AlertTriangle, Clock, Calendar, MapPin, UserCog } from "lucide-react"
+import { RefreshCcw, AlertTriangle, Clock, Calendar, MapPin, UserCog, ChevronLeft, ChevronRight, Repeat } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
 import { Input } from "@/components/ui/input"
@@ -24,6 +24,19 @@ import {
 import { useAuth } from "@/context/AuthContext"
 import { useSelectedLocationId, useLocationContext } from "@/context/LocationContext"
 import SchedulerCalendar from "@/components/scheduling/SchedulerCalendar"
+import { UpcomingRangePicker } from "@/components/scheduling/UpcomingRangePicker"
+import {
+    allUpcomingRange,
+    byDateThenTime,
+    isExpired,
+    isRecurring,
+    matchesRange,
+    todayISO,
+    type UpcomingRange,
+} from "@/lib/availability-filter"
+
+/** Dated work windows per page. Matches the Patients table's page size. */
+const PAGE_SIZE = 25
 
 export default function ProvidersScheduling() {
     const { user } = useAuth()
@@ -37,7 +50,12 @@ export default function ProvidersScheduling() {
     const [selectedProviderId, setSelectedProviderId] = useState<string>("")
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
-    const [showExpired, setShowExpired] = useState(false)
+    // One control, not two: the range's start date *is* the expired filter.
+    // Unchecked, the range clamps to today so past-dated windows are unreachable;
+    // checked, the picker unlocks earlier dates.
+    const [includePast, setIncludePast] = useState(false)
+    const [dateRange, setDateRange] = useState<UpcomingRange>(() => allUpcomingRange())
+    const [page, setPage] = useState(0)
     const [view, setView] = useState<"list" | "calendar">("list")
     // Calendar view is still under test — expose it on staging/local only and keep
     // it out of production until validated. Remove this gate to launch everywhere.
@@ -300,62 +318,211 @@ export default function ProvidersScheduling() {
         }
     }
 
-    // Use local date (browser TZ) — the user is at the practice.
-    const todayLocal = new Date().toLocaleDateString("en-CA") // YYYY-MM-DD
-    const isAvailabilityExpired = (av: CachedAvailability) =>
-        !!av.specific_date && av.specific_date < todayLocal
+    // Today in the browser's timezone — the user is sitting at the practice.
+    const today = todayISO()
 
-    // Filter availabilities by selected appointment type (and expired state
-    // unless showExpired is on), then sort by date.
-    // NexHealth returns rows in insertion order, which renders as random
-    // dates from the operator's perspective — easy to mis-link an
-    // appointment type to a far-future row instead of the soonest one.
-    // Sort: specific_date ascending, then begin_time. Rows without a
-    // specific_date (pure recurring rules) sort first.
-    const filteredAvailabilities = availabilities
-        .filter((av) => showExpired || !isAvailabilityExpired(av))
-        .filter(
-            (av) =>
-                selectedApptTypeId === "all" ||
-                av.appointment_type_ids?.includes(selectedApptTypeId)
-        )
-        .filter(
-            (av) =>
-                selectedOperatoryId === "all" ||
-                av.operatory_source_id === selectedOperatoryId
-        )
-        .slice()
-        .sort((a, b) => {
-            const ad = a.specific_date ?? ""
-            const bd = b.specific_date ?? ""
-            if (ad !== bd) return ad.localeCompare(bd)
-            const at = a.begin_time ?? ""
-            const bt = b.begin_time ?? ""
-            return at.localeCompare(bt)
-        })
+    // Memoised: this used to recompute (filter + sort over the provider's whole
+    // availability set) on every render, including every keystroke in the
+    // Scheduling Rules inputs above.
+    const visibleAvailabilities = useMemo(
+        () =>
+            availabilities
+                .filter((av) => matchesRange(av, dateRange))
+                .filter(
+                    (av) =>
+                        selectedApptTypeId === "all" ||
+                        av.appointment_type_ids?.includes(selectedApptTypeId)
+                )
+                .filter(
+                    (av) =>
+                        selectedOperatoryId === "all" ||
+                        av.operatory_source_id === selectedOperatoryId
+                ),
+        [availabilities, dateRange, selectedApptTypeId, selectedOperatoryId]
+    )
 
-    const unlinkedCount = availabilities.filter(
-        (av) =>
-            !isAvailabilityExpired(av) &&
-            (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
-    ).length
+    // Recurring rules are pinned above the paginated list rather than sorted into
+    // it. Sorted in, they'd take the top of page 1 and push the dated rows the
+    // operator is filtering for onto page 2 — which reads as "the filter did nothing".
+    const recurringWindows = useMemo(
+        () => visibleAvailabilities.filter(isRecurring),
+        [visibleAvailabilities]
+    )
+    const datedWindows = useMemo(
+        () => visibleAvailabilities.filter((av) => !isRecurring(av)).sort(byDateThenTime),
+        [visibleAvailabilities]
+    )
+
+    const pageCount = Math.max(1, Math.ceil(datedWindows.length / PAGE_SIZE))
+    const pagedWindows = useMemo(
+        () => datedWindows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+        [datedWindows, page]
+    )
+    const from = datedWindows.length === 0 ? 0 : page * PAGE_SIZE + 1
+    const to = Math.min((page + 1) * PAGE_SIZE, datedWindows.length)
+    const totalShown = recurringWindows.length + datedWindows.length
+
+    // Narrowing a filter while on page 4 would otherwise strand the operator on
+    // an out-of-range page showing nothing.
+    useEffect(() => {
+        setPage(0)
+    }, [selectedProviderId, selectedApptTypeId, selectedOperatoryId, dateRange])
+
+    // `includePast` widens the result set rather than narrowing it, so it doesn't
+    // count as a filter for the "(filtered)" label or the Clear button.
+    const hasNarrowingFilter =
+        selectedApptTypeId !== "all" ||
+        selectedOperatoryId !== "all" ||
+        dateRange.endDate !== null
+
+    // The checkbox *is* the lower bound: checking it drops the bound entirely so
+    // expired windows appear immediately (the old "Show expired" behaviour),
+    // unchecking clamps back to today. Without this the box would only unlock the
+    // picker and appear to do nothing on its own.
+    const handleIncludePastChange = (checked: boolean) => {
+        setIncludePast(checked)
+        setDateRange((prev) => ({ ...prev, startDate: checked ? null : today }))
+    }
+
+    const resetFilters = () => {
+        setSelectedApptTypeId("all")
+        setSelectedOperatoryId("all")
+        setIncludePast(false)
+        setDateRange(allUpcomingRange())
+    }
+
+    const unlinkedCount = useMemo(
+        () =>
+            availabilities.filter(
+                (av) =>
+                    !isExpired(av, today) &&
+                    (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
+            ).length,
+        [availabilities, today]
+    )
 
     // Collect appointment types that appear in this provider's availabilities
-    const availableApptTypeIds = new Set(availabilities.flatMap((av) => av.appointment_type_ids || []))
-    const relevantApptTypes = appointmentTypes.filter((at) => availableApptTypeIds.has(at.source_id))
+    const relevantApptTypes = useMemo(() => {
+        const ids = new Set(availabilities.flatMap((av) => av.appointment_type_ids || []))
+        return appointmentTypes.filter((at) => ids.has(at.source_id))
+    }, [availabilities, appointmentTypes])
 
     // Collect operatories that appear in this provider's availabilities.
     // Names alone can collide (e.g. two rooms both named "DR. KADRI"), so the
     // filter label always includes the ID to disambiguate.
-    const availableOperatoryIds = new Set(
-        availabilities.map((av) => av.operatory_source_id).filter((id): id is string => !!id)
-    )
-    const relevantOperatories = operatories.filter((op) => availableOperatoryIds.has(op.source_id))
+    const relevantOperatories = useMemo(() => {
+        const ids = new Set(
+            availabilities.map((av) => av.operatory_source_id).filter((id): id is string => !!id)
+        )
+        return operatories.filter((op) => ids.has(op.source_id))
+    }, [availabilities, operatories])
 
     // NexHealth doesn't embed an operatory name on the availability itself (only
     // operatory_id), so resolve the display name from the operatories list by
     // source_id. Names can collide, so rows still show the ID alongside.
-    const operatoryNameBySourceId = new Map(operatories.map((op) => [op.source_id, op.name]))
+    const operatoryNameBySourceId = useMemo(
+        () => new Map(operatories.map((op) => [op.source_id, op.name])),
+        [operatories]
+    )
+
+    // One row, rendered by both the recurring section and the paginated dated
+    // list. Defined once so the two can't drift apart visually.
+    const renderWindow = (av: CachedAvailability) => {
+        const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
+        const isPastDate = isExpired(av, today)
+        const isWarning = !hasTypes && !isPastDate
+
+        const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
+        const normalClass = isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
+
+        return (
+            <div
+                key={av.id}
+                className={`rounded-lg border p-4 transition-colors ${isPastDate
+                        ? "border-border/40 bg-muted/20 opacity-50"
+                        : isWarning
+                            ? "border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] dark:bg-[rgb(255,244,227)]/10"
+                            : "border-border bg-background/70 hover:border-border"
+                    }`}
+            >
+                <div className="flex items-start justify-between">
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                            <Clock className={`h-4 w-4 ${mutedClass}`} />
+                            <span className={`font-medium ${normalClass}`}>
+                                {av.begin_time} - {av.end_time}
+                            </span>
+                            {isPastDate && (
+                                <Badge variant="outline" className="text-xs text-muted-foreground/60 border-border/40">
+                                    Expired
+                                </Badge>
+                            )}
+                            {av.synced && (
+                                <Badge
+                                    variant={isWarning ? "outline" : "secondary"}
+                                    className={`text-xs ${isWarning
+                                            ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 bg-indigo-500/10"
+                                            : ""
+                                        }`}
+                                >
+                                    Synced from PMS
+                                </Badge>
+                            )}
+                            {!av.synced && (
+                                <Badge
+                                    variant="outline"
+                                    className={`text-xs ${isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300" : ""
+                                        }`}
+                                >
+                                    Manual
+                                </Badge>
+                            )}
+                        </div>
+                        {av.operatory_source_id && (
+                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
+                                <MapPin className="h-3 w-3" />
+                                Operatory: {operatoryNameBySourceId.get(av.operatory_source_id) ?? av.operatory_name ?? "Unknown"}
+                                <span className="opacity-60">({av.operatory_source_id})</span>
+                            </div>
+                        )}
+                        {av.days && av.days.length > 0 && (
+                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
+                                <Calendar className="h-3 w-3" />
+                                {av.days.join(", ")}
+                            </div>
+                        )}
+                        {av.specific_date && (
+                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
+                                <Calendar className="h-3 w-3" />
+                                Specific date: {av.specific_date}
+                            </div>
+                        )}
+                        <div className={`text-sm ${normalClass}`}>
+                            <span className={mutedClass}>Appointment Types: </span>
+                            {hasTypes ? (
+                                <span>{av.appointment_type_names?.join(", ")}</span>
+                            ) : (
+                                <span className="text-indigo-700 dark:text-indigo-300 font-medium">
+                                    None linked
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                    {canManage && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className={isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/10 shrink-0" : "shrink-0"}
+                            onClick={() => openEditDialog(av)}
+                        >
+                            Edit Linking
+                        </Button>
+                    )}
+                </div>
+            </div>
+        )
+    }
+
 
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
@@ -434,68 +601,25 @@ export default function ProvidersScheduling() {
                 />
             ) : (
                 <>
-                    {/* Filters: Provider → Appointment Type */}
-                    <div className="flex items-center gap-4 flex-wrap">
-                        <div className="flex items-center gap-2">
-                            <label className="text-sm font-medium whitespace-nowrap">Provider:</label>
-                            <Select value={selectedProviderId} onValueChange={setSelectedProviderId}>
-                                <SelectTrigger className="w-[280px]">
-                                    <SelectValue placeholder="Select provider" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {providers.map((p) => (
-                                        <SelectItem key={p.source_id} value={p.source_id}>
-                                            {p.name || `${p.first_name} ${p.last_name}`}
-                                            {p.specialty ? ` (${p.specialty})` : ""}
-                                            {p.is_hidden ? " — hidden from voice agent" : ""}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                            <label className="text-sm font-medium whitespace-nowrap">Appointment Type:</label>
-                            <Select value={selectedApptTypeId} onValueChange={setSelectedApptTypeId}>
-                                <SelectTrigger className="w-[260px]">
-                                    <SelectValue placeholder="All Types" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Types</SelectItem>
-                                    {relevantApptTypes.map((at) => (
-                                        <SelectItem key={at.source_id} value={at.source_id}>
-                                            {at.name}
-                                            {at.duration_minutes ? ` (${at.duration_minutes} min)` : ""}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                            <label className="text-sm font-medium whitespace-nowrap">Operatory:</label>
-                            <Select value={selectedOperatoryId} onValueChange={setSelectedOperatoryId}>
-                                <SelectTrigger className="w-[260px]">
-                                    <SelectValue placeholder="All Operatories" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Operatories</SelectItem>
-                                    {relevantOperatories.map((op) => (
-                                        <SelectItem key={op.source_id} value={op.source_id}>
-                                            {op.name} ({op.source_id})
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                            <Checkbox
-                                checked={showExpired}
-                                onCheckedChange={(checked) => setShowExpired(checked === true)}
-                            />
-                            Show expired
-                        </label>
+                    {/* Provider scopes the whole page: it drives the availability fetch
+                        and the Scheduling Rules card below, so it stays here. The
+                        list-only filters live in the Work Windows card header. */}
+                    <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium whitespace-nowrap">Provider:</label>
+                        <Select value={selectedProviderId} onValueChange={setSelectedProviderId}>
+                            <SelectTrigger className="w-[280px]">
+                                <SelectValue placeholder="Select provider" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {providers.map((p) => (
+                                    <SelectItem key={p.source_id} value={p.source_id}>
+                                        {p.name || `${p.first_name} ${p.last_name}`}
+                                        {p.specialty ? ` (${p.specialty})` : ""}
+                                        {p.is_hidden ? " — hidden from voice agent" : ""}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                     </div>
 
                     {/* Provider Scheduling Rules */}
@@ -628,126 +752,131 @@ export default function ProvidersScheduling() {
                     </Card>
 
                     <Card>
-                        <CardHeader>
-                            <CardTitle>
-                                Work Windows for {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}
-                            </CardTitle>
-                            <CardDescription>
-                                {filteredAvailabilities.length} schedule{filteredAvailabilities.length !== 1 ? "s" : ""} found
-                                {selectedApptTypeId !== "all" ? " (filtered)" : ""}.
-                                {canManage
-                                    ? ' Click "Edit Linking" to associate appointment types, or create a custom Work Window.'
-                                    : " Read-only view."}
-                            </CardDescription>
+                        <CardHeader className="gap-4 space-y-0">
+                            <div className="space-y-1.5">
+                                <CardTitle>
+                                    Work Windows for {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}
+                                </CardTitle>
+                                <CardDescription>
+                                    {totalShown} schedule{totalShown !== 1 ? "s" : ""} shown
+                                    {hasNarrowingFilter ? " (filtered)" : ""}.
+                                    {canManage
+                                        ? ' Click "Edit Linking" to associate appointment types, or create a custom Work Window.'
+                                        : " Read-only view."}
+                                </CardDescription>
+                            </div>
+
+                            {/* Filters sit directly above the rows they act on. They used to
+                                live at the top of the page, separated from this list by the
+                                whole Scheduling Rules card. */}
+                            <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 p-3">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Filters
+                                </span>
+
+                                <Select value={selectedApptTypeId} onValueChange={setSelectedApptTypeId}>
+                                    <SelectTrigger className="h-9 w-[220px]" aria-label="Filter by appointment type">
+                                        <SelectValue placeholder="All Types" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Types</SelectItem>
+                                        {relevantApptTypes.map((at) => (
+                                            <SelectItem key={at.source_id} value={at.source_id}>
+                                                {at.name}
+                                                {at.duration_minutes ? ` (${at.duration_minutes} min)` : ""}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+
+                                <Select value={selectedOperatoryId} onValueChange={setSelectedOperatoryId}>
+                                    <SelectTrigger className="h-9 w-[220px]" aria-label="Filter by operatory">
+                                        <SelectValue placeholder="All Operatories" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Operatories</SelectItem>
+                                        {relevantOperatories.map((op) => (
+                                            <SelectItem key={op.source_id} value={op.source_id}>
+                                                {op.name} ({op.source_id})
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+
+                                <UpcomingRangePicker
+                                    value={dateRange}
+                                    onChange={setDateRange}
+                                    allowPast={includePast}
+                                />
+
+                                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                    <Checkbox
+                                        checked={includePast}
+                                        onCheckedChange={(checked) => handleIncludePastChange(checked === true)}
+                                    />
+                                    Include past dates
+                                </label>
+
+                                {hasNarrowingFilter && (
+                                    <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={resetFilters}>
+                                        Clear filters
+                                    </Button>
+                                )}
+                            </div>
                         </CardHeader>
                         <CardContent>
                             {loadingAvailabilities ? (
                                 <div className="flex justify-center py-6 text-muted-foreground">Loading work windows...</div>
-                            ) : filteredAvailabilities.length === 0 ? (
+                            ) : totalShown === 0 ? (
                                 <p className="text-center py-6 text-muted-foreground">
-                                    {selectedApptTypeId !== "all"
-                                        ? "No work windows match this appointment type."
+                                    {hasNarrowingFilter
+                                        ? "No work windows match the current filters."
                                         : canManage
                                             ? "No work windows found for this provider. Add one above."
                                             : "No work windows found for this provider."}
                                 </p>
                             ) : (
-                                <div className="space-y-3">
-                                    {filteredAvailabilities.map((av) => {
-                                        const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
-                                        const isPastDate = isAvailabilityExpired(av)
-                                        const isWarning = !hasTypes && !isPastDate
-
-                                        const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
-                                        const normalClass = isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
-
-                                        return (
-                                            <div
-                                                key={av.id}
-                                                className={`rounded-lg border p-4 transition-colors ${isPastDate
-                                                        ? "border-border/40 bg-muted/20 opacity-50"
-                                                        : isWarning
-                                                            ? "border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] dark:bg-[rgb(255,244,227)]/10"
-                                                            : "border-border bg-background/70 hover:border-border"
-                                                    }`}
-                                            >
-                                                <div className="flex items-start justify-between">
-                                                    <div className="space-y-1">
-                                                        <div className="flex items-center gap-2">
-                                                            <Clock className={`h-4 w-4 ${mutedClass}`} />
-                                                            <span className={`font-medium ${normalClass}`}>
-                                                                {av.begin_time} - {av.end_time}
-                                                            </span>
-                                                            {isPastDate && (
-                                                                <Badge variant="outline" className="text-xs text-muted-foreground/60 border-border/40">
-                                                                    Expired
-                                                                </Badge>
-                                                            )}
-                                                            {av.synced && (
-                                                                <Badge
-                                                                    variant={isWarning ? "outline" : "secondary"}
-                                                                    className={`text-xs ${isWarning
-                                                                            ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 bg-indigo-500/10"
-                                                                            : ""
-                                                                        }`}
-                                                                >
-                                                                    Synced from PMS
-                                                                </Badge>
-                                                            )}
-                                                            {!av.synced && (
-                                                                <Badge
-                                                                    variant="outline"
-                                                                    className={`text-xs ${isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300" : ""
-                                                                        }`}
-                                                                >
-                                                                    Manual
-                                                                </Badge>
-                                                            )}
-                                                        </div>
-                                                        {av.operatory_source_id && (
-                                                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
-                                                                <MapPin className="h-3 w-3" />
-                                                                Operatory: {operatoryNameBySourceId.get(av.operatory_source_id) ?? av.operatory_name ?? "Unknown"}
-                                                                <span className="opacity-60">({av.operatory_source_id})</span>
-                                                            </div>
-                                                        )}
-                                                        {av.days && av.days.length > 0 && (
-                                                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
-                                                                <Calendar className="h-3 w-3" />
-                                                                {av.days.join(", ")}
-                                                            </div>
-                                                        )}
-                                                        {av.specific_date && (
-                                                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
-                                                                <Calendar className="h-3 w-3" />
-                                                                Specific date: {av.specific_date}
-                                                            </div>
-                                                        )}
-                                                        <div className={`text-sm ${normalClass}`}>
-                                                            <span className={mutedClass}>Appointment Types: </span>
-                                                            {hasTypes ? (
-                                                                <span>{av.appointment_type_names?.join(", ")}</span>
-                                                            ) : (
-                                                                <span className="text-indigo-700 dark:text-indigo-300 font-medium">
-                                                                    None linked
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                    {canManage && (
-                                                        <Button
-                                                            variant="outline"
-                                                            size="sm"
-                                                            className={isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/10 shrink-0" : "shrink-0"}
-                                                            onClick={() => openEditDialog(av)}
-                                                        >
-                                                            Edit Linking
-                                                        </Button>
-                                                    )}
-                                                </div>
+                                <div className="space-y-6">
+                                    {recurringWindows.length > 0 && (
+                                        <div className="space-y-3">
+                                            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                                                <Repeat className="h-4 w-4 shrink-0" />
+                                                Recurring weekly windows
+                                                <span className="font-normal">— repeat every week, so they apply to any date range</span>
                                             </div>
-                                        )
-                                    })}
+                                            {recurringWindows.map(renderWindow)}
+                                        </div>
+                                    )}
+
+                                    {datedWindows.length > 0 && (
+                                        <div className="space-y-3">
+                                            {recurringWindows.length > 0 && (
+                                                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                                                    <Calendar className="h-4 w-4 shrink-0" />
+                                                    Dated windows
+                                                </div>
+                                            )}
+                                            {pagedWindows.map(renderWindow)}
+
+                                            {datedWindows.length > PAGE_SIZE && (
+                                                <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-sm text-muted-foreground">
+                                                    <span>
+                                                        Showing <span className="font-medium text-foreground">{from}–{to}</span> of{" "}
+                                                        <span className="font-medium text-foreground">{datedWindows.length}</span> dated windows
+                                                    </span>
+                                                    <div className="flex items-center gap-2">
+                                                        <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="gap-1">
+                                                            <ChevronLeft className="h-4 w-4" /> Previous
+                                                        </Button>
+                                                        <span className="tabular-nums">Page {page + 1} of {pageCount}</span>
+                                                        <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)} className="gap-1">
+                                                            Next <ChevronRight className="h-4 w-4" />
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </CardContent>

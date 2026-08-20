@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { CalendarSkeleton } from "@/components/ui/skeletons"
 import { getInitials } from "@/components/calls/format"
 import { listAvailabilities, updateAvailability } from "@/lib/tenant-api"
+import { addDays, matchesDate, toMinutes as toMin } from "@/lib/availability-filter"
 import type { CachedAvailability, CachedOperatory, CachedAppointmentType } from "@/types"
 
 // Clean pastel scheduler (Google/Syncfusion-style tiles). Working windows, NOT
@@ -20,11 +21,6 @@ const COL_W = 158
 const GUTTER_W = 58
 const PALETTE = ["#4F63D2", "#0E9AA7", "#C98A1B", "#C65A7A", "#8A5CD1", "#2E8B57", "#B4530A", "#5B6B8C", "#9333A8"]
 
-const toMin = (t?: string | null) => {
-    if (!t) return null
-    const [h, m] = t.split(":").map(Number)
-    return h * 60 + (m || 0)
-}
 const fromMin = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`
 const to12 = (t: string) => {
     const [h, m] = t.split(":").map(Number)
@@ -35,9 +31,6 @@ const durLabel = (mins: number) => {
     const h = Math.floor(mins / 60), m = mins % 60
     return `${h ? `${h}h ` : ""}${String(m).padStart(2, "0")}m`
 }
-const addDays = (isoDate: string, delta: number) => {
-    const d = new Date(`${isoDate}T12:00:00`); d.setDate(d.getDate() + delta); return d.toLocaleDateString("en-CA")
-}
 const mondayOf = (isoDate: string) => {
     const d = new Date(`${isoDate}T12:00:00`); const dow = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dow); return d.toLocaleDateString("en-CA")
 }
@@ -47,7 +40,6 @@ const nowMinutesIn = (tz: string) => {
     const p = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date())
     return (Number(p.find((x) => x.type === "hour")?.value ?? 0) % 24) * 60 + Number(p.find((x) => x.type === "minute")?.value ?? 0)
 }
-const weekdayName = (isoDate: string) => new Date(`${isoDate}T12:00:00`).toLocaleDateString("en-US", { weekday: "long" })
 const isLinked = (av: CachedAvailability) => !!(av.appointment_type_ids && av.appointment_type_ids.length)
 
 type Band = { sMin: number; eMin: number; members: CachedAvailability[] }
@@ -143,12 +135,6 @@ export default function SchedulerCalendar({
 
     const resourceKeyOf = (w: CachedAvailability) =>
         effectiveGroupBy === "operatory" ? (w.operatory_source_id || "") : (w.provider_source_id || "__none__")
-    const matchesDate = (w: CachedAvailability, d: string) => {
-        if (w.active === false) return false
-        if (toMin(w.begin_time) == null || toMin(w.end_time) == null) return false
-        if (w.specific_date) return w.specific_date === d
-        return (w.days || []).includes(weekdayName(d))
-    }
     const shown = (w: CachedAvailability, d: string) => matchesDate(w, d) && passesFilters(w)
 
     const resources = useMemo(() => {
