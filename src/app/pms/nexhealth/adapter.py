@@ -648,9 +648,28 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         )
         return raw.get("data", {})
 
+    # Availabilities are the slowest read we make: NexHealth pre-expands them
+    # into one row per date, and the provider-embedded fetch below pulls every
+    # provider's set in one go. Give it more headroom than the 30s client
+    # default, and no retries — a call that already blew a 60s budget will blow
+    # it again, and the default 3 retries would turn one slow load into four.
+    #
+    # NOTE: CloudFront caps the /api/* origin read at 30s (infra stack.py sets
+    # no read_timeout on that behavior), so until that is raised the browser
+    # still gives up first. This budget helps callers that reach the ALB
+    # directly, and stops the backend burning ~2 minutes on a hung upstream.
+    _AVAILABILITY_TIMEOUT_SECONDS = 60.0
+
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
         provider_id = kwargs.pop("provider_id", None)
-        ignore_past_dates = bool(kwargs.get("ignore_past_dates", False))
+        # Default ON. Past work windows are never useful to any caller — the
+        # setup UI shows upcoming schedules and the voice agent books forward —
+        # and NexHealth pre-expands availabilities into one row per date, so a
+        # practice's history is by far the largest part of this payload. This
+        # used to default to False, which left the embedded path below
+        # unfiltered while the direct call hardcoded True: the two sources
+        # disagreed, and the permissive one was the expensive one.
+        ignore_past_dates = bool(kwargs.get("ignore_past_dates", True))
 
         params = {
             **self._default_params(),
@@ -663,7 +682,14 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         if "include[]" not in params:
             params["include[]"] = ["appointment_types"]
 
-        raw = await handle_nexhealth_request(self._client, "GET", "/availabilities", params=params)
+        raw = await handle_nexhealth_request(
+            self._client,
+            "GET",
+            "/availabilities",
+            params=params,
+            timeout=self._AVAILABILITY_TIMEOUT_SECONDS,
+            max_retries=0,
+        )
         direct_items = raw.get("data", [])
         if not isinstance(direct_items, list):
             direct_items = []
@@ -699,7 +725,14 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
                 "per_page": per_page,
                 "include[]": ["availabilities", "appointment_types"],
             }
-            return await handle_nexhealth_request(self._client, "GET", "/providers", params=p)
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                "/providers",
+                params=p,
+                timeout=self._AVAILABILITY_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
 
         providers = await fetch_all_pages(fetch, per_page=50, max_items=200)
         today = date.today().isoformat()

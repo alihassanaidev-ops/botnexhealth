@@ -50,10 +50,9 @@ export default function ProvidersScheduling() {
     const [selectedProviderId, setSelectedProviderId] = useState<string>("")
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
-    // One control, not two: the range's start date *is* the expired filter.
-    // Unchecked, the range clamps to today so past-dated windows are unreachable;
-    // checked, the picker unlocks earlier dates.
-    const [includePast, setIncludePast] = useState(false)
+    // No past-date control: the backend drops past-dated windows before they
+    // reach us (adapter.list_availabilities defaults ignore_past_dates=True),
+    // so a toggle here would have nothing to reveal.
     const [dateRange, setDateRange] = useState<UpcomingRange>(() => allUpcomingRange())
     const [page, setPage] = useState(0)
     const [view, setView] = useState<"list" | "calendar">("list")
@@ -368,26 +367,14 @@ export default function ProvidersScheduling() {
         setPage(0)
     }, [selectedProviderId, selectedApptTypeId, selectedOperatoryId, dateRange])
 
-    // `includePast` widens the result set rather than narrowing it, so it doesn't
-    // count as a filter for the "(filtered)" label or the Clear button.
     const hasNarrowingFilter =
         selectedApptTypeId !== "all" ||
         selectedOperatoryId !== "all" ||
         dateRange.endDate !== null
 
-    // The checkbox *is* the lower bound: checking it drops the bound entirely so
-    // expired windows appear immediately (the old "Show expired" behaviour),
-    // unchecking clamps back to today. Without this the box would only unlock the
-    // picker and appear to do nothing on its own.
-    const handleIncludePastChange = (checked: boolean) => {
-        setIncludePast(checked)
-        setDateRange((prev) => ({ ...prev, startDate: checked ? null : today }))
-    }
-
     const resetFilters = () => {
         setSelectedApptTypeId("all")
         setSelectedOperatoryId("all")
-        setIncludePast(false)
         setDateRange(allUpcomingRange())
     }
 
@@ -803,19 +790,7 @@ export default function ProvidersScheduling() {
                                     </SelectContent>
                                 </Select>
 
-                                <UpcomingRangePicker
-                                    value={dateRange}
-                                    onChange={setDateRange}
-                                    allowPast={includePast}
-                                />
-
-                                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                                    <Checkbox
-                                        checked={includePast}
-                                        onCheckedChange={(checked) => handleIncludePastChange(checked === true)}
-                                    />
-                                    Include past dates
-                                </label>
+                                <UpcomingRangePicker value={dateRange} onChange={setDateRange} />
 
                                 {hasNarrowingFilter && (
                                     <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={resetFilters}>

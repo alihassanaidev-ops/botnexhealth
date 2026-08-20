@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -150,6 +151,123 @@ async def test_list_availabilities_uses_provider_embedded_windows_when_endpoint_
     assert calls[0][0] == "/availabilities"
     assert calls[0][1]["provider_id"] == "123"
     assert calls[1][0] == "/providers"
+
+
+@pytest.mark.asyncio
+async def test_list_availabilities_drops_past_dated_embedded_windows(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Past work windows must never reach the caller.
+
+    NexHealth pre-expands availabilities into one row per date, so a practice's
+    history dominates this payload. `ignore_past_dates` used to default to
+    False, which left this embedded path unfiltered while the direct
+    /availabilities call hardcoded True — the two sources disagreed and the
+    permissive one was the expensive one.
+    """
+    adapter = _make_adapter()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+
+    def window(window_id: int, specific_date: str | None) -> dict:
+        return {
+            "id": window_id,
+            "provider_id": 123,
+            "operatory_id": 789,
+            "begin_time": "08:00",
+            "end_time": "17:00",
+            "days": ["Monday"],
+            "specific_date": specific_date,
+            "active": True,
+        }
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        if path == "/providers":
+            return {
+                "count": 1,
+                "data": [
+                    {
+                        "id": 123,
+                        "first_name": "Ada",
+                        "last_name": "Lovelace",
+                        "availabilities": [
+                            window(1, yesterday),
+                            window(2, tomorrow),
+                            window(3, None),  # recurring rule — no date to expire
+                        ],
+                    }
+                ],
+            }
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.list_availabilities(provider_id="nh-123")
+
+    assert sorted(item["id"] for item in result) == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_list_availabilities_past_dates_can_still_be_requested_explicitly(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The default flipped, but an explicit caller override still wins."""
+    adapter = _make_adapter()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        if path == "/providers":
+            return {
+                "count": 1,
+                "data": [
+                    {
+                        "id": 123,
+                        "availabilities": [
+                            {
+                                "id": 1,
+                                "provider_id": 123,
+                                "begin_time": "08:00",
+                                "end_time": "17:00",
+                                "specific_date": yesterday,
+                                "active": True,
+                            }
+                        ],
+                    }
+                ],
+            }
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.list_availabilities(provider_id="nh-123", ignore_past_dates=False)
+
+    assert [item["id"] for item in result] == [1]
+
+
+@pytest.mark.asyncio
+async def test_list_availabilities_uses_a_longer_budget_and_no_retries(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """This is the slowest read we make, and retrying a timeout multiplies it.
+
+    httpx.TimeoutException subclasses httpx.RequestError, which the HTTP client
+    retries — so the default 3 retries turn one slow call into four.
+    """
+    adapter = _make_adapter()
+    seen: list[dict] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
+        seen.append({"path": path, **kwargs})
+        return {"data": []}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    await adapter.list_availabilities(provider_id="nh-123")
+
+    assert seen, "expected at least one upstream call"
+    for call in seen:
+        assert call["timeout"] == 60.0, call
+        assert call["max_retries"] == 0, call
 
 
 @pytest.mark.asyncio

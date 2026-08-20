@@ -30,24 +30,15 @@ const PRESETS = [7, 30, 90] as const
 interface UpcomingRangePickerProps {
     value: UpcomingRange
     onChange: (value: UpcomingRange) => void
-    /** When false, dates before today are unselectable and the range starts today. */
-    allowPast?: boolean
     className?: string
 }
 
-export function UpcomingRangePicker({
-    value,
-    onChange,
-    allowPast = false,
-    className,
-}: UpcomingRangePickerProps) {
+export function UpcomingRangePicker({ value, onChange, className }: UpcomingRangePickerProps) {
     const [open, setOpen] = useState(false)
     const [draft, setDraft] = useState<DateRange | undefined>(undefined)
 
     const today = todayISO()
-    // startDate is null when "Include past dates" is on — there is no lower
-    // bound, so anchor the calendar on today instead.
-    const start = value.startDate ? parseISO(value.startDate) : parseISO(today)
+    const start = parseISO(value.startDate)
     const end = value.endDate ? parseISO(value.endDate) : undefined
 
     // Which preset (if any) the current value corresponds to — drives both the
@@ -62,18 +53,14 @@ export function UpcomingRangePicker({
         ? "All upcoming"
         : activePreset
             ? `Next ${activePreset} days`
-            : value.startDate === null
-                ? end
-                    ? `Through ${format(end, "MMM d, yyyy")}`
-                    : "All dates"
-                : end
-                    ? `${format(start, "MMM d")} – ${format(end, "MMM d, yyyy")}`
-                    : `From ${format(start, "MMM d, yyyy")}`
+            : end
+                ? `${format(start, "MMM d")} – ${format(end, "MMM d, yyyy")}`
+                : `From ${format(start, "MMM d, yyyy")}`
 
     // Seed the calendar draft when the popover opens rather than in an effect,
     // which would fire on every value change including the ones we just made.
     function handleOpenChange(next: boolean) {
-        if (next) setDraft(value.startDate ? { from: start, to: end } : undefined)
+        if (next) setDraft({ from: start, to: end })
         setOpen(next)
     }
 
@@ -133,7 +120,7 @@ export function UpcomingRangePicker({
                     selected={draft}
                     onSelect={handleSelect}
                     defaultMonth={start}
-                    disabled={allowPast ? undefined : { before: parseISO(today) }}
+                    disabled={{ before: parseISO(today) }}
                 />
             </PopoverContent>
         </Popover>

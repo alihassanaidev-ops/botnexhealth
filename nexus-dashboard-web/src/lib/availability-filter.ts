@@ -12,16 +12,16 @@
 import type { CachedAvailability } from "@/types"
 
 /**
- * Inclusive date window for the list filter. Either bound may be `null`,
- * meaning "unbounded in that direction".
+ * Inclusive date window for the list filter. `endDate: null` means open-ended
+ * forwards, which is the default — the list keeps showing every upcoming
+ * window until the operator narrows it deliberately.
  *
- * The default is `{ startDate: today, endDate: null }` — open-ended forwards,
- * so the list keeps showing every upcoming window until the operator narrows it
- * deliberately, and clamped at today so expired windows stay out. Clearing
- * `startDate` is what "Include past dates" does.
+ * There is no unbounded-past equivalent: the backend drops past-dated windows
+ * before they reach the browser, so nothing here can look further back than
+ * `startDate`.
  */
 export interface UpcomingRange {
-    startDate: string | null
+    startDate: string
     endDate: string | null
 }
 
@@ -45,11 +45,6 @@ export function weekdayName(isoDate: string): string {
 /** The default range: open-ended from today. Preserves pre-filter behaviour. */
 export function allUpcomingRange(): UpcomingRange {
     return { startDate: todayISO(), endDate: null }
-}
-
-/** Is the range unbounded in both directions? Only reachable via "Include past dates". */
-export function isUnbounded(range: UpcomingRange): boolean {
-    return range.startDate === null && range.endDate === null
 }
 
 /** "Next N days" from today, inclusive — N=7 spans today plus the next 6. */
@@ -82,7 +77,7 @@ export function isExpired(av: CachedAvailability, today: string = todayISO()): b
 export function matchesRange(av: CachedAvailability, range: UpcomingRange): boolean {
     if (isRecurring(av)) return true
     const date = av.specific_date as string
-    if (range.startDate && date < range.startDate) return false
+    if (date < range.startDate) return false
     if (range.endDate && date > range.endDate) return false
     return true
 }

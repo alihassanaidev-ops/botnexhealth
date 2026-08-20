@@ -18,7 +18,6 @@ import {
     isRecurring,
     matchesDate,
     matchesRange,
-    isUnbounded,
     nextNDaysRange,
     todayISO,
     toMinutes,
@@ -130,15 +129,6 @@ describe("matchesRange", () => {
         expect(matchesRange(recurring, { startDate: "2020-01-01", endDate: "2020-01-02" })).toBe(true)
     })
 
-    it("treats a null startDate as unbounded into the past — what \"Include past dates\" sets", () => {
-        const unbounded = { startDate: null, endDate: null }
-        expect(matchesRange(av({ specific_date: "1999-01-01" }), unbounded)).toBe(true)
-        expect(matchesRange(av({ specific_date: "2099-01-01" }), unbounded)).toBe(true)
-        // Still respects an upper bound when one is set.
-        expect(matchesRange(av({ specific_date: "2099-01-01" }), { startDate: null, endDate: "2026-08-20" })).toBe(false)
-        expect(matchesRange(av({ specific_date: "1999-01-01" }), { startDate: null, endDate: "2026-08-20" })).toBe(true)
-    })
-
     it("treats a null endDate as open-ended", () => {
         expect(matchesRange(av({ specific_date: "2099-12-31" }), { startDate: "2026-08-10", endDate: null })).toBe(true)
         expect(matchesRange(av({ specific_date: "2026-08-09" }), { startDate: "2026-08-10", endDate: null })).toBe(false)
@@ -200,13 +190,5 @@ describe("byDateThenTime", () => {
             av({ id: "a", specific_date: "2026-08-20", begin_time: "09:00" }),
         ]
         expect([...rows].sort(byDateThenTime).map((r) => r.id)).toEqual(["a", "b", "c"])
-    })
-})
-
-describe("isUnbounded", () => {
-    it("is true only when both bounds are cleared", () => {
-        expect(isUnbounded({ startDate: null, endDate: null })).toBe(true)
-        expect(isUnbounded(allUpcomingRange())).toBe(false)
-        expect(isUnbounded({ startDate: null, endDate: "2026-08-20" })).toBe(false)
     })
 })

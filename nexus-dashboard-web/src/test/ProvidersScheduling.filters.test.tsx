@@ -10,7 +10,7 @@
  * land in, and that paging doesn't lose the recurring rules.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
@@ -134,6 +134,16 @@ function pagerText() {
     return screen.getByText(/^Showing/).textContent?.replace(/\s+/g, " ").trim() ?? ""
 }
 
+// Radix's Popover relies on pointer-capture and scrollIntoView, neither of
+// which jsdom implements. Stubbing them lets the date-range picker be driven
+// like a real user drives it, instead of reaching past the UI.
+beforeAll(() => {
+    Element.prototype.hasPointerCapture = vi.fn(() => false)
+    Element.prototype.setPointerCapture = vi.fn()
+    Element.prototype.releasePointerCapture = vi.fn()
+    Element.prototype.scrollIntoView = vi.fn()
+})
+
 beforeEach(() => {
     localStorage.clear()
     ;(api.get as ReturnType<typeof vi.fn>).mockReset()
@@ -224,9 +234,12 @@ describe("Recurring weekly windows", () => {
     })
 })
 
-describe("Include past dates", () => {
-    it("hides expired windows by default and reveals them when checked", async () => {
-        const user = userEvent.setup()
+describe("Past-dated windows", () => {
+    it("are filtered out client-side even if the backend sends them", async () => {
+        // The backend drops these before they reach us
+        // (adapter.list_availabilities defaults ignore_past_dates=True), so
+        // there is no UI control to reveal them. If one arrives anyway, the
+        // today-clamped range must still keep it out of the list.
         mountWith([
             makeAvailability({ source_id: "past-1", specific_date: addDays(todayISO(), -5) }),
             makeAvailability({ source_id: "past-2", specific_date: addDays(todayISO(), -1) }),
@@ -234,50 +247,69 @@ describe("Include past dates", () => {
         ])
 
         await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
-        // Only the future window survives the default today-clamped range.
         await waitFor(() => expect(rowCount()).toBe(1))
         expect(screen.queryByText("Expired")).not.toBeInTheDocument()
+    })
 
-        await user.click(screen.getByRole("checkbox", { name: /include past dates/i }))
+    it("offers no control to bring them back", async () => {
+        mountWith(datedWindows(3))
 
         await waitFor(() => expect(rowCount()).toBe(3))
-        expect(screen.getAllByText("Expired")).toHaveLength(2)
+        expect(screen.queryByRole("checkbox", { name: /past/i })).not.toBeInTheDocument()
+        expect(screen.queryByText(/include past/i)).not.toBeInTheDocument()
+        expect(screen.queryByText(/show expired/i)).not.toBeInTheDocument()
     })
+})
 
-    it("re-clamps to today when unchecked", async () => {
+describe("Date range filter", () => {
+    it("narrows the list to the chosen window and resets to page 1", async () => {
         const user = userEvent.setup()
-        mountWith([
-            makeAvailability({ source_id: "past-1", specific_date: addDays(todayISO(), -5) }),
-            makeAvailability({ source_id: "future-1", specific_date: addDays(todayISO(), 1) }),
-        ])
-
-        await waitFor(() => expect(rowCount()).toBe(1))
-
-        const checkbox = screen.getByRole("checkbox", { name: /include past dates/i })
-        await user.click(checkbox)
-        await waitFor(() => expect(rowCount()).toBe(2))
-
-        await user.click(checkbox)
-        await waitFor(() => expect(rowCount()).toBe(1))
-    })
-
-    it("resets to page 1 when the filter changes, so the operator is never stranded", async () => {
-        const user = userEvent.setup()
-        // 60 future + 1 past: paging to 3 then widening must not leave page 3 empty.
-        mountWith([
-            ...datedWindows(60),
-            makeAvailability({ source_id: "past-1", specific_date: addDays(todayISO(), -5) }),
-        ])
+        // 40 windows one per day: a "Next 7 days" range must keep exactly 7.
+        mountWith(datedWindows(40))
 
         await waitFor(() => expect(rowCount()).toBe(25))
-        await user.click(screen.getByRole("button", { name: /next/i }))
-        await user.click(screen.getByRole("button", { name: /next/i }))
-        expect(screen.getByText("Page 3 of 3")).toBeInTheDocument()
 
-        await user.click(screen.getByRole("checkbox", { name: /include past dates/i }))
+        // Page to the end first, so the reset-to-page-1 behaviour is observable.
+        await user.click(screen.getByRole("button", { name: /next/i }))
+        expect(screen.getByText("Page 2 of 2")).toBeInTheDocument()
 
-        await waitFor(() => expect(screen.getByText("Page 1 of 3")).toBeInTheDocument())
-        expect(rowCount()).toBe(25)
+        await user.click(screen.getByRole("button", { name: /filter by date range/i }))
+        await user.click(await screen.findByRole("button", { name: "Next 7 days" }))
+
+        // datedWindows starts at tomorrow, so a 7-day window from today holds 6.
+        await waitFor(() => expect(rowCount()).toBe(6))
+        // Narrowed below one page, so the pager is gone rather than stuck on page 2.
+        expect(screen.queryByText(/^Showing/)).not.toBeInTheDocument()
+        expect(screen.getByText(/\(filtered\)/)).toBeInTheDocument()
+    })
+
+    it("restores the full list when the range filter is cleared", async () => {
+        const user = userEvent.setup()
+        mountWith(datedWindows(40))
+
+        await waitFor(() => expect(rowCount()).toBe(25))
+
+        await user.click(screen.getByRole("button", { name: /filter by date range/i }))
+        await user.click(await screen.findByRole("button", { name: "Next 7 days" }))
+        await waitFor(() => expect(rowCount()).toBe(6))
+
+        await user.click(screen.getByRole("button", { name: /clear filters/i }))
+        await waitFor(() => expect(rowCount()).toBe(25))
+        expect(screen.getByText("Page 1 of 2")).toBeInTheDocument()
+    })
+
+    it("keeps recurring rules visible regardless of the range", async () => {
+        const user = userEvent.setup()
+        mountWith([...recurringWindows(2), ...datedWindows(40)])
+
+        await waitFor(() => expect(rowCount()).toBe(27))
+
+        await user.click(screen.getByRole("button", { name: /filter by date range/i }))
+        await user.click(await screen.findByRole("button", { name: "Next 7 days" }))
+
+        // 2 recurring + 6 dated: recurring rules repeat forever, so no range excludes them.
+        await waitFor(() => expect(rowCount()).toBe(8))
+        expect(screen.getByText(/Recurring weekly windows/i)).toBeInTheDocument()
     })
 })
 
@@ -311,7 +343,7 @@ describe("Filter placement", () => {
         expect(card).not.toBeNull()
         expect(within(card as HTMLElement).getByText("Filters")).toBeInTheDocument()
         expect(
-            within(card as HTMLElement).getByRole("checkbox", { name: /include past dates/i })
+            within(card as HTMLElement).getByRole("button", { name: /filter by date range/i })
         ).toBeInTheDocument()
     })
 })

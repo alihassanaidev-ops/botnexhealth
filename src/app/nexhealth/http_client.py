@@ -83,6 +83,8 @@ class NexHealthHTTPClient:
         token: str,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
     ) -> dict[str, Any]:
         """
         Make HTTP request with automatic retry for rate limits.
@@ -93,6 +95,14 @@ class NexHealthHTTPClient:
             token: Bearer token
             params: Query parameters
             json: JSON body
+            timeout: Per-request timeout override, seconds. Defaults to the
+                client-wide timeout. Use for a small number of known-slow
+                endpoints rather than raising the default, which would also
+                delay failure detection on the latency-sensitive voice paths.
+            max_retries: Per-request retry override. Pass 0 on a long read: a
+                call that already exceeded a generous timeout will almost
+                certainly do so again, and the default 3 retries turn one slow
+                request into several times the wait.
 
         Returns:
             Response payload
@@ -105,8 +115,9 @@ class NexHealthHTTPClient:
             raise RuntimeError("HTTP client not initialized. Use as context manager.")
 
         headers = self._build_headers(token)
+        retries = self._max_retries if max_retries is None else max_retries
 
-        for attempt in range(self._max_retries + 1):
+        for attempt in range(retries + 1):
             # Pre-flight: ask the cluster-wide limiter for a slot before we
             # spend a real network round-trip. The limiter fails open on
             # Redis errors, so this can't break us if the cache is down.
@@ -120,20 +131,21 @@ class NexHealthHTTPClient:
                     headers=headers,
                     params=params,
                     json=json,
+                    **({} if timeout is None else {"timeout": timeout}),
                 )
 
                 # Handle rate limiting (429)
                 if response.status_code == 429:
                     retry_after = int(response.headers.get("Retry-After", self._retry_delay))
-                    if attempt < self._max_retries:
+                    if attempt < retries:
                         logger.warning(
-                            f"Rate limit hit (attempt {attempt + 1}/{self._max_retries + 1}), "
+                            f"Rate limit hit (attempt {attempt + 1}/{retries + 1}), "
                             f"retrying after {retry_after}s"
                         )
                         await asyncio.sleep(retry_after)
                         continue
                     raise NexHealthRateLimitError(
-                        f"Rate limit exceeded after {self._max_retries + 1} attempts",
+                        f"Rate limit exceeded after {retries + 1} attempts",
                         retry_after=retry_after,
                     )
 
@@ -167,7 +179,7 @@ class NexHealthHTTPClient:
                     "Upstream request error: type=%s method=%s path=%s",
                     type(e).__name__, method, path,
                 )
-                if attempt < self._max_retries:
+                if attempt < retries:
                     await asyncio.sleep(self._retry_delay * (attempt + 1))
                     continue
                 raise
