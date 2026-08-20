@@ -57,9 +57,10 @@ export default function ProvidersScheduling() {
     // so a toggle here would have nothing to reveal.
     const [dateRange, setDateRange] = useState<UpcomingRange>(() => allUpcomingRange())
     // Notes and lunch breaks come back in the same collection as real working
-    // windows. They aren't bookable and can't meaningfully be linked to an
-    // appointment type, so they're out of the way unless asked for.
-    const [showNonBookable, setShowNonBookable] = useState(false)
+    // windows. Shown by default *with* their label, because seeing "Lunch" on a
+    // row is what tells an operator it isn't bookable time — hiding them
+    // answered the clutter but not the question they were asking of the list.
+    const [showNonBookable, setShowNonBookable] = useState(true)
     const [page, setPage] = useState(0)
     const [view, setView] = useState<"list" | "calendar">("list")
     // Calendar view is still under test — expose it on staging/local only and keep
@@ -383,7 +384,7 @@ export default function ProvidersScheduling() {
     const resetFilters = () => {
         setSelectedApptTypeId("all")
         setSelectedOperatoryId("all")
-        setShowNonBookable(false)
+        setShowNonBookable(true)
         setDateRange(allUpcomingRange())
     }
 
@@ -820,7 +821,7 @@ export default function ProvidersScheduling() {
                                         checked={showNonBookable}
                                         onCheckedChange={(checked) => setShowNonBookable(checked === true)}
                                     />
-                                    Show notes &amp; breaks
+                                    Show notes &amp; breaks (Lunch, NOTE)
                                 </label>
 
                                 {hasNarrowingFilter && (

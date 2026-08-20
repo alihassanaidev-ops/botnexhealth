@@ -295,7 +295,7 @@ describe("Inactive windows", () => {
 })
 
 describe("Notes and breaks (v3 labels)", () => {
-    it("hides non-bookable rows by default and reveals them on request", async () => {
+    it("shows non-bookable rows with their label, and can hide them", async () => {
         // NexHealth returns Lunch blocks and synced OpenDental notes in the same
         // collection as real working hours. For one clinic that was 659 of 2,045
         // rows, which buries the schedule the operator is actually linking.
@@ -313,14 +313,15 @@ describe("Notes and breaks (v3 labels)", () => {
         ])
 
         await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
-        await waitFor(() => expect(rowCount()).toBe(1))
-        expect(screen.queryByText("Lunch")).not.toBeInTheDocument()
-
-        await user.click(screen.getByRole("checkbox", { name: /show notes & breaks/i }))
-
+        // Shown by default, each carrying its label — the label is the whole point.
         await waitFor(() => expect(rowCount()).toBe(3))
         expect(screen.getByText("Lunch")).toBeInTheDocument()
         expect(screen.getByText("NOTE")).toBeInTheDocument()
+
+        await user.click(screen.getByRole("checkbox", { name: /show notes & breaks/i }))
+
+        await waitFor(() => expect(rowCount()).toBe(1))
+        expect(screen.queryByText("Lunch")).not.toBeInTheDocument()
     })
 
     it("does not count notes or breaks as unlinked appointment types", async () => {
