@@ -52,7 +52,7 @@ def _make_request(
     return request
 
 
-def _make_session(location=None, contact=None):
+def _make_session(location=None, contact=None, appointment_reason=None):
     session = AsyncMock()
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
@@ -61,9 +61,14 @@ def _make_session(location=None, contact=None):
     loc_result.scalar_one_or_none.return_value = location
     contact_result = MagicMock()
     contact_result.scalar_one_or_none.return_value = contact
+    reason_result = MagicMock()
+    reason_result.scalar_one_or_none.return_value = appointment_reason
 
-    # First execute → location lookup; second → contact lookup
-    session.execute = AsyncMock(side_effect=[loc_result, contact_result])
+    # First execute → location lookup; second → contact lookup; third → the
+    # appointment-type label that feeds trigger metadata (task list item 1.2).
+    session.execute = AsyncMock(
+        side_effect=[loc_result, contact_result, reason_result]
+    )
     return session
 
 

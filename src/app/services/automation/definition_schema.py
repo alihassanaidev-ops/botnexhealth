@@ -4,7 +4,12 @@ Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, appointment_state_changed, recall_scan, manual,
             bulk_import, callback_requested, patient_status_changed
   Nodes:    wait, drip, send_sms, send_voice, send_email, update_patient_status,
-            update_gotracker_appointment, json_mapper, llm, condition, exit
+            update_appointment, update_gotracker_appointment, json_mapper, llm,
+            condition, exit
+
+``update_appointment`` is the PMS-neutral appointment write-back and should be
+preferred; ``update_gotracker_appointment`` only runs on GoTracker locations and
+is retained for already-published definitions.
 """
 
 from __future__ import annotations
@@ -385,6 +390,53 @@ class UpdateGoTrackerAppointmentNode(BaseModel):
         return self
 
 
+class UpdateAppointmentNode(BaseModel):
+    """PMS-neutral appointment write-back.
+
+    Routes through the ``PMSAdapter`` contract so one campaign definition writes
+    back on any PMS. Prefer this over :class:`UpdateGoTrackerAppointmentNode`,
+    which only runs on GoTracker locations and is kept for already-published
+    definitions.
+
+    ``reschedule`` requires ``start_time``. Note that reschedule semantics differ
+    by PMS — GoTracker updates in place, NexHealth books the new slot and cancels
+    the old one, which yields a new appointment id.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["update_appointment"] = "update_appointment"
+    next_node_id: str
+    operation: Literal["confirm", "cancel", "reschedule"]
+    start_time: str | None = None
+    end_time: str | None = None
+    duration_min: int | None = Field(default=None, ge=1)
+    provider_id: str | None = None
+    operatory_id: str | None = None
+    reason: str | None = None
+
+    @field_validator(
+        "start_time",
+        "end_time",
+        "provider_id",
+        "operatory_id",
+        "reason",
+    )
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def require_reschedule_target(self) -> "UpdateAppointmentNode":
+        if self.operation == "reschedule" and self.start_time is None:
+            raise ValueError("update_appointment reschedule requires start_time")
+        return self
+
+
 class JsonMapping(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -479,6 +531,7 @@ WorkflowNode = Annotated[
         SendEmailNode,
         UpdatePatientStatusNode,
         UpdateGoTrackerAppointmentNode,
+        UpdateAppointmentNode,
         JsonMapperNode,
         LlmNode,
         ConditionNode,

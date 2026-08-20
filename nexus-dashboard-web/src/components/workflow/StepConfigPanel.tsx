@@ -56,6 +56,7 @@ import type {
     SendSmsNode,
     SendVoiceNode,
     TriggerType,
+    UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
     WaitNode,
@@ -388,6 +389,9 @@ function NodeForm({
                 {node.type === "drip" && <DripFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "update_patient_status" && (
                     <UpdatePatientStatusFields node={node} onChange={onNodeChange} readOnly={readOnly} />
+                )}
+                {node.type === "update_appointment" && (
+                    <UpdateAppointmentFields node={node} onChange={onNodeChange} readOnly={readOnly} />
                 )}
                 {node.type === "update_gotracker_appointment" && (
                     <UpdateGoTrackerAppointmentFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
@@ -1008,6 +1012,55 @@ function UpdatePatientStatusFields({
                     onChange={(e) => onChange({ ...node, note_template: e.target.value })}
                 />
             </Field>
+        </>
+    )
+}
+
+function UpdateAppointmentFields({
+    node,
+    onChange,
+    readOnly,
+}: {
+    node: UpdateAppointmentNode
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    const update = (patch: Partial<UpdateAppointmentNode>) => onChange({ ...node, ...patch })
+    return (
+        <>
+            <Field label="Operation">
+                <Select
+                    value={node.operation}
+                    disabled={readOnly}
+                    onValueChange={(value) =>
+                        update({ operation: value as UpdateAppointmentNode["operation"] })
+                    }
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="confirm">Confirm</SelectItem>
+                        <SelectItem value="cancel">Cancel</SelectItem>
+                        <SelectItem value="reschedule">Reschedule</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+
+            {node.operation === "reschedule" && (
+                <Field label="New start time">
+                    <Input
+                        value={node.start_time ?? ""}
+                        disabled={readOnly}
+                        placeholder="e.g. {{reschedule_start_time}}"
+                        onChange={(e) => update({ start_time: e.target.value || null })}
+                    />
+                </Field>
+            )}
+
+            <p className="text-xs text-muted-foreground">
+                Writes back through the clinic's PMS, so one workflow works on both
+                NexHealth and GoTracker. Rescheduling on NexHealth books the new slot
+                and cancels the old one, which produces a new appointment id.
+            </p>
         </>
     )
 }

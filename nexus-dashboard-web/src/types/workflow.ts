@@ -112,6 +112,7 @@ export type NodeType =
     | "send_voice"
     | "send_email"
     | "update_patient_status"
+    | "update_appointment"
     | "update_gotracker_appointment"
     | "json_mapper"
     | "llm"
@@ -169,6 +170,22 @@ export interface UpdatePatientStatusNode {
     status: string
     next_node_id: string
     note_template?: string | null
+}
+/**
+ * PMS-neutral appointment write-back. Prefer this over
+ * UpdateGoTrackerAppointmentNode, which only runs on GoTracker locations.
+ */
+export interface UpdateAppointmentNode {
+    type: "update_appointment"
+    id: string
+    next_node_id: string
+    operation: "confirm" | "cancel" | "reschedule"
+    start_time?: string | null
+    end_time?: string | null
+    duration_min?: number | null
+    provider_id?: string | null
+    operatory_id?: string | null
+    reason?: string | null
 }
 export interface UpdateGoTrackerAppointmentNode {
     type: "update_gotracker_appointment"
@@ -239,6 +256,7 @@ export type WorkflowNode =
     | SendVoiceNode
     | SendEmailNode
     | UpdatePatientStatusNode
+    | UpdateAppointmentNode
     | UpdateGoTrackerAppointmentNode
     | JsonMapperNode
     | LlmNode
@@ -280,7 +298,7 @@ export interface WorkflowDefinition {
 }
 
 /** Node types that carry exactly one forward pointer (`next_node_id`). */
-export type LinearNode = WaitNode | DripNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode | UpdateGoTrackerAppointmentNode | JsonMapperNode | LlmNode
+export type LinearNode = WaitNode | DripNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode | UpdateAppointmentNode | UpdateGoTrackerAppointmentNode | JsonMapperNode | LlmNode
 /** Node types that place a message/call on a channel. */
 export type SendNode = SendSmsNode | SendVoiceNode | SendEmailNode
 

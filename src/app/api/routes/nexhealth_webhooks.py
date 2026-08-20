@@ -10,11 +10,13 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.config import settings
 from src.app.database import get_system_db_session
 from src.app.models.contact import Contact
 from src.app.models.institution import Institution
+from src.app.models.institution_appointment_type import InstitutionAppointmentType
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.dead_letter import capture_dead_letter
 from src.app.services.automation.nexhealth_shadow_webhook_service import (
@@ -123,6 +125,87 @@ def _appointment_is_cancelled(event: str, appt: dict) -> bool:
     if event in _CANCEL_EVENTS:
         return True
     return bool(appt.get("cancelled", False) or appt.get("canceled", False))
+
+
+async def _resolve_appointment_reason(
+    session: AsyncSession,
+    *,
+    institution_id: str,
+    location_id: str,
+    appointment_type_id: str | None,
+) -> str | None:
+    """Map a NexHealth ``appointment_type_id`` onto the reason label.
+
+    Campaign entry conditions match on a human reason label, but the webhook only
+    carries the type id. The cached ``institution_appointment_types`` rows already
+    hold the mapping, so this stays a local read.
+    """
+    if not appointment_type_id:
+        return None
+
+    row = await session.execute(
+        select(InstitutionAppointmentType.name).where(
+            InstitutionAppointmentType.institution_id == institution_id,
+            InstitutionAppointmentType.location_id == location_id,
+            InstitutionAppointmentType.source == "nexhealth",
+            InstitutionAppointmentType.source_id == appointment_type_id,
+        )
+    )
+    name = row.scalar_one_or_none()
+    if name is None:
+        # Explicit absence beats a silent exit — see task list item 1.2.
+        logger.info(
+            "nexhealth_appointment_webhook: unresolved appointment_type_id=%s "
+            "institution=%s location=%s — appointment_reason omitted",
+            appointment_type_id,
+            institution_id,
+            location_id,
+        )
+    return name
+
+
+def _appointment_trigger_metadata(
+    *,
+    event: str,
+    appt: dict[str, Any],
+    appointment_id: str,
+    nexhealth_location_id: str,
+    nexhealth_patient_id: str | None,
+    provider_id: str | None,
+    appointment_type_id: str | None,
+    appointment_reason: str | None,
+    start_time: str | None,
+    cancelled: bool,
+) -> dict[str, Any]:
+    """Normalized trigger metadata, field-compatible with the GoTracker path.
+
+    The shipped templates branch on ``appointment_status`` and
+    ``appointment_reason``. GoTracker supplies both (``gotracker_webhooks.py``);
+    NexHealth used to supply neither, so every run exited as ineligible before the
+    first step. Field names deliberately match the GoTracker emitter so one
+    template definition evaluates identically on both paths.
+
+    NexHealth has no numeric status id — an appointment is live or cancelled — so
+    it maps onto the same two labels ``_gotracker_status_label`` produces for the
+    states the templates actually read.
+    """
+    confirmed = appt.get("confirmed")
+    return {
+        "event": event,
+        "pms_source": "nexhealth",
+        # Identifiers
+        "nexhealth_appointment_id": appointment_id,
+        "nexhealth_location_id": nexhealth_location_id,
+        "nexhealth_patient_id": nexhealth_patient_id,
+        "provider_id": provider_id,
+        "appointment_type_id": appointment_type_id,
+        # Normalized fields the templates branch on
+        "appointment_status": "cancelled" if cancelled else "booked",
+        "appointment_reason": appointment_reason,
+        "appointment_reasons": [appointment_reason] if appointment_reason else [],
+        "appointment_confirmed": bool(confirmed) if confirmed is not None else None,
+        "appointment_datetime": start_time,
+    }
 
 
 def _appointment_dedup_key(
@@ -966,6 +1049,18 @@ async def _process_appointment_event(
             if contact:
                 contact_id = str(contact.id)
 
+        # Trigger metadata parity (task list item 1.2). Campaign entry conditions
+        # read a reason *label*, but the webhook only carries the type id, so
+        # resolve it from the cached appointment types we already sync. A live
+        # list_appointment_types call would add latency and a new failure mode to
+        # a request NexHealth does not retry.
+        appointment_reason = await _resolve_appointment_reason(
+            session,
+            institution_id=institution_id,
+            location_id=location_id,
+            appointment_type_id=appointment_type_id,
+        )
+
     # ── Event-ledger claim + projection upsert (Plan 09 D-1/D-2/D-4) ──
     # dedup_key is the event's business identity, not the provider delivery id:
     # v2/v3 overlap deliveries for the same PMS appointment change collide.
@@ -1088,11 +1183,18 @@ async def _process_appointment_event(
         appointment_at_iso=start_time,
         contact_id=contact_id,
         location_id=location_id,
-        trigger_metadata={
-            "event": event,
-            "nexhealth_appointment_id": appointment_id,
-            "nexhealth_location_id": nexhealth_location_id,
-        },
+        trigger_metadata=_appointment_trigger_metadata(
+            event=event,
+            appt=appt,
+            appointment_id=appointment_id,
+            nexhealth_location_id=nexhealth_location_id,
+            nexhealth_patient_id=nexhealth_patient_id,
+            provider_id=provider_id,
+            appointment_type_id=appointment_type_id,
+            appointment_reason=appointment_reason,
+            start_time=start_time,
+            cancelled=is_cancelled,
+        ),
     )
     if contact_id:
         resume_reactivation_booking.delay(

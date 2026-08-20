@@ -62,9 +62,16 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         group: "advanced",
         accent: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
     },
+    update_appointment: {
+        label: "Update Appointment",
+        description: "Confirm, cancel, or reschedule in the clinic's PMS.",
+        icon: ClipboardList,
+        group: "action",
+        accent: "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
+    },
     update_gotracker_appointment: {
         label: "Update GoTracker Appointment",
-        description: "Write status, confirmation, or timing to GoTracker.",
+        description: "GoTracker only. Prefer Update Appointment for new workflows.",
         icon: ClipboardList,
         group: "action",
         accent: "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
@@ -160,7 +167,7 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
     { title: "Channels", group: "channel", types: ["send_voice"] },
-    { title: "Actions", group: "action", types: ["drip", "llm", "update_gotracker_appointment"] },
+    { title: "Actions", group: "action", types: ["drip", "llm", "update_appointment", "update_gotracker_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },
 ]

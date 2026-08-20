@@ -127,6 +127,7 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
         case "send_voice":
         case "send_email":
         case "update_patient_status":
+        case "update_appointment":
         case "update_gotracker_appointment":
         case "json_mapper":
         case "llm":
@@ -174,6 +175,7 @@ function singleNext(node: WorkflowNode): string | undefined {
         node.type === "send_voice" ||
         node.type === "send_email" ||
         node.type === "update_patient_status" ||
+        node.type === "update_appointment" ||
         node.type === "update_gotracker_appointment" ||
         node.type === "json_mapper" ||
         node.type === "llm"
@@ -470,6 +472,19 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 note_template: "",
                 next_node_id: "",
             }
+        case "update_appointment":
+            return {
+                type,
+                id,
+                next_node_id: "",
+                operation: "confirm",
+                start_time: null,
+                end_time: null,
+                duration_min: null,
+                provider_id: null,
+                operatory_id: null,
+                reason: null,
+            }
         case "update_gotracker_appointment":
             return {
                 type,
@@ -653,6 +668,7 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
                 case "send_voice":
                 case "send_email":
                 case "update_patient_status":
+                case "update_appointment":
                 case "update_gotracker_appointment":
                 case "json_mapper":
                 case "llm":
@@ -703,6 +719,7 @@ export function connectNodes(
         case "send_voice":
         case "send_email":
         case "update_patient_status":
+        case "update_appointment":
         case "update_gotracker_appointment":
         case "json_mapper":
         case "llm":

@@ -274,6 +274,17 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                 }
                 break
             }
+            case "update_appointment": {
+                refError(node, node.next_node_id, "Appointment update step")
+                if (node.operation === "reschedule" && !node.start_time?.trim()) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Reschedule needs a new start time.",
+                    })
+                }
+                break
+            }
             case "update_gotracker_appointment": {
                 refError(node, node.next_node_id, "GoTracker appointment update step")
                 const hasWriteback =

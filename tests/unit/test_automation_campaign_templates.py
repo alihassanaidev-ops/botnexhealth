@@ -73,10 +73,9 @@ def test_surgery_confirmation_template_marks_confirmed_status() -> None:
     t = TEMPLATES["surgery-pre-appointment-confirmation"]
     nodes = {node["id"]: node for node in t.definition["nodes"]}
 
-    assert nodes["write-gotracker-confirmed"]["type"] == "update_gotracker_appointment"
-    assert nodes["write-gotracker-confirmed"]["confirmed"] is True
-    assert nodes["write-gotracker-confirmed"]["preconfirmed"] is None
-    assert nodes["write-gotracker-confirmed"]["next_node_id"] == "exit-confirmed"
+    assert nodes["write-appointment-confirmed"]["type"] == "update_appointment"
+    assert nodes["write-appointment-confirmed"]["operation"] == "confirm"
+    assert nodes["write-appointment-confirmed"]["next_node_id"] == "exit-confirmed"
 
 
 def test_surgery_confirmation_template_configures_reasons_and_retry_timing() -> None:
@@ -99,9 +98,9 @@ def test_surgery_confirmation_template_configures_reasons_and_retry_timing() -> 
     nodes = {node["id"]: node for node in definition["nodes"]}
     assert nodes["check-eligible-reason"]["rules"] == [
         {
-            "field": "appointment_status_id",
+            "field": "appointment_status",
             "op": "in_case_insensitive",
-            "value": ["1"],
+            "value": ["booked"],
         },
         {
             "field": "appointment_reason",
@@ -160,7 +159,8 @@ def test_surgery_confirmation_template_has_three_business_attempts_and_dynamic_c
     assert nodes["wait-callback-1"]["next_node_id"] == "voice-preop-attempt-2"
     assert nodes["wait-callback-2"]["next_node_id"] == "voice-preop-attempt-3"
     assert nodes["mark-max-attempts"]["status"] == "unreachable_after_max_attempts"
-    assert nodes["write-gotracker-rescheduled"]["start_time"] == "{{reschedule_start_time}}"
+    assert nodes["write-appointment-rescheduled"]["start_time"] == "{{reschedule_start_time}}"
+    assert nodes["write-appointment-rescheduled"]["operation"] == "reschedule"
 
 
 def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() -> None:
@@ -179,9 +179,9 @@ def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() ->
         "value": "confirmed",
     }
     assert "answered" not in str(nodes["attempt-1-confirmed"]["rules"])
-    assert nodes["attempt-1-cancelled"]["true_next_node_id"] == "write-gotracker-cancelled"
-    assert nodes["write-gotracker-cancelled"]["type"] == "update_gotracker_appointment"
-    assert nodes["write-gotracker-cancelled"]["status_id"] == 3
+    assert nodes["attempt-1-cancelled"]["true_next_node_id"] == "write-appointment-cancelled"
+    assert nodes["write-appointment-cancelled"]["type"] == "update_appointment"
+    assert nodes["write-appointment-cancelled"]["operation"] == "cancel"
     assert nodes["attempt-1-reschedule"]["true_next_node_id"] == "check-reschedule-time"
     assert nodes["attempt-1-unreachable"]["true_next_node_id"] == "wait-retry-1"
 

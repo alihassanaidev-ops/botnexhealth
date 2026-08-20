@@ -40,6 +40,7 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
     WaitNode,
@@ -67,6 +68,14 @@ _DEFAULT_CALENDAR_JITTER_SECONDS = 300
 
 class WorkflowGoTrackerWritebackError(RuntimeError):
     """Raised when an explicit GoTracker appointment writeback node fails."""
+
+
+class WorkflowAppointmentWritebackError(RuntimeError):
+    """Raised when a PMS-neutral appointment writeback node fails."""
+
+
+# GoTracker's "cancelled" status id, per _gotracker_status_label.
+_GOTRACKER_CANCELLED_STATUS_ID = 3
 
 
 @dataclass
@@ -334,6 +343,21 @@ class WorkflowStepDispatcher:
                     run, node, context
                 )
                 patient_status_event_ids.append(event_id)
+
+            elif isinstance(node, UpdateAppointmentNode):
+                try:
+                    current_node_id = await self._update_appointment(
+                        run, node, context, location_timezone=location_timezone
+                    )
+                except (
+                    WorkflowAppointmentWritebackError,
+                    WorkflowGoTrackerWritebackError,
+                ):
+                    return DispatchResult(
+                        status="failed",
+                        steps_advanced=steps_advanced,
+                        patient_status_event_ids=patient_status_event_ids,
+                    )
 
             elif isinstance(node, UpdateGoTrackerAppointmentNode):
                 try:
@@ -642,6 +666,235 @@ class WorkflowStepDispatcher:
         )
         await self.session.flush()
         return node.next_node_id, str(event.id)
+
+    async def _reschedule_booking_request(
+        self,
+        run: AutomationWorkflowRun,
+        node: UpdateAppointmentNode,
+        context: dict,
+        *,
+        location_timezone: str = "UTC",
+    ):
+        """Build the booking a neutral reschedule needs, or ``None``.
+
+        ``PMSAdapter.reschedule_appointment`` takes a full ``BookingRequest``, but
+        a workflow node only carries the new start time. The rest comes from the
+        appointment projection we already maintain. Returning ``None`` means the
+        caller must fail the step loudly rather than guess.
+        """
+        from src.app.models.appointment_working_set import AppointmentWorkingSet
+        from src.app.pms.models import BookingRequest
+
+        rendered = _render_gotracker_update_value(node.start_time, context)
+        parsed = _parse_context_datetime(rendered, location_timezone)
+        if parsed is None:
+            return None
+
+        row = (
+            (
+                await self.session.execute(
+                    select(AppointmentWorkingSet).where(
+                        AppointmentWorkingSet.institution_id == run.institution_id,
+                        AppointmentWorkingSet.nexhealth_appointment_id
+                        == str(run.trigger_ref_id),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if row is None:
+            return None
+
+        patient_id = row.nexhealth_patient_id
+        provider_id = (
+            _render_gotracker_update_value(node.provider_id, context) or row.provider_id
+        )
+        if not patient_id or not provider_id:
+            return None
+
+        return BookingRequest(
+            patient_id=str(patient_id),
+            provider_id=str(provider_id),
+            appointment_type_id=row.appointment_type_id,
+            slot_start=parsed.isoformat(),
+            duration_min=node.duration_min,
+            operatory_id=_render_gotracker_update_value(node.operatory_id, context),
+            note=_render_gotracker_update_value(node.reason, context),
+        )
+
+    def _gotracker_node_for(
+        self, node: UpdateAppointmentNode
+    ) -> UpdateGoTrackerAppointmentNode:
+        """Translate a neutral write-back into its GoTracker equivalent.
+
+        Mirrors exactly what the shipped template used to declare inline, so a
+        GoTracker campaign keeps its previous behaviour byte for byte.
+        """
+        common = {"id": node.id, "next_node_id": node.next_node_id}
+        if node.operation == "confirm":
+            return UpdateGoTrackerAppointmentNode(
+                **common, confirmed=True, preconfirmed=None
+            )
+        if node.operation == "cancel":
+            return UpdateGoTrackerAppointmentNode(**common, status_id=_GOTRACKER_CANCELLED_STATUS_ID)
+        return UpdateGoTrackerAppointmentNode(
+            **common,
+            start_time=node.start_time,
+            end_time=node.end_time,
+            duration_min=node.duration_min,
+            provider_id=node.provider_id,
+            operatory_id=node.operatory_id,
+            reason=node.reason,
+        )
+
+    async def _update_appointment(
+        self,
+        run: AutomationWorkflowRun,
+        node: UpdateAppointmentNode,
+        context: dict,
+        *,
+        location_timezone: str = "UTC",
+    ) -> str:
+        """PMS-neutral appointment write-back.
+
+        Routes through the ``PMSAdapter`` contract so one campaign definition
+        writes back on any PMS. GoTracker is delegated to the existing
+        GoTracker-specific path, which carries appointment locking, a
+        pending-writeback guard and its own audit trail.
+        """
+        from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+        from src.app.models.institution import Institution
+        from src.app.pms.base import SupportsAppointmentConfirmation
+        from src.app.pms.factory import get_adapter_for_institution_location
+        from src.app.services.audit import log_audit
+
+        institution = await self.session.get(Institution, run.institution_id)
+
+        if institution is not None and getattr(institution, "pms_type", None) == "gotracker":
+            return await self._update_gotracker_appointment(
+                run,
+                self._gotracker_node_for(node),
+                context,
+                location_timezone=location_timezone,
+            )
+
+        step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
+
+        async def fail(
+            reason: str,
+            metadata: dict | None = None,
+            *,
+            result_code: str = "appointment_writeback_failed",
+        ) -> None:
+            await self.runtime.fail_step(
+                step,
+                error_message=reason,
+                result_code=result_code,
+                result_metadata=metadata or {},
+            )
+            await self.runtime.fail_run(run, reason=result_code)
+
+        if run.trigger_ref_type != "appointment" or not run.trigger_ref_id:
+            await fail("Appointment writeback requires an appointment-triggered run")
+            raise WorkflowAppointmentWritebackError("missing appointment reference")
+        if not run.location_id:
+            await fail("Appointment writeback requires a location-scoped run")
+            raise WorkflowAppointmentWritebackError("missing location")
+
+        location = await self.session.get(InstitutionLocation, run.location_id)
+        if institution is None or location is None:
+            await fail("Appointment writeback could not resolve institution/location")
+            raise WorkflowAppointmentWritebackError("missing institution/location")
+
+        appointment_id = str(run.trigger_ref_id)
+        adapter = None
+        audit_action = {
+            "confirm": AuditAction.CONFIRM_APPOINTMENT,
+            "cancel": AuditAction.CANCEL_APPOINTMENT,
+            "reschedule": AuditAction.RESCHEDULE_APPOINTMENT,
+        }[node.operation]
+
+        try:
+            adapter = await get_adapter_for_institution_location(institution, location)
+            pms_source = getattr(adapter, "source", None)
+
+            if node.operation == "confirm":
+                # The confirmation mixin is optional. An adapter without it must
+                # fail loudly — a run must never report a patient as confirmed
+                # while the PMS was never touched.
+                if not isinstance(adapter, SupportsAppointmentConfirmation):
+                    await fail(
+                        (
+                            f"PMS '{pms_source}' does not support appointment "
+                            "confirmation write-back"
+                        ),
+                        {"pms_source": pms_source, "operation": node.operation},
+                        result_code="appointment_confirmation_unsupported",
+                    )
+                    raise WorkflowAppointmentWritebackError(
+                        "adapter lacks SupportsAppointmentConfirmation"
+                    )
+                result = await adapter.confirm_appointment(appointment_id)
+            elif node.operation == "cancel":
+                result = await adapter.cancel_appointment(appointment_id)
+            else:
+                booking = await self._reschedule_booking_request(
+                    run,
+                    node,
+                    context,
+                    location_timezone=location_timezone,
+                )
+                if booking is None:
+                    await fail(
+                        "Appointment reschedule requires a resolvable start_time",
+                        {"start_time": node.start_time},
+                        result_code="appointment_reschedule_unresolvable",
+                    )
+                    raise WorkflowAppointmentWritebackError("unresolvable reschedule")
+                result = await adapter.reschedule_appointment(appointment_id, booking)
+
+            await log_audit(
+                actor=AuditActor.SYSTEM,
+                action=audit_action,
+                target_resource=f"appointment:{appointment_id}",
+                outcome=(
+                    AuditOutcome.SUCCESS
+                    if result.success
+                    else AuditOutcome.FAILURE_EXTERNAL_API
+                ),
+                metadata={
+                    "source": "workflow_appointment_writeback",
+                    "workflow_run_id": str(run.id),
+                    "step_id": node.id,
+                    "operation": node.operation,
+                    "pms_source": pms_source,
+                    "pms_status": result.status,
+                    "error": result.error,
+                },
+            )
+
+            if not result.success:
+                await fail(
+                    result.error or f"Appointment {node.operation} failed",
+                    {"pms_source": pms_source, "operation": node.operation},
+                )
+                raise WorkflowAppointmentWritebackError(f"{node.operation} failed")
+
+            await self.runtime.complete_step(
+                step,
+                result_code=f"appointment_{node.operation}ed",
+                result_metadata={
+                    "operation": node.operation,
+                    "pms_source": pms_source,
+                    "pms_status": result.status,
+                    "appointment_id": result.id or appointment_id,
+                },
+            )
+            return node.next_node_id
+        finally:
+            if adapter is not None:
+                await adapter.close()
 
     async def _update_gotracker_appointment(
         self,

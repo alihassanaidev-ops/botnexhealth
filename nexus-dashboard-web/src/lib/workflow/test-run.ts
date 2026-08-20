@@ -128,6 +128,16 @@ function describe(
                 },
                 next: node.next_node_id,
             }
+        case "update_appointment":
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "update_appointment",
+                    summary: "Update appointment in PMS",
+                    detail: node.operation,
+                },
+                next: node.next_node_id,
+            }
         case "update_gotracker_appointment":
             return {
                 step: {

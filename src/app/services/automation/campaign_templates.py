@@ -632,7 +632,7 @@ def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
             "type": "condition",
             "id": f"attempt-{suffix}-confirmed",
             "rules": [{"field": "call_outcome", "op": "eq", "value": "confirmed"}],
-            "true_next_node_id": "write-gotracker-confirmed",
+            "true_next_node_id": "write-appointment-confirmed",
             "false_next_node_id": f"attempt-{suffix}-cancelled",
         },
         {
@@ -645,7 +645,7 @@ def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
                     "value": ["cancelled", "appointment_cancelled"],
                 }
             ],
-            "true_next_node_id": "write-gotracker-cancelled",
+            "true_next_node_id": "write-appointment-cancelled",
             "false_next_node_id": f"attempt-{suffix}-reschedule",
         },
         {
@@ -737,9 +737,12 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
             "logic": "AND",
             "rules": [
                 {
-                    "field": "appointment_status_id",
+                    # Normalized status label, supplied by both webhook paths.
+                    # GoTracker maps status id 1 to "booked", so this matches
+                    # exactly what `appointment_status_id in ["1"]` used to.
+                    "field": "appointment_status",
                     "op": "in_case_insensitive",
-                    "value": ["1"],
+                    "value": ["booked"],
                 },
                 {
                     "field": "appointment_reason",
@@ -761,26 +764,29 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
                 {"field": "reschedule_start_time", "op": "is_not_null", "value": None},
                 {"field": "reschedule_start_time", "op": "neq", "value": ""},
             ],
-            "true_next_node_id": "write-gotracker-rescheduled",
+            "true_next_node_id": "write-appointment-rescheduled",
             "false_next_node_id": "mark-reschedule-time-missing",
         },
+        # PMS-neutral write-backs: the same definition runs on NexHealth and
+        # GoTracker. On GoTracker these translate to the previous
+        # update_gotracker_appointment behaviour exactly.
         {
-            "type": "update_gotracker_appointment",
-            "id": "write-gotracker-rescheduled",
+            "type": "update_appointment",
+            "id": "write-appointment-rescheduled",
+            "operation": "reschedule",
             "start_time": "{{reschedule_start_time}}",
             "next_node_id": "exit-rescheduled",
         },
         {
-            "type": "update_gotracker_appointment",
-            "id": "write-gotracker-confirmed",
-            "confirmed": True,
-            "preconfirmed": None,
+            "type": "update_appointment",
+            "id": "write-appointment-confirmed",
+            "operation": "confirm",
             "next_node_id": "exit-confirmed",
         },
         {
-            "type": "update_gotracker_appointment",
-            "id": "write-gotracker-cancelled",
-            "status_id": 3,
+            "type": "update_appointment",
+            "id": "write-appointment-cancelled",
+            "operation": "cancel",
             "next_node_id": "exit-cancelled",
         },
         {
