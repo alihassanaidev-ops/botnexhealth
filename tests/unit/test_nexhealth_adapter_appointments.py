@@ -613,6 +613,31 @@ async def test_working_hours_v3_uses_the_renamed_route_and_v3_headers(
 
 
 @pytest.mark.asyncio
+async def test_working_hours_v3_requests_appointment_types(
+    monkeypatch: pytest.MonkeyPatch,
+    v3_working_hours,
+):
+    """v3 omits appointment_types unless asked, and two things depend on them.
+
+    Retell's _validate_appointment_type_for_provider builds its allowed set from
+    this field: an empty set rejects every booking. The setup UI also reports
+    every window as unlinked without it.
+    """
+    adapter = _make_adapter()
+    seen: list[dict] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
+        seen.append(params or {})
+        return {"data": [], "page_info": {"has_next_page": False}}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    await adapter.list_availabilities(provider_id="nh-123")
+
+    assert seen[0]["include[]"] == ["appointment_types"]
+
+
+@pytest.mark.asyncio
 async def test_working_hours_v3_carries_the_label_through(
     monkeypatch: pytest.MonkeyPatch,
     v3_working_hours,

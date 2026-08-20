@@ -762,6 +762,11 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         base = {
             **self._default_params(),
             "ignore_past_dates": "true" if ignore_past_dates else "false",
+            # v3 omits appointment_types unless asked. Without this the Retell
+            # appointment-type validation (handlers._validate_appointment_type_
+            # for_provider) sees an empty allowed set and rejects every booking,
+            # and the setup UI reports every window as unlinked.
+            "include[]": ["appointment_types"],
         }
         if provider_id:
             base["provider_id"] = provider_id
