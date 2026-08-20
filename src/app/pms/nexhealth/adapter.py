@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+import re
 from typing import TYPE_CHECKING, Any, Literal
 
 from src.app.api.helpers import handle_nexhealth_request
@@ -56,6 +57,14 @@ AppointmentCancellationMode = Literal[
     "cancelled_only",
     "active_and_cancelled",
 ]
+_DIRECT_RESCHEDULE_PATCH_PMS_KEYS = frozenset(
+    {
+        "dentrix",
+        "dentrixenterprise",
+        "eaglesoft",
+        "opendental",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -212,6 +221,37 @@ def _raw_id(value: Any) -> str | None:
     return _strip(str(value))
 
 
+def _normalize_pms_key(value: str | None) -> str | None:
+    if not value or not value.strip():
+        return None
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _direct_reschedule_patch_supported(pms_name: str | None) -> bool:
+    key = _normalize_pms_key(pms_name)
+    return bool(key and key in _DIRECT_RESCHEDULE_PATCH_PMS_KEYS)
+
+
+def _pms_name_from_sync_payload(payload: dict[str, Any]) -> str | None:
+    return next(iter(_pms_name_candidates_from_sync_payload(payload)), None)
+
+
+def _pms_name_candidates_from_sync_payload(payload: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for key in ("display_name", "name", "type", "vendor", "pms", "software"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value.strip())
+    return candidates
+
+
+def _select_direct_reschedule_pms_name(candidates: list[str]) -> str | None:
+    for candidate in candidates:
+        if _direct_reschedule_patch_supported(candidate):
+            return candidate
+    return candidates[0] if candidates else None
+
+
 def _slot_core_matches_booking(slot: UniversalSlot, req: BookingRequest) -> bool:
     if not _same_slot_datetime(slot.start, req.slot_start):
         return False
@@ -264,6 +304,7 @@ class NexHealthAdapter(
         subdomain: str | None = None,
         location_id: str | None = None,
         api_contract: NexHealthAPIContract | str | None = None,
+        direct_reschedule_pms_name: str | None = None,
         owns_client: bool = False,
     ) -> None:
         self._client = client
@@ -273,6 +314,7 @@ class NexHealthAdapter(
         self._api_contract = normalize_nexhealth_api_contract(
             api_contract or NexHealthAPIContract.LEGACY_V2
         )
+        self._direct_reschedule_pms_name = direct_reschedule_pms_name
         self._owns_client = owns_client
 
     @classmethod
@@ -308,14 +350,63 @@ class NexHealthAdapter(
         # AsyncClient per adapter leaks sockets if a caller misses close()
         # and collapses under concurrent Retell/function traffic.
         client = await get_nexhealth_client_dependency()
+        direct_reschedule_pms_name = None
+        internal_institution_id = getattr(institution, "id", None)
+        internal_location_id = getattr(location, "id", None)
+        if internal_institution_id and internal_location_id:
+            direct_reschedule_pms_name = await cls._direct_reschedule_pms_name_for_location(
+                institution_id=str(internal_institution_id),
+                location_id=str(internal_location_id),
+            )
         return cls(
             client,
             institution,
             subdomain=subdomain,
             location_id=location_id,
             api_contract=global_settings.nexhealth_api_contract,
+            direct_reschedule_pms_name=direct_reschedule_pms_name,
             owns_client=False,
         )
+
+    @staticmethod
+    async def _direct_reschedule_pms_name_for_location(
+        *, institution_id: str, location_id: str
+    ) -> str | None:
+        try:
+            from sqlalchemy import select
+
+            from src.app.database import get_system_db_session
+            from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
+
+            async with get_system_db_session(
+                "nexhealth_direct_reschedule_capability",
+                external_id=location_id,
+            ) as session:
+                row = (
+                    await session.execute(
+                        select(NexHealthSyncStatus).where(
+                            NexHealthSyncStatus.institution_id == institution_id,
+                            NexHealthSyncStatus.location_id == location_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    return None
+
+                candidates = [
+                    candidate.strip()
+                    for candidate in (row.sync_source_name, row.sync_source_type)
+                    if candidate and candidate.strip()
+                ]
+                payload = row.emr_payload if isinstance(row.emr_payload, dict) else {}
+                candidates.extend(_pms_name_candidates_from_sync_payload(payload))
+                return _select_direct_reschedule_pms_name(candidates)
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve NexHealth direct reschedule PMS support: %s",
+                type(exc).__name__,
+            )
+            return None
 
     async def close(self) -> None:
         if self._owns_client and self._client:
@@ -1075,6 +1166,96 @@ class NexHealthAdapter(
                 "Rescheduled successfully (new booked, old cancelled)."
             )
         return book_result
+
+    async def reschedule_appointment_v2(
+        self, old_appointment_id: str, new_booking: BookingRequest
+    ) -> BookingResult:
+        if not self._can_patch_reschedule_directly():
+            return await self.reschedule_appointment(old_appointment_id, new_booking)
+
+        validation = await self._validate_selected_slot_before_booking(new_booking)
+        if not validation.ok:
+            return BookingResult(
+                success=False,
+                source="nexhealth",
+                status="error",
+                error=validation.error or "Selected slot is no longer available.",
+            )
+
+        end_time = new_booking.slot_end or validation.end_time
+        if not end_time:
+            return await self.reschedule_appointment(old_appointment_id, new_booking)
+
+        return await self._patch_reschedule_appointment(
+            old_appointment_id,
+            new_booking,
+            end_time=end_time,
+        )
+
+    def _can_patch_reschedule_directly(self) -> bool:
+        if self._api_contract is not NexHealthAPIContract.STABLE_V3:
+            return False
+
+        # reschedule_appointment_v2: NexHealth stable v3 direct appointment
+        # updates are supported only for appointment-update PMSes: Dentrix,
+        # Dentrix Enterprise, Eaglesoft, and Open Dental. Denticon appears in
+        # the migration guide but not the endpoint reference, so do not enable
+        # it without explicit confirmation.
+        return _direct_reschedule_patch_supported(self._direct_reschedule_pms_name)
+
+    async def _patch_reschedule_appointment(
+        self,
+        old_appointment_id: str,
+        new_booking: BookingRequest,
+        *,
+        end_time: str,
+    ) -> BookingResult:
+        appt: dict[str, Any] = {
+            "start_time": new_booking.slot_start,
+            "end_time": end_time,
+        }
+        if new_booking.operatory_id:
+            appt["operatory_id"] = _strip(new_booking.operatory_id)
+        if new_booking.note:
+            appt["note"] = new_booking.note
+
+        params = self._default_params()
+
+        try:
+            raw = await handle_nexhealth_request(
+                self._client,
+                "PATCH",
+                f"/appointments/{_strip(old_appointment_id)}",
+                params=params,
+                json={"appt": appt},
+            )
+            if raw.get("code") is False:
+                return BookingResult(
+                    success=False,
+                    source="nexhealth",
+                    status="error",
+                    error=raw.get("error", "Failed"),
+                )
+            result = mappers.to_booking_result(raw, success=True)
+            result.status = "rescheduled"
+            result.message = "Rescheduled successfully."
+            if not result.id:
+                result.id = f"{PREFIX}-{_strip(old_appointment_id)}"
+            if not result.start:
+                result.start = new_booking.slot_start
+            if not result.end:
+                result.end = end_time
+            if not result.patient_id:
+                result.patient_id = new_booking.patient_id
+            if not result.provider_id:
+                result.provider_id = new_booking.provider_id
+            if not result.appointment_type_id and new_booking.appointment_type_id:
+                result.appointment_type_id = _strip(new_booking.appointment_type_id)
+            return result
+        except Exception as e:
+            return BookingResult(
+                success=False, source="nexhealth", status="error", error=str(e)
+            )
 
     # ── Locations ────────────────────────────────────────────────────────
 

@@ -9,13 +9,17 @@ from src.app.pms.nexhealth import adapter as adapter_module
 from src.app.pms.nexhealth.adapter import NexHealthAdapter
 
 
-def _make_adapter(api_contract: str = "legacy_v2") -> NexHealthAdapter:
+def _make_adapter(
+    api_contract: str = "legacy_v2",
+    direct_reschedule_pms_name: str | None = None,
+) -> NexHealthAdapter:
     return NexHealthAdapter(
         client=SimpleNamespace(),
         institution=SimpleNamespace(),
         subdomain="test-subdomain",
         location_id="test-location",
         api_contract=api_contract,
+        direct_reschedule_pms_name=direct_reschedule_pms_name,
     )
 
 
@@ -1120,6 +1124,152 @@ async def test_reschedule_returns_warning_when_cancel_fails_after_new_booked(
     assert result.success is True  # the booking did happen
     assert "failed to cancel old appointment" in (result.message or "").lower()
     assert "please cancel manually" in (result.message or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_reschedule_v2_patches_existing_for_supported_stable_v3_pms(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(
+        api_contract="stable_v3",
+        direct_reschedule_pms_name="Dentrix",
+    )
+    calls: list[dict] = []
+
+    async def fake_validate(_req):
+        return adapter_module._SlotValidationResult(
+            ok=True,
+            end_time="2026-05-04T09:30:00Z",
+        )
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(
+            {
+                "method": method,
+                "path": path,
+                "params": params,
+                "json": json,
+            }
+        )
+        return {
+            "data": {
+                "appt": {
+                    "id": "old-1",
+                    "patient_id": "patient-1",
+                    "provider_id": "provider-1",
+                    "start_time": "2026-05-04T09:00:00Z",
+                    "end_time": "2026-05-04T09:30:00Z",
+                }
+            }
+        }
+
+    monkeypatch.setattr(adapter, "_validate_selected_slot_before_booking", fake_validate)
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    result = await adapter.reschedule_appointment_v2("old-1", _booking_request())
+
+    assert result.success is True
+    assert result.status == "rescheduled"
+    assert result.id == "nh-old-1"
+    assert result.message == "Rescheduled successfully."
+    assert calls == [
+        {
+            "method": "PATCH",
+            "path": "/appointments/old-1",
+            "params": {
+                "subdomain": "test-subdomain",
+                "location_id": "test-location",
+            },
+            "json": {
+                "appt": {
+                    "start_time": "2026-05-04T09:00:00Z",
+                    "end_time": "2026-05-04T09:30:00Z",
+                }
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reschedule_v2_falls_back_for_legacy_contract(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from unittest.mock import AsyncMock
+    from src.app.pms.models import BookingResult
+
+    adapter = _make_adapter(
+        api_contract="legacy_v2",
+        direct_reschedule_pms_name="Dentrix",
+    )
+    fallback = AsyncMock(
+        return_value=BookingResult(
+            success=True,
+            source="nexhealth",
+            status="confirmed",
+            message="legacy fallback",
+        )
+    )
+    monkeypatch.setattr(adapter, "reschedule_appointment", fallback)
+
+    result = await adapter.reschedule_appointment_v2("old-1", _booking_request())
+
+    assert result.success is True
+    assert result.message == "legacy fallback"
+    fallback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reschedule_v2_falls_back_for_unsupported_pms(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from unittest.mock import AsyncMock
+    from src.app.pms.models import BookingResult
+
+    adapter = _make_adapter(
+        api_contract="stable_v3",
+        direct_reschedule_pms_name="Curve",
+    )
+    fallback = AsyncMock(
+        return_value=BookingResult(
+            success=True,
+            source="nexhealth",
+            status="confirmed",
+            message="legacy fallback",
+        )
+    )
+    monkeypatch.setattr(adapter, "reschedule_appointment", fallback)
+
+    result = await adapter.reschedule_appointment_v2("old-1", _booking_request())
+
+    assert result.success is True
+    assert result.message == "legacy fallback"
+    fallback.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("pms_name", "supported"),
+    [
+        ("Dentrix", True),
+        ("Dentrix Enterprise", True),
+        ("Eaglesoft", True),
+        ("OpenDental", True),
+        ("Open Dental", True),
+        ("Denticon", False),
+        ("Curve", False),
+        (None, False),
+    ],
+)
+def test_direct_reschedule_support_is_conservative(pms_name, supported):
+    assert adapter_module._direct_reschedule_patch_supported(pms_name) is supported
+
+
+def test_direct_reschedule_pms_selection_prefers_supported_candidate():
+    assert (
+        adapter_module._select_direct_reschedule_pms_name(
+            ["NexHealth Sync", "OpenDental"]
+        )
+        == "OpenDental"
+    )
 
 
 @pytest.mark.asyncio

@@ -122,6 +122,43 @@ async def test_create_patient_rejects_unsupported_gender():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_gender", "expected_gender"),
+    [
+        ("male", "Male"),
+        (" FEMALE ", "Female"),
+        ("oThEr", "Other"),
+    ],
+)
+async def test_create_patient_normalizes_gender(raw_gender, expected_gender):
+    mock_adapter = SimpleNamespace(create_patient=AsyncMock(return_value={"success": True}))
+
+    async def mock_resolve():
+        return SimpleNamespace(
+            institution=SimpleNamespace(id="inst-1"),
+            location=SimpleNamespace(id="loc-1"),
+            adapter=mock_adapter,
+        )
+
+    with patch("src.app.retell.handlers._resolve_context", new=mock_resolve):
+        result = await create_patient(
+            {
+                "first_name": "John",
+                "last_name": "Doe",
+                "email": "john.doe@example.com",
+                "phone_number": "555-0123",
+                "date_of_birth": "1990-01-01",
+                "provider_id": "456",
+                "gender": raw_gender,
+            }
+        )
+
+    assert result["success"] is True
+    req = mock_adapter.create_patient.call_args.args[0]
+    assert req.gender == expected_gender
+
+
+@pytest.mark.asyncio
 async def test_list_transfer_numbers_success():
     """Test listing transfer numbers via Retell handler."""
     mock_rows = [

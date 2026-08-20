@@ -113,6 +113,16 @@ class PMSAdapter(ABC):
     ) -> BookingResult:
         ...
 
+    async def reschedule_appointment_v2(
+        self, old_appointment_id: str, new_booking: BookingRequest
+    ) -> BookingResult:
+        """Reschedule using the adapter's newest supported write path.
+
+        Default keeps compatibility for PMSes that have not opted into a
+        distinct v2 implementation.
+        """
+        return await self.reschedule_appointment(old_appointment_id, new_booking)
+
     # --- Appointment Queries ---
 
     async def has_provider_appointments_on_date(

@@ -30,6 +30,7 @@ IDEMPOTENT_FUNCTIONS: frozenset[str] = frozenset(
         "book_appointment",
         "cancel_appointment",
         "reschedule_appointment",
+        "reschedule_appointment_v2",
         "create_patient",
     }
 )
