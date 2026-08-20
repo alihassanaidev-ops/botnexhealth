@@ -196,7 +196,7 @@ export async function previewBulkLinkRange(
         provider_id: string;
         start_date: string;
         end_date: string;
-        operatory_id?: string | null;
+        operatory_ids?: string[] | null;
     },
     locationId?: string
 ): Promise<BulkLinkRangePreview> {

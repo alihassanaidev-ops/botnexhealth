@@ -272,6 +272,26 @@ async def test_preview_without_operatory_filter_matches_every_operatory(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_preview_matches_multiple_selected_operatories(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter)
+
+    result = await route.preview_bulk_link_range_availabilities(
+        req=route.BulkLinkRangePreviewRequest(
+            provider_id="nh-2",
+            operatory_ids=["nh-4", "nh-9"],
+            start_date="2026-08-20",
+            end_date="2026-08-22",
+        ),
+        current_user=_admin(),
+        location_id=None,
+    )
+
+    assert sorted(w.source_id for w in result.windows) == ["nh-101", "nh-104"]
+
+
+@pytest.mark.asyncio
 async def test_preview_without_operatory_filter_excludes_hidden_operatories(monkeypatch):
     adapter = _FakeAvailabilityAdapter()
     adapter.availabilities = _range_availabilities()
@@ -310,6 +330,29 @@ async def test_preview_rejects_hidden_operatory_filter(monkeypatch):
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Cannot use a hidden operatory"
+    assert adapter.list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_preview_rejects_hidden_operatory_in_multi_filter(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter, hidden_operatory_ids=["nh-9"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route.preview_bulk_link_range_availabilities(
+            req=route.BulkLinkRangePreviewRequest(
+                provider_id="nh-2",
+                operatory_ids=["nh-4", "nh-9"],
+                start_date="2026-08-20",
+                end_date="2026-08-22",
+            ),
+            current_user=_admin(),
+            location_id=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Cannot use hidden operatories: nh-9"
     assert adapter.list_calls == 0
 
 

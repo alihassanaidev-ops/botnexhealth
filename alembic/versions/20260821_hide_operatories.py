@@ -1,7 +1,7 @@
 """Add local visibility flag for cached operatories.
 
 Revision ID: 20260821_hide_operatories
-Revises: 20260815_nh_shadow_secret
+Revises: 20260818_nh_hybrid_creds
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "20260821_hide_operatories"
-down_revision = "20260815_nh_shadow_secret"
+down_revision = "20260818_nh_hybrid_creds"
 branch_labels = None
 depends_on = None
 

@@ -376,9 +376,9 @@ def _match_availabilities_in_range(
     raw_items: list[dict[str, Any]],
     *,
     dates: set[str],
-    operatory_id: str | None,
+    operatory_ids: set[str] | None,
 ) -> list[dict[str, Any]]:
-    """Dated work windows falling inside `dates`, optionally one operatory only.
+    """Dated work windows falling inside `dates`, optionally selected operatories only.
 
     Recurring rows (`days` with no `specific_date`) are skipped on purpose:
     patching them would change every future week, not just the selected range.
@@ -388,8 +388,25 @@ def _match_availabilities_in_range(
         for item in raw_items
         if item.get("id") not in (None, "")
         and _availability_matches_dates(item, dates)
-        and (operatory_id is None or _same_source_id(item.get("operatory_id"), operatory_id))
+        and (
+            operatory_ids is None
+            or any(_same_source_id(item.get("operatory_id"), operatory_id) for operatory_id in operatory_ids)
+        )
     ]
+
+
+def _bulk_preview_operatory_ids(req: "BulkLinkRangePreviewRequest") -> set[str] | None:
+    if req.operatory_ids is not None:
+        cleaned = {operatory_id for operatory_id in req.operatory_ids if operatory_id}
+        if not cleaned:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "operatory_ids must not be empty when provided",
+            )
+        return cleaned
+    if req.operatory_id:
+        return {req.operatory_id}
+    return None
 
 
 def _filter_visible_availabilities(
@@ -550,6 +567,8 @@ class BulkLinkRangePreviewRequest(BaseModel):
     provider_id: str
     start_date: str
     end_date: str
+    operatory_ids: list[str] | None = None
+    # Backward-compatible single-operatory field used by older clients.
     operatory_id: str | None = None
 
 
@@ -1179,7 +1198,15 @@ async def preview_bulk_link_range_availabilities(
 
         range_dates = _parse_range_dates(location, req.start_date, req.end_date)
         hidden_operatory_ids = await _hidden_operatory_source_ids(session, institution.id, location.id)
-        if req.operatory_id:
+        selected_operatory_ids = _bulk_preview_operatory_ids(req)
+        if selected_operatory_ids and req.operatory_ids is not None:
+            await _ensure_operatory_ids_visible(
+                session,
+                institution.id,
+                location.id,
+                list(selected_operatory_ids),
+            )
+        elif req.operatory_id:
             await _ensure_operatory_is_visible(session, institution.id, location.id, req.operatory_id)
         raw_items = await adapter.list_availabilities(
             provider_id=req.provider_id,
@@ -1188,7 +1215,7 @@ async def preview_bulk_link_range_availabilities(
         matched_items = _match_availabilities_in_range(
             raw_items,
             dates=set(range_dates),
-            operatory_id=req.operatory_id,
+            operatory_ids=selected_operatory_ids,
         )
         matched_items = [
             item
