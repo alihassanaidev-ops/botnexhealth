@@ -112,7 +112,8 @@ groups reliably include provider IDs but not provider names.
    appointments exist and leaves slots visible.
 
 Booking is `POST /appointments` (body wrapped under `"appt"`), cancel is
-`PATCH /appointments/{id}` with `cancelled: true`. Before posting a booking,
+`PATCH /appointments/{id}` with `cancelled: true`, and confirmation is
+`PATCH /appointments/{id}` with `confirmed: true`. Before posting a booking,
 the adapter re-queries the contract-aware slot endpoint for the selected day,
 provider, appointment type, and operatory, then only proceeds when the selected
 slot still matches exactly. The match checks start time and provider, checks

@@ -1,9 +1,9 @@
 """Idempotency for synchronous Retell function calls.
 
-Mid-call function invocations (book/cancel/reschedule/create_patient) are
+Mid-call function invocations (book/cancel/confirm/reschedule/create_patient) are
 deduped per (call_id, function_name, args_hash). The cached result is
 replayed verbatim on retry so a Retell network blip does not produce a
-second booking, cancellation, or patient record.
+second booking, cancellation, confirmation writeback, or patient record.
 
 Read-only functions are not wrapped — replays of a lookup are harmless and
 not worth the storage.
@@ -29,6 +29,7 @@ IDEMPOTENT_FUNCTIONS: frozenset[str] = frozenset(
     {
         "book_appointment",
         "cancel_appointment",
+        "confirm_appointment",
         "reschedule_appointment",
         "reschedule_appointment_v2",
         "create_patient",

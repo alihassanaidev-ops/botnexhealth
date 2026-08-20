@@ -216,7 +216,8 @@ binding is strictly **1 Retell agent ↔ 1 InstitutionLocation**.
     `find_appointment_slots`, `list_appointment_types`, `list_providers`,
     `list_insurance_plans`, `list_transfer_numbers`, `list_operatories`
   - **Mutating (idempotency-wrapped):** `create_patient`, `book_appointment`,
-    `cancel_appointment`, `reschedule_appointment`, `reschedule_appointment_v2`
+    `cancel_appointment`, `confirm_appointment`, `reschedule_appointment`,
+    `reschedule_appointment_v2`
 - **Idempotency** (`src/app/retell/idempotency.py`): unique on
   `(call_id, function_name, HMAC(args))`. A Retell retry replays the cached result
   instead of double-booking; in-flight duplicates get a retryable "still

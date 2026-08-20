@@ -31,7 +31,11 @@ from src.app.models.institution_provider import InstitutionProvider
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
-from src.app.pms.base import PMSAdapter, SupportsAvailabilityLinking
+from src.app.pms.base import (
+    PMSAdapter,
+    SupportsAppointmentConfirmation,
+    SupportsAvailabilityLinking,
+)
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import (
@@ -1141,6 +1145,41 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
             safe_error_summary(e),
         )
         return {"success": False, "error": "Failed to cancel appointment"}
+
+
+@register_function("confirm_appointment")
+@audit(
+    AuditAction.CONFIRM_APPOINTMENT,
+    resource=lambda args: (
+        f"appointment:{hash_for_logging(str(args.get('appointment_id'))) if args.get('appointment_id') else 'unknown'}"
+    ),
+)
+async def confirm_appointment(args: dict[str, Any]) -> dict[str, Any]:
+    """Mark an existing appointment confirmed."""
+    appointment_id = args.get("appointment_id")
+    if not appointment_id:
+        return {"error": "appointment_id is required."}
+
+    try:
+        ctx = await _resolve_context()
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+    if not isinstance(ctx.adapter, SupportsAppointmentConfirmation):
+        return {
+            "success": False,
+            "error": "Appointment confirmation is not supported for this PMS.",
+        }
+
+    try:
+        result = await ctx.adapter.confirm_appointment(appointment_id)
+        return result.model_dump()
+    except Exception as e:
+        logger.error(
+            "Failed to confirm appointment: %s",
+            safe_error_summary(e),
+        )
+        return {"success": False, "error": "Failed to confirm appointment"}
 
 
 async def _reschedule_appointment_impl(
