@@ -79,6 +79,13 @@ from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
 
+# The Chair Flow label GoTracker emits when a visit finishes, and which the
+# shipped post-op template triggers on. NexHealth has no completion event, so the
+# post-visit sweep writes this same label — one template definition then enrols on
+# either PMS. Matching is case-insensitive
+# (`appointment_trigger_service.py:217-222`), but keep the exact casing.
+NEXHEALTH_VISIT_COMPLETED = "Completed"
+
 _CLAIM_BATCH = 50
 _CLAIM_TTL_SECONDS = 120
 # How long to defer a waiting run whose workflow is currently paused.
@@ -367,6 +374,160 @@ async def _recover_stale_async() -> dict:
         await session.commit()
     logger.info("recover_stale_workflow_timers: recovered %d timer(s)", count)
     return {"recovered": count}
+
+
+# ---------------------------------------------------------------------------
+# NexHealth post-visit completion sweeper
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    name="src.app.tasks.automation_workflow.sweep_nexhealth_completed_visits",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def sweep_nexhealth_completed_visits(self) -> dict:
+    """Mark finished NexHealth visits complete so post-visit campaigns can run.
+
+    GoTracker reports visit progress through Chair Flow, and a transition to
+    ``Completed`` is what enrols the post-op follow-up campaign. NexHealth has no
+    equivalent — it emits no checkout, check-in or completion event — so the
+    signal is derived here: once an appointment's start time plus its type's
+    duration has passed and it was not cancelled, the visit is treated as done.
+
+    Marking ``flow_state`` makes the row ineligible for the next sweep, and the
+    enrollment idempotency key folds in ``flow_state``/``flow_changed_at``, so a
+    repeated sweep cannot double-enrol.
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(_sweep_nexhealth_completed_visits_async())
+    except Exception as exc:
+        logger.exception("sweep_nexhealth_completed_visits failed: %s", exc)
+        raise self.retry(exc=exc, countdown=30)
+
+
+def completed_visit_candidates_query(window_start: datetime, now: datetime):
+    """Candidate rows for the post-visit sweep, with their type duration.
+
+    Extracted so the filters are testable on their own. Each predicate here is
+    load-bearing: dropping the ``pms_type`` one would synthesize completion over
+    real GoTracker Chair Flow data, and dropping the ``flow_state`` one would
+    re-trigger every sweep.
+    """
+    from sqlalchemy import and_, or_, select
+
+    from src.app.models.appointment_working_set import AppointmentWorkingSet
+    from src.app.models.institution import Institution
+    from src.app.models.institution_appointment_type import InstitutionAppointmentType
+
+    return (
+        select(AppointmentWorkingSet, InstitutionAppointmentType.duration_minutes)
+        .join(Institution, Institution.id == AppointmentWorkingSet.institution_id)
+        .outerjoin(
+            InstitutionAppointmentType,
+            and_(
+                InstitutionAppointmentType.institution_id
+                == AppointmentWorkingSet.institution_id,
+                InstitutionAppointmentType.location_id
+                == AppointmentWorkingSet.location_id,
+                InstitutionAppointmentType.source == "nexhealth",
+                InstitutionAppointmentType.source_id
+                == AppointmentWorkingSet.appointment_type_id,
+            ),
+        )
+        .where(
+            # Only NexHealth institutions. GoTracker rows carry real Chair Flow
+            # data and must never be synthesized over.
+            Institution.pms_type == "nexhealth",
+            AppointmentWorkingSet.status == "scheduled",
+            AppointmentWorkingSet.start_time.is_not(None),
+            # Cheap pre-filter; the exact end time is computed per row below
+            # because duration varies by appointment type.
+            AppointmentWorkingSet.start_time >= window_start,
+            AppointmentWorkingSet.start_time <= now,
+            or_(
+                AppointmentWorkingSet.flow_state.is_(None),
+                AppointmentWorkingSet.flow_state != NEXHEALTH_VISIT_COMPLETED,
+            ),
+        )
+    )
+
+
+async def _sweep_nexhealth_completed_visits_async() -> dict:
+    from src.app.config import settings
+
+    now = datetime.now(tz=timezone.utc)
+    lookback_hours = int(settings.nexhealth_post_visit_lookback_hours)
+    default_duration = int(settings.nexhealth_post_visit_default_duration_minutes)
+    window_start = now - timedelta(hours=lookback_hours)
+
+    completed: list[dict] = []
+
+    async with get_system_db_session("celery") as session:
+        rows = (
+            (
+                await session.execute(
+                    completed_visit_candidates_query(window_start, now)
+                )
+            )
+            .unique()
+            .all()
+        )
+
+        for appt, duration_minutes in rows:
+            start = appt.start_time
+            if start is None:
+                continue
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            ended_at = start + timedelta(
+                minutes=int(duration_minutes or default_duration)
+            )
+            if ended_at > now or ended_at < window_start:
+                continue
+
+            appt.flow_state = NEXHEALTH_VISIT_COMPLETED
+            # The end of the visit, not sweep time: the post-op template waits a
+            # fixed offset from flow_changed_at, and that must mean the same
+            # thing on both PMSs.
+            appt.flow_changed_at = ended_at
+            appt.last_status_source = "nexhealth_post_visit_sweep"
+            completed.append(
+                {
+                    "institution_id": str(appt.institution_id),
+                    "appointment_id": str(appt.nexhealth_appointment_id),
+                    "location_id": str(appt.location_id) if appt.location_id else None,
+                    "contact_id": str(appt.contact_id) if appt.contact_id else None,
+                    "flow_changed_at": ended_at.isoformat(),
+                }
+            )
+
+        await session.commit()
+
+    # Fire triggers only after the marks are durable, so a crash between the two
+    # re-marks rather than double-enrolling.
+    for item in completed:
+        trigger_appointment_state_workflows.delay(
+            institution_id=item["institution_id"],
+            appointment_id=item["appointment_id"],
+            contact_id=item["contact_id"],
+            location_id=item["location_id"],
+            flow_state=NEXHEALTH_VISIT_COMPLETED,
+            flow_changed_at=item["flow_changed_at"],
+            trigger_metadata={
+                "event": "nexhealth_visit_completed",
+                "pms_source": "nexhealth",
+            },
+        )
+
+    logger.info(
+        "sweep_nexhealth_completed_visits: completed=%d lookback_hours=%d",
+        len(completed),
+        lookback_hours,
+    )
+    return {"completed": len(completed), "lookback_hours": lookback_hours}
 
 
 # ---------------------------------------------------------------------------

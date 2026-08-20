@@ -101,6 +101,14 @@ class Settings(BaseSettings):
     workflow_llm_timeout_seconds: float = 20.0
     workflow_llm_allow_keyword_fallback: bool = False
 
+    # NexHealth post-visit completion sweep. NexHealth has no checkout event, so
+    # a visit is treated as finished once start_time + the appointment type's
+    # duration has passed. The lookback bounds how far back the sweep will reach,
+    # which stops a first run on a busy clinic from firing a huge backlog of
+    # triggers; it matches the shipped post-op template's max_followup_delay_hours.
+    nexhealth_post_visit_lookback_hours: int = 72
+    nexhealth_post_visit_default_duration_minutes: int = 60
+
     # Resend (transactional email)
     resend_api_key: str | None = None
     resend_from_email: str | None = None

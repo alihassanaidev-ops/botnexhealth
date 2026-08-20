@@ -94,9 +94,15 @@ class AppointmentWorkingSet(Base):
     last_writeback_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Tracker patient-flow data. Unlike StatusId, FlowState records visit
-    # progress; post-op enrollment is driven by a terminal state such as
-    # "Completed".
+    # Visit-progress state. Unlike StatusId, this records how far through the
+    # visit the patient is; post-op enrollment is driven by a terminal state such
+    # as "Completed".
+    #
+    # Populated by both PMS paths, despite the Tracker-flavoured naming.
+    # GoTracker writes real Chair Flow transitions. NexHealth has no completion
+    # event, so `sweep_nexhealth_completed_visits` derives it once the
+    # appointment's start time plus its type duration has passed, and sets
+    # flow_changed_at to the computed end of the visit rather than sweep time.
     flow_state: Mapped[str | None] = mapped_column(String(120), nullable=True)
     flow_changed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

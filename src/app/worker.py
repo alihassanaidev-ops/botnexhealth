@@ -95,6 +95,14 @@ def _build_celery_app() -> Celery:
                 # PMS read/write failures that do not emit a webhook.
                 "schedule": 15 * 60.0,
             },
+            "sweep-nexhealth-completed-visits": {
+                "task": "src.app.tasks.automation_workflow.sweep_nexhealth_completed_visits",
+                # NexHealth emits no checkout event, so post-visit campaigns
+                # depend on this deriving completion. Every 10 minutes keeps the
+                # enrolment close to the real end of the visit without polling
+                # hard; the template then waits hours before calling anyone.
+                "schedule": 600.0,
+            },
             "recover-stale-workflow-timers": {
                 "task": "src.app.tasks.automation_workflow.recover_stale_workflow_timers",
                 # Faster than the 120 s claim TTL so a crashed-worker timer is

@@ -261,6 +261,64 @@ Tests that pin this behavior: `tests/unit/test_nexhealth_token_manager.py`,
 `test_nexhealth_pagination.py`, `test_nexhealth_adapter_appointments.py`,
 `test_slot_filter.py`, and `tests/integration/test_slot_duration_edge_cases.py`.
 
+## Post-visit completion (derived, not observed)
+
+Post-visit campaigns — the shipped `post-op-followup-after-confirmation`
+template — enrol when an appointment reaches a terminal visit state. On GoTracker
+that state arrives for free: Chair Flow reports progress and transitions to
+`Completed` when the patient leaves.
+
+**NexHealth has no equivalent.** Its webhook vocabulary is
+`appointment_insertion` / `appointment_created` / `appointment_updated` /
+`appointment_cancelled` / `appointment_confirmed`, `patient_created` /
+`patient_updated`, and `sync_status`. There is no checkout, no check-in and no
+completion event, and the adapter exposes no such concept. So completion is
+**derived**.
+
+`sweep_nexhealth_completed_visits` (Celery beat, every 10 minutes) marks a
+NexHealth appointment complete once:
+
+- the institution's `pms_type` is `nexhealth` — GoTracker rows are never touched,
+  they carry real Chair Flow data
+- the appointment is still `scheduled`, i.e. not cancelled
+- `start_time + duration` has passed, where duration comes from the matching
+  `institution_appointment_types.duration_minutes` and falls back to
+  `nexhealth_post_visit_default_duration_minutes` (60) when the type is unknown
+- the visit ended within `nexhealth_post_visit_lookback_hours` (72)
+
+It writes `flow_state = "Completed"` and `flow_changed_at = <computed visit end>`
+onto the working-set row, then fires `trigger_appointment_state_workflows`.
+
+Two details that matter:
+
+- **`flow_changed_at` is the end of the visit, not sweep time.** The post-op
+  template waits a fixed offset from that anchor, so it has to mean the same
+  thing on both PMSs or NexHealth patients would be called late by up to the
+  sweep interval.
+- **The template is not modified.** The trigger matcher skips `status_ids` when
+  empty and `confirmed`/`preconfirmed` when null, so a synthesized
+  `flow_state="Completed"` satisfies the shipped definition as-is. One campaign
+  definition, both PMSs.
+
+Safety properties:
+
+| Concern | Handling |
+|---|---|
+| Re-triggering the same visit | `flow_state` excludes the row next sweep, and `flow_changed_at` is folded into the enrollment idempotency key |
+| Crash mid-sweep | Marks are committed before any trigger fires, so a crash re-marks rather than double-enrolling |
+| First run on a busy clinic | The lookback bounds the reach; enrollment separately refuses work older than the trigger's `max_followup_delay_hours` |
+| Cancelled visits | Excluded by the `status = 'scheduled'` predicate |
+
+Known bound: the SQL pre-filters on `start_time` within the lookback, so an
+unusually long appointment that *started* before the window but *ended* inside it
+is missed. With a 72h window and typical durations this is not reachable in
+practice.
+
+**What this cannot do:** NexHealth exposes no no-show or completion status, so a
+patient who never turned up is indistinguishable from one who was treated. Their
+appointment is not cancelled, so the sweep marks it complete and the follow-up
+campaign calls them. Suppressing that needs a real status signal from NexHealth.
+
 ## V3 webhook shadow validation
 
 REST cutover and webhook cutover stay separate. Existing live subscriptions
