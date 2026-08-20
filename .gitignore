@@ -99,3 +99,7 @@ cdk.out/
 
 # Graphify knowledge graph (generated; large graph.json). Rebuild with `graphify .`
 graphify-out/
+
+.claude
+/docs/
+/Internal/
