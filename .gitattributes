@@ -1,0 +1,10 @@
+# Shell scripts must keep LF endings even when checked out on Windows.
+#
+# entrypoint.sh is COPYed straight into the Docker image, and the staging deploy
+# builds that image from the working tree. With core.autocrlf=true a Windows
+# checkout rewrites the shebang to "#!/bin/sh\r", so Linux looks for an
+# interpreter named "/bin/sh\r" and the container dies with the misleading
+# "exec ./entrypoint.sh: no such file or directory". The scripts/ helpers run
+# under Git Bash, where CRLF is likewise a hazard.
+*.sh text eol=lf
+entrypoint.sh text eol=lf
