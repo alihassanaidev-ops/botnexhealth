@@ -7,13 +7,14 @@ Proxies mutations to PMS and refreshes the local cache.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, timedelta
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -300,23 +301,14 @@ def _date_from_iso(value: str | None) -> str | None:
     return str(value).split("T", 1)[0]
 
 
-def _next_week_start_for_location(location: InstitutionLocation) -> str:
-    timezone_name = location.timezone or "UTC"
-    try:
-        today = datetime.now(ZoneInfo(timezone_name)).date()
-    except Exception:
-        today = datetime.utcnow().date()
-    days_until_next_monday = 7 - today.weekday()
-    return (today + timedelta(days=days_until_next_monday)).isoformat()
-
-
-def _day_name(value: str | None) -> str | None:
-    if not value:
-        return None
-    try:
-        return date.fromisoformat(value).strftime("%A")
-    except ValueError:
-        return None
+# Bulk range linking is throttled so a wide selection cannot exhaust the
+# NexHealth request quota: the client applies at most BULK_LINK_BATCH_SIZE
+# windows per request and waits BULK_LINK_BATCH_PAUSE_SECONDS between batches.
+# Both values are handed to the client by the preview endpoint so the pacing
+# lives in one place.
+BULK_LINK_MAX_RANGE_DAYS = 15
+BULK_LINK_BATCH_SIZE = 10
+BULK_LINK_BATCH_PAUSE_SECONDS = 30
 
 
 def _strip_source_prefix(value: Any) -> str | None:
@@ -336,9 +328,40 @@ def _same_source_id(left: Any, right: Any) -> bool:
     return bool(left_id and right_id and left_id == right_id)
 
 
-def _next_week_dates(location: InstitutionLocation) -> list[str]:
-    start = date.fromisoformat(_next_week_start_for_location(location))
-    return [(start + timedelta(days=offset)).isoformat() for offset in range(7)]
+def _parse_range_dates(
+    location: InstitutionLocation,
+    start_date: str,
+    end_date: str,
+) -> list[str]:
+    """Validate a forward-looking range and expand it to inclusive ISO dates.
+
+    The range must start no earlier than today in the location's timezone and
+    span at most BULK_LINK_MAX_RANGE_DAYS days.
+    """
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "start_date and end_date must be YYYY-MM-DD dates",
+        ) from None
+
+    if end < start:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "end_date must not be before start_date")
+
+    today = date.fromisoformat(_today_for_location(location))
+    if start < today:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "start_date must not be in the past")
+
+    day_count = (end - start).days + 1
+    if day_count > BULK_LINK_MAX_RANGE_DAYS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Date range must not exceed {BULK_LINK_MAX_RANGE_DAYS} days",
+        )
+
+    return [(start + timedelta(days=offset)).isoformat() for offset in range(day_count)]
 
 
 def _availability_matches_dates(item: dict[str, Any], dates: set[str]) -> bool:
@@ -348,14 +371,24 @@ def _availability_matches_dates(item: dict[str, Any], dates: set[str]) -> bool:
     return bool(specific_date and str(specific_date) in dates)
 
 
-def _availability_with_linked_types(
-    item: dict[str, Any],
-    appointment_type_ids: list[str],
-) -> dict[str, Any]:
-    out = dict(item)
-    out["appointment_type_ids"] = [_strip_source_prefix(type_id) for type_id in appointment_type_ids]
-    out.pop("appointment_types", None)
-    return out
+def _match_availabilities_in_range(
+    raw_items: list[dict[str, Any]],
+    *,
+    dates: set[str],
+    operatory_id: str | None,
+) -> list[dict[str, Any]]:
+    """Dated work windows falling inside `dates`, optionally one operatory only.
+
+    Recurring rows (`days` with no `specific_date`) are skipped on purpose:
+    patching them would change every future week, not just the selected range.
+    """
+    return [
+        item
+        for item in raw_items
+        if item.get("id") not in (None, "")
+        and _availability_matches_dates(item, dates)
+        and (operatory_id is None or _same_source_id(item.get("operatory_id"), operatory_id))
+    ]
 
 
 def _availability_response_from_slot(slot: Any, *, index: int) -> CachedAvailabilityResponse:
@@ -445,17 +478,31 @@ class UpdateAvailabilityRequest(BaseModel):
     active: bool | None = None
 
 
-class BulkLinkNextWeekAvailabilityRequest(BaseModel):
+class BulkLinkRangePreviewRequest(BaseModel):
     provider_id: str
-    appointment_type_ids: list[str]
+    start_date: str
+    end_date: str
     operatory_id: str | None = None
 
 
-class BulkLinkNextWeekAvailabilityResponse(BaseModel):
+class BulkLinkRangePreviewResponse(BaseModel):
+    start_date: str
+    end_date: str
+    day_count: int
     matched_count: int
-    updated_count: int
-    skipped_count: int
     windows: list[CachedAvailabilityResponse]
+    batch_size: int
+    batch_pause_seconds: int
+
+
+class BulkLinkRangeApplyRequest(BaseModel):
+    availability_ids: list[str] = Field(min_length=1, max_length=BULK_LINK_BATCH_SIZE)
+    appointment_type_ids: list[str] = Field(min_length=1)
+
+
+class BulkLinkRangeApplyResponse(BaseModel):
+    updated_count: int
+    updated_ids: list[str] = []
     errors: list[str] = []
 
 
@@ -972,18 +1019,19 @@ async def list_availabilities(
 
 
 @router.post(
-    "/availabilities/bulk-link-next-week",
-    response_model=BulkLinkNextWeekAvailabilityResponse,
+    "/availabilities/bulk-link-range/preview",
+    response_model=BulkLinkRangePreviewResponse,
 )
-async def bulk_link_next_week_availabilities(
-    req: BulkLinkNextWeekAvailabilityRequest,
+async def preview_bulk_link_range_availabilities(
+    req: BulkLinkRangePreviewRequest,
     current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     location_id: str | None = Query(None),
 ):
-    """Link appointment types to real PMS work windows that occur next week."""
-    if not req.appointment_type_ids:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "appointment_type_ids is required")
+    """List the real PMS work windows a range-link would touch, without writing.
 
+    Reading the PMS once here lets the client split the writes into throttled
+    batches without re-listing (and re-spending quota) for every batch.
+    """
     async with get_db_session() as session:
         institution, location = await _resolve_institution_location(current_user, session, location_id)
         adapter = await _get_adapter(institution, location)
@@ -991,71 +1039,98 @@ async def bulk_link_next_week_availabilities(
         if not isinstance(adapter, SupportsAvailabilityLinking):
             raise HTTPException(400, "This PMS does not support availability updates")
 
-        next_week_dates = set(_next_week_dates(location))
+        range_dates = _parse_range_dates(location, req.start_date, req.end_date)
         raw_items = await adapter.list_availabilities(
             provider_id=req.provider_id,
             ignore_past_dates=False,
         )
-        matched_items = [
-            item for item in raw_items
-            if _availability_matches_dates(item, next_week_dates)
-            and (
-                req.operatory_id is None
-                or _same_source_id(item.get("operatory_id"), req.operatory_id)
-            )
-        ]
+        matched_items = _match_availabilities_in_range(
+            raw_items,
+            dates=set(range_dates),
+            operatory_id=req.operatory_id,
+        )
 
-        updated_windows: list[CachedAvailabilityResponse] = []
-        errors: list[str] = []
-        for item in matched_items:
-            raw_id = item.get("id")
-            source_id = _prefixed_nexhealth_id(raw_id)
-            if not source_id:
-                errors.append("Skipped availability without an id")
-                continue
+    return BulkLinkRangePreviewResponse(
+        start_date=range_dates[0],
+        end_date=range_dates[-1],
+        day_count=len(range_dates),
+        matched_count=len(matched_items),
+        windows=[_availability_response_from_raw(item) for item in matched_items],
+        batch_size=BULK_LINK_BATCH_SIZE,
+        batch_pause_seconds=BULK_LINK_BATCH_PAUSE_SECONDS,
+    )
+
+
+@router.post(
+    "/availabilities/bulk-link-range/apply",
+    response_model=BulkLinkRangeApplyResponse,
+)
+async def apply_bulk_link_range_availabilities(
+    req: BulkLinkRangeApplyRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
+):
+    """Link appointment types to one throttled batch of PMS work windows.
+
+    Capped at BULK_LINK_BATCH_SIZE ids per call; the client waits
+    BULK_LINK_BATCH_PAUSE_SECONDS between calls so a wide date range does not
+    burn through the NexHealth request quota in one burst.
+    """
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
+
+        if not isinstance(adapter, SupportsAvailabilityLinking):
+            raise HTTPException(400, "This PMS does not support availability updates")
+
+        async def _link_one(availability_id: str) -> str | Exception:
             try:
                 await adapter.update_availability(
-                    availability_id=source_id,
+                    availability_id=availability_id,
                     appointment_type_ids=req.appointment_type_ids,
                 )
-                updated_windows.append(
-                    _availability_response_from_raw(
-                        _availability_with_linked_types(item, req.appointment_type_ids),
-                        fallback_source_id=source_id,
-                    )
-                )
-            except Exception as exc:
-                errors.append(f"{source_id}: {safe_error_summary(exc)}")
+                return availability_id
+            except Exception as exc:  # surfaced per-window; the batch continues
+                return exc
+
+        outcomes = await asyncio.gather(
+            *(_link_one(availability_id) for availability_id in req.availability_ids)
+        )
 
         loc_slug = location.slug
         institution_id = institution.id
-        matched_count = len(matched_items)
-        updated_count = len(updated_windows)
-        skipped_count = matched_count - updated_count
+
+    updated_ids = [
+        availability_id
+        for availability_id, outcome in zip(req.availability_ids, outcomes)
+        if not isinstance(outcome, Exception)
+    ]
+    errors = [
+        f"{availability_id}: {safe_error_summary(outcome)}"
+        for availability_id, outcome in zip(req.availability_ids, outcomes)
+        if isinstance(outcome, Exception)
+    ]
 
     log_audit_background(
         actor=AuditActor.ADMIN,
         user_id=str(current_user.id),
         action=AuditAction.LOCATION_UPDATE,
-        target_resource=f"location:{loc_slug}/availabilities:next_week",
+        target_resource=f"location:{loc_slug}/availabilities:range_batch",
         outcome=AuditOutcome.SUCCESS if not errors else AuditOutcome.FAILURE_EXTERNAL_API,
         metadata={
             "actor_role": current_user.role,
-            "action": "bulk_link_next_week_availabilities",
-            "provider_id": req.provider_id,
-            "operatory_id": req.operatory_id,
+            "action": "apply_bulk_link_range_availabilities",
             "appointment_type_ids": req.appointment_type_ids,
-            "matched_count": matched_count,
-            "updated_count": updated_count,
-            "skipped_count": skipped_count,
+            "availability_ids": req.availability_ids,
+            "requested_count": len(req.availability_ids),
+            "updated_count": len(updated_ids),
+            "failed_count": len(errors),
         },
         institution_id=institution_id,
     )
-    return BulkLinkNextWeekAvailabilityResponse(
-        matched_count=matched_count,
-        updated_count=updated_count,
-        skipped_count=skipped_count,
-        windows=updated_windows,
+    return BulkLinkRangeApplyResponse(
+        updated_count=len(updated_ids),
+        updated_ids=updated_ids,
         errors=errors,
     )
 

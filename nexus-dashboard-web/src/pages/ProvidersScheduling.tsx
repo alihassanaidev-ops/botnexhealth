@@ -1,12 +1,16 @@
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Calendar as CalendarPicker } from "@/components/ui/calendar"
+import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
+import { addDays, differenceInCalendarDays, format, startOfDay } from "date-fns"
+import type { DateRange } from "react-day-picker"
 import { RefreshCcw, AlertTriangle, Clock, Calendar, CalendarDays, MapPin, UserCog } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
@@ -19,12 +23,26 @@ import {
     listOperatories,
     createAvailability,
     updateAvailability,
-    bulkLinkNextWeekAvailabilities,
+    previewBulkLinkRange,
+    applyBulkLinkRange,
     updateProvider,
     triggerSync,
 } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
 import { useSelectedLocationId } from "@/context/LocationContext"
+
+const ISO_DATE = "yyyy-MM-dd"
+/** Bulk range linking is capped server-side; `today + 14` spans 15 days inclusive. */
+const BULK_RANGE_MAX_DAYS = 15
+/** Range the picker opens with — matches the old fixed "next week" behaviour. */
+const BULK_RANGE_DEFAULT_DAYS = 7
+
+interface BulkProgress {
+    batch: number
+    batches: number
+    done: number
+    total: number
+}
 
 export default function ProvidersScheduling() {
     const { user } = useAuth()
@@ -67,6 +85,21 @@ export default function ProvidersScheduling() {
     const [canLinkAvailability, setCanLinkAvailability] = useState(false)
     const [bulkDialogOpen, setBulkDialogOpen] = useState(false)
     const [bulkTypeIds, setBulkTypeIds] = useState<string[]>([])
+    const bulkRangeMin = useMemo(() => startOfDay(new Date()), [])
+    const bulkRangeMax = useMemo(
+        () => addDays(bulkRangeMin, BULK_RANGE_MAX_DAYS - 1),
+        [bulkRangeMin],
+    )
+    const [bulkRange, setBulkRange] = useState<DateRange | undefined>(() => ({
+        from: startOfDay(new Date()),
+        to: addDays(startOfDay(new Date()), BULK_RANGE_DEFAULT_DAYS - 1),
+    }))
+    const [bulkRunning, setBulkRunning] = useState(false)
+    const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null)
+    const [bulkPauseRemaining, setBulkPauseRemaining] = useState(0)
+    // Flipped on unmount (or a cancel) so the batch loop stops between batches
+    // instead of firing more PMS writes into a dead component.
+    const bulkCancelledRef = useRef(false)
 
     // Load providers + appointment types once on mount
     const fetchData = useCallback(async () => {
@@ -122,6 +155,9 @@ export default function ProvidersScheduling() {
         fetchAvailabilities()
     }, [fetchAvailabilities])
 
+    // Stop the throttled batch loop if the page goes away mid-run.
+    useEffect(() => () => { bulkCancelledRef.current = true }, [])
+
     // Reset appointment type/operatory filters + sync settings when provider changes
     useEffect(() => {
         setSelectedApptTypeId("all")
@@ -134,6 +170,14 @@ export default function ProvidersScheduling() {
     }, [selectedProviderId, providers])
 
     const selectedProvider = providers.find((p) => p.source_id === selectedProviderId)
+
+    const bulkRangeDayCount =
+        bulkRange?.from && bulkRange?.to
+            ? differenceInCalendarDays(bulkRange.to, bulkRange.from) + 1
+            : 0
+    const bulkRangeLabel = bulkRangeDayCount
+        ? `${format(bulkRange!.from!, "MMM d")} - ${format(bulkRange!.to!, "MMM d, yyyy")} (${bulkRangeDayCount} day${bulkRangeDayCount === 1 ? "" : "s"})`
+        : "Pick a start and end day"
 
     const handleSync = async () => {
         if (!canManage || !locationId) return
@@ -211,35 +255,98 @@ export default function ProvidersScheduling() {
         )
     }
 
-    const handleBulkLinkNextWeek = async () => {
+    // Idle wait between write batches, surfaced as a live countdown so the
+    // admin can see the run is pacing itself rather than stalled.
+    const pauseBetweenBatches = (seconds: number) =>
+        new Promise<void>((resolve) => {
+            let remaining = seconds
+            setBulkPauseRemaining(remaining)
+            const timer = window.setInterval(() => {
+                remaining -= 1
+                if (remaining <= 0 || bulkCancelledRef.current) {
+                    window.clearInterval(timer)
+                    setBulkPauseRemaining(0)
+                    resolve()
+                    return
+                }
+                setBulkPauseRemaining(remaining)
+            }, 1000)
+        })
+
+    const handleBulkLinkRange = async () => {
         if (!canManage || !selectedProviderId || !locationId) return
         if (bulkTypeIds.length === 0) {
             toast.error("Please select at least one appointment type")
             return
         }
-        setSaving(true)
+        if (!bulkRange?.from || !bulkRange?.to) {
+            toast.error("Please select a date range")
+            return
+        }
+
+        bulkCancelledRef.current = false
+        setBulkRunning(true)
+        setBulkProgress(null)
+        setBulkPauseRemaining(0)
         try {
-            const result = await bulkLinkNextWeekAvailabilities({
+            // One read for the whole range; the batches below only write, so a
+            // wide range costs the PMS quota a single listing call.
+            const preview = await previewBulkLinkRange({
                 provider_id: selectedProviderId,
-                appointment_type_ids: bulkTypeIds,
+                start_date: format(bulkRange.from, ISO_DATE),
+                end_date: format(bulkRange.to, ISO_DATE),
                 operatory_id: selectedOperatoryId === "all" ? null : selectedOperatoryId,
             }, locationId)
-            if (result.updated_count > 0) {
-                toast.success(`Linked ${result.updated_count} next-week work window${result.updated_count === 1 ? "" : "s"}`)
-            } else {
-                toast.warning("No next-week work windows matched the current provider and operatory filters")
+
+            const ids = preview.windows.map((w) => w.source_id).filter(Boolean)
+            if (ids.length === 0) {
+                toast.warning("No dated work windows in that range matched the selected provider and operatory")
+                return
             }
-            if (result.errors.length > 0) {
-                toast.error(`${result.errors.length} work window${result.errors.length === 1 ? "" : "s"} failed to update`)
+
+            const batches: string[][] = []
+            for (let i = 0; i < ids.length; i += preview.batch_size) {
+                batches.push(ids.slice(i, i + preview.batch_size))
+            }
+
+            let updated = 0
+            const errors: string[] = []
+            for (let i = 0; i < batches.length; i++) {
+                if (bulkCancelledRef.current) break
+                setBulkProgress({ batch: i + 1, batches: batches.length, done: updated, total: ids.length })
+                const result = await applyBulkLinkRange({
+                    availability_ids: batches[i],
+                    appointment_type_ids: bulkTypeIds,
+                }, locationId)
+                updated += result.updated_count
+                errors.push(...result.errors)
+                setBulkProgress({ batch: i + 1, batches: batches.length, done: updated, total: ids.length })
+                if (i < batches.length - 1 && !bulkCancelledRef.current) {
+                    await pauseBetweenBatches(preview.batch_pause_seconds)
+                }
+            }
+
+            if (bulkCancelledRef.current) return
+
+            if (updated > 0) {
+                toast.success(
+                    `Linked ${updated} work window${updated === 1 ? "" : "s"} across ` +
+                    `${preview.day_count} day${preview.day_count === 1 ? "" : "s"}`
+                )
+            }
+            if (errors.length > 0) {
+                toast.error(`${errors.length} work window${errors.length === 1 ? "" : "s"} failed to update`)
             }
             setBulkDialogOpen(false)
             setBulkTypeIds([])
             await fetchAvailabilities()
         } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : "Failed to link next week's work windows"
+            const message = error instanceof Error ? error.message : "Failed to link the selected date range"
             toast.error(message)
         } finally {
-            setSaving(false)
+            setBulkRunning(false)
+            setBulkProgress(null)
+            setBulkPauseRemaining(0)
         }
     }
 
@@ -417,7 +524,7 @@ export default function ProvidersScheduling() {
                                     disabled={loading || !selectedProviderId}
                                 >
                                     <CalendarDays className="h-4 w-4" />
-                                    Link next week
+                                    Link Date Range
                                 </Button>
                             )}
                             {canLinkAvailability && (
@@ -644,7 +751,7 @@ export default function ProvidersScheduling() {
                                 {filteredAvailabilities.length} {canLinkAvailability ? "schedule" : "slot"}{filteredAvailabilities.length !== 1 ? "s" : ""} found
                                 {selectedApptTypeId !== "all" ? " (filtered)" : ""}.
                                 {canLinkAvailability && canManage
-                                    ? ' Click "Edit Linking" to associate appointment types, or use "Link next week" to bulk-link matching windows.'
+                                    ? ' Click "Edit Linking" to associate appointment types, or use "Link Date Range" to bulk-link matching windows.'
                                     : canLinkAvailability
                                         ? " Read-only view."
                                         : " These are read directly from your PMS."}
@@ -773,13 +880,17 @@ export default function ProvidersScheduling() {
 
             {canManage && canLinkAvailability && (
                 <>
-                    {/* Bulk Link Next Week Dialog */}
-                    <Dialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
-                        <DialogContent className="max-w-md">
+                    {/* Bulk Link Date Range Dialog */}
+                    <Dialog
+                        open={bulkDialogOpen}
+                        onOpenChange={(next) => { if (!bulkRunning) setBulkDialogOpen(next) }}
+                    >
+                        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
                             <DialogHeader>
-                                <DialogTitle>Link Next Week</DialogTitle>
+                                <DialogTitle>Link Date Range</DialogTitle>
                                 <DialogDescription>
-                                    Apply appointment types to real PMS work windows for next week.
+                                    Apply appointment types to real PMS work windows on the days you pick, from
+                                    today up to {BULK_RANGE_MAX_DAYS} days ahead.
                                 </DialogDescription>
                             </DialogHeader>
                             <div className="space-y-3 py-2">
@@ -790,38 +901,105 @@ export default function ProvidersScheduling() {
                                             ? "All operatories"
                                             : operatoryNameBySourceId.get(selectedOperatoryId) ?? selectedOperatoryId}
                                     </div>
-                                    <div>Range: next week</div>
+                                    <div>Range: {bulkRangeLabel}</div>
                                 </div>
-                                {appointmentTypes.length === 0 ? (
-                                    <p className="text-sm text-muted-foreground">
-                                        No appointment types configured. Create some first.
-                                    </p>
-                                ) : (
-                                    <div className="border rounded-md max-h-64 overflow-y-auto">
-                                        {appointmentTypes.map((at) => (
-                                            <label
-                                                key={at.source_id}
-                                                className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <p className="text-sm font-medium">Days to link</p>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 px-2 text-xs"
+                                                onClick={() => setBulkRange(undefined)}
+                                                disabled={bulkRunning || !bulkRange?.from}
                                             >
-                                                <Checkbox
-                                                    checked={bulkTypeIds.includes(at.source_id)}
-                                                    onCheckedChange={() => toggleBulkTypeId(at.source_id)}
-                                                />
-                                                <span className="text-sm">{at.name}</span>
-                                                {at.duration_minutes && (
-                                                    <span className="text-xs text-muted-foreground ml-auto">
-                                                        {at.duration_minutes} min
+                                                Clear
+                                            </Button>
+                                        </div>
+                                        {/* `max` counts the gap between the ends, so 14 means 15 days inclusive. */}
+                                        <CalendarPicker
+                                            mode="range"
+                                            max={BULK_RANGE_MAX_DAYS - 1}
+                                            selected={bulkRange}
+                                            onSelect={setBulkRange}
+                                            defaultMonth={bulkRangeMin}
+                                            startMonth={bulkRangeMin}
+                                            endMonth={bulkRangeMax}
+                                            disabled={bulkRunning || { before: bulkRangeMin, after: bulkRangeMax }}
+                                            className="rounded-md border"
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            Click a day to start a range, then a later day to extend it.
+                                            Clear to start over.
+                                        </p>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <p className="text-sm font-medium">Appointment types</p>
+                                        {appointmentTypes.length === 0 ? (
+                                            <p className="text-sm text-muted-foreground">
+                                                No appointment types configured. Create some first.
+                                            </p>
+                                        ) : (
+                                            <div className="border rounded-md max-h-64 overflow-y-auto">
+                                                {appointmentTypes.map((at) => (
+                                                    <label
+                                                        key={at.source_id}
+                                                        className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                    >
+                                                        <Checkbox
+                                                            checked={bulkTypeIds.includes(at.source_id)}
+                                                            onCheckedChange={() => toggleBulkTypeId(at.source_id)}
+                                                            disabled={bulkRunning}
+                                                        />
+                                                        <span className="text-sm">{at.name}</span>
+                                                        {at.duration_minutes && (
+                                                            <span className="text-xs text-muted-foreground ml-auto">
+                                                                {at.duration_minutes} min
+                                                            </span>
+                                                        )}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                                {bulkRunning && (
+                                    <div className="space-y-2 rounded-md border border-border/70 p-3">
+                                        {bulkProgress ? (
+                                            <>
+                                                <div className="flex items-center justify-between text-sm">
+                                                    <span>Batch {bulkProgress.batch} of {bulkProgress.batches}</span>
+                                                    <span className="text-muted-foreground">
+                                                        {bulkProgress.done} / {bulkProgress.total} linked
                                                     </span>
-                                                )}
-                                            </label>
-                                        ))}
+                                                </div>
+                                                <Progress value={(bulkProgress.done / bulkProgress.total) * 100} />
+                                            </>
+                                        ) : (
+                                            <p className="text-sm">Checking which work windows fall in this range...</p>
+                                        )}
+                                        <p className="text-xs text-muted-foreground">
+                                            {bulkPauseRemaining > 0
+                                                ? `Pausing ${bulkPauseRemaining}s before the next batch to stay inside the PMS API quota.`
+                                                : "Keep this dialog open until the run finishes."}
+                                        </p>
                                     </div>
                                 )}
                             </div>
                             <DialogFooter>
-                                <Button variant="outline" onClick={() => setBulkDialogOpen(false)}>Cancel</Button>
-                                <Button onClick={handleBulkLinkNextWeek} disabled={saving || bulkTypeIds.length === 0}>
-                                    {saving ? "Linking..." : "Link Next Week"}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setBulkDialogOpen(false)}
+                                    disabled={bulkRunning}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    onClick={handleBulkLinkRange}
+                                    disabled={bulkRunning || bulkTypeIds.length === 0 || !bulkRange?.from || !bulkRange?.to}
+                                >
+                                    {bulkRunning ? "Linking..." : "Apply"}
                                 </Button>
                             </DialogFooter>
                         </DialogContent>

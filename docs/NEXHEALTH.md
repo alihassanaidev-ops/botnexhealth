@@ -158,12 +158,26 @@ path: `/appointment_slots` on legacy v2 and `/available_slots` on stable v3.
 Don't reach for `/availabilities` or `/working_hours` when you mean "what can
 the patient book".
 
-**Setup can bulk-link next week's dated work windows.** The provider scheduling
-page has a "Link next week" action that reads real NexHealth working-window
-records, filters them to dated rows whose `specific_date` falls next week for
-the selected provider/operatories, and PATCHes those records with the selected
-appointment types. It deliberately does not patch recurring rows with only
-`days`, because that would affect future weeks too, not just the selected range.
+**Setup can bulk-link dated work windows over a chosen date range.** The
+provider scheduling page has a "Link Date Range" action: the admin picks a range
+on a calendar (from today, 1 to 15 days), and the app reads real NexHealth
+working-window records, filters them to dated rows whose `specific_date` falls
+inside that range for the selected provider/operatories, and PATCHes those
+records with the selected appointment types. It deliberately does not patch
+recurring rows with only `days`, because that would affect future weeks too, not
+just the selected range.
+
+The write is throttled so a wide range cannot exhaust the NexHealth request
+quota. Two endpoints split the work, both short enough to survive the 30s
+CloudFront/axios request timeout:
+
+- `POST .../availabilities/bulk-link-range/preview` reads `/availabilities`
+  **once** for the whole range and returns the matching windows plus the
+  `batch_size` (10) and `batch_pause_seconds` (30) the client must honour.
+- `POST .../availabilities/bulk-link-range/apply` PATCHes at most `batch_size`
+  windows per call, concurrently. The dashboard walks the batches and waits
+  `batch_pause_seconds` between them, so NexHealth sees at most 10 writes per
+  30s window and only one listing call for the entire run.
 
 **`/availabilities` returns empty for PMS-synced schedules.** For providers
 whose schedule syncs from the PMS, the endpoint can return 200 with zero rows

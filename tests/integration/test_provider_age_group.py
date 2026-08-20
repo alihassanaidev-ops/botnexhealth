@@ -297,6 +297,9 @@ async def test_list_providers_filters_by_age(monkeypatch):
 
     # Mock _resolve_context
     mock_adapter = SimpleNamespace(
+        # `source` is part of the PMSAdapter contract; list_providers uses it to
+        # rebuild the "nh-"-prefixed source_id the age rules are cached under.
+        source="nexhealth",
         list_providers=lambda: [
             _make_pms_provider("100", "Dr Pediatric"),   # min=0, max=17
             _make_pms_provider("200", "Dr Adult"),       # min=18, max=65
@@ -349,7 +352,7 @@ async def test_list_providers_adult_patient(monkeypatch):
     """Adult patient gets adult provider + unrestricted."""
     from src.app.retell import handlers
 
-    mock_adapter = SimpleNamespace()
+    mock_adapter = SimpleNamespace(source="nexhealth")
 
     async def mock_list_providers():
         return [
@@ -397,7 +400,7 @@ async def test_list_providers_no_dob_returns_all(monkeypatch):
     """Without date_of_birth, all providers are returned."""
     from src.app.retell import handlers
 
-    mock_adapter = SimpleNamespace()
+    mock_adapter = SimpleNamespace(source="nexhealth")
 
     async def mock_list_providers():
         return [
@@ -426,7 +429,7 @@ async def test_list_providers_invalid_dob_returns_all(monkeypatch):
     """Invalid DOB format should not crash — returns all providers."""
     from src.app.retell import handlers
 
-    mock_adapter = SimpleNamespace()
+    mock_adapter = SimpleNamespace(source="nexhealth")
 
     async def mock_list_providers():
         return [

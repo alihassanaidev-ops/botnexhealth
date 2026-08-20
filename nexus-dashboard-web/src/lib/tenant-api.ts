@@ -159,22 +159,49 @@ export async function listAvailabilities(
     return unwrapArray<CachedAvailability>(data, `${BASE}/availabilities`);
 }
 
-export async function bulkLinkNextWeekAvailabilities(
+export interface BulkLinkRangePreview {
+    start_date: string;
+    end_date: string;
+    day_count: number;
+    matched_count: number;
+    windows: CachedAvailability[];
+    /** Max work windows the API accepts per apply call. */
+    batch_size: number;
+    /** Seconds to wait between apply calls so the PMS quota is not exhausted. */
+    batch_pause_seconds: number;
+}
+
+/** Work windows a range-link would touch. Read-only — nothing is written. */
+export async function previewBulkLinkRange(
     payload: {
         provider_id: string;
-        appointment_type_ids: string[];
+        start_date: string;
+        end_date: string;
         operatory_id?: string | null;
     },
     locationId?: string
+): Promise<BulkLinkRangePreview> {
+    const { data } = await api.post<BulkLinkRangePreview>(
+        `${BASE}/availabilities/bulk-link-range/preview${qs(locationId)}`,
+        payload
+    );
+    return data;
+}
+
+/** Link one throttled batch (at most `batch_size` windows) from a preview. */
+export async function applyBulkLinkRange(
+    payload: {
+        availability_ids: string[];
+        appointment_type_ids: string[];
+    },
+    locationId?: string
 ): Promise<{
-    matched_count: number;
     updated_count: number;
-    skipped_count: number;
-    windows: CachedAvailability[];
+    updated_ids: string[];
     errors: string[];
 }> {
     const { data } = await api.post(
-        `${BASE}/availabilities/bulk-link-next-week${qs(locationId)}`,
+        `${BASE}/availabilities/bulk-link-range/apply${qs(locationId)}`,
         payload
     );
     return data;
