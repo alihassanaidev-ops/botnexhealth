@@ -29,7 +29,8 @@ import {
     triggerSync,
 } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
-import { useSelectedLocationId } from "@/context/LocationContext"
+import { useSelectedLocationId, useLocationContext } from "@/context/LocationContext"
+import SchedulerCalendar from "@/components/scheduling/SchedulerCalendar"
 
 const ISO_DATE = "yyyy-MM-dd"
 /** Bulk range linking is capped server-side; `today + 14` spans 15 days inclusive. */
@@ -47,6 +48,7 @@ interface BulkProgress {
 export default function ProvidersScheduling() {
     const { user } = useAuth()
     const locationId = useSelectedLocationId()
+    const { selectedLocation } = useLocationContext()
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [providers, setProviders] = useState<CachedProvider[]>([])
     const [availabilities, setAvailabilities] = useState<CachedAvailability[]>([])
@@ -56,6 +58,7 @@ export default function ProvidersScheduling() {
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
     const [showExpired, setShowExpired] = useState(false)
+    const [view, setView] = useState<"list" | "calendar">("calendar")
     const [loading, setLoading] = useState(true)
     const [loadingAvailabilities, setLoadingAvailabilities] = useState(false)
     const [syncing, setSyncing] = useState(false)
@@ -515,28 +518,41 @@ export default function ProvidersScheduling() {
                         : "Review live bookable slots from your PMS and configure provider scheduling rules."
                 }
                 actions={
-                    canManage ? (
-                        <>
-                            {canLinkAvailability && (
-                                <Button
-                                    variant="outline"
-                                    onClick={() => setBulkDialogOpen(true)}
-                                    disabled={loading || !selectedProviderId}
+                    <>
+                        <div className="inline-flex overflow-hidden rounded-md border">
+                            {(["calendar", "list"] as const).map((v) => (
+                                <button
+                                    key={v}
+                                    onClick={() => setView(v)}
+                                    className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground hover:text-foreground"}`}
                                 >
-                                    <CalendarDays className="h-4 w-4" />
-                                    Link Date Range
+                                    {v}
+                                </button>
+                            ))}
+                        </div>
+                        {canManage && view === "list" && (
+                            <>
+                                {canLinkAvailability && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => setBulkDialogOpen(true)}
+                                        disabled={loading || !selectedProviderId}
+                                    >
+                                        <CalendarDays className="h-4 w-4" />
+                                        Link next week
+                                    </Button>
+                                )}
+                                {canLinkAvailability && (
+                                    <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
+                                        Create Work Window
+                                    </Button>
+                                )}
+                                <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
+                                    <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
                                 </Button>
-                            )}
-                            {canLinkAvailability && (
-                                <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
-                                    Create Work Window
-                                </Button>
-                            )}
-                            <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
-                                <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                            </Button>
-                        </>
-                    ) : undefined
+                            </>
+                        )}
+                    </>
                 }
             />
 
@@ -571,6 +587,14 @@ export default function ProvidersScheduling() {
                         </p>
                     </CardContent>
                 </Card>
+            ) : view === "calendar" ? (
+                <SchedulerCalendar
+                    locationId={locationId}
+                    operatories={operatories}
+                    appointmentTypes={appointmentTypes}
+                    canManage={canManage}
+                    timezone={selectedLocation?.timezone ?? undefined}
+                />
             ) : (
                 <>
                     {/* Filters: Provider → Appointment Type */}
