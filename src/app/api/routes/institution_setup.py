@@ -185,6 +185,7 @@ class CachedOperatoryResponse(BaseModel):
     source_id: str
     name: str
     is_active: bool = True
+    is_hidden: bool = False
     synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
@@ -375,9 +376,9 @@ def _match_availabilities_in_range(
     raw_items: list[dict[str, Any]],
     *,
     dates: set[str],
-    operatory_id: str | None,
+    operatory_ids: set[str] | None,
 ) -> list[dict[str, Any]]:
-    """Dated work windows falling inside `dates`, optionally one operatory only.
+    """Dated work windows falling inside `dates`, optionally selected operatories only.
 
     Recurring rows (`days` with no `specific_date`) are skipped on purpose:
     patching them would change every future week, not just the selected range.
@@ -387,7 +388,38 @@ def _match_availabilities_in_range(
         for item in raw_items
         if item.get("id") not in (None, "")
         and _availability_matches_dates(item, dates)
-        and (operatory_id is None or _same_source_id(item.get("operatory_id"), operatory_id))
+        and (
+            operatory_ids is None
+            or any(_same_source_id(item.get("operatory_id"), operatory_id) for operatory_id in operatory_ids)
+        )
+    ]
+
+
+def _bulk_preview_operatory_ids(req: "BulkLinkRangePreviewRequest") -> set[str] | None:
+    if req.operatory_ids is not None:
+        cleaned = {operatory_id for operatory_id in req.operatory_ids if operatory_id}
+        if not cleaned:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "operatory_ids must not be empty when provided",
+            )
+        return cleaned
+    if req.operatory_id:
+        return {req.operatory_id}
+    return None
+
+
+def _filter_visible_availabilities(
+    items: list[CachedAvailabilityResponse],
+    hidden_operatory_ids: set[str],
+) -> list[CachedAvailabilityResponse]:
+    if not hidden_operatory_ids:
+        return items
+    return [
+        item
+        for item in items
+        if not item.operatory_source_id
+        or not any(_same_source_id(item.operatory_source_id, hidden_id) for hidden_id in hidden_operatory_ids)
     ]
 
 
@@ -418,6 +450,55 @@ def _availability_response_from_slot(slot: Any, *, index: int) -> CachedAvailabi
             "end": slot.end,
         },
     )
+
+
+async def _hidden_operatory_source_ids(
+    session: AsyncSession,
+    institution_id: str,
+    location_id: str,
+) -> set[str]:
+    result = await session.execute(
+        select(InstitutionOperatory.source_id).where(
+            InstitutionOperatory.institution_id == institution_id,
+            InstitutionOperatory.location_id == location_id,
+            InstitutionOperatory.is_hidden.is_(True),
+        )
+    )
+    return set(result.scalars().all())
+
+
+async def _ensure_operatory_is_visible(
+    session: AsyncSession,
+    institution_id: str,
+    location_id: str,
+    operatory_id: str,
+) -> None:
+    hidden_ids = await _hidden_operatory_source_ids(session, institution_id, location_id)
+    if any(_same_source_id(operatory_id, hidden_id) for hidden_id in hidden_ids):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cannot use a hidden operatory")
+
+
+async def _ensure_operatory_ids_visible(
+    session: AsyncSession,
+    institution_id: str,
+    location_id: str,
+    operatory_ids: list[str],
+) -> None:
+    hidden_ids = await _hidden_operatory_source_ids(session, institution_id, location_id)
+    requested_hidden_ids = sorted(
+        operatory_id
+        for operatory_id in set(operatory_ids)
+        if any(_same_source_id(operatory_id, hidden_id) for hidden_id in hidden_ids)
+    )
+    if requested_hidden_ids:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Cannot use hidden operatories: {', '.join(requested_hidden_ids)}",
+        )
+
+
+def _raw_operatory_id_is_hidden(value: Any, hidden_operatory_ids: set[str]) -> bool:
+    return any(_same_source_id(value, hidden_id) for hidden_id in hidden_operatory_ids)
 
 
 class LocationInfoResponse(BaseModel):
@@ -478,10 +559,16 @@ class UpdateAvailabilityRequest(BaseModel):
     active: bool | None = None
 
 
+class UpdateOperatoryRequest(BaseModel):
+    is_hidden: bool
+
+
 class BulkLinkRangePreviewRequest(BaseModel):
     provider_id: str
     start_date: str
     end_date: str
+    operatory_ids: list[str] | None = None
+    # Backward-compatible single-operatory field used by older clients.
     operatory_id: str | None = None
 
 
@@ -736,6 +823,13 @@ async def create_appointment_type(
             raise HTTPException(400, "This PMS does not support creating appointment types")
         if adapter.source == "gotracker" and not req.provider_ids:
             raise HTTPException(400, "GoTracker appointment types require at least one provider")
+        if req.operatory_ids:
+            await _ensure_operatory_ids_visible(
+                session,
+                institution.id,
+                location.id,
+                req.operatory_ids,
+            )
 
         result = await adapter.create_appointment_type(
             name=req.name,
@@ -822,6 +916,13 @@ async def update_appointment_type(
             raise HTTPException(400, "This PMS does not support updating appointment types")
         if adapter.source == "gotracker" and req.provider_ids == []:
             raise HTTPException(400, "GoTracker appointment types require at least one provider")
+        if req.operatory_ids:
+            await _ensure_operatory_ids_visible(
+                session,
+                institution.id,
+                location.id,
+                req.operatory_ids,
+            )
 
         result = await adapter.update_appointment_type(
             appointment_type_id=source_id,
@@ -924,18 +1025,19 @@ async def delete_appointment_type(
     )
 
 
-# ── Operatories (cached, read-only) ─────────────────────────────────────
+# ── Operatories (cached + local visibility) ─────────────────────────────
 
 
 @router.get("/operatories", response_model=list[CachedOperatoryResponse])
 async def list_operatories(
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_id: str | None = Query(None),
+    include_hidden: bool = Query(False),
 ):
     """List cached operatories for the institution location."""
     async with get_db_session() as session:
         institution, location = await _resolve_institution_location(current_user, session, location_id)
-        result = await session.execute(
+        stmt = (
             select(InstitutionOperatory)
             .where(
                 InstitutionOperatory.institution_id == institution.id,
@@ -943,7 +1045,55 @@ async def list_operatories(
             )
             .order_by(InstitutionOperatory.name)
         )
+        if not include_hidden:
+            stmt = stmt.where(InstitutionOperatory.is_hidden.is_(False))
+
+        result = await session.execute(stmt)
         return [CachedOperatoryResponse.model_validate(op) for op in result.scalars().all()]
+
+
+@router.patch("/operatories/{operatory_id}", response_model=CachedOperatoryResponse)
+async def update_operatory(
+    operatory_id: str,
+    req: UpdateOperatoryRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
+):
+    """Update local operatory setup flags without changing PMS data."""
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        result = await session.execute(
+            select(InstitutionOperatory).where(
+                InstitutionOperatory.institution_id == institution.id,
+                InstitutionOperatory.location_id == location.id,
+                InstitutionOperatory.source_id == operatory_id,
+            )
+        )
+        operatory = result.scalar_one_or_none()
+        if not operatory:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Operatory not found")
+
+        operatory.is_hidden = req.is_hidden
+        await session.flush()
+
+        response = CachedOperatoryResponse.model_validate(operatory)
+        loc_slug = location.slug
+        institution_id = institution.id
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/operatory:{operatory_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "update_operatory_visibility",
+            "is_hidden": req.is_hidden,
+        },
+        institution_id=institution_id,
+    )
+    return response
 
 
 # ── Descriptors (cached, read-only) ─────────────────────────────────────
@@ -987,6 +1137,7 @@ async def list_availabilities(
     async with get_db_session() as session:
         institution, location = await _resolve_institution_location(current_user, session, location_id)
         adapter = await _get_adapter(institution, location)
+        hidden_operatory_ids = await _hidden_operatory_source_ids(session, institution.id, location.id)
 
         # Build extra params for the PMS call
         extra: dict[str, Any] = {}
@@ -996,17 +1147,23 @@ async def list_availabilities(
         try:
             if isinstance(adapter, SupportsAvailabilityLinking):
                 raw_items = await adapter.list_availabilities(**extra)
-                return [_availability_response_from_raw(item) for item in raw_items]
+                return _filter_visible_availabilities(
+                    [_availability_response_from_raw(item) for item in raw_items],
+                    hidden_operatory_ids,
+                )
 
             slot_result = await adapter.find_available_slots(
                 start_date=start_date or _today_for_location(location),
                 days=days,
                 provider_id=provider_source_id,
             )
-            return [
-                _availability_response_from_slot(slot, index=index)
-                for index, slot in enumerate(slot_result.slots)
-            ]
+            return _filter_visible_availabilities(
+                [
+                    _availability_response_from_slot(slot, index=index)
+                    for index, slot in enumerate(slot_result.slots)
+                ],
+                hidden_operatory_ids,
+            )
         except Exception as e:
             logger.error(
                 "Failed to fetch schedule availability from PMS: %s",
@@ -1040,6 +1197,17 @@ async def preview_bulk_link_range_availabilities(
             raise HTTPException(400, "This PMS does not support availability updates")
 
         range_dates = _parse_range_dates(location, req.start_date, req.end_date)
+        hidden_operatory_ids = await _hidden_operatory_source_ids(session, institution.id, location.id)
+        selected_operatory_ids = _bulk_preview_operatory_ids(req)
+        if selected_operatory_ids and req.operatory_ids is not None:
+            await _ensure_operatory_ids_visible(
+                session,
+                institution.id,
+                location.id,
+                list(selected_operatory_ids),
+            )
+        elif req.operatory_id:
+            await _ensure_operatory_is_visible(session, institution.id, location.id, req.operatory_id)
         raw_items = await adapter.list_availabilities(
             provider_id=req.provider_id,
             ignore_past_dates=False,
@@ -1047,8 +1215,13 @@ async def preview_bulk_link_range_availabilities(
         matched_items = _match_availabilities_in_range(
             raw_items,
             dates=set(range_dates),
-            operatory_id=req.operatory_id,
+            operatory_ids=selected_operatory_ids,
         )
+        matched_items = [
+            item
+            for item in matched_items
+            if not _raw_operatory_id_is_hidden(item.get("operatory_id"), hidden_operatory_ids)
+        ]
 
     return BulkLinkRangePreviewResponse(
         start_date=range_dates[0],
@@ -1153,6 +1326,7 @@ async def create_availability(
 
         if not isinstance(adapter, SupportsAvailabilityLinking):
             raise HTTPException(400, "This PMS does not support creating availability windows")
+        await _ensure_operatory_is_visible(session, institution.id, location.id, req.operatory_id)
 
         raw = await adapter.link_availability(
             provider_id=req.provider_id,
@@ -1205,6 +1379,8 @@ async def update_availability(
 
         if not isinstance(adapter, SupportsAvailabilityLinking):
             raise HTTPException(400, "This PMS does not support availability updates")
+        if req.operatory_id is not None:
+            await _ensure_operatory_is_visible(session, institution.id, location.id, req.operatory_id)
 
         updated = await adapter.update_availability(
             availability_id=source_id,

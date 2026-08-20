@@ -14,7 +14,22 @@ from src.app.pms.base import SupportsAvailabilityLinking
 
 
 class _FakeSession:
-    pass
+    def __init__(self, hidden_operatory_ids=None):
+        self.hidden_operatory_ids = hidden_operatory_ids or []
+
+    async def execute(self, _stmt):
+        return _FakeHiddenOperatoryResult(self.hidden_operatory_ids)
+
+
+class _FakeHiddenOperatoryResult:
+    def __init__(self, hidden_operatory_ids):
+        self.hidden_operatory_ids = hidden_operatory_ids
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self.hidden_operatory_ids
 
 
 class _FakeAvailabilityAdapter(SupportsAvailabilityLinking):
@@ -66,10 +81,10 @@ class _FakeAvailabilityAdapter(SupportsAvailabilityLinking):
         return self.availabilities
 
 
-def _monkeypatch_route_context(monkeypatch, adapter, *, today="2026-08-20"):
+def _monkeypatch_route_context(monkeypatch, adapter, *, today="2026-08-20", hidden_operatory_ids=None):
     @asynccontextmanager
     async def fake_db_session():
-        yield _FakeSession()
+        yield _FakeSession(hidden_operatory_ids)
 
     async def fake_resolve(_current_user, _session, _location_id):
         return (
@@ -120,6 +135,30 @@ async def test_create_availability_returns_cached_response_shape(monkeypatch):
     assert result.source_id == "nh-999"
     assert result.provider_source_id == "nh-123"
     assert result.appointment_type_ids == ["nh-50"]
+
+
+@pytest.mark.asyncio
+async def test_create_availability_rejects_hidden_operatory(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    _monkeypatch_route_context(monkeypatch, adapter, hidden_operatory_ids=["nh-789"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route.create_availability(
+            req=route.CreateAvailabilityRequest(
+                provider_id="nh-123",
+                appointment_type_ids=["nh-50"],
+                operatory_id="nh-789",
+                days=["Monday"],
+                start_time="09:00",
+                end_time="17:00",
+            ),
+            current_user=_admin(),
+            location_id=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Cannot use a hidden operatory"
+    assert adapter.created_payload is None
 
 
 # ── Bulk link over a selected date range ─────────────────────────────────
@@ -230,6 +269,91 @@ async def test_preview_without_operatory_filter_matches_every_operatory(monkeypa
     )
 
     assert sorted(w.source_id for w in result.windows) == ["nh-101", "nh-104"]
+
+
+@pytest.mark.asyncio
+async def test_preview_matches_multiple_selected_operatories(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter)
+
+    result = await route.preview_bulk_link_range_availabilities(
+        req=route.BulkLinkRangePreviewRequest(
+            provider_id="nh-2",
+            operatory_ids=["nh-4", "nh-9"],
+            start_date="2026-08-20",
+            end_date="2026-08-22",
+        ),
+        current_user=_admin(),
+        location_id=None,
+    )
+
+    assert sorted(w.source_id for w in result.windows) == ["nh-101", "nh-104"]
+
+
+@pytest.mark.asyncio
+async def test_preview_without_operatory_filter_excludes_hidden_operatories(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter, hidden_operatory_ids=["nh-9"])
+
+    result = await route.preview_bulk_link_range_availabilities(
+        req=route.BulkLinkRangePreviewRequest(
+            provider_id="nh-2",
+            start_date="2026-08-20",
+            end_date="2026-08-22",
+        ),
+        current_user=_admin(),
+        location_id=None,
+    )
+
+    assert [w.source_id for w in result.windows] == ["nh-101"]
+
+
+@pytest.mark.asyncio
+async def test_preview_rejects_hidden_operatory_filter(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter, hidden_operatory_ids=["nh-4"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route.preview_bulk_link_range_availabilities(
+            req=route.BulkLinkRangePreviewRequest(
+                provider_id="nh-2",
+                operatory_id="nh-4",
+                start_date="2026-08-20",
+                end_date="2026-08-22",
+            ),
+            current_user=_admin(),
+            location_id=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Cannot use a hidden operatory"
+    assert adapter.list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_preview_rejects_hidden_operatory_in_multi_filter(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter, hidden_operatory_ids=["nh-9"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route.preview_bulk_link_range_availabilities(
+            req=route.BulkLinkRangePreviewRequest(
+                provider_id="nh-2",
+                operatory_ids=["nh-4", "nh-9"],
+                start_date="2026-08-20",
+                end_date="2026-08-22",
+            ),
+            current_user=_admin(),
+            location_id=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Cannot use hidden operatories: nh-9"
+    assert adapter.list_calls == 0
 
 
 @pytest.mark.asyncio

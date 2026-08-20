@@ -199,6 +199,7 @@ export interface CachedOperatory {
     source_id: string;
     name: string;
     is_active: boolean;
+    is_hidden: boolean;
     synced_at: string | null;
 }
 

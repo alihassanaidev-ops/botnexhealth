@@ -31,7 +31,11 @@ from src.app.models.institution_provider import InstitutionProvider
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
-from src.app.pms.base import PMSAdapter, SupportsAvailabilityLinking
+from src.app.pms.base import (
+    PMSAdapter,
+    SupportsAppointmentConfirmation,
+    SupportsAvailabilityLinking,
+)
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import (
@@ -757,7 +761,7 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
         if not args.get(field):
             return {"error": f"{field} is required."}
 
-    gender = str(args["gender"]).strip()
+    gender = str(args["gender"]).strip().lower().capitalize()
     if gender not in {"Female", "Male", "Other"}:
         return {"error": "gender must be one of: Female, Male, Other."}
 
@@ -1143,15 +1147,46 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
         return {"success": False, "error": "Failed to cancel appointment"}
 
 
-@register_function("reschedule_appointment")
+@register_function("confirm_appointment")
 @audit(
-    AuditAction.RESCHEDULE_APPOINTMENT,
+    AuditAction.CONFIRM_APPOINTMENT,
     resource=lambda args: (
-        f"reschedule:old={hash_for_logging(str(args.get('old_appointment_id'))) if args.get('old_appointment_id') else 'unknown'}"
+        f"appointment:{hash_for_logging(str(args.get('appointment_id'))) if args.get('appointment_id') else 'unknown'}"
     ),
 )
-async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
-    """Reschedule an appointment."""
+async def confirm_appointment(args: dict[str, Any]) -> dict[str, Any]:
+    """Mark an existing appointment confirmed."""
+    appointment_id = args.get("appointment_id")
+    if not appointment_id:
+        return {"error": "appointment_id is required."}
+
+    try:
+        ctx = await _resolve_context()
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+    if not isinstance(ctx.adapter, SupportsAppointmentConfirmation):
+        return {
+            "success": False,
+            "error": "Appointment confirmation is not supported for this PMS.",
+        }
+
+    try:
+        result = await ctx.adapter.confirm_appointment(appointment_id)
+        return result.model_dump()
+    except Exception as e:
+        logger.error(
+            "Failed to confirm appointment: %s",
+            safe_error_summary(e),
+        )
+        return {"success": False, "error": "Failed to confirm appointment"}
+
+
+async def _reschedule_appointment_impl(
+    args: dict[str, Any],
+    *,
+    use_v2: bool,
+) -> dict[str, Any]:
     old_id = args.get("old_appointment_id")
     if not old_id:
         return {"error": "old_appointment_id is required."}
@@ -1166,6 +1201,9 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
+    if ctx.adapter is None:
+        return {"success": False, "error": "PMS integration is not configured."}
+
     if ctx.adapter.source != "gotracker":
         if not args.get("appointment_type_id"):
             return {"error": "appointment_type_id is required for the new booking."}
@@ -1175,29 +1213,59 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
         if validation_error:
             return {"success": False, "error": validation_error}
 
+    new_booking = BookingRequest(
+        patient_id=args["patient_id"],
+        provider_id=args["provider_id"],
+        slot_start=args["start_time"],
+        slot_end=args.get("end_time"),
+        duration_min=args.get("duration_min"),
+        operatory_id=args.get("operatory_id"),
+        appointment_type_id=(
+            None if ctx.adapter.source == "gotracker" else args.get("appointment_type_id")
+        ),
+        descriptor_ids=args.get("descriptor_ids", []),
+        note=args.get("note"),
+    )
+    if use_v2:
+        result = await ctx.adapter.reschedule_appointment_v2(old_id, new_booking)
+    else:
+        result = await ctx.adapter.reschedule_appointment(old_id, new_booking)
+    return result.model_dump()
+
+
+@register_function("reschedule_appointment")
+@audit(
+    AuditAction.RESCHEDULE_APPOINTMENT,
+    resource=lambda args: (
+        f"reschedule:old={hash_for_logging(str(args.get('old_appointment_id'))) if args.get('old_appointment_id') else 'unknown'}"
+    ),
+)
+async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
+    """Reschedule an appointment."""
     try:
-        result = await ctx.adapter.reschedule_appointment(
-            old_id,
-            BookingRequest(
-                patient_id=args["patient_id"],
-                provider_id=args["provider_id"],
-                slot_start=args["start_time"],
-                slot_end=args.get("end_time"),
-                duration_min=args.get("duration_min"),
-                operatory_id=args.get("operatory_id"),
-                appointment_type_id=(
-                    None
-                    if ctx.adapter.source == "gotracker"
-                    else args.get("appointment_type_id")
-                ),
-                descriptor_ids=args.get("descriptor_ids", []),
-                note=args.get("note"),
-            ),
-        )
-        return result.model_dump()
+        return await _reschedule_appointment_impl(args, use_v2=False)
     except Exception as e:
         logger.error(
             "Failed to reschedule: %s",
+            safe_error_summary(e),
+        )
+        return {"success": False, "error": "Failed to reschedule"}
+
+
+@register_function("reschedule_appointment_v2")
+@audit(
+    AuditAction.RESCHEDULE_APPOINTMENT,
+    resource=lambda args: (
+        f"reschedule_v2:old={hash_for_logging(str(args.get('old_appointment_id'))) if args.get('old_appointment_id') else 'unknown'}"
+    ),
+)
+async def reschedule_appointment_v2(args: dict[str, Any]) -> dict[str, Any]:
+    """Reschedule an appointment using the newest supported PMS write path."""
+    try:
+        return await _reschedule_appointment_impl(args, use_v2=True)
+    except Exception as e:
+        logger.error(
+            "Failed to reschedule v2: %s",
             safe_error_summary(e),
         )
         return {"success": False, "error": "Failed to reschedule"}

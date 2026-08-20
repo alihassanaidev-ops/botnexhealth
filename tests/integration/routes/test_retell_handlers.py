@@ -3,8 +3,26 @@ from types import SimpleNamespace
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.app.pms.models import PatientCreateRequest
-from src.app.retell.handlers import create_patient, list_transfer_numbers
+from src.app.pms.base import SupportsAppointmentConfirmation
+from src.app.pms.models import BookingResult, PatientCreateRequest
+from src.app.retell.handlers import (
+    confirm_appointment,
+    create_patient,
+    list_transfer_numbers,
+)
+
+
+class ConfirmingAdapter(SupportsAppointmentConfirmation):
+    def __init__(self, result: BookingResult | None = None) -> None:
+        self.confirm_appointment = AsyncMock(
+            return_value=result
+            or BookingResult(
+                success=True,
+                source="nexhealth",
+                status="confirmed",
+                message="Appointment confirmed successfully.",
+            )
+        )
 
 @pytest.mark.asyncio
 async def test_create_patient_success():
@@ -48,6 +66,50 @@ async def test_create_patient_success():
     assert req.date_of_birth == "1990-01-01"
     assert req.provider_id == "456"
     assert req.gender == "Other"
+
+
+@pytest.mark.asyncio
+async def test_confirm_appointment_success():
+    mock_adapter = ConfirmingAdapter()
+
+    async def mock_resolve():
+        return SimpleNamespace(
+            institution=SimpleNamespace(id="inst-1"),
+            location=SimpleNamespace(id="loc-1"),
+            adapter=mock_adapter,
+        )
+
+    with patch("src.app.retell.handlers._resolve_context", new=mock_resolve):
+        result = await confirm_appointment({"appointment_id": "nh-appt-123"})
+
+    assert result["success"] is True
+    assert result["status"] == "confirmed"
+    mock_adapter.confirm_appointment.assert_awaited_once_with("nh-appt-123")
+
+
+@pytest.mark.asyncio
+async def test_confirm_appointment_requires_appointment_id():
+    result = await confirm_appointment({})
+
+    assert result == {"error": "appointment_id is required."}
+
+
+@pytest.mark.asyncio
+async def test_confirm_appointment_rejects_unsupported_pms():
+    async def mock_resolve():
+        return SimpleNamespace(
+            institution=SimpleNamespace(id="inst-1"),
+            location=SimpleNamespace(id="loc-1"),
+            adapter=SimpleNamespace(),
+        )
+
+    with patch("src.app.retell.handlers._resolve_context", new=mock_resolve):
+        result = await confirm_appointment({"appointment_id": "appt-123"})
+
+    assert result == {
+        "success": False,
+        "error": "Appointment confirmation is not supported for this PMS.",
+    }
 
 @pytest.mark.asyncio
 async def test_create_patient_missing_fields():
@@ -119,6 +181,43 @@ async def test_create_patient_rejects_unsupported_gender():
     )
 
     assert result == {"error": "gender must be one of: Female, Male, Other."}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_gender", "expected_gender"),
+    [
+        ("male", "Male"),
+        (" FEMALE ", "Female"),
+        ("oThEr", "Other"),
+    ],
+)
+async def test_create_patient_normalizes_gender(raw_gender, expected_gender):
+    mock_adapter = SimpleNamespace(create_patient=AsyncMock(return_value={"success": True}))
+
+    async def mock_resolve():
+        return SimpleNamespace(
+            institution=SimpleNamespace(id="inst-1"),
+            location=SimpleNamespace(id="loc-1"),
+            adapter=mock_adapter,
+        )
+
+    with patch("src.app.retell.handlers._resolve_context", new=mock_resolve):
+        result = await create_patient(
+            {
+                "first_name": "John",
+                "last_name": "Doe",
+                "email": "john.doe@example.com",
+                "phone_number": "555-0123",
+                "date_of_birth": "1990-01-01",
+                "provider_id": "456",
+                "gender": raw_gender,
+            }
+        )
+
+    assert result["success"] is True
+    req = mock_adapter.create_patient.call_args.args[0]
+    assert req.gender == expected_gender
 
 
 @pytest.mark.asyncio

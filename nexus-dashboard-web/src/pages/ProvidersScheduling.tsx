@@ -29,7 +29,8 @@ import {
     triggerSync,
 } from "@/lib/tenant-api"
 import { useAuth } from "@/context/AuthContext"
-import { useSelectedLocationId } from "@/context/LocationContext"
+import { useSelectedLocationId, useLocationContext } from "@/context/LocationContext"
+import SchedulerCalendar from "@/components/scheduling/SchedulerCalendar"
 
 const ISO_DATE = "yyyy-MM-dd"
 /** Bulk range linking is capped server-side; `today + 14` spans 15 days inclusive. */
@@ -47,6 +48,7 @@ interface BulkProgress {
 export default function ProvidersScheduling() {
     const { user } = useAuth()
     const locationId = useSelectedLocationId()
+    const { selectedLocation } = useLocationContext()
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [providers, setProviders] = useState<CachedProvider[]>([])
     const [availabilities, setAvailabilities] = useState<CachedAvailability[]>([])
@@ -56,6 +58,7 @@ export default function ProvidersScheduling() {
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
     const [showExpired, setShowExpired] = useState(false)
+    const [view, setView] = useState<"list" | "calendar">("calendar")
     const [loading, setLoading] = useState(true)
     const [loadingAvailabilities, setLoadingAvailabilities] = useState(false)
     const [syncing, setSyncing] = useState(false)
@@ -85,6 +88,7 @@ export default function ProvidersScheduling() {
     const [canLinkAvailability, setCanLinkAvailability] = useState(false)
     const [bulkDialogOpen, setBulkDialogOpen] = useState(false)
     const [bulkTypeIds, setBulkTypeIds] = useState<string[]>([])
+    const [bulkOperatoryIds, setBulkOperatoryIds] = useState<string[]>([])
     const bulkRangeMin = useMemo(() => startOfDay(new Date()), [])
     const bulkRangeMax = useMemo(
         () => addDays(bulkRangeMin, BULK_RANGE_MAX_DAYS - 1),
@@ -255,6 +259,14 @@ export default function ProvidersScheduling() {
         )
     }
 
+    const toggleBulkOperatoryId = (operatoryId: string) => {
+        setBulkOperatoryIds((prev) =>
+            prev.includes(operatoryId)
+                ? prev.filter((id) => id !== operatoryId)
+                : [...prev, operatoryId]
+        )
+    }
+
     // Idle wait between write batches, surfaced as a live countdown so the
     // admin can see the run is pacing itself rather than stalled.
     const pauseBetweenBatches = (seconds: number) =>
@@ -279,6 +291,10 @@ export default function ProvidersScheduling() {
             toast.error("Please select at least one appointment type")
             return
         }
+        if (bulkOperatoryIds.length === 0) {
+            toast.error("Please select at least one operatory")
+            return
+        }
         if (!bulkRange?.from || !bulkRange?.to) {
             toast.error("Please select a date range")
             return
@@ -295,12 +311,12 @@ export default function ProvidersScheduling() {
                 provider_id: selectedProviderId,
                 start_date: format(bulkRange.from, ISO_DATE),
                 end_date: format(bulkRange.to, ISO_DATE),
-                operatory_id: selectedOperatoryId === "all" ? null : selectedOperatoryId,
+                operatory_ids: bulkOperatoryIds,
             }, locationId)
 
             const ids = preview.windows.map((w) => w.source_id).filter(Boolean)
             if (ids.length === 0) {
-                toast.warning("No dated work windows in that range matched the selected provider and operatory")
+                toast.warning("No dated work windows in that range matched the selected provider and operatories")
                 return
             }
 
@@ -339,6 +355,7 @@ export default function ProvidersScheduling() {
             }
             setBulkDialogOpen(false)
             setBulkTypeIds([])
+            setBulkOperatoryIds([])
             await fetchAvailabilities()
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to link the selected date range"
@@ -503,6 +520,29 @@ export default function ProvidersScheduling() {
     // source_id. Names can collide, so rows still show the ID alongside.
     const operatoryNameBySourceId = new Map(operatories.map((op) => [op.source_id, op.name]))
 
+    const allBulkOperatoriesSelected =
+        relevantOperatories.length > 0 &&
+        relevantOperatories.every((op) => bulkOperatoryIds.includes(op.source_id))
+
+    const bulkOperatoryLabel =
+        bulkOperatoryIds.length === 0
+            ? "None selected"
+            : allBulkOperatoriesSelected
+                ? "All visible operatories"
+                : bulkOperatoryIds.length === 1
+                    ? operatoryNameBySourceId.get(bulkOperatoryIds[0]) ?? bulkOperatoryIds[0]
+                    : `${bulkOperatoryIds.length} operatories selected`
+
+    const openBulkDialog = () => {
+        const visibleIds = relevantOperatories.map((op) => op.source_id)
+        setBulkOperatoryIds(
+            selectedOperatoryId !== "all" && visibleIds.includes(selectedOperatoryId)
+                ? [selectedOperatoryId]
+                : visibleIds
+        )
+        setBulkDialogOpen(true)
+    }
+
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
@@ -515,28 +555,41 @@ export default function ProvidersScheduling() {
                         : "Review live bookable slots from your PMS and configure provider scheduling rules."
                 }
                 actions={
-                    canManage ? (
-                        <>
-                            {canLinkAvailability && (
-                                <Button
-                                    variant="outline"
-                                    onClick={() => setBulkDialogOpen(true)}
-                                    disabled={loading || !selectedProviderId}
+                    <>
+                        <div className="inline-flex overflow-hidden rounded-md border">
+                            {(["calendar", "list"] as const).map((v) => (
+                                <button
+                                    key={v}
+                                    onClick={() => setView(v)}
+                                    className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground hover:text-foreground"}`}
                                 >
-                                    <CalendarDays className="h-4 w-4" />
-                                    Link Date Range
+                                    {v}
+                                </button>
+                            ))}
+                        </div>
+                        {canManage && view === "list" && (
+                            <>
+                                {canLinkAvailability && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={openBulkDialog}
+                                        disabled={loading || !selectedProviderId}
+                                    >
+                                        <CalendarDays className="h-4 w-4" />
+                                        Link date range
+                                    </Button>
+                                )}
+                                {canLinkAvailability && (
+                                    <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
+                                        Create Work Window
+                                    </Button>
+                                )}
+                                <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
+                                    <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
                                 </Button>
-                            )}
-                            {canLinkAvailability && (
-                                <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
-                                    Create Work Window
-                                </Button>
-                            )}
-                            <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
-                                <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                            </Button>
-                        </>
-                    ) : undefined
+                            </>
+                        )}
+                    </>
                 }
             />
 
@@ -571,6 +624,14 @@ export default function ProvidersScheduling() {
                         </p>
                     </CardContent>
                 </Card>
+            ) : view === "calendar" ? (
+                <SchedulerCalendar
+                    locationId={locationId}
+                    operatories={operatories}
+                    appointmentTypes={appointmentTypes}
+                    canManage={canManage}
+                    timezone={selectedLocation?.timezone ?? undefined}
+                />
             ) : (
                 <>
                     {/* Filters: Provider → Appointment Type */}
@@ -896,11 +957,7 @@ export default function ProvidersScheduling() {
                             <div className="space-y-3 py-2">
                                 <div className="rounded-md border border-border/70 p-3 text-sm text-muted-foreground">
                                     <div>Provider: {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}</div>
-                                    <div>
-                                        Operatory: {selectedOperatoryId === "all"
-                                            ? "All operatories"
-                                            : operatoryNameBySourceId.get(selectedOperatoryId) ?? selectedOperatoryId}
-                                    </div>
+                                    <div>Operatories: {bulkOperatoryLabel}</div>
                                     <div>Range: {bulkRangeLabel}</div>
                                 </div>
                                 <div className="grid gap-4 sm:grid-cols-2">
@@ -934,34 +991,80 @@ export default function ProvidersScheduling() {
                                             Clear to start over.
                                         </p>
                                     </div>
-                                    <div className="space-y-1">
-                                        <p className="text-sm font-medium">Appointment types</p>
-                                        {appointmentTypes.length === 0 ? (
-                                            <p className="text-sm text-muted-foreground">
-                                                No appointment types configured. Create some first.
-                                            </p>
-                                        ) : (
-                                            <div className="border rounded-md max-h-64 overflow-y-auto">
-                                                {appointmentTypes.map((at) => (
-                                                    <label
-                                                        key={at.source_id}
-                                                        className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
-                                                    >
-                                                        <Checkbox
-                                                            checked={bulkTypeIds.includes(at.source_id)}
-                                                            onCheckedChange={() => toggleBulkTypeId(at.source_id)}
-                                                            disabled={bulkRunning}
-                                                        />
-                                                        <span className="text-sm">{at.name}</span>
-                                                        {at.duration_minutes && (
-                                                            <span className="text-xs text-muted-foreground ml-auto">
-                                                                {at.duration_minutes} min
-                                                            </span>
-                                                        )}
-                                                    </label>
-                                                ))}
+                                    <div className="space-y-4">
+                                        <div className="space-y-1">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <p className="text-sm font-medium">Operatories</p>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-7 px-2 text-xs"
+                                                    onClick={() =>
+                                                        setBulkOperatoryIds(
+                                                            allBulkOperatoriesSelected
+                                                                ? []
+                                                                : relevantOperatories.map((op) => op.source_id)
+                                                        )
+                                                    }
+                                                    disabled={bulkRunning || relevantOperatories.length === 0}
+                                                >
+                                                    {allBulkOperatoriesSelected ? "Clear" : "Select all"}
+                                                </Button>
                                             </div>
-                                        )}
+                                            {relevantOperatories.length === 0 ? (
+                                                <p className="text-sm text-muted-foreground">
+                                                    No visible operatories found for this provider.
+                                                </p>
+                                            ) : (
+                                                <div className="border rounded-md max-h-36 overflow-y-auto">
+                                                    {relevantOperatories.map((op) => (
+                                                        <label
+                                                            key={op.source_id}
+                                                            className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                        >
+                                                            <Checkbox
+                                                                checked={bulkOperatoryIds.includes(op.source_id)}
+                                                                onCheckedChange={() => toggleBulkOperatoryId(op.source_id)}
+                                                                disabled={bulkRunning}
+                                                            />
+                                                            <span className="min-w-0 flex-1 truncate text-sm">{op.name}</span>
+                                                            <span className="shrink-0 text-xs text-muted-foreground">
+                                                                {op.source_id}
+                                                            </span>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="space-y-1">
+                                            <p className="text-sm font-medium">Appointment types</p>
+                                            {appointmentTypes.length === 0 ? (
+                                                <p className="text-sm text-muted-foreground">
+                                                    No appointment types configured. Create some first.
+                                                </p>
+                                            ) : (
+                                                <div className="border rounded-md max-h-64 overflow-y-auto">
+                                                    {appointmentTypes.map((at) => (
+                                                        <label
+                                                            key={at.source_id}
+                                                            className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                        >
+                                                            <Checkbox
+                                                                checked={bulkTypeIds.includes(at.source_id)}
+                                                                onCheckedChange={() => toggleBulkTypeId(at.source_id)}
+                                                                disabled={bulkRunning}
+                                                            />
+                                                            <span className="text-sm">{at.name}</span>
+                                                            {at.duration_minutes && (
+                                                                <span className="text-xs text-muted-foreground ml-auto">
+                                                                    {at.duration_minutes} min
+                                                                </span>
+                                                            )}
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                                 {bulkRunning && (
@@ -997,7 +1100,13 @@ export default function ProvidersScheduling() {
                                 </Button>
                                 <Button
                                     onClick={handleBulkLinkRange}
-                                    disabled={bulkRunning || bulkTypeIds.length === 0 || !bulkRange?.from || !bulkRange?.to}
+                                    disabled={
+                                        bulkRunning ||
+                                        bulkOperatoryIds.length === 0 ||
+                                        bulkTypeIds.length === 0 ||
+                                        !bulkRange?.from ||
+                                        !bulkRange?.to
+                                    }
                                 >
                                     {bulkRunning ? "Linking..." : "Apply"}
                                 </Button>

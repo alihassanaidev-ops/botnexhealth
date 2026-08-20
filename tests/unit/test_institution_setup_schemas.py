@@ -58,6 +58,7 @@ class TestCachedOperatoryResponse:
         op = CachedOperatoryResponse(id="uuid-3", source_id="100", name="Chair 1")
         assert op.name == "Chair 1"
         assert op.is_active is True
+        assert op.is_hidden is False
 
 
 class TestCachedDescriptorResponse:

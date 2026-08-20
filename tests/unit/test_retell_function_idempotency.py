@@ -362,7 +362,9 @@ def test_idempotent_allowlist_covers_only_mutating_functions():
         {
             "book_appointment",
             "cancel_appointment",
+            "confirm_appointment",
             "reschedule_appointment",
+            "reschedule_appointment_v2",
             "create_patient",
         }
     )

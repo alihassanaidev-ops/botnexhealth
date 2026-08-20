@@ -2,8 +2,14 @@
   "mcpServers": {
     "graphify": {
       "command": "C:\\Users\\AliHa\\.local\\bin\\graphify-mcp.exe",
-      "args": ["graphify-out/graph.json"],
+      "args": [
+        "graphify-out/graph.json"
+      ],
       "type": "stdio"
+    },
+    "clickup": {
+      "type": "http",
+      "url": "https://mcp.clickup.com/mcp"
     }
   }
 }

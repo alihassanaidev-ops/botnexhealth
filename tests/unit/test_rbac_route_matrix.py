@@ -292,6 +292,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/setup/appointment-types",
         "PATCH /api/institution/setup/appointment-types/{source_id}",
         "DELETE /api/institution/setup/appointment-types/{source_id}",
+        "PATCH /api/institution/setup/operatories/{operatory_id}",
         "POST /api/institution/setup/availabilities",
         "POST /api/institution/setup/availabilities/bulk-link-range/preview",
         "POST /api/institution/setup/availabilities/bulk-link-range/apply",
