@@ -88,6 +88,10 @@ Runs on demand (location setup flow / admin action), not on a schedule.
 Upsert-only: rows deleted in NexHealth are not removed locally — staleness is
 visible as `synced_at` age. Acceptable for reference data; don't rely on these
 tables for anything booking-critical (slot search always hits the live API).
+Operatories also carry a local `is_hidden` flag. PMS sync updates the room name
+and active state but preserves that local visibility preference; hidden
+operatories remain visible on the Operatories setup page and are filtered out of
+appointment-type and scheduling selections.
 
 ## Slot search and booking
 

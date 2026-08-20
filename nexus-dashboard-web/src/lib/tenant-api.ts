@@ -127,9 +127,28 @@ export async function updateAppointmentType(
 
 // ── Operatories ─────────────────────────────────────────────────────────
 
-export async function listOperatories(locationId?: string): Promise<CachedOperatory[]> {
-    const { data } = await api.get<unknown>(`${BASE}/operatories${qs(locationId)}`);
+export async function listOperatories(
+    locationId?: string,
+    options?: { includeHidden?: boolean }
+): Promise<CachedOperatory[]> {
+    const params = new URLSearchParams();
+    if (locationId) params.set("location_id", locationId);
+    if (options?.includeHidden) params.set("include_hidden", "true");
+    const q = params.toString() ? `?${params.toString()}` : "";
+    const { data } = await api.get<unknown>(`${BASE}/operatories${q}`);
     return unwrapArray<CachedOperatory>(data, `${BASE}/operatories`);
+}
+
+export async function updateOperatory(
+    operatoryId: string,
+    payload: { is_hidden: boolean },
+    locationId?: string
+): Promise<CachedOperatory> {
+    const { data } = await api.patch<CachedOperatory>(
+        `${BASE}/operatories/${operatoryId}${qs(locationId)}`,
+        payload
+    );
+    return data;
 }
 
 // ── Descriptors ─────────────────────────────────────────────────────────
