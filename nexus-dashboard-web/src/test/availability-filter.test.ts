@@ -42,6 +42,8 @@ function av(overrides: Partial<CachedAvailability> = {}): CachedAvailability {
         appointment_type_names: ["Cleaning"],
         active: true,
         synced: true,
+        label_name: null,
+        is_bookable_window: true,
         source_metadata: null,
         synced_at: null,
         ...overrides,

@@ -84,6 +84,23 @@ export function isActive(av: CachedAvailability): boolean {
 }
 
 /**
+ * Is this a genuine bookable working window, rather than something that merely
+ * describes the schedule?
+ *
+ * NexHealth returns three kinds of row in one collection: unlabelled working
+ * hours (bookable), `Lunch` blocks that fill the gap between them, and `NOTE`
+ * annotations drawn on top of them. For one clinic that split 1,386 bookable
+ * against 659 notes and breaks — so showing all three as "work windows" buries
+ * the real schedule and invites linking appointment types to a lunch break.
+ *
+ * Only v3 carries the label. On v2 the API cannot tell them apart, so the
+ * backend reports every row as bookable and this returns true throughout.
+ */
+export function isBookableWindow(av: CachedAvailability): boolean {
+    return av.is_bookable_window !== false
+}
+
+/**
  * Does this window fall inside the range?
  *
  * Recurring rules always match: they repeat every week forever, so they are

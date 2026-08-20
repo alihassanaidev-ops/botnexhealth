@@ -9,6 +9,21 @@ from src.app.pms.nexhealth import adapter as adapter_module
 from src.app.pms.nexhealth.adapter import NexHealthAdapter
 
 
+@pytest.fixture
+def legacy_v2_working_hours(monkeypatch: pytest.MonkeyPatch):
+    """Pin the work-window route to v2.
+
+    The route defaults to v3 now, so tests that exercise the legacy
+    /availabilities + /providers-embedded merge must say so explicitly.
+    """
+    from src.app.config import settings as global_settings
+
+    monkeypatch.setattr(
+        global_settings, "nexhealth_working_hours_api_version", "v2", raising=False
+    )
+    return global_settings
+
+
 def _make_adapter() -> NexHealthAdapter:
     return NexHealthAdapter(
         client=SimpleNamespace(),
@@ -106,6 +121,7 @@ async def test_has_provider_appointments_safe_fallback_on_unexpected_payload(mon
 @pytest.mark.asyncio
 async def test_list_availabilities_uses_provider_embedded_windows_when_endpoint_is_empty(
     monkeypatch: pytest.MonkeyPatch,
+    legacy_v2_working_hours,
 ):
     adapter = _make_adapter()
     calls: list[tuple[str, dict]] = []
@@ -156,6 +172,7 @@ async def test_list_availabilities_uses_provider_embedded_windows_when_endpoint_
 @pytest.mark.asyncio
 async def test_list_availabilities_drops_past_dated_embedded_windows(
     monkeypatch: pytest.MonkeyPatch,
+    legacy_v2_working_hours,
 ):
     """Past work windows must never reach the caller.
 
@@ -210,6 +227,7 @@ async def test_list_availabilities_drops_past_dated_embedded_windows(
 @pytest.mark.asyncio
 async def test_list_availabilities_past_dates_can_still_be_requested_explicitly(
     monkeypatch: pytest.MonkeyPatch,
+    legacy_v2_working_hours,
 ):
     """The default flipped, but an explicit caller override still wins."""
     adapter = _make_adapter()
@@ -247,6 +265,7 @@ async def test_list_availabilities_past_dates_can_still_be_requested_explicitly(
 @pytest.mark.asyncio
 async def test_list_availabilities_uses_a_longer_budget_and_no_retries(
     monkeypatch: pytest.MonkeyPatch,
+    legacy_v2_working_hours,
 ):
     """This is the slowest read we make, and retrying a timeout multiplies it.
 
@@ -549,3 +568,117 @@ async def test_create_appointment_type_wraps_body_under_appointment_type_key(
         "'appointment_type'; flat payloads get 400 'Missing parameter "
         "appointment_type' from NexHealth"
     )
+
+
+@pytest.fixture
+def v3_working_hours(monkeypatch: pytest.MonkeyPatch):
+    """Pin the work-window route to v3 (the default, made explicit)."""
+    from src.app.config import settings as global_settings
+
+    monkeypatch.setattr(
+        global_settings, "nexhealth_working_hours_api_version", "v3.0.0", raising=False
+    )
+    return global_settings
+
+
+@pytest.mark.asyncio
+async def test_working_hours_v3_uses_the_renamed_route_and_v3_headers(
+    monkeypatch: pytest.MonkeyPatch,
+    v3_working_hours,
+):
+    """v3 renamed /availabilities to /working_hours and changed both headers.
+
+    The override is per request: every other route must stay on the
+    client-wide contract until the full migration lands.
+    """
+    adapter = _make_adapter()
+    seen: list[dict] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
+        seen.append({"path": path, "params": params or {}, **kwargs})
+        return {"data": [], "page_info": {"has_next_page": False}}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    await adapter.list_availabilities(provider_id="nh-123")
+
+    assert len(seen) == 1, "v3 needs one paginated route, not the v2 two-path merge"
+    call = seen[0]
+    assert call["path"] == "/working_hours"
+    assert call["headers_override"]["Nex-Api-Version"] == "v3.0.0"
+    assert call["headers_override"]["Accept"] == "application/json"
+    # Server-side past filtering is the whole point — v2 could not do this.
+    assert call["params"]["ignore_past_dates"] == "true"
+    assert call["params"]["provider_id"] == "123"
+
+
+@pytest.mark.asyncio
+async def test_working_hours_v3_carries_the_label_through(
+    monkeypatch: pytest.MonkeyPatch,
+    v3_working_hours,
+):
+    """`label` is the only thing that separates a real window from a note.
+
+    A NexHealth clinic returns Lunch blocks and synced OpenDental notes in the
+    same collection as genuine working hours; on v2 they are indistinguishable.
+    """
+    adapter = _make_adapter()
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
+        return {
+            "data": [
+                {"id": 1, "begin_time": "09:00", "end_time": "13:00",
+                 "source": "synced", "label": None},
+                {"id": 2, "begin_time": "13:00", "end_time": "14:00",
+                 "source": "synced", "label": {"id": 7, "name": "Lunch"}},
+                {"id": 3, "begin_time": "10:30", "end_time": "11:10",
+                 "source": "synced", "label": {"id": 8, "name": "NOTE"}},
+            ],
+            "page_info": {"has_next_page": False},
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    rows = await adapter.list_availabilities(provider_id="nh-123")
+
+    by_id = {r["id"]: r for r in rows}
+    assert by_id[1]["label_name"] is None
+    assert by_id[2]["label_name"] == "Lunch"
+    assert by_id[3]["label_name"] == "NOTE"
+    # v3 replaced `synced` with `source`; downstream still reads `synced`.
+    assert by_id[1]["synced"] is True
+
+
+@pytest.mark.asyncio
+async def test_working_hours_v3_follows_the_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+    v3_working_hours,
+):
+    """v3 paginates by opaque cursor, not page number.
+
+    The clinic's busiest provider is ~2k rows at 100/page, so stopping after
+    page one would silently truncate most of the schedule.
+    """
+    adapter = _make_adapter()
+    cursors: list[str | None] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
+        params = params or {}
+        cursors.append(params.get("end_cursor"))
+        page = len(cursors)
+        if page < 3:
+            return {
+                "data": [{"id": page, "begin_time": "09:00", "end_time": "17:00"}],
+                "page_info": {"has_next_page": True, "end_cursor": f"cur{page}"},
+            }
+        return {
+            "data": [{"id": page, "begin_time": "09:00", "end_time": "17:00"}],
+            "page_info": {"has_next_page": False},
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    rows = await adapter.list_availabilities()
+
+    assert [r["id"] for r in rows] == [1, 2, 3]
+    assert cursors == [None, "cur1", "cur2"]

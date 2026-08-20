@@ -71,6 +71,8 @@ function makeAvailability(overrides: Partial<CachedAvailability>): CachedAvailab
         appointment_type_names: ["Cleaning"],
         active: true,
         synced: true,
+        label_name: null,
+        is_bookable_window: true,
         source_metadata: null,
         synced_at: null,
         ...overrides,
@@ -289,6 +291,62 @@ describe("Inactive windows", () => {
 
         await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
         expect(screen.queryByText(/without linked/i)).not.toBeInTheDocument()
+    })
+})
+
+describe("Notes and breaks (v3 labels)", () => {
+    it("hides non-bookable rows by default and reveals them on request", async () => {
+        // NexHealth returns Lunch blocks and synced OpenDental notes in the same
+        // collection as real working hours. For one clinic that was 659 of 2,045
+        // rows, which buries the schedule the operator is actually linking.
+        const user = userEvent.setup()
+        mountWith([
+            makeAvailability({ source_id: "real", specific_date: addDays(todayISO(), 1) }),
+            makeAvailability({
+                source_id: "lunch", specific_date: addDays(todayISO(), 1),
+                label_name: "Lunch", is_bookable_window: false,
+            }),
+            makeAvailability({
+                source_id: "note", specific_date: addDays(todayISO(), 1),
+                label_name: "NOTE", is_bookable_window: false,
+            }),
+        ])
+
+        await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
+        await waitFor(() => expect(rowCount()).toBe(1))
+        expect(screen.queryByText("Lunch")).not.toBeInTheDocument()
+
+        await user.click(screen.getByRole("checkbox", { name: /show notes & breaks/i }))
+
+        await waitFor(() => expect(rowCount()).toBe(3))
+        expect(screen.getByText("Lunch")).toBeInTheDocument()
+        expect(screen.getByText("NOTE")).toBeInTheDocument()
+    })
+
+    it("does not count notes or breaks as unlinked appointment types", async () => {
+        // A lunch break has no appointment type to link, so warning about it
+        // sends the operator chasing something they cannot fix.
+        mountWith([
+            makeAvailability({
+                source_id: "lunch", specific_date: addDays(todayISO(), 1),
+                label_name: "Lunch", is_bookable_window: false,
+                appointment_type_ids: [], appointment_type_names: [],
+            }),
+        ])
+
+        await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
+        expect(screen.queryByText(/without linked/i)).not.toBeInTheDocument()
+    })
+
+    it("treats v2 rows as bookable, since v2 cannot label them", async () => {
+        // The backend reports is_bookable_window=true for every v2 row.
+        mountWith([
+            makeAvailability({ source_id: "v2a", specific_date: addDays(todayISO(), 1) }),
+            makeAvailability({ source_id: "v2b", specific_date: addDays(todayISO(), 2) }),
+        ])
+
+        await waitFor(() => expect(rowCount()).toBe(2))
+        expect(screen.queryByRole("checkbox", { name: /show notes & breaks/i })).toBeInTheDocument()
     })
 })
 

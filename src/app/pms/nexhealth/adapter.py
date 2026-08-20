@@ -12,6 +12,11 @@ from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from src.app.api.helpers import fetch_all_pages, handle_nexhealth_request
+from src.app.nexhealth.api_contract import (
+    NexHealthAPIContract,
+    normalize_nexhealth_api_contract,
+)
+from src.app.nexhealth.pagination import fetch_all_pages as fetch_all_pages_v3
 from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
 from src.app.pms.models import (
     BookingRequest,
@@ -659,6 +664,10 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
     # still gives up first. This budget helps callers that reach the ALB
     # directly, and stops the backend burning ~2 minutes on a hung upstream.
     _AVAILABILITY_TIMEOUT_SECONDS = 60.0
+    # One clinic's busiest provider is ~2k upcoming rows; the location total is
+    # ~2.7k. Cap well above that so a real schedule is never truncated, but
+    # still bounded against a runaway.
+    _WORKING_HOURS_MAX_ITEMS = 20000
 
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
         provider_id = kwargs.pop("provider_id", None)
@@ -681,6 +690,12 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             params["provider_id"] = _strip(provider_id)
         if "include[]" not in params:
             params["include[]"] = ["appointment_types"]
+
+        if self._working_hours_contract is NexHealthAPIContract.STABLE_V3:
+            return await self._list_working_hours_v3(
+                provider_id=_strip(provider_id) if provider_id else None,
+                ignore_past_dates=ignore_past_dates,
+            )
 
         raw = await handle_nexhealth_request(
             self._client,
@@ -709,6 +724,88 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             key = str(item_id) if item_id is not None else repr(sorted(item.items()))
             merged[key] = item
         return list(merged.values())
+
+    @property
+    def _working_hours_contract(self) -> NexHealthAPIContract:
+        """Contract for the work-window route only.
+
+        Scoped deliberately: v3 is the only version that exposes `label`
+        (NOTE / Lunch / genuine working hour) and the only one that honours
+        ignore_past_dates server-side. Every other route stays on the
+        client-wide version until the full migration lands.
+        """
+        from src.app.config import settings as global_settings
+
+        return normalize_nexhealth_api_contract(
+            getattr(global_settings, "nexhealth_working_hours_api_version", "v2")
+        )
+
+    async def _list_working_hours_v3(
+        self,
+        *,
+        provider_id: str | None = None,
+        ignore_past_dates: bool = True,
+    ) -> list[dict]:
+        """Read work windows from v3 /working_hours.
+
+        Replaces both v2 read paths at once. v2 needed the /providers embedded
+        fallback because /availabilities returns nothing for PMS-synced
+        schedules, and that fallback pulled every provider's rows on every
+        request. v3 filters by provider server-side and drops past dates before
+        sending, so one paginated call covers it.
+        """
+        contract = NexHealthAPIContract.STABLE_V3
+        headers = {
+            "Accept": contract.accept_header,
+            "Nex-Api-Version": contract.api_version_header,
+        }
+        base = {
+            **self._default_params(),
+            "ignore_past_dates": "true" if ignore_past_dates else "false",
+        }
+        if provider_id:
+            base["provider_id"] = provider_id
+
+        async def fetch_page(page_params: dict[str, Any]) -> dict[str, Any]:
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                contract.working_windows_path,
+                params={**base, **page_params},
+                timeout=self._AVAILABILITY_TIMEOUT_SECONDS,
+                max_retries=0,
+                headers_override=headers,
+            )
+
+        rows = await fetch_all_pages_v3(
+            fetch_page,
+            api_contract=contract,
+            collection_key="working_hours",
+            per_page=100,
+            max_items=self._WORKING_HOURS_MAX_ITEMS,
+        )
+        return [self._normalize_working_hour(row) for row in rows]
+
+    @staticmethod
+    def _normalize_working_hour(row: dict) -> dict:
+        """Map a v3 working_hour onto the shape the rest of the code expects.
+
+        v3 replaced `synced` with `source`, and added `label`. Both are carried
+        through so the UI can tell a genuine working window from a synced
+        OpenDental note or lunch block — the distinction v2 makes impossible.
+        """
+        item = dict(row)
+        source = item.get("source")
+        if "synced" not in item and source is not None:
+            item["synced"] = source == "synced"
+        label = item.get("label")
+        if isinstance(label, dict):
+            item["label_name"] = label.get("name")
+            item["label_id"] = label.get("id")
+        elif label is None:
+            item["label_name"] = None
+            item["label_id"] = None
+        return item
 
     async def _list_provider_embedded_availabilities(
         self,

@@ -108,6 +108,7 @@ async def handle_nexhealth_request(
     json: dict[str, Any] | None = None,
     timeout: float | None = None,
     max_retries: int | None = None,
+    headers_override: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """
     Handle NexHealth API request with consistent error handling (DRY).
@@ -120,6 +121,7 @@ async def handle_nexhealth_request(
         json: JSON body
         timeout: Per-request timeout override, seconds (GET only).
         max_retries: Per-request retry override (GET only).
+        headers_override: Per-request API-contract header override (GET only).
 
     Returns:
         API response payload
@@ -130,7 +132,11 @@ async def handle_nexhealth_request(
     try:
         if method == "GET":
             return await client.get(
-                path, params=params, timeout=timeout, max_retries=max_retries
+                path,
+                params=params,
+                timeout=timeout,
+                max_retries=max_retries,
+                headers_override=headers_override,
             )
         elif method == "POST":
             return await client.post(path, params=params, json=json)

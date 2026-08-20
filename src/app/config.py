@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     nexhealth_api_key: str = ""
     nexhealth_base_url: str = "https://nexhealth.info"
     nexhealth_api_version: str = "v2"
+    # Work windows are read under their own contract so this one route can move
+    # to v3 ahead of the rest. v3 is what exposes `label` (NOTE / Lunch / real
+    # working hour) and honours ignore_past_dates server-side; v2 exposes
+    # neither. Set to "v2" to roll the route back without a redeploy.
+    nexhealth_working_hours_api_version: str = "v3.0.0"
     nexhealth_accept: str = "application/vnd.Nexhealth+json;version=2"
     nexhealth_max_connections: int = 20
     nexhealth_max_keepalive_connections: int = 10

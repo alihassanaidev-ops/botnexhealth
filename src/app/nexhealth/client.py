@@ -89,10 +89,16 @@ class NexHealthClient:
         params: dict[str, Any] | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
+        headers_override: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """GET request. See `request` for the timeout/retry overrides."""
+        """GET request. See `request` for the per-request overrides."""
         return await self.request(
-            "GET", path, params=params, timeout=timeout, max_retries=max_retries
+            "GET",
+            path,
+            params=params,
+            timeout=timeout,
+            max_retries=max_retries,
+            headers_override=headers_override,
         )
 
     async def post(
@@ -125,6 +131,7 @@ class NexHealthClient:
         json: dict[str, Any] | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
+        headers_override: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Make API request.
@@ -136,6 +143,7 @@ class NexHealthClient:
             json: JSON body
             timeout: Per-request timeout override, seconds.
             max_retries: Per-request retry override.
+            headers_override: Per-request header overrides (API contract switch).
 
         Returns:
             Response payload
@@ -152,4 +160,5 @@ class NexHealthClient:
             json=json,
             timeout=timeout,
             max_retries=max_retries,
+            headers_override=headers_override,
         )

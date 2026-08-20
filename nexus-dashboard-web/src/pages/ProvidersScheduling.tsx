@@ -29,6 +29,7 @@ import {
     allUpcomingRange,
     byDateThenTime,
     isActive,
+    isBookableWindow,
     isExpired,
     isRecurring,
     matchesRange,
@@ -55,6 +56,10 @@ export default function ProvidersScheduling() {
     // reach us (adapter.list_availabilities defaults ignore_past_dates=True),
     // so a toggle here would have nothing to reveal.
     const [dateRange, setDateRange] = useState<UpcomingRange>(() => allUpcomingRange())
+    // Notes and lunch breaks come back in the same collection as real working
+    // windows. They aren't bookable and can't meaningfully be linked to an
+    // appointment type, so they're out of the way unless asked for.
+    const [showNonBookable, setShowNonBookable] = useState(false)
     const [page, setPage] = useState(0)
     const [view, setView] = useState<"list" | "calendar">("list")
     // Calendar view is still under test — expose it on staging/local only and keep
@@ -328,6 +333,7 @@ export default function ProvidersScheduling() {
         () =>
             availabilities
                 .filter(isActive)
+                .filter((av) => showNonBookable || isBookableWindow(av))
                 .filter((av) => matchesRange(av, dateRange))
                 .filter(
                     (av) =>
@@ -339,7 +345,7 @@ export default function ProvidersScheduling() {
                         selectedOperatoryId === "all" ||
                         av.operatory_source_id === selectedOperatoryId
                 ),
-        [availabilities, dateRange, selectedApptTypeId, selectedOperatoryId]
+        [availabilities, dateRange, selectedApptTypeId, selectedOperatoryId, showNonBookable]
     )
 
     // Recurring rules are pinned above the paginated list rather than sorted into
@@ -367,7 +373,7 @@ export default function ProvidersScheduling() {
     // an out-of-range page showing nothing.
     useEffect(() => {
         setPage(0)
-    }, [selectedProviderId, selectedApptTypeId, selectedOperatoryId, dateRange])
+    }, [selectedProviderId, selectedApptTypeId, selectedOperatoryId, dateRange, showNonBookable])
 
     const hasNarrowingFilter =
         selectedApptTypeId !== "all" ||
@@ -377,6 +383,7 @@ export default function ProvidersScheduling() {
     const resetFilters = () => {
         setSelectedApptTypeId("all")
         setSelectedOperatoryId("all")
+        setShowNonBookable(false)
         setDateRange(allUpcomingRange())
     }
 
@@ -387,6 +394,8 @@ export default function ProvidersScheduling() {
                     // An inactive window generates no slots, so an unlinked one
                     // isn't a problem to warn about.
                     isActive(av) &&
+                    // A note or lunch break has no appointment type to link.
+                    isBookableWindow(av) &&
                     !isExpired(av, today) &&
                     (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
             ).length,
@@ -422,7 +431,7 @@ export default function ProvidersScheduling() {
     const renderWindow = (av: CachedAvailability) => {
         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
         const isPastDate = isExpired(av, today)
-        const isWarning = !hasTypes && !isPastDate
+        const isWarning = !hasTypes && !isPastDate && isBookableWindow(av)
 
         const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
         const normalClass = isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
@@ -447,6 +456,15 @@ export default function ProvidersScheduling() {
                             {isPastDate && (
                                 <Badge variant="outline" className="text-xs text-muted-foreground/60 border-border/40">
                                     Expired
+                                </Badge>
+                            )}
+                            {av.label_name && (
+                                <Badge
+                                    variant="outline"
+                                    className="text-xs border-amber-500/50 text-amber-700 dark:text-amber-300"
+                                    title="Not bookable time — this row describes the schedule rather than offering appointments"
+                                >
+                                    {av.label_name}
                                 </Badge>
                             )}
                             {av.synced && (
@@ -796,6 +814,14 @@ export default function ProvidersScheduling() {
                                 </Select>
 
                                 <UpcomingRangePicker value={dateRange} onChange={setDateRange} />
+
+                                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                    <Checkbox
+                                        checked={showNonBookable}
+                                        onCheckedChange={(checked) => setShowNonBookable(checked === true)}
+                                    />
+                                    Show notes &amp; breaks
+                                </label>
 
                                 {hasNarrowingFilter && (
                                     <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={resetFilters}>

@@ -85,6 +85,7 @@ class NexHealthHTTPClient:
         json: dict[str, Any] | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
+        headers_override: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Make HTTP request with automatic retry for rate limits.
@@ -99,6 +100,10 @@ class NexHealthHTTPClient:
                 client-wide timeout. Use for a small number of known-slow
                 endpoints rather than raising the default, which would also
                 delay failure detection on the latency-sensitive voice paths.
+            headers_override: Replaces the derived Accept/Nex-Api-Version headers
+                for this request only. Used to call a single endpoint under a
+                different NexHealth API contract than the client-wide one, so a
+                migration can move one route at a time.
             max_retries: Per-request retry override. Pass 0 on a long read: a
                 call that already exceeded a generous timeout will almost
                 certainly do so again, and the default 3 retries turn one slow
@@ -115,6 +120,8 @@ class NexHealthHTTPClient:
             raise RuntimeError("HTTP client not initialized. Use as context manager.")
 
         headers = self._build_headers(token)
+        if headers_override:
+            headers = {**headers, **headers_override}
         retries = self._max_retries if max_retries is None else max_retries
 
         for attempt in range(retries + 1):
