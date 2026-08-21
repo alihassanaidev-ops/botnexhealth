@@ -35,6 +35,8 @@ import { UpcomingRangePicker } from "@/components/scheduling/UpcomingRangePicker
 import {
     byDateThenTime,
     defaultRange,
+    isExpired,
+    todayISO,
     isActive,
     isBookableWindow,
     isRecurring,
@@ -484,9 +486,13 @@ export default function ProvidersScheduling() {
     }
 
     // Use local date (browser TZ) — the user is at the practice.
-    const todayLocal = new Date().toLocaleDateString("en-CA") // YYYY-MM-DD
-    const isAvailabilityExpired = (av: CachedAvailability) =>
-        !!av.specific_date && av.specific_date < todayLocal
+    const todayLocal = todayISO()
+    // useCallback so the memoised derivations below actually memoise: a fresh
+    // function identity each render defeated them entirely.
+    const isAvailabilityExpired = useCallback(
+        (av: CachedAvailability) => isExpired(av, todayLocal),
+        [todayLocal]
+    )
 
     // Filter availabilities by selected appointment type (and expired state
     // unless showExpired is on), then sort by date.
