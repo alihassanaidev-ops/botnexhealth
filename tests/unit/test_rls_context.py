@@ -120,8 +120,15 @@ async def test_superadmin_system_session_sets_explicit_cross_tenant_context(
     async with get_superadmin_system_db_session("workflow_scheduler_poll") as session:
         assert session is fake_session
 
+    # Resolve the class from the live module rather than the symbol imported at
+    # collection time. test_database_null_pool reloads src.app.database in an
+    # autouse fixture, which rebinds RlsContext to a NEW class object — and a
+    # frozen dataclass only compares equal to its own class, so a stale import
+    # fails here depending purely on test ordering.
+    import src.app.database as database_mod
+
     assert observed_contexts == [
-        RlsContext(
+        database_mod.RlsContext(
             context_type="user",
             user_id="00000000-0000-0000-0000-000000000000",
             role="SUPER_ADMIN",

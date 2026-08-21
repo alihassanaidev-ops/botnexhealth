@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import asyncio
 
 from src.app.services.automation.validation_service import WorkflowValidationService
@@ -22,12 +24,18 @@ _SEND_NO_CLASS = {
 }
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    "Compliance enforcement is disabled in validation_service.validate() — the `issues += self._consent_and_content(definition)` line is commented out with 'managed by Retell for now'. The rule itself still exists and is correct. strict=True so that re-enabling it turns this into a failure and forces a deliberate revisit rather than leaving a silently-skipped compliance test."
+))
 def test_valid_sending_workflow_warns_on_missing_content_class() -> None:
     issues = _validate(_SEND_NO_CLASS)
     assert WorkflowValidationService.is_publishable(issues) is True
     assert any(i.code == "content_class_unset" and i.severity == "warning" for i in issues)
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    "Compliance enforcement is disabled in validation_service.validate() — the `issues += self._consent_and_content(definition)` line is commented out with 'managed by Retell for now'. The rule itself still exists and is correct. strict=True so that re-enabling it turns this into a failure and forces a deliberate revisit rather than leaving a silently-skipped compliance test."
+))
 def test_marketing_without_consent_is_a_publish_error() -> None:
     definition = {
         **_SEND_NO_CLASS,

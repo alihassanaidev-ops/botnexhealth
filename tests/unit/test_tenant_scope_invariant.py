@@ -45,7 +45,7 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # institution association is recorded on the row only after the handler
     # resolves it. A cross-tenant collision would require two clinics to
     # share the same Retell call_id, which Retell guarantees never happens.
-    ("src/app/retell/idempotency.py", 96, "RetellFunctionInvocation"),
+    ("src/app/retell/idempotency.py", 98, "RetellFunctionInvocation"),
     ("src/app/retell/idempotency.py", 182, "RetellFunctionInvocation"),
     ("src/app/retell/webhooks.py", 162, "RetellWebhookEvent"),
     ("src/app/retell/webhooks.py", 224, "RetellWebhookEvent"),
@@ -60,9 +60,9 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # with DATABASE_ADMIN_URL and intentionally scans expired records across
     # tenants. It only clears PHI whose retention deadline has passed and
     # skips rows under legal hold.
-    ("src/app/services/retention_policy.py", 305, "Call"),    # expired recordings
-    ("src/app/services/retention_policy.py", 354, "Call"),    # purged-call CFV cleanup
-    ("src/app/services/retention_policy.py", 379, "Call"),    # retained-call EXISTS
+    ("src/app/services/retention_policy.py", 348, "Call"),    # expired recordings
+    ("src/app/services/retention_policy.py", 397, "Call"),    # purged-call CFV cleanup
+    ("src/app/services/retention_policy.py", 422, "Call"),    # retained-call EXISTS
     ("src/app/services/retention_policy.py", 390, "Contact"), # anonymized-contact CFV
 
     # Contact-detail (Patients page) loads a primary contact's aliases and the
@@ -73,6 +73,13 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # and RLS enforces institution_id on Contact and Call regardless.
     ("src/app/api/routes/contacts.py", 293, "Contact"),  # aliases of scoped primary
     ("src/app/api/routes/contacts.py", 304, "Call"),     # calls of scoped primary + aliases
+
+    # The v3 cutover readiness report is a platform-admin diagnostic. It selects
+    # only (AuditLog.action, COUNT(*)) grouped by action — action names and
+    # integers, never a PHI-bearing row. It runs from a CLI that hard-exits
+    # without DATABASE_ADMIN_URL, opens a superadmin system session, and is
+    # reachable from no API route, so no tenant can invoke it.
+    ("src/app/services/automation/nexhealth_cutover_service.py", 215, "AuditLog"),
 }
 
 
