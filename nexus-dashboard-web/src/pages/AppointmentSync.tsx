@@ -35,6 +35,7 @@ import {
     type AppointmentSyncItem,
     type AppointmentSyncListResponse,
 } from "@/lib/appointment-sync-api"
+import { useInstitution } from "@/context/InstitutionContext"
 import { cn } from "@/lib/utils"
 
 const PAGE_SIZE = 50
@@ -99,6 +100,14 @@ function StatusBadge({ item }: { item: AppointmentSyncItem }) {
     )
 }
 
+function LocalStatusBadge({ status }: { status: string }) {
+    return (
+        <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+            {formatStatusLabel(status)}
+        </span>
+    )
+}
+
 function FlagBadge({ value, label }: { value: boolean | null; label: string }) {
     return (
         <span
@@ -124,7 +133,7 @@ function SourceLabel({ source }: { source: string | null }) {
     )
 }
 
-function SkeletonRows() {
+function SkeletonRows({ isGoTracker }: { isGoTracker: boolean }) {
     return (
         <>
             {Array.from({ length: 8 }).map((_, index) => (
@@ -132,7 +141,7 @@ function SkeletonRows() {
                     <TableCell><Skeleton className="h-5 w-40" /></TableCell>
                     <TableCell><Skeleton className="h-5 w-36" /></TableCell>
                     <TableCell><Skeleton className="h-5 w-24" /></TableCell>
-                    <TableCell><Skeleton className="h-5 w-32" /></TableCell>
+                    {isGoTracker && <TableCell><Skeleton className="h-5 w-32" /></TableCell>}
                     <TableCell><Skeleton className="h-5 w-28" /></TableCell>
                     <TableCell><Skeleton className="h-5 w-28" /></TableCell>
                 </TableRow>
@@ -142,6 +151,8 @@ function SkeletonRows() {
 }
 
 export default function AppointmentSync() {
+    const { pmsType } = useInstitution()
+    const isGoTracker = pmsType === "gotracker"
     const [data, setData] = useState<AppointmentSyncListResponse | null>(null)
     const [loading, setLoading] = useState(true)
     const [search, setSearch] = useState("")
@@ -169,14 +180,14 @@ export default function AppointmentSync() {
                 limit: PAGE_SIZE,
                 offset: page * PAGE_SIZE,
                 search: debouncedSearch || undefined,
-                gotracker_status_id: statusId === ALL_STATUSES ? undefined : Number(statusId),
+                gotracker_status_id: isGoTracker && statusId !== ALL_STATUSES ? Number(statusId) : undefined,
             }))
         } catch (error) {
             toast.error(error instanceof Error ? error.message : "Failed to load appointment sync status")
         } finally {
             setLoading(false)
         }
-    }, [debouncedSearch, page, statusId])
+    }, [debouncedSearch, isGoTracker, page, statusId])
 
     useEffect(() => {
         void fetchRows()
@@ -192,7 +203,7 @@ export default function AppointmentSync() {
             <PageHeader
                 icon={CalendarClock}
                 title="Appointment Sync"
-                description="Current GoTracker appointment status snapshot known to ScaleNexus."
+                description="Current appointment synchronization snapshot known to ScaleNexus."
                 actions={
                     <>
                         {!loading && data && (
@@ -219,20 +230,22 @@ export default function AppointmentSync() {
                         className="h-8 w-[240px] pl-8 lg:w-[340px]"
                     />
                 </div>
-                <Select value={statusId} onValueChange={setStatusId}>
-                    <SelectTrigger className="h-8 w-[220px]">
-                        <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value={ALL_STATUSES}>All GoTracker statuses</SelectItem>
-                        {GOTRACKER_STATUSES.map((status) => (
-                            <SelectItem key={status.id} value={String(status.id)}>
-                                {status.id} · {status.label}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-                {(search || statusId !== ALL_STATUSES) && (
+                {isGoTracker && (
+                    <Select value={statusId} onValueChange={setStatusId}>
+                        <SelectTrigger className="h-8 w-[220px]">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={ALL_STATUSES}>All GoTracker statuses</SelectItem>
+                            {GOTRACKER_STATUSES.map((status) => (
+                                <SelectItem key={status.id} value={String(status.id)}>
+                                    {status.id} · {status.label}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                )}
+                {(search || (isGoTracker && statusId !== ALL_STATUSES)) && (
                     <Button
                         variant="ghost"
                         onClick={() => {
@@ -254,18 +267,18 @@ export default function AppointmentSync() {
                                 <TableRow>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Patient</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Appointment</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">GoTracker status</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Flags</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{isGoTracker ? "GoTracker status" : "Sync status"}</TableHead>
+                                    {isGoTracker && <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Flags</TableHead>}
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Source</TableHead>
                                     <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Last seen</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
                                 {loading ? (
-                                    <SkeletonRows />
+                                    <SkeletonRows isGoTracker={isGoTracker} />
                                 ) : !data || data.items.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={6} className="px-4 py-16 text-center">
+                                        <TableCell colSpan={isGoTracker ? 6 : 5} className="px-4 py-16 text-center">
                                             <div className="flex flex-col items-center gap-3 text-muted-foreground">
                                                 <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
                                                     <CalendarClock className="h-6 w-6 opacity-40" />
@@ -273,7 +286,7 @@ export default function AppointmentSync() {
                                                 <div>
                                                     <p className="text-sm font-medium text-foreground/70">No appointment sync rows</p>
                                                     <p className="mt-0.5 text-xs">
-                                                        {search ? "Try a different search." : "GoTracker webhook appointments will appear here."}
+                                                        {search ? "Try a different search." : "Appointments synchronized from your PMS will appear here."}
                                                     </p>
                                                 </div>
                                             </div>
@@ -291,17 +304,23 @@ export default function AppointmentSync() {
                                                 <div className="font-mono text-xs text-muted-foreground">{item.appointment_id}</div>
                                             </TableCell>
                                             <TableCell className="px-4 py-3">
-                                                <StatusBadge item={item} />
-                                                <div className="mt-1 text-xs capitalize text-muted-foreground">
-                                                    Local: {item.local_status}
-                                                </div>
+                                                {isGoTracker ? (
+                                                    <>
+                                                        <StatusBadge item={item} />
+                                                        <div className="mt-1 text-xs capitalize text-muted-foreground">
+                                                            Local: {item.local_status}
+                                                        </div>
+                                                    </>
+                                                ) : <LocalStatusBadge status={item.local_status} />}
                                             </TableCell>
-                                            <TableCell className="px-4 py-3">
-                                                <div className="flex flex-wrap gap-1.5">
-                                                    <FlagBadge value={item.is_confirmed} label="Confirmed" />
-                                                    <FlagBadge value={item.is_preconfirmed} label="Preconfirmed" />
-                                                </div>
-                                            </TableCell>
+                                            {isGoTracker && (
+                                                <TableCell className="px-4 py-3">
+                                                    <div className="flex flex-wrap gap-1.5">
+                                                        <FlagBadge value={item.is_confirmed} label="Confirmed" />
+                                                        <FlagBadge value={item.is_preconfirmed} label="Preconfirmed" />
+                                                    </div>
+                                                </TableCell>
+                                            )}
                                             <TableCell className="px-4 py-3 text-xs">
                                                 <SourceLabel source={item.last_status_source} />
                                                 <div className="mt-1 text-muted-foreground">
