@@ -36,12 +36,13 @@ async def test_create_reuses_shared_nexhealth_client(monkeypatch: pytest.MonkeyP
 
     shared_client = SharedClient()
 
-    async def fake_dependency():
+    # The credential-aware factory takes the resolved credential context.
+    async def fake_dependency(_credential):
         return shared_client
 
     monkeypatch.setattr(global_settings, "nexhealth_api_key", "test-api-key")
     monkeypatch.setattr(
-        dependencies, "get_nexhealth_client_dependency", fake_dependency
+        dependencies, "get_nexhealth_client_for_credential", fake_dependency
     )
 
     adapter = await NexHealthAdapter.create(

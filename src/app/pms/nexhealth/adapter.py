@@ -316,6 +316,8 @@ class NexHealthAdapter(
         )
         self._direct_reschedule_pms_name = direct_reschedule_pms_name
         self._owns_client = owns_client
+        self.credential_mode: str | None = None
+        self.api_key_hash: str | None = None
 
     @classmethod
     async def create(
@@ -323,19 +325,18 @@ class NexHealthAdapter(
     ) -> NexHealthAdapter:
         """Build a NexHealth adapter scoped to an institution + location.
 
-        The platform shares a single NexHealth account, so the API key comes
-        from global settings. Per-clinic isolation is provided exclusively by
-        ``location.nexhealth_subdomain`` and ``location.nexhealth_location_id``;
-        we fail closed if either is missing to prevent a misconfigured clinic
-        from silently routing to whichever subdomain happens to be in the
-        global env.
+        Hybrid credential mode is supported: if the institution stores a
+        NexHealth API key, use it; otherwise fall back to the platform key.
+        Location scoping still comes from ``location.nexhealth_subdomain`` and
+        ``location.nexhealth_location_id``.
         """
         from src.app.config import settings as global_settings
-        from src.app.dependencies import get_nexhealth_client_dependency
+        from src.app.dependencies import (
+            get_nexhealth_client_for_credential,
+            resolve_nexhealth_credential,
+        )
 
-        api_key = global_settings.nexhealth_api_key
-        if not api_key:
-            raise RuntimeError("NEXHEALTH_API_KEY is not configured")
+        credential = resolve_nexhealth_credential(institution)
 
         subdomain = location.nexhealth_subdomain
         location_id = location.nexhealth_location_id
@@ -349,7 +350,9 @@ class NexHealthAdapter(
         # and token caching survive across requests. Creating a fresh
         # AsyncClient per adapter leaks sockets if a caller misses close()
         # and collapses under concurrent Retell/function traffic.
-        client = await get_nexhealth_client_dependency()
+        # Client comes from the resolved credential, so a clinic-owned key gets
+        # its own client, token cache and rate-limit bucket.
+        client = await get_nexhealth_client_for_credential(credential)
         direct_reschedule_pms_name = None
         internal_institution_id = getattr(institution, "id", None)
         internal_location_id = getattr(location, "id", None)
@@ -358,7 +361,7 @@ class NexHealthAdapter(
                 institution_id=str(internal_institution_id),
                 location_id=str(internal_location_id),
             )
-        return cls(
+        adapter = cls(
             client,
             institution,
             subdomain=subdomain,
@@ -367,6 +370,9 @@ class NexHealthAdapter(
             direct_reschedule_pms_name=direct_reschedule_pms_name,
             owns_client=False,
         )
+        adapter.credential_mode = credential.mode
+        adapter.api_key_hash = credential.api_key_hash
+        return adapter
 
     @staticmethod
     async def _direct_reschedule_pms_name_for_location(

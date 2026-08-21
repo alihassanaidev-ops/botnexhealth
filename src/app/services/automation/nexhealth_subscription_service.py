@@ -166,6 +166,9 @@ class NexHealthSubscriptionLifecycleService:
         institution_id = str(institution.id)
         location_id = str(location.id)
         events = event_types or DEFAULT_WEBHOOK_EVENTS
+        from src.app.dependencies import resolve_nexhealth_credential
+
+        credential = resolve_nexhealth_credential(institution)
         existing = (
             await self.session.execute(
                 select(NexHealthWebhookSubscription).where(
@@ -184,6 +187,8 @@ class NexHealthSubscriptionLifecycleService:
                 subdomain=str(location.nexhealth_subdomain),
                 nexhealth_location_id=str(location.nexhealth_location_id),
                 event_types=events,
+                credential_mode=credential.mode,
+                api_key_hash=credential.api_key_hash,
                 status=NexHealthWebhookSubscriptionStatus.PENDING.value,
                 updated_at=now,
             )
@@ -193,6 +198,8 @@ class NexHealthSubscriptionLifecycleService:
             existing.subdomain = str(location.nexhealth_subdomain)
             existing.nexhealth_location_id = str(location.nexhealth_location_id)
             existing.event_types = events
+            existing.credential_mode = credential.mode
+            existing.api_key_hash = credential.api_key_hash
             existing.updated_at = now
             if existing.status == NexHealthWebhookSubscriptionStatus.DISABLED.value:
                 existing.status = NexHealthWebhookSubscriptionStatus.PENDING.value
@@ -326,6 +333,8 @@ class NexHealthSubscriptionLifecycleService:
                 await adapter.close()
 
         row.provider_subscription_id = str(endpoint_id)
+        row.credential_mode = adapter.credential_mode
+        row.api_key_hash = adapter.api_key_hash
         row.status = NexHealthWebhookSubscriptionStatus.ACTIVE.value
         row.error_metadata = None
         # The endpoint's secret_key is the inbound-webhook signing secret. Persist it if

@@ -148,6 +148,11 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/admin/institutions/retell/agents/{agent_id}",
         "GET /api/admin/institutions/retell/phone-numbers",
         "GET /api/admin/institutions/nexhealth/locations",
+        # Per-institution NexHealth credential management. Both guard on
+        # get_current_admin, so SUPER_ADMIN only — they read and verify a
+        # clinic's own API key.
+        "GET /api/admin/institutions/{slug}/nexhealth/locations",
+        "POST /api/admin/institutions/{slug}/nexhealth/verify",
         "GET /api/admin/institutions/audit-logs",
         "GET /api/admin/institutions",
         "POST /api/admin/institutions",
