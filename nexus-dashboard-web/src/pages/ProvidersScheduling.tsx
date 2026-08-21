@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { toast } from "sonner"
 import { addDays, differenceInCalendarDays, format, startOfDay } from "date-fns"
 import type { DateRange } from "react-day-picker"
-import { RefreshCcw, AlertTriangle, Clock, Calendar, CalendarDays, MapPin, UserCog } from "lucide-react"
+import { RefreshCcw, AlertTriangle, Clock, Calendar, CalendarDays, MapPin, UserCog, ChevronLeft, ChevronRight, Repeat } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
 import { Input } from "@/components/ui/input"
@@ -31,6 +31,19 @@ import {
 import { useAuth } from "@/context/AuthContext"
 import { useSelectedLocationId, useLocationContext } from "@/context/LocationContext"
 import SchedulerCalendar from "@/components/scheduling/SchedulerCalendar"
+import { UpcomingRangePicker } from "@/components/scheduling/UpcomingRangePicker"
+import {
+    byDateThenTime,
+    defaultRange,
+    isActive,
+    isBookableWindow,
+    isRecurring,
+    matchesRange,
+    type UpcomingRange,
+} from "@/lib/availability-filter"
+
+/** Dated work windows per page. Matches the Patients table's page size. */
+const PAGE_SIZE = 25
 
 const ISO_DATE = "yyyy-MM-dd"
 /** Bulk range linking is capped server-side; `today + 14` spans 15 days inclusive. */
@@ -58,7 +71,12 @@ export default function ProvidersScheduling() {
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
     const [showExpired, setShowExpired] = useState(false)
-    const [view, setView] = useState<"list" | "calendar">("calendar")
+    // Opens on the coming week: that's what a front-desk operator is working on,
+    // and it keeps the default view to a page or two instead of thousands of
+    // pre-expanded rows. Wider presets are one click away in the picker.
+    const [dateRange, setDateRange] = useState<UpcomingRange>(() => defaultRange())
+    const [page, setPage] = useState(0)
+    const [view, setView] = useState<"list" | "calendar">("list")
     const [loading, setLoading] = useState(true)
     const [loadingAvailabilities, setLoadingAvailabilities] = useState(false)
     const [syncing, setSyncing] = useState(false)
@@ -477,40 +495,111 @@ export default function ProvidersScheduling() {
     // appointment type to a far-future row instead of the soonest one.
     // Sort: specific_date ascending, then begin_time. Rows without a
     // specific_date (pure recurring rules) sort first.
-    const filteredAvailabilities = availabilities
-        // PMS notes and lunch breaks arrive in the same collection as real
-        // working windows; only v3 labels them, so on v2 this is a no-op.
-        .filter((av) => showNonBookable || av.is_bookable_window !== false)
-        .filter((av) => showExpired || !isAvailabilityExpired(av))
-        .filter(
-            (av) =>
-                !canLinkAvailability ||
-                selectedApptTypeId === "all" ||
-                av.appointment_type_ids?.includes(selectedApptTypeId)
-        )
-        .filter(
-            (av) =>
-                selectedOperatoryId === "all" ||
-                av.operatory_source_id === selectedOperatoryId
-        )
-        .slice()
-        .sort((a, b) => {
-            const ad = a.specific_date ?? ""
-            const bd = b.specific_date ?? ""
-            if (ad !== bd) return ad.localeCompare(bd)
-            const at = a.begin_time ?? ""
-            const bt = b.begin_time ?? ""
-            return at.localeCompare(bt)
-        })
+    // Memoised: this used to recompute (filter + sort over the provider's whole
+    // availability set) on every render, including every keystroke in the
+    // Scheduling Rules inputs above.
+    const visibleAvailabilities = useMemo(
+        () =>
+            availabilities
+                .filter(isActive)
+                // PMS notes and lunch breaks arrive in the same collection as
+                // real working windows; only v3 labels them, so on v2 this is
+                // a no-op.
+                .filter((av) => showNonBookable || isBookableWindow(av))
+                .filter((av) => showExpired || matchesRange(av, dateRange))
+                .filter(
+                    (av) =>
+                        !canLinkAvailability ||
+                        selectedApptTypeId === "all" ||
+                        av.appointment_type_ids?.includes(selectedApptTypeId)
+                )
+                .filter(
+                    (av) =>
+                        selectedOperatoryId === "all" ||
+                        av.operatory_source_id === selectedOperatoryId
+                ),
+        [
+            availabilities, showExpired, dateRange, showNonBookable,
+            canLinkAvailability, selectedApptTypeId, selectedOperatoryId,
+        ]
+    )
 
-    const unlinkedCount = canLinkAvailability ? availabilities.filter(
-        (av) =>
-            // A note or break has no appointment type to link, so warning
-            // about it sends the operator chasing something unfixable.
-            av.is_bookable_window !== false &&
-            !isAvailabilityExpired(av) &&
-            (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
-    ).length : 0
+    // Recurring rules are pinned above the paginated list rather than sorted
+    // into it. Sorted in, they'd take the top of page 1 and push the dated rows
+    // the operator is filtering for onto page 2 — which reads as "the filter did
+    // nothing".
+    const recurringWindows = useMemo(
+        () => visibleAvailabilities.filter(isRecurring),
+        [visibleAvailabilities]
+    )
+    const datedWindows = useMemo(
+        () => visibleAvailabilities.filter((av) => !isRecurring(av)).sort(byDateThenTime),
+        [visibleAvailabilities]
+    )
+
+    const pageCount = Math.max(1, Math.ceil(datedWindows.length / PAGE_SIZE))
+    const pagedWindows = useMemo(
+        () => datedWindows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+        [datedWindows, page]
+    )
+    // Group the visible page by date so each day gets its own heading — a flat
+    // run of rows reads as one long list with the dates buried inside each card.
+    const pagedGroups = useMemo(() => {
+        const groups: { date: string; rows: CachedAvailability[] }[] = []
+        for (const av of pagedWindows) {
+            const key = av.specific_date ?? ""
+            const last = groups[groups.length - 1]
+            if (last && last.date === key) last.rows.push(av)
+            else groups.push({ date: key, rows: [av] })
+        }
+        return groups
+    }, [pagedWindows])
+
+    const rangeFrom = datedWindows.length === 0 ? 0 : page * PAGE_SIZE + 1
+    const rangeTo = Math.min((page + 1) * PAGE_SIZE, datedWindows.length)
+    const totalShown = recurringWindows.length + datedWindows.length
+
+    // Kept for the row markup and the existing empty-state copy.
+    const filteredAvailabilities = visibleAvailabilities
+
+    // Narrowing a filter while on page 4 would otherwise strand the operator on
+    // an out-of-range page showing nothing.
+    useEffect(() => {
+        setPage(0)
+    }, [
+        selectedProviderId, selectedApptTypeId, selectedOperatoryId,
+        dateRange, showNonBookable, showExpired,
+    ])
+
+    // `showExpired` and `showNonBookable` widen rather than narrow, so they
+    // don't count toward the "(filtered)" label or the Clear button.
+    const hasNarrowingFilter =
+        selectedApptTypeId !== "all" ||
+        selectedOperatoryId !== "all" ||
+        dateRange.endDate !== null
+
+    const resetFilters = () => {
+        setSelectedApptTypeId("all")
+        setSelectedOperatoryId("all")
+        setDateRange(defaultRange())
+    }
+
+    const unlinkedCount = useMemo(
+        () =>
+            canLinkAvailability
+                ? availabilities.filter(
+                    (av) =>
+                        // An inactive window generates no slots, and a note or
+                        // break has no appointment type to link — warning about
+                        // either sends the operator chasing something unfixable.
+                        isActive(av) &&
+                        isBookableWindow(av) &&
+                        !isAvailabilityExpired(av) &&
+                        (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
+                ).length
+                : 0,
+        [availabilities, canLinkAvailability, isAvailabilityExpired]
+    )
 
     // Collect appointment types that appear in this provider's availabilities
     const availableApptTypeIds = new Set(availabilities.flatMap((av) => av.appointment_type_ids || []))
@@ -552,6 +641,115 @@ export default function ProvidersScheduling() {
                 : visibleIds
         )
         setBulkDialogOpen(true)
+    }
+
+    // One row, rendered by both the recurring section and the paginated
+    // dated list, so the two cannot drift apart visually.
+    const renderWindow = (av: CachedAvailability) => {
+        const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
+        const isPastDate = isAvailabilityExpired(av)
+        const isWarning = canLinkAvailability && !hasTypes && !isPastDate
+
+        const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
+        const normalClass = isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
+
+        return (
+            <div
+                key={av.id}
+                className={`rounded-lg border p-4 transition-colors ${isPastDate
+                        ? "border-border/40 bg-muted/20 opacity-50"
+                        : isWarning
+                            ? "border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] dark:bg-[rgb(255,244,227)]/10"
+                            : "border-border bg-background/70 hover:border-border"
+                    }`}
+            >
+                <div className="flex items-start justify-between">
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                            <Clock className={`h-4 w-4 ${mutedClass}`} />
+                            <span className={`font-medium ${normalClass}`}>
+                                {av.begin_time} - {av.end_time}
+                            </span>
+                            {isPastDate && (
+                                <Badge variant="outline" className="text-xs text-muted-foreground/60 border-border/40">
+                                    Expired
+                                </Badge>
+                            )}
+                            {av.label_name && (
+                            <Badge
+                                variant="outline"
+                                className="text-xs border-amber-500/50 text-amber-700 dark:text-amber-300"
+                                title="Not bookable time — this row describes the schedule rather than offering appointments"
+                            >
+                                {av.label_name}
+                            </Badge>
+                        )}
+                        {av.synced && (
+                                <Badge
+                                    variant={isWarning ? "outline" : "secondary"}
+                                    className={`text-xs ${isWarning
+                                            ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 bg-indigo-500/10"
+                                            : ""
+                                        }`}
+                                >
+                                    Synced from PMS
+                                </Badge>
+                            )}
+                            {!av.synced && (
+                                <Badge
+                                    variant="outline"
+                                    className={`text-xs ${isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300" : ""
+                                        }`}
+                                >
+                                    Manual
+                                </Badge>
+                            )}
+                        </div>
+                        {av.operatory_source_id && (
+                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
+                                <MapPin className="h-3 w-3" />
+                                Operatory: {operatoryNameBySourceId.get(av.operatory_source_id) ?? av.operatory_name ?? "Unknown"}
+                                <span className="opacity-60">({av.operatory_source_id})</span>
+                            </div>
+                        )}
+                        {av.days && av.days.length > 0 && (
+                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
+                                <Calendar className="h-3 w-3" />
+                                {av.days.join(", ")}
+                            </div>
+                        )}
+                        {av.specific_date && (
+                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
+                                <Calendar className="h-3 w-3" />
+                                Specific date: {av.specific_date}
+                            </div>
+                        )}
+                        {canLinkAvailability && (
+                            <div className={`text-sm ${normalClass}`}>
+                                <span className={mutedClass}>Appointment Types: </span>
+                                {hasTypes ? (
+                                    <span>{av.appointment_type_names?.join(", ")}</span>
+                                ) : (
+                                    <span className="text-indigo-700 dark:text-indigo-300 font-medium">
+                                        None linked
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                    {canManage && canLinkAvailability && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className={isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/10 shrink-0" : "shrink-0"}
+                            onClick={() => openEditDialog(av)}
+                        >
+                            Edit Linking
+                        </Button>
+                    )}
+                </div>
+            </div>
+        )
     }
 
     return (
@@ -645,79 +843,24 @@ export default function ProvidersScheduling() {
                 />
             ) : (
                 <>
-                    {/* Filters: Provider → Appointment Type */}
-                    <div className="flex items-center gap-4 flex-wrap">
-                        <div className="flex items-center gap-2">
-                            <label className="text-sm font-medium whitespace-nowrap">Provider:</label>
-                            <Select value={selectedProviderId} onValueChange={setSelectedProviderId}>
-                                <SelectTrigger className="w-[280px]">
-                                    <SelectValue placeholder="Select provider" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {providers.map((p) => (
-                                        <SelectItem key={p.source_id} value={p.source_id}>
-                                            {p.name || `${p.first_name} ${p.last_name}`}
-                                            {p.specialty ? ` (${p.specialty})` : ""}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {canLinkAvailability && (
-                            <div className="flex items-center gap-2">
-                                <label className="text-sm font-medium whitespace-nowrap">Appointment Type:</label>
-                                <Select value={selectedApptTypeId} onValueChange={setSelectedApptTypeId}>
-                                    <SelectTrigger className="w-[260px]">
-                                        <SelectValue placeholder="All Types" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All Types</SelectItem>
-                                        {relevantApptTypes.map((at) => (
-                                            <SelectItem key={at.source_id} value={at.source_id}>
-                                                {at.name}
-                                                {at.duration_minutes ? ` (${at.duration_minutes} min)` : ""}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                        )}
-
-                        <div className="flex items-center gap-2">
-                            <label className="text-sm font-medium whitespace-nowrap">Operatory:</label>
-                            <Select value={selectedOperatoryId} onValueChange={setSelectedOperatoryId}>
-                                <SelectTrigger className="w-[260px]">
-                                    <SelectValue placeholder="All Operatories" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Operatories</SelectItem>
-                                    {relevantOperatories.map((op) => (
-                                        <SelectItem key={op.source_id} value={op.source_id}>
-                                            {op.name} ({op.source_id})
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                            <Checkbox
-                                checked={showExpired}
-                                onCheckedChange={(checked) => setShowExpired(checked === true)}
-                            />
-                            Show expired
-                        </label>
-
-                        {canLinkAvailability && (
-                            <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                                <Checkbox
-                                    checked={showNonBookable}
-                                    onCheckedChange={(checked) => setShowNonBookable(checked === true)}
-                                />
-                                Show notes &amp; breaks (Lunch, NOTE)
-                            </label>
-                        )}
+                    {/* Provider scopes the whole page: it drives the availability
+                        fetch and the Scheduling Rules card below, so it stays here.
+                        The list-only filters live in the Work Windows card header. */}
+                    <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium whitespace-nowrap">Provider:</label>
+                        <Select value={selectedProviderId} onValueChange={setSelectedProviderId}>
+                            <SelectTrigger className="w-[280px]">
+                                <SelectValue placeholder="Select provider" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {providers.map((p) => (
+                                    <SelectItem key={p.source_id} value={p.source_id}>
+                                        {p.name || `${p.first_name} ${p.last_name}`}
+                                        {p.specialty ? ` (${p.specialty})` : ""}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                     </div>
 
                     {/* Provider Scheduling Rules */}
@@ -825,19 +968,87 @@ export default function ProvidersScheduling() {
                     </Card>
 
                     <Card>
-                        <CardHeader>
-                            <CardTitle>
-                                {canLinkAvailability ? "Work Windows" : "Live Slots"} for {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}
-                            </CardTitle>
-                            <CardDescription>
-                                {filteredAvailabilities.length} {canLinkAvailability ? "schedule" : "slot"}{filteredAvailabilities.length !== 1 ? "s" : ""} found
-                                {selectedApptTypeId !== "all" ? " (filtered)" : ""}.
-                                {canLinkAvailability && canManage
-                                    ? ' Click "Edit Linking" to associate appointment types, or use "Link Date Range" to bulk-link matching windows.'
-                                    : canLinkAvailability
-                                        ? " Read-only view."
-                                        : " These are read directly from your PMS."}
-                            </CardDescription>
+                        <CardHeader className="gap-4 space-y-0">
+                            <div className="space-y-1.5">
+                                <CardTitle>
+                                    {canLinkAvailability ? "Work Windows" : "Live Slots"} for {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}
+                                </CardTitle>
+                                <CardDescription>
+                                    {totalShown} {canLinkAvailability ? "schedule" : "slot"}{totalShown !== 1 ? "s" : ""} shown
+                                    {hasNarrowingFilter ? " (filtered)" : ""}.
+                                    {canLinkAvailability && canManage
+                                        ? ' Click "Edit Linking" to associate appointment types, or use "Link Date Range" to bulk-link matching windows.'
+                                        : canLinkAvailability
+                                            ? " Read-only view."
+                                            : " These are read directly from your PMS."}
+                                </CardDescription>
+                            </div>
+
+                            {/* Filters sit directly above the rows they act on. They used to
+                                live at the top of the page, separated from this list by the
+                                whole Scheduling Rules card. */}
+                            <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 p-3">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Filters
+                                </span>
+
+                                {canLinkAvailability && (
+                                    <Select value={selectedApptTypeId} onValueChange={setSelectedApptTypeId}>
+                                        <SelectTrigger className="h-9 w-[220px]" aria-label="Filter by appointment type">
+                                            <SelectValue placeholder="All Types" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All Types</SelectItem>
+                                            {relevantApptTypes.map((at) => (
+                                                <SelectItem key={at.source_id} value={at.source_id}>
+                                                    {at.name}
+                                                    {at.duration_minutes ? ` (${at.duration_minutes} min)` : ""}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+
+                                <Select value={selectedOperatoryId} onValueChange={setSelectedOperatoryId}>
+                                    <SelectTrigger className="h-9 w-[220px]" aria-label="Filter by operatory">
+                                        <SelectValue placeholder="All Operatories" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Operatories</SelectItem>
+                                        {relevantOperatories.map((op) => (
+                                            <SelectItem key={op.source_id} value={op.source_id}>
+                                                {op.name} ({op.source_id})
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+
+                                <UpcomingRangePicker value={dateRange} onChange={setDateRange} />
+
+                                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                    <Checkbox
+                                        checked={showExpired}
+                                        onCheckedChange={(checked) => setShowExpired(checked === true)}
+                                    />
+                                    Show expired
+                                </label>
+
+                                {canLinkAvailability && (
+                                    <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                        <Checkbox
+                                            checked={showNonBookable}
+                                            onCheckedChange={(checked) => setShowNonBookable(checked === true)}
+                                        />
+                                        Show notes &amp; breaks (Lunch, NOTE)
+                                    </label>
+                                )}
+
+                                {hasNarrowingFilter && (
+                                    <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={resetFilters}>
+                                        Clear filters
+                                    </Button>
+                                )}
+                            </div>
                         </CardHeader>
                         <CardContent>
                             {loadingAvailabilities ? (
@@ -855,113 +1066,62 @@ export default function ProvidersScheduling() {
                                         : "No live slots found for this provider in the next 7 days."}
                                 </p>
                             ) : (
-                                <div className="space-y-3">
-                                    {filteredAvailabilities.map((av) => {
-                                        const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
-                                        const isPastDate = isAvailabilityExpired(av)
-                                        const isWarning = canLinkAvailability && !hasTypes && !isPastDate
-
-                                        const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
-                                        const normalClass = isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
-
-                                        return (
-                                            <div
-                                                key={av.id}
-                                                className={`rounded-lg border p-4 transition-colors ${isPastDate
-                                                        ? "border-border/40 bg-muted/20 opacity-50"
-                                                        : isWarning
-                                                            ? "border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] dark:bg-[rgb(255,244,227)]/10"
-                                                            : "border-border bg-background/70 hover:border-border"
-                                                    }`}
-                                            >
-                                                <div className="flex items-start justify-between">
-                                                    <div className="space-y-1">
-                                                        <div className="flex items-center gap-2">
-                                                            <Clock className={`h-4 w-4 ${mutedClass}`} />
-                                                            <span className={`font-medium ${normalClass}`}>
-                                                                {av.begin_time} - {av.end_time}
-                                                            </span>
-                                                            {isPastDate && (
-                                                                <Badge variant="outline" className="text-xs text-muted-foreground/60 border-border/40">
-                                                                    Expired
-                                                                </Badge>
-                                                            )}
-                                                            {av.label_name && (
-                                                            <Badge
-                                                                variant="outline"
-                                                                className="text-xs border-amber-500/50 text-amber-700 dark:text-amber-300"
-                                                                title="Not bookable time — this row describes the schedule rather than offering appointments"
-                                                            >
-                                                                {av.label_name}
-                                                            </Badge>
-                                                        )}
-                                                        {av.synced && (
-                                                                <Badge
-                                                                    variant={isWarning ? "outline" : "secondary"}
-                                                                    className={`text-xs ${isWarning
-                                                                            ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 bg-indigo-500/10"
-                                                                            : ""
-                                                                        }`}
-                                                                >
-                                                                    Synced from PMS
-                                                                </Badge>
-                                                            )}
-                                                            {!av.synced && (
-                                                                <Badge
-                                                                    variant="outline"
-                                                                    className={`text-xs ${isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300" : ""
-                                                                        }`}
-                                                                >
-                                                                    Manual
-                                                                </Badge>
-                                                            )}
-                                                        </div>
-                                                        {av.operatory_source_id && (
-                                                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
-                                                                <MapPin className="h-3 w-3" />
-                                                                Operatory: {operatoryNameBySourceId.get(av.operatory_source_id) ?? av.operatory_name ?? "Unknown"}
-                                                                <span className="opacity-60">({av.operatory_source_id})</span>
-                                                            </div>
-                                                        )}
-                                                        {av.days && av.days.length > 0 && (
-                                                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
-                                                                <Calendar className="h-3 w-3" />
-                                                                {av.days.join(", ")}
-                                                            </div>
-                                                        )}
-                                                        {av.specific_date && (
-                                                            <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
-                                                                <Calendar className="h-3 w-3" />
-                                                                Specific date: {av.specific_date}
-                                                            </div>
-                                                        )}
-                                                        {canLinkAvailability && (
-                                                            <div className={`text-sm ${normalClass}`}>
-                                                                <span className={mutedClass}>Appointment Types: </span>
-                                                                {hasTypes ? (
-                                                                    <span>{av.appointment_type_names?.join(", ")}</span>
-                                                                ) : (
-                                                                    <span className="text-indigo-700 dark:text-indigo-300 font-medium">
-                                                                        None linked
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                    {canManage && canLinkAvailability && (
-                                                        <Button
-                                                            variant="outline"
-                                                            size="sm"
-                                                            className={isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/10 shrink-0" : "shrink-0"}
-                                                            onClick={() => openEditDialog(av)}
-                                                        >
-                                                            Edit Linking
-                                                        </Button>
-                                                    )}
-                                                </div>
+                                <div className="space-y-6">
+                                    {recurringWindows.length > 0 && (
+                                        <div className="space-y-3">
+                                            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                                                <Repeat className="h-4 w-4 shrink-0" />
+                                                Recurring weekly windows
+                                                <span className="font-normal">— repeat every week, so they apply to any date range</span>
                                             </div>
-                                        )
-                                    })}
+                                            {recurringWindows.map(renderWindow)}
+                                        </div>
+                                    )}
+
+                                    {datedWindows.length > 0 && (
+                                        <div className="space-y-3">
+                                            {recurringWindows.length > 0 && (
+                                                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                                                    <Calendar className="h-4 w-4 shrink-0" />
+                                                    Dated windows
+                                                </div>
+                                            )}
+                                            {pagedGroups.map((group) => (
+                                                <div key={group.date || "undated"} className="space-y-3">
+                                                    <div className="flex items-center gap-2 border-b pb-1.5 text-sm font-semibold">
+                                                        <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                                        {group.date
+                                                            ? new Date(`${group.date}T12:00:00`).toLocaleDateString("en-US", {
+                                                                weekday: "long", month: "long", day: "numeric", year: "numeric",
+                                                            })
+                                                            : "No specific date"}
+                                                        <span className="font-normal text-muted-foreground">
+                                                            — {group.rows.length} window{group.rows.length !== 1 ? "s" : ""}
+                                                        </span>
+                                                    </div>
+                                                    {group.rows.map(renderWindow)}
+                                                </div>
+                                            ))}
+
+                                            {datedWindows.length > PAGE_SIZE && (
+                                                <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-sm text-muted-foreground">
+                                                    <span>
+                                                        Showing <span className="font-medium text-foreground">{rangeFrom}–{rangeTo}</span> of{" "}
+                                                        <span className="font-medium text-foreground">{datedWindows.length}</span> dated windows
+                                                    </span>
+                                                    <div className="flex items-center gap-2">
+                                                        <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="gap-1">
+                                                            <ChevronLeft className="h-4 w-4" /> Previous
+                                                        </Button>
+                                                        <span className="tabular-nums">Page {page + 1} of {pageCount}</span>
+                                                        <Button variant="outline" size="sm" disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)} className="gap-1">
+                                                            Next <ChevronRight className="h-4 w-4" />
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </CardContent>

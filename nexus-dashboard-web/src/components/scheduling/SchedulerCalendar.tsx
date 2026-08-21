@@ -3,7 +3,6 @@ import { ChevronLeft, ChevronRight, AlertTriangle, Globe, Clock, LayoutGrid, Use
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { CalendarSkeleton } from "@/components/ui/skeletons"
 import { getInitials } from "@/components/calls/format"
 import { listAvailabilities, updateAvailability } from "@/lib/tenant-api"
 import type { CachedAvailability, CachedOperatory, CachedAppointmentType } from "@/types"
@@ -122,7 +121,13 @@ export default function SchedulerCalendar({
     }, [locationId])
 
     const operatoryName = useMemo(() => new Map(operatories.map((o) => [o.source_id, o.name])), [operatories])
-    const hasOperatories = useMemo(() => windows.some((w) => w.operatory_source_id), [windows])
+    // While the fetch is in flight there are no windows to inspect, so trust the
+    // operatories prop — otherwise groupBy falls back to "provider" and the
+    // instant-render grid below would draw the wrong columns before data lands.
+    const hasOperatories = useMemo(
+        () => windows.some((w) => w.operatory_source_id) || (windows.length === 0 && operatories.length > 0),
+        [windows, operatories]
+    )
     const effectiveGroupBy = hasOperatories ? groupBy : "provider"
 
     // dropdown option lists
@@ -152,6 +157,24 @@ export default function SchedulerCalendar({
     const shown = (w: CachedAvailability, d: string) => matchesDate(w, d) && passesFilters(w)
 
     const resources = useMemo(() => {
+        // Before the fetch returns there are no windows to derive columns from,
+        // so fall back to the operatories we were handed as a prop. That renders
+        // the real grid — real columns, real time gutter, no events — straight
+        // away and fills in when the data lands, instead of flashing a skeleton
+        // and then replacing the whole layout.
+        if (effectiveGroupBy === "operatory" && windows.length === 0 && operatories.length) {
+            const dupNames = new Set(
+                operatories
+                    .map((o) => o.name)
+                    .filter((n, i, arr) => n && arr.indexOf(n) !== i)
+            )
+            return operatories.map((o) => ({
+                key: o.source_id,
+                name: o.name || o.source_id,
+                sub: o.source_id as string | null,
+                dup: dupNames.has(o.name),
+            }))
+        }
         if (effectiveGroupBy === "operatory") {
             const ids: string[] = []
             for (const w of windows) { const id = w.operatory_source_id; if (id && !ids.includes(id)) ids.push(id) }
@@ -162,7 +185,7 @@ export default function SchedulerCalendar({
         const seen = new Map<string, string>()
         for (const w of windows) { const k = w.provider_source_id || "__none__"; if (!seen.has(k)) seen.set(k, w.provider_name || "Unassigned") }
         return [...seen.entries()].map(([key, name]) => ({ key, name, sub: null as string | null, dup: false }))
-    }, [windows, effectiveGroupBy, operatoryName])
+    }, [windows, effectiveGroupBy, operatoryName, operatories])
 
     useEffect(() => {
         if (resources.length && !resources.some((r) => r.key === weekResource)) setWeekResource(resources[0].key)
@@ -342,12 +365,12 @@ export default function SchedulerCalendar({
                     <span className="text-muted-foreground">{NoteBanner}</span>
                 </div>
 
-                {loading ? (
-                    <CalendarSkeleton cols={7} />
-                ) : error ? (
+                {error ? (
                     <div className="flex items-center gap-2 rounded-xl border border-destructive/40 p-4 text-sm text-destructive"><AlertTriangle className="h-4 w-4" />{error}</div>
                 ) : columns.length === 0 ? (
-                    <div className="rounded-xl border py-16 text-center text-sm text-muted-foreground">No schedule matches the current filters.</div>
+                    <div className="rounded-xl border py-16 text-center text-sm text-muted-foreground">
+                        {loading ? "Loading schedule…" : "No schedule matches the current filters."}
+                    </div>
                 ) : (
                     <div className="rounded-xl border bg-card overflow-hidden">
                         <div className="overflow-x-auto">
