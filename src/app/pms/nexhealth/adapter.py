@@ -786,7 +786,7 @@ class NexHealthAdapter(
     ) -> list[dict[str, Any]]:
         """List patient recall records for this location from NexHealth.
 
-        NexHealth exposes recall queues (``GET /recalls``) scoped by subdomain +
+        NexHealth exposes recall queues (``GET /patient_recalls``) scoped by subdomain +
         location (capability "View patient recalls"). Each record carries a
         ``patient_id`` and a ``due_date``; the recall scanner derives "overdue"
         from the due date. Paged via the shared ``fetch_all_pages`` helper so the
@@ -797,13 +797,16 @@ class NexHealthAdapter(
         async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
             p = {**params, **page_params}
             return await handle_nexhealth_request(
-                self._client, "GET", "/recalls", params=p
+                # `/recalls` does not exist — it 404s on BOTH v2 and v3. The real
+                # route is `/patient_recalls`; verified live, 8,862 rows for one
+                # clinic. This call had never succeeded.
+                self._client, "GET", "/patient_recalls", params=p
             )
 
         return await fetch_all_pages(
             fetch,
             api_contract=self._api_contract,
-            collection_key="recalls",
+            collection_key="patient_recalls",
             per_page=50,
             max_items=max_items,
         )
