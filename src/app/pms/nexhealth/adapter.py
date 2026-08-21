@@ -493,14 +493,26 @@ class NexHealthAdapter(
 
         return [mappers.to_patient(p) for p in patients]
 
-    async def get_patient(self, patient_id: str) -> UniversalPatient | None:
+    async def get_patient(
+        self,
+        patient_id: str,
+        include: list[str] | None = None,
+    ) -> UniversalPatient | None:
         """Fetch a single patient by NexHealth ID.
 
         Returns ``None`` if the patient cannot be found. Used to read the
         email address NexHealth has on file (collected at intake) rather than
-        trusting a value transcribed by the voice agent during a call.
+        trusting a value transcribed by the voice agent during a call, and to
+        read appointment context.
+
+        `include` works here on BOTH contracts. v3 removed includes from the
+        patient *list* endpoint, but the single-patient read still honours them
+        — verified live against production on both v2 and v3, which is what
+        makes this the replacement for the list-level includes.
         """
         params = self._default_params()
+        if include:
+            params["include[]"] = include
         try:
             raw = await handle_nexhealth_request(
                 self._client, "GET", f"/patients/{_strip(patient_id)}", params=params
@@ -1457,6 +1469,15 @@ class NexHealthAdapter(
         )
         return raw.get("data", {})
 
+    # Measured against a live clinic: 2,725 upcoming work windows for one
+    # location, 2,045 for its busiest provider. A 500 cap silently dropped ~81%
+    # of them, and truncation is only a log warning — the return value carries
+    # no signal, so callers treat a short list as complete. Three of them do
+    # real damage with it: the setup display, the bulk-link preview whose
+    # matched_count drives batched writes, and the Retell appointment-type gate,
+    # which rejects a legitimate type when the linking window falls past the cut.
+    _WORKING_HOURS_MAX_ITEMS = 20000
+
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
         provider_id = kwargs.pop("provider_id", None)
         ignore_past_dates = bool(kwargs.get("ignore_past_dates", False))
@@ -1486,7 +1507,7 @@ class NexHealthAdapter(
             api_contract=self._api_contract,
             collection_key=self._api_contract.working_windows_path.strip("/"),
             per_page=100,
-            max_items=500,
+            max_items=self._WORKING_HOURS_MAX_ITEMS,
         )
 
         # NexHealth's /availabilities endpoint can return 200 with no rows for

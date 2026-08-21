@@ -15,6 +15,10 @@ def _ctx(
 ) -> SimpleNamespace:
     adapter = MagicMock()
     adapter.search_patients = AsyncMock(return_value=patients)
+    # Full-detail lookup reads the identified patient directly rather than
+    # re-running the list search: v3 removed includes from the patient LIST
+    # endpoint, so the old path silently lost appointment context.
+    adapter.get_patient = AsyncMock(return_value=patients[0] if patients else None)
     return SimpleNamespace(
         institution=SimpleNamespace(id="11111111-1111-1111-1111-111111111111"),
         location=location,
@@ -235,15 +239,40 @@ async def test_basic_lookup_still_requires_verification_and_returns_only_id(
 
 
 @pytest.mark.asyncio
-async def test_full_detail_refetch_keeps_only_the_verified_patient(monkeypatch):
+async def test_full_detail_reads_the_verified_patient_by_id(monkeypatch):
+    """The detail read is by id, so it cannot drift to another patient.
+
+    It also must ask for the appointment includes: v3 dropped them from the
+    patient LIST endpoint but still honours them on the single-patient read,
+    and losing them silently strips upcoming-appointment and last-visit context.
+    """
     original = _patient(pid="p1")
     refreshed = _patient(pid="p1")
-    unrelated = _patient(pid="p2", first_name="Other", last_name="Person")
     ctx = _ctx([original])
-    ctx.adapter.search_patients.side_effect = [[original], [unrelated, refreshed]]
+    ctx.adapter.get_patient = AsyncMock(return_value=refreshed)
 
     result = await _invoke(monkeypatch, ctx, _verified_args())
 
     assert result["patient_id"] == "p1"
     assert result["patients"][0]["id"] == "p1"
     assert len(result["patients"]) == 1
+
+    ctx.adapter.get_patient.assert_awaited_once()
+    call = ctx.adapter.get_patient.await_args
+    assert call.args[0] == "p1" or call.kwargs.get("patient_id") == "p1"
+    assert "upcoming_appts" in (call.kwargs.get("include") or [])
+
+
+@pytest.mark.asyncio
+async def test_full_detail_discards_a_patient_that_is_not_the_verified_one(monkeypatch):
+    """Defence in depth: if the detail read ever returns someone else, drop it."""
+    original = _patient(pid="p1")
+    unrelated = _patient(pid="p2", first_name="Other", last_name="Person")
+    ctx = _ctx([original])
+    ctx.adapter.get_patient = AsyncMock(return_value=unrelated)
+
+    result = await _invoke(monkeypatch, ctx, _verified_args())
+
+    assert result["patient_id"] == "p1"
+    assert all(p["id"] == "p1" for p in result["patients"])
+    assert not any(p.get("first_name") == "Other" for p in result["patients"])

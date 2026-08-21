@@ -644,14 +644,16 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
         ):
             payload_patient = verified_patient
             if detail_level == "full":
-                full_patients = await ctx.adapter.search_patients(
-                    query,
-                    name=supplied_name,
-                    email=args.get("email"),
-                    phone_number=args.get("phone_number"),
-                    date_of_birth=args.get("date_of_birth"),
-                    include=full_detail_include,
+                # Read the identified patient directly rather than re-running the
+                # list search with includes. v3 removed includes from the patient
+                # LIST endpoint, so the old path returned a patient with no
+                # upcoming appointment and no last visit — silently, with no
+                # error. The single-patient read still honours includes on both
+                # contracts, and it costs one request instead of a second search.
+                detailed = await ctx.adapter.get_patient(
+                    patient_id, include=full_detail_include
                 )
+                full_patients = [detailed] if detailed else []
                 payload_patient = next(
                     (
                         patient
