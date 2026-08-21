@@ -1,6 +1,6 @@
 /**
  * Integration tests for the Work Windows list: pagination, the recurring-rules
- * section, and the "Include past dates" control.
+ * section, and the "Show expired" control.
  *
  * These render the real page against a mocked API. Radix Select and Popover
  * need pointer-event APIs jsdom doesn't implement, so the appointment-type /
@@ -226,10 +226,25 @@ describe("Work Windows pagination", () => {
 })
 
 describe("Recurring weekly windows", () => {
-    it("are pinned outside pagination and stay visible on every page", async () => {
+    it("are hidden by default and revealed only by Show recurring", async () => {
+        const user = userEvent.setup()
+        mountWith([...recurringWindows(2), ...datedWindows(5)])
+
+        await waitFor(() => expect(rowCount()).toBe(5))
+        expect(screen.queryByText(/Recurring weekly windows/i)).not.toBeInTheDocument()
+
+        await user.click(screen.getByRole("checkbox", { name: /show recurring/i }))
+
+        await waitFor(() => expect(screen.getByText(/Recurring weekly windows/i)).toBeInTheDocument())
+        expect(rowCount()).toBe(7)
+    })
+
+    it("are pinned outside pagination and stay visible on every page when enabled", async () => {
         const user = userEvent.setup()
         mountWith([...recurringWindows(3), ...datedWindows(60)])
 
+        await waitFor(() => expect(rowCount()).toBe(25))
+        await user.click(screen.getByRole("checkbox", { name: /show recurring/i }))
         await waitFor(() => expect(screen.getByText(/Recurring weekly windows/i)).toBeInTheDocument())
 
         // 3 recurring (unpaginated) + 25 dated (page 1).
@@ -249,8 +264,15 @@ describe("Recurring weekly windows", () => {
         expect(screen.queryByText(/Recurring weekly windows/i)).not.toBeInTheDocument()
     })
 
-    it("shows recurring rules even when no dated window survives the filter", async () => {
+    it("shows recurring rules even when no dated window survives the filter, once enabled", async () => {
+        const user = userEvent.setup()
         mountWith(recurringWindows(2))
+
+        await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
+        expect(rowCount()).toBe(0)
+        expect(screen.queryByText(/Recurring weekly windows/i)).not.toBeInTheDocument()
+
+        await user.click(screen.getByRole("checkbox", { name: /show recurring/i }))
 
         await waitFor(() => expect(rowCount()).toBe(2))
         expect(screen.getByText(/Recurring weekly windows/i)).toBeInTheDocument()
@@ -283,6 +305,7 @@ describe("Past-dated windows", () => {
 
         await waitFor(() => expect(rowCount()).toBe(3))
         expect(screen.getByRole("checkbox", { name: /show expired/i })).toBeInTheDocument()
+        expect(screen.getByRole("checkbox", { name: /show recurring/i })).toBeInTheDocument()
         expect(screen.queryByRole("checkbox", { name: /include past/i })).not.toBeInTheDocument()
     })
 })
@@ -422,11 +445,15 @@ describe("Date range filter", () => {
         await waitFor(() => expect(rowCount()).toBe(10))
     })
 
-    it("keeps recurring rules visible regardless of the range", async () => {
+    it("keeps recurring rules visible regardless of the range when enabled", async () => {
+        const user = userEvent.setup()
         mountWith([...recurringWindows(2), ...datedWindows(10), ...farFutureWindows(8)])
 
-        // 2 recurring + 10 in-week. Recurring rules repeat forever, so no range
-        // excludes them — but the far-future dated rows are still filtered out.
+        // Recurring rules repeat forever, so no range excludes them once the
+        // operator opts in — but the far-future dated rows are still filtered out.
+        await waitFor(() => expect(rowCount()).toBe(10))
+        await user.click(screen.getByRole("checkbox", { name: /show recurring/i }))
+
         await waitFor(() => expect(rowCount()).toBe(12))
         expect(screen.getByText(/Recurring weekly windows/i)).toBeInTheDocument()
     })
