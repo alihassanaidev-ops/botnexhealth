@@ -1519,14 +1519,31 @@ class NexHealthAdapter(
             max_items=self._WORKING_HOURS_MAX_ITEMS,
         )
 
-        # NexHealth's /availabilities endpoint can return 200 with no rows for
+        # NexHealth's v2 /availabilities endpoint can return 200 with no rows for
         # normal PMS-synced provider schedules. Those same work windows are
-        # exposed on /providers when availabilities are included, so merge that
-        # embedded source as the display/read path for setup.
-        provider_items = await self._list_provider_embedded_availabilities(
-            provider_id=_strip(provider_id) if provider_id else None,
-            ignore_past_dates=ignore_past_dates,
+        # exposed on /providers when availabilities are included, so that
+        # embedded source is the fallback read path for setup.
+        #
+        # Only reach for it when the primary read came back empty. It is by far
+        # the most expensive call we make — it pulls EVERY provider's embedded
+        # rows regardless of which provider was asked for (1.57 MB, ~26s for one
+        # clinic). Measured on v3: /working_hours returned 3,645 rows and the
+        # fallback contributed 0 additional ids to the merged result, so paying
+        # for it unconditionally doubled the request time for nothing.
+        # v3 ONLY. On v2 the two sources are complementary, not redundant:
+        # /availabilities returned 1,386 rows for a provider whose true total is
+        # 2,036, with the embedded path supplying the rest. Skipping it there
+        # silently loses a third of the schedule. On v3 /working_hours is a
+        # superset, so the fallback is pure cost.
+        skip_fallback = (
+            self._api_contract is NexHealthAPIContract.STABLE_V3 and bool(direct_items)
         )
+        provider_items: list[dict] = []
+        if not skip_fallback:
+            provider_items = await self._list_provider_embedded_availabilities(
+                provider_id=_strip(provider_id) if provider_id else None,
+                ignore_past_dates=ignore_past_dates,
+            )
 
         merged: dict[str, dict] = {}
         for item in [*direct_items, *provider_items]:

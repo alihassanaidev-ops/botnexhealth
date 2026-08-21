@@ -179,13 +179,13 @@ async def test_list_patients_uses_cursor_pagination_for_stable_v3(
             "subdomain": "test-subdomain",
             "location_id": "test-location",
             "updated_since": "2026-07-21T09:00:00Z",
-            "per_page": 50,
+            "per_page": 1000,
         },
         {
             "subdomain": "test-subdomain",
             "location_id": "test-location",
             "updated_since": "2026-07-21T09:00:00Z",
-            "per_page": 50,
+            "per_page": 1000,
             "end_cursor": "cursor-1",
         },
     ]
@@ -1342,3 +1342,76 @@ async def test_create_appointment_type_wraps_body_under_appointment_type_key(
         "'appointment_type'; flat payloads get 400 'Missing parameter "
         "appointment_type' from NexHealth"
     )
+
+
+@pytest.mark.asyncio
+async def test_v3_skips_the_provider_embedded_fallback_when_direct_returns_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    v3_working_hours,
+):
+    """The fallback pulls EVERY provider's rows — 1.57 MB, ~26s for one clinic.
+
+    On v3 /working_hours is a superset (measured: 3,645 rows direct, 0 unique
+    ids added by the fallback), so paying for it doubles the request time for
+    nothing.
+    """
+    adapter = _make_adapter()
+    paths: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
+        paths.append(path)
+        if path == "/working_hours":
+            return {"data": [{"id": 1, "begin_time": "09:00", "end_time": "17:00"}],
+                    "page_info": {"has_next_page": False}}
+        return {"data": [], "count": 0}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+    rows = await adapter.list_availabilities(provider_id="nh-123")
+
+    assert len(rows) == 1
+    assert "/providers" not in paths, "the expensive fallback should not run"
+
+
+@pytest.mark.asyncio
+async def test_v3_still_falls_back_when_direct_returns_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    v3_working_hours,
+):
+    """The safety net stays: an empty primary read must still try /providers."""
+    adapter = _make_adapter()
+    paths: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
+        paths.append(path)
+        return {"data": [], "count": 0, "page_info": {"has_next_page": False}}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+    await adapter.list_availabilities(provider_id="nh-123")
+
+    assert "/providers" in paths
+
+
+@pytest.mark.asyncio
+async def test_v2_always_merges_both_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_v2_working_hours,
+):
+    """On v2 the two sources are complementary, not redundant.
+
+    /availabilities returned 1,386 rows for a provider whose true total is
+    2,036 — the embedded path supplies the rest. Skipping it there loses a
+    third of the schedule.
+    """
+    adapter = _make_adapter()
+    paths: list[str] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
+        paths.append(path)
+        if path == "/availabilities":
+            return {"data": [{"id": 1, "begin_time": "09:00", "end_time": "17:00"}], "count": 1}
+        return {"data": [], "count": 0}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+    await adapter.list_availabilities(provider_id="nh-123")
+
+    assert "/providers" in paths, "v2 must still merge the embedded source"
