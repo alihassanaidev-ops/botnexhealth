@@ -101,5 +101,6 @@
     "TWILLIO_SID": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-sid-SF6GPp",
     "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-api-secret-Wcvoaw",
     "GOTRACKER_WEBHOOK_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/gotracker-webhook-secret-To8vZC"
-  }
+  },
+  "nexhealthApiVersion": "v3.0.0"
 }

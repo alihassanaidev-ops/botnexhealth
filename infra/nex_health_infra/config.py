@@ -130,7 +130,11 @@ class EnvironmentConfig:
     # reach the application. Enable only in environments where larger,
     # authenticated JSON payloads have been explicitly tested.
     waf_count_oversize_body_requests: bool = False
-
+    # NexHealth API contract for this environment ("v2" / "v3.0.0"). Must live
+    # in CDK config: it was set by hand on the staging task definition and the
+    # next `cdk deploy` regenerated that definition and silently dropped it,
+    # reverting staging to v2 while the deploy looked successful.
+    nexhealth_api_version: str | None = None
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
@@ -154,6 +158,7 @@ def load_config(path: str | Path) -> EnvironmentConfig:
     return EnvironmentConfig(
         app_name=raw["appName"],
         environment_name=raw["environmentName"],
+        nexhealth_api_version=raw.get("nexhealthApiVersion"),
         account=raw["account"],
         region=raw["region"],
         app_env=raw.get("appEnv", raw["environmentName"]),
