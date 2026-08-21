@@ -2911,7 +2911,16 @@ def _recall_is_due(recall: dict, *, now: datetime) -> bool:
     Records with a due date strictly in the future are skipped; a missing/
     unparseable due date is treated as due (the record is on the recall queue).
     """
-    raw = recall.get("due_date") or recall.get("due") or recall.get("next_visit_date")
+    # NexHealth's field is `date_due` — verified against the v20240412 OpenAPI
+    # spec and a live response. None of the other spellings exist, so before
+    # this every record fell through to the missing-date branch below and was
+    # treated as due: 8,862 recalls at one clinic, all "overdue".
+    raw = (
+        recall.get("date_due")
+        or recall.get("due_date")
+        or recall.get("due")
+        or recall.get("next_visit_date")
+    )
     if not raw:
         return True
     try:
@@ -3070,7 +3079,8 @@ async def _enroll_recalls_for_institution(
                             "idempotency_key": key,
                             "trigger_metadata": {
                                 "nexhealth_patient_id": patient_id,
-                                "recall_due_date": recall.get("due_date"),
+                                "recall_due_date": recall.get("date_due")
+                                or recall.get("due_date"),
                                 "recall_period": period,
                             },
                         },

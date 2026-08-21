@@ -788,7 +788,7 @@ class NexHealthAdapter(
 
         NexHealth exposes recall queues (``GET /patient_recalls``) scoped by subdomain +
         location (capability "View patient recalls"). Each record carries a
-        ``patient_id`` and a ``due_date``; the recall scanner derives "overdue"
+        ``patient_id`` and a ``date_due``; the recall scanner derives "overdue"
         from the due date. Paged via the shared ``fetch_all_pages`` helper so the
         shared API key's rate limiter/pacing wrapper still governs the pull.
         """
