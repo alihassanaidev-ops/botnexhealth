@@ -229,6 +229,10 @@ export interface CachedAvailability {
     appointment_type_names: string[] | null;
     active: boolean;
     synced: boolean;
+    /** v3 only: "NOTE" / "Lunch" / null. Null on v2, which cannot distinguish them. */
+    label_name: string | null;
+    /** False for PMS notes and breaks — they describe the schedule, not bookable time. */
+    is_bookable_window: boolean;
     source_metadata: Record<string, unknown> | null;
     synced_at: string | null;
 }

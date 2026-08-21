@@ -1472,14 +1472,20 @@ class NexHealthAdapter(
         )
         return raw.get("data", {})
 
-    # Measured against a live clinic: 2,725 upcoming work windows for one
-    # location, 2,045 for its busiest provider. A 500 cap silently dropped ~81%
-    # of them, and truncation is only a log warning — the return value carries
-    # no signal, so callers treat a short list as complete. Three of them do
-    # real damage with it: the setup display, the bulk-link preview whose
-    # matched_count drives batched writes, and the Retell appointment-type gate,
-    # which rejects a legitimate type when the linking window falls past the cut.
-    _WORKING_HOURS_MAX_ITEMS = 20000
+    # No practical cap on work windows. NexHealth pre-expands them into one row
+    # per date, so a real schedule is thousands of rows — measured live: 2,735
+    # for one location, 2,045 for its busiest provider — and the number grows
+    # with how far ahead the PMS expands. Any cap here truncates silently: the
+    # return value carries no signal, so callers treat a short list as complete.
+    # Three of them do real damage with it — the setup display, the bulk-link
+    # preview whose matched_count drives batched writes, and the Retell
+    # appointment-type gate, which rejects a legitimate type when the linking
+    # window falls past the cut.
+    #
+    # This is a runaway backstop, not a data limit: it sits far above any
+    # plausible schedule, and cursor pagination stops on has_next_page long
+    # before it. Hitting it means something is wrong, not that a clinic is big.
+    _WORKING_HOURS_MAX_ITEMS = 1_000_000
 
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
         provider_id = kwargs.pop("provider_id", None)
@@ -1527,7 +1533,31 @@ class NexHealthAdapter(
             item_id = item.get("id")
             key = str(item_id) if item_id is not None else repr(sorted(item.items()))
             merged[key] = item
-        return list(merged.values())
+        return [self._normalize_working_hour(row) for row in merged.values()]
+
+    @staticmethod
+    def _normalize_working_hour(row: dict) -> dict:
+        """Flatten v3-only fields onto the shape the rest of the code expects.
+
+        v3 replaced `synced` with `source`, and added `label` — a nested
+        ``{"id", "name"}`` object. The label is the ONLY thing that separates a
+        genuine bookable working window (no label) from a synced PMS note
+        ("NOTE") or a break ("Lunch"); v2 exposes nothing that distinguishes
+        them, verified field-by-field against production. Both are carried
+        through flat so the API layer and UI can act on them.
+        """
+        item = dict(row)
+        source = item.get("source")
+        if "synced" not in item and source is not None:
+            item["synced"] = source == "synced"
+        label = item.get("label")
+        if isinstance(label, dict):
+            item["label_name"] = label.get("name")
+            item["label_id"] = label.get("id")
+        else:
+            item.setdefault("label_name", None)
+            item.setdefault("label_id", None)
+        return item
 
     async def _list_provider_embedded_availabilities(
         self,

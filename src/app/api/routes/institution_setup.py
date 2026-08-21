@@ -219,6 +219,11 @@ class CachedAvailabilityResponse(BaseModel):
     appointment_type_names: list[str] | None = None
     active: bool = True
     synced: bool = False
+    # v3-only. `label_name` is what separates a genuine working window (None)
+    # from a synced PMS note ("NOTE") or a break ("Lunch"). v2 cannot tell them
+    # apart, so both stay None/True there.
+    label_name: str | None = None
+    is_bookable_window: bool = True
     source_metadata: dict | None = None
     synced_at: datetime | None = None
 
@@ -269,6 +274,10 @@ def _availability_response_from_raw(
         ],
         active=item.get("active", True),
         synced=item.get("synced", False),
+        label_name=item.get("label_name"),
+        # A labelled row describes the schedule rather than offering bookable
+        # time: Lunch fills the gap between working windows, NOTE annotates one.
+        is_bookable_window=item.get("label_name") is None,
         source_metadata={
             "tz_offset": item.get("tz_offset"),
             "custom_recurrence": item.get("custom_recurrence"),

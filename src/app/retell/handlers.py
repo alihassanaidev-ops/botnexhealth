@@ -146,8 +146,18 @@ async def _validate_appointment_type_for_provider(
     raw_provider_id = provider_id.removeprefix("nh-")
     raw_appt_id = appointment_type_id.removeprefix("nh-")
     try:
+        # Past dates MUST stay in for this check, stated explicitly rather than
+        # relying on the adapter default — the default differs across branches
+        # and a merge that flips it silently breaks every booking.
+        #
+        # Appointment-type links live on whichever work window the PMS attached
+        # them to, and at a real clinic every one of them was on a past-dated
+        # row (69 of 69 for one provider, 12 of 12 for another). Filtering past
+        # dates here empties allowed_ids, and this gate then rejects every
+        # booking, reschedule and slot search for that provider.
         availabilities = await ctx.adapter.list_availabilities(
-            provider_id=raw_provider_id
+            provider_id=raw_provider_id,
+            ignore_past_dates=False,
         )
     except Exception as e:
         logger.error(

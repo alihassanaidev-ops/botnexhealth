@@ -86,6 +86,11 @@ export default function ProvidersScheduling() {
     const [maxAge, setMaxAge] = useState<number | "">("")
     const [savingSettings, setSavingSettings] = useState(false)
     const [canLinkAvailability, setCanLinkAvailability] = useState(false)
+    // NexHealth returns PMS notes and lunch breaks in the same collection as
+    // real working windows. Only v3 labels them, so on v2 every row reports as
+    // bookable and this toggle is inert. Shown by default: seeing "Lunch" on a
+    // row is what tells an operator it is not bookable time.
+    const [showNonBookable, setShowNonBookable] = useState(true)
     const [bulkDialogOpen, setBulkDialogOpen] = useState(false)
     const [bulkTypeIds, setBulkTypeIds] = useState<string[]>([])
     const [bulkOperatoryIds, setBulkOperatoryIds] = useState<string[]>([])
@@ -473,6 +478,9 @@ export default function ProvidersScheduling() {
     // Sort: specific_date ascending, then begin_time. Rows without a
     // specific_date (pure recurring rules) sort first.
     const filteredAvailabilities = availabilities
+        // PMS notes and lunch breaks arrive in the same collection as real
+        // working windows; only v3 labels them, so on v2 this is a no-op.
+        .filter((av) => showNonBookable || av.is_bookable_window !== false)
         .filter((av) => showExpired || !isAvailabilityExpired(av))
         .filter(
             (av) =>
@@ -497,6 +505,9 @@ export default function ProvidersScheduling() {
 
     const unlinkedCount = canLinkAvailability ? availabilities.filter(
         (av) =>
+            // A note or break has no appointment type to link, so warning
+            // about it sends the operator chasing something unfixable.
+            av.is_bookable_window !== false &&
             !isAvailabilityExpired(av) &&
             (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
     ).length : 0
@@ -697,6 +708,16 @@ export default function ProvidersScheduling() {
                             />
                             Show expired
                         </label>
+
+                        {canLinkAvailability && (
+                            <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                <Checkbox
+                                    checked={showNonBookable}
+                                    onCheckedChange={(checked) => setShowNonBookable(checked === true)}
+                                />
+                                Show notes &amp; breaks (Lunch, NOTE)
+                            </label>
+                        )}
                     </div>
 
                     {/* Provider Scheduling Rules */}
@@ -865,7 +886,16 @@ export default function ProvidersScheduling() {
                                                                     Expired
                                                                 </Badge>
                                                             )}
-                                                            {av.synced && (
+                                                            {av.label_name && (
+                                                            <Badge
+                                                                variant="outline"
+                                                                className="text-xs border-amber-500/50 text-amber-700 dark:text-amber-300"
+                                                                title="Not bookable time — this row describes the schedule rather than offering appointments"
+                                                            >
+                                                                {av.label_name}
+                                                            </Badge>
+                                                        )}
+                                                        {av.synced && (
                                                                 <Badge
                                                                     variant={isWarning ? "outline" : "secondary"}
                                                                     className={`text-xs ${isWarning
