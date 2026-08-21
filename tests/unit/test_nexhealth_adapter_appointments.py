@@ -1347,7 +1347,6 @@ async def test_create_appointment_type_wraps_body_under_appointment_type_key(
 @pytest.mark.asyncio
 async def test_v3_skips_the_provider_embedded_fallback_when_direct_returns_rows(
     monkeypatch: pytest.MonkeyPatch,
-    v3_working_hours,
 ):
     """The fallback pulls EVERY provider's rows — 1.57 MB, ~26s for one clinic.
 
@@ -1355,7 +1354,7 @@ async def test_v3_skips_the_provider_embedded_fallback_when_direct_returns_rows(
     ids added by the fallback), so paying for it doubles the request time for
     nothing.
     """
-    adapter = _make_adapter()
+    adapter = _make_adapter(api_contract="stable_v3")
     paths: list[str] = []
 
     async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
@@ -1375,10 +1374,9 @@ async def test_v3_skips_the_provider_embedded_fallback_when_direct_returns_rows(
 @pytest.mark.asyncio
 async def test_v3_still_falls_back_when_direct_returns_nothing(
     monkeypatch: pytest.MonkeyPatch,
-    v3_working_hours,
 ):
     """The safety net stays: an empty primary read must still try /providers."""
-    adapter = _make_adapter()
+    adapter = _make_adapter(api_contract="stable_v3")
     paths: list[str] = []
 
     async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
@@ -1394,7 +1392,6 @@ async def test_v3_still_falls_back_when_direct_returns_nothing(
 @pytest.mark.asyncio
 async def test_v2_always_merges_both_sources(
     monkeypatch: pytest.MonkeyPatch,
-    legacy_v2_working_hours,
 ):
     """On v2 the two sources are complementary, not redundant.
 
@@ -1402,7 +1399,7 @@ async def test_v2_always_merges_both_sources(
     2,036 — the embedded path supplies the rest. Skipping it there loses a
     third of the schedule.
     """
-    adapter = _make_adapter()
+    adapter = _make_adapter(api_contract="legacy_v2")
     paths: list[str] = []
 
     async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
