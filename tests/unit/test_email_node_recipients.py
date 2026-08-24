@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import FakeEmailSender, make_resolved_identity
 from src.app.services.automation.definition_schema import (
     ContactRecipient,
     MergeFieldRecipient,
@@ -186,42 +187,53 @@ def _make_executor(contact=None, institution=None, location=None):
     return EmailNodeExecutor(session, runtime), runtime
 
 
-def _run_with_capture(executor, run, node, post_impl=None, settings_patch=None):
-    """Execute the node with Resend stubbed out, returning the captured payload."""
-    captured: dict = {}
+def _run_with_capture(executor, run, node, sender=None, identity=None):
+    """Execute the node with the provider and identity stubbed out.
 
-    async def _default_post(url, headers, json):
-        captured["payload"] = json
-        captured["headers"] = headers
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json = MagicMock(return_value={"id": "resend-1"})
-        return resp
+    Returns the message the sender received, so assertions are about what was
+    sent rather than about one vendor's HTTP payload shape.
+    """
+    sender = sender or FakeEmailSender()
+    resolved = identity or make_resolved_identity()
 
-    post = post_impl or _default_post
+    resolver = AsyncMock()
+    resolver.resolve = AsyncMock(return_value=resolved)
 
     with patch("src.app.services.automation.email_node_executor.settings") as s:
-        s.resend_api_key = "key"
-        s.resend_from_email = "platform@scalenexus.ai"
         s.resend_reply_to = None
         s.public_base_url = "https://api.example.com"
-        if settings_patch:
-            settings_patch(s)
-
-        client = AsyncMock()
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        client.post = AsyncMock(side_effect=post)
 
         with patch(
-            "src.app.services.automation.email_node_executor.httpx.AsyncClient",
-            return_value=client,
+            "src.app.services.automation.email_node_executor.EmailIdentityService",
+            return_value=resolver,
+        ), patch(
+            "src.app.services.automation.email_node_executor.get_patient_email_sender_for",
+            return_value=sender,
         ):
             result = asyncio.run(executor.execute(run, node, {}))
 
-    captured["result"] = result
-    captured["post_calls"] = client.post.await_count
-    return captured
+    message = sender.last
+    return {
+        "result": result,
+        "message": message,
+        "payload": _as_payload(message),
+        "post_calls": sender.attempts,
+        "sender": sender,
+    }
+
+
+def _as_payload(message):
+    """Shape the message like the old provider payload so assertions read the same."""
+    if message is None:
+        return {}
+    payload = {
+        "to": list(message.to),
+        "subject": message.subject,
+        "text": message.text,
+    }
+    if message.html:
+        payload["html"] = message.html
+    return payload
 
 
 def test_contact_recipient_sends_to_patient_with_unsubscribe_footer():
@@ -304,29 +316,30 @@ def test_contact_recipient_still_requires_a_contact():
 # ---------------------------------------------------------------------------
 
 
+def _retryable(message="boom"):
+    from src.app.services.email.sender import EmailSendError
+
+    return EmailSendError(message, retryable=True)
+
+
+def _permanent(message="rejected"):
+    from src.app.services.email.sender import EmailSendError
+
+    return EmailSendError(message, retryable=False)
+
+
 def test_max_attempts_retries_then_succeeds():
     executor, runtime = _make_executor(
         contact=_make_contact(), institution=_make_institution()
     )
-    calls = {"n": 0}
-
-    async def _flaky(url, headers, json):
-        calls["n"] += 1
-        resp = MagicMock()
-        if calls["n"] < 3:
-            resp.status_code = 500
-            resp.text = "boom"
-            return resp
-        resp.status_code = 200
-        resp.json = MagicMock(return_value={"id": "resend-1"})
-        return resp
+    sender = FakeEmailSender(fail_with=_retryable(), fail_times=2)
 
     with patch(
         "src.app.services.automation.email_node_executor.asyncio.sleep",
         new=AsyncMock(),
     ):
         out = _run_with_capture(
-            executor, _make_run(), _node(max_attempts=3), post_impl=_flaky
+            executor, _make_run(), _node(max_attempts=3), sender=sender
         )
 
     assert out["post_calls"] == 3
@@ -338,23 +351,34 @@ def test_max_attempts_exhausted_fails_run_by_default():
     executor, runtime = _make_executor(
         contact=_make_contact(), institution=_make_institution()
     )
-
-    async def _always_fail(url, headers, json):
-        resp = MagicMock()
-        resp.status_code = 500
-        resp.text = "boom"
-        return resp
+    sender = FakeEmailSender(fail_with=_retryable(), fail_times=99)
 
     with patch(
         "src.app.services.automation.email_node_executor.asyncio.sleep",
         new=AsyncMock(),
     ):
         out = _run_with_capture(
-            executor, _make_run(), _node(max_attempts=2), post_impl=_always_fail
+            executor, _make_run(), _node(max_attempts=2), sender=sender
         )
 
     assert out["post_calls"] == 2
     runtime.fail_step.assert_called_once()
+    runtime.fail_run.assert_called_once()
+
+
+def test_permanent_failure_is_not_retried():
+    """A rejected address is rejected identically next time; retrying only
+    burns sending quota."""
+    executor, runtime = _make_executor(
+        contact=_make_contact(), institution=_make_institution()
+    )
+    sender = FakeEmailSender(fail_with=_permanent(), fail_times=99)
+
+    out = _run_with_capture(
+        executor, _make_run(), _node(max_attempts=3), sender=sender
+    )
+
+    assert out["post_calls"] == 1
     runtime.fail_run.assert_called_once()
 
 
@@ -364,18 +388,10 @@ def test_on_failure_continue_advances_without_failing_the_run():
     executor, runtime = _make_executor(
         contact=_make_contact(), institution=_make_institution()
     )
-
-    async def _always_fail(url, headers, json):
-        resp = MagicMock()
-        resp.status_code = 500
-        resp.text = "boom"
-        return resp
+    sender = FakeEmailSender(fail_with=_retryable(), fail_times=99)
 
     out = _run_with_capture(
-        executor,
-        _make_run(),
-        _node(on_failure="continue"),
-        post_impl=_always_fail,
+        executor, _make_run(), _node(on_failure="continue"), sender=sender
     )
 
     runtime.fail_step.assert_called_once()
@@ -384,9 +400,46 @@ def test_on_failure_continue_advances_without_failing_the_run():
 
 
 def test_idempotency_key_is_stable_across_attempts():
-    """A retry must reuse the key so Resend dedupes rather than double-sending."""
+    """A retry must reuse the key so the provider dedupes rather than
+    double-sending."""
     executor, _ = _make_executor(
         contact=_make_contact(), institution=_make_institution()
     )
     out = _run_with_capture(executor, _make_run(), _node())
-    assert out["headers"]["Idempotency-Key"] == "email:run-1:n1"
+    assert out["message"].idempotency_key == "email:run-1:n1"
+
+
+def test_identity_supplies_the_from_address_and_provider():
+    executor, _ = _make_executor(
+        contact=_make_contact(), institution=_make_institution()
+    )
+    sender = FakeEmailSender(provider="ses")
+    identity = make_resolved_identity(
+        from_address="hello@brightsmile.mail.scalenexus.ai",
+        from_name="Bright Smile Dental",
+        provider="ses",
+        tenant_name="brightsmile",
+        configuration_set="scalenexus-brightsmile",
+    )
+
+    out = _run_with_capture(
+        executor, _make_run(), _node(), sender=sender, identity=identity
+    )
+
+    msg = out["message"]
+    assert msg.from_address == "hello@brightsmile.mail.scalenexus.ai"
+    assert msg.from_name == "Bright Smile Dental"
+    assert msg.tenant_name == "brightsmile"
+    assert msg.configuration_set == "scalenexus-brightsmile"
+
+
+def test_no_sending_address_fails_the_step():
+    executor, runtime = _make_executor(
+        contact=_make_contact(), institution=_make_institution()
+    )
+    identity = make_resolved_identity(from_address=None, is_platform_fallback=True)
+
+    _run_with_capture(executor, _make_run(), _node(), identity=identity)
+
+    runtime.fail_run.assert_called_once()
+    assert "no sending address" in runtime.fail_run.call_args.kwargs["reason"]

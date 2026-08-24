@@ -15,6 +15,7 @@ returns no issues, since readiness is a per-location property.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +33,8 @@ from src.app.services.automation.definition_schema import (
 from src.app.services.automation.validation_service import ValidationIssue
 from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 _READINESS_CODE = "channel_not_ready"
 _PLACEHOLDER_VALUES = {
@@ -121,18 +124,18 @@ class ChannelReadinessService:
                     )
                 )
 
-        if email_nodes and not self._email_ready(institution):
+        if email_nodes:
+            problem = await self._email_problem(institution, location)
             for node in email_nodes:
+                if problem is None:
+                    continue
+                severity, message = problem
                 issues.append(
                     ValidationIssue(
-                        severity="warning",
+                        severity=severity,
                         code=_READINESS_CODE,
                         node_id=node.id,
-                        message=(
-                            "Email channel is not provisioned: no from-address "
-                            "(institution or platform) is configured. Emails will fail "
-                            "until a sender address is set up."
-                        ),
+                        message=message,
                     )
                 )
 
@@ -161,7 +164,9 @@ class ChannelReadinessService:
         )
 
         sms_ready = self._sms_ready(institution, location)
-        email_ready = self._email_ready(institution)
+        email_problem = await self._email_problem(institution, location)
+        email_ready = email_problem is None
+        email_reason = email_problem[1] if email_problem else None
         voice_ready = await self._location_has_usable_outbound_profile(location)
 
         details = [
@@ -175,9 +180,9 @@ class ChannelReadinessService:
             {
                 "channel": "email",
                 "ready": email_ready,
-                "reason": None
-                if email_ready
-                else "No email from-address (institution or platform) configured.",
+                # Carries the specific reason — an unverified domain and a
+                # missing address are very different problems to act on.
+                "reason": email_reason,
             },
             {
                 "channel": "voice",
@@ -209,14 +214,71 @@ class ChannelReadinessService:
             and _has_real_value(creds.auth_token)
         )
 
-    @staticmethod
-    def _email_ready(institution: Institution | None) -> bool:
-        """Email is ready when a from-address (institution or platform) resolves
-        and the Resend API key is configured to send with."""
+    async def _email_problem(
+        self,
+        institution: Institution | None,
+        location: InstitutionLocation | None,
+    ) -> tuple[str, str] | None:
+        """``(severity, message)`` for the email channel, or None when ready.
+
+        A **configured but unverified** sending domain is an error, not a
+        warning. Unlike a missing sender — which fails loudly and visibly — an
+        unverified domain sends successfully and then lands in spam. Nobody sees
+        an error; the clinic just quietly stops reaching patients, and the
+        domain's reputation is damaged in the process. Blocking at publish is
+        the only point where that is cheap to catch.
+        """
+        from src.app.models.email_sending_identity import (
+            EmailIdentityStatus,
+            EmailSendingIdentity,
+        )
+
+        if institution is None:
+            return None
+
+        identity: EmailSendingIdentity | None = None
+        try:
+            from src.app.services.email.identity_service import EmailIdentityService
+
+            identity = await EmailIdentityService(self.session).get_effective_identity(
+                str(institution.id),
+                str(location.id) if location is not None else None,
+            )
+        except Exception:  # noqa: BLE001 — readiness must not fail the publish path
+            logger.warning("could not load the sending identity for readiness", exc_info=True)
+
+        if identity is not None and identity.status != EmailIdentityStatus.VERIFIED.value:
+            if identity.status == EmailIdentityStatus.REVOKED.value:
+                return (
+                    "error",
+                    f"The sending domain {identity.domain} has stopped verifying — its "
+                    "DNS records may have been removed. Email would be delivered "
+                    "unauthenticated and land in spam. Re-verify it before publishing.",
+                )
+            return (
+                "error",
+                f"The sending domain {identity.domain} is not verified yet "
+                f"(status: {identity.status}). Email sent from an unverified domain "
+                "fails authentication and lands in spam without reporting an error.",
+            )
+
+        if identity is not None:
+            return None
+
+        # No per-clinic identity: fall back to the legacy address plus a provider
+        # key. Still only a warning — mail from the platform address delivers.
         email_from = TenantTwilioCredentialResolver.resolve_email_from(institution)
-        return bool(
+        ready = bool(
             _has_real_value(email_from.from_address)
             and _has_real_value(settings.resend_api_key)
+        )
+        if ready:
+            return None
+        return (
+            "warning",
+            "Email channel is not provisioned: no from-address (institution or "
+            "platform) is configured. Emails will fail until a sender address is "
+            "set up.",
         )
 
     async def _voice_node_issues(

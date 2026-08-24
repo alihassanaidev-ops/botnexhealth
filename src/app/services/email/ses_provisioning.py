@@ -25,7 +25,10 @@ from src.app.config import settings
 logger = logging.getLogger(__name__)
 
 #: SES tenant and configuration-set names allow a restricted character set.
-_NAME_SAFE_RE = re.compile(r"[^a-zA-Z0-9_-]")
+#: Runs of unsupported characters collapse to a single separator, so
+#: "Bright Smile / Dental" reads as "bright-smile-dental" rather than
+#: "bright-smile---dental".
+_NAME_SAFE_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 _MAX_NAME_LEN = 64
 
 

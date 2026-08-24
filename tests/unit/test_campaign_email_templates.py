@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import FakeEmailSender, make_resolved_identity
 from src.app.models.campaign_email_template import (
     TEMPLATE_KEY_RE,
     slugify_template_key,
@@ -271,35 +272,37 @@ def _saved(active=True):
 
 
 def _execute(executor, svc, node, run=None):
-    captured: dict = {}
-
-    async def _post(url, headers, json):
-        captured["payload"] = json
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json = MagicMock(return_value={"id": "resend-1"})
-        return resp
+    sender = FakeEmailSender()
+    resolver = AsyncMock()
+    resolver.resolve = AsyncMock(return_value=make_resolved_identity())
 
     with patch("src.app.services.automation.email_node_executor.settings") as s:
-        s.resend_api_key = "key"
-        s.resend_from_email = "platform@scalenexus.ai"
         s.resend_reply_to = None
         s.public_base_url = "https://api.example.com"
 
-        client = AsyncMock()
-        client.__aenter__ = AsyncMock(return_value=client)
-        client.__aexit__ = AsyncMock(return_value=False)
-        client.post = AsyncMock(side_effect=_post)
-
         with patch(
-            "src.app.services.automation.email_node_executor.httpx.AsyncClient",
-            return_value=client,
+            "src.app.services.automation.email_node_executor.EmailIdentityService",
+            return_value=resolver,
+        ), patch(
+            "src.app.services.automation.email_node_executor.get_patient_email_sender_for",
+            return_value=sender,
         ), patch(
             "src.app.services.campaign_email_template_service.CampaignEmailTemplateService",
             return_value=svc,
         ):
-            captured["result"] = asyncio.run(executor.execute(run or _make_run(), node, {}))
-    return captured
+            result = asyncio.run(executor.execute(run or _make_run(), node, {}))
+
+    message = sender.last
+    payload = {}
+    if message is not None:
+        payload = {
+            "to": list(message.to),
+            "subject": message.subject,
+            "text": message.text,
+        }
+        if message.html:
+            payload["html"] = message.html
+    return {"result": result, "payload": payload, "message": message}
 
 
 def test_executor_uses_saved_template_content():

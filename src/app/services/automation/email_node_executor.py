@@ -1,9 +1,14 @@
-"""Executor for SendEmailNode — sends plain-text campaign emails via Resend (Plan 05).
+"""Executor for SendEmailNode (Plan 05).
 
 The node addresses the enrolled patient by default, but can also target the
 clinic's own staff, fixed addresses, or an address resolved from a merge field.
 Consent gating and the unsubscribe footer apply to patient-directed sends only —
 see ``SendEmailNode.is_patient_directed`` and ``step_dispatcher._is_patient_directed``.
+
+Content is either inline on the node or a saved campaign template referenced by
+key. The sending identity and provider are resolved per clinic
+(``services.email.identity_service``), so a clinic migrated to SES sends through
+SES while the rest of the platform still uses Resend.
 """
 
 from __future__ import annotations
@@ -12,25 +17,40 @@ import asyncio
 import logging
 from html import escape
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.config import settings
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.contact import Contact
-from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import SendEmailNode
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.template_renderer import build_merge_vars
-from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
+from src.app.services.email.identity_service import EmailIdentityService
+from src.app.services.email.sender import (
+    EmailMessage,
+    EmailSender,
+    EmailSendError,
+    ResendSender,
+    SesSender,
+)
 from src.app.services.staff_recipients import resolve_staff_recipients, unique_emails
 from src.app.services.template_engine import render_html, render_text
 from src.app.services.usage_metering_service import UsageMeteringService
 
 logger = logging.getLogger(__name__)
 
-_RESEND_URL = "https://api.resend.com/emails"
+
+def get_patient_email_sender_for(provider: str) -> EmailSender:
+    """Sender for a resolved identity's provider.
+
+    The identity decides, not global config: a clinic already migrated to SES
+    keeps sending through SES even while the platform default is still Resend,
+    which is what makes a per-clinic rollout possible.
+    """
+    return SesSender() if provider == "ses" else ResendSender()
+
+
 # Linear backoff between send attempts. Deliberately short: the run holds a row
 # lock while this executes, so a long sleep would stall the dispatcher.
 _RETRY_BACKOFF_SECONDS = 2
@@ -43,13 +63,6 @@ class _RecipientError(Exception):
         super().__init__(reason)
         self.result_code = result_code
         self.reason = reason
-
-
-def _build_from(address: str, name: str | None) -> str:
-    """Return 'Name <address>' or just 'address' for the Resend from field."""
-    if name:
-        return f"{name} <{address}>"
-    return address
 
 
 def _unsubscribe_footer_html(url: str, clinic_name: str | None) -> str:
@@ -128,20 +141,25 @@ class EmailNodeExecutor:
                 run, node, step, "no_email", "send_email: no recipient address resolved"
             )
 
-        # --- Resolve from-address (institution → platform fallback) ---
-        institution: Institution | None = await self.session.get(Institution, run.institution_id)
-        email_from = TenantTwilioCredentialResolver.resolve_email_from(institution)
-        from_address = email_from.from_address
-        from_name = email_from.from_name
-
-        api_key = settings.resend_api_key
-        if not api_key or not from_address:
+        # --- Resolve the sending identity (location → institution → platform) ---
+        identity = await EmailIdentityService(self.session).resolve(
+            str(run.institution_id),
+            str(run.location_id) if run.location_id else None,
+        )
+        if not identity.is_sendable:
             return await self._abort(
                 run,
                 node,
                 step,
-                "resend_not_configured",
-                "send_email: Resend not configured (RESEND_API_KEY / from address)",
+                "sender_not_configured",
+                "send_email: no sending address is configured for this clinic or the platform",
+            )
+        if identity.is_platform_fallback:
+            # Not fatal — the mail still delivers — but the clinic is not sending
+            # under its own identity, which is usually a misconfiguration.
+            logger.info(
+                "send_email using the platform sending address: institution=%s run=%s",
+                run.institution_id, run.id,
             )
 
         # --- Resolve location for template merge vars ---
@@ -210,58 +228,59 @@ class EmailNodeExecutor:
                 if html:
                     html = html + _unsubscribe_footer_html(_url, _clinic)
 
-        # --- Send via Resend ---
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            # Crash-window idempotency (XC-1b): a stable per-(run, node) key so a
-            # retry after a crash between send and commit is deduped by Resend
-            # rather than emailing the patient twice. The key is deliberately
-            # stable across the attempt loop below for the same reason.
-            "Idempotency-Key": f"email:{run.id}:{node.id}",
-        }
-        payload = {
-            "from": _build_from(from_address, from_name),
-            "to": recipients,
-            "subject": subject,
-            "text": body,
-            # Tag so the Resend bounce/complaint webhook can scope suppression
-            # back to this institution (Plan 05).
-            "tags": [{"name": "institution_id", "value": str(run.institution_id)}],
-        }
+        # --- Send through the configured provider ---
         # Always multipart when HTML exists — never HTML-only. Text-only clients,
         # screen readers and spam filters all want the plain part present.
-        if html:
-            payload["html"] = html
-        if settings.resend_reply_to:
-            payload["reply_to"] = settings.resend_reply_to
+        message = EmailMessage(
+            from_address=identity.from_address,
+            from_name=identity.from_name,
+            to=recipients,
+            subject=subject,
+            text=body,
+            html=html,
+            reply_to=identity.reply_to,
+            # Crash-window idempotency (XC-1b): a stable per-(run, node) key so a
+            # retry after a crash between send and commit is deduped by the
+            # provider rather than emailing the patient twice. Deliberately
+            # stable across the attempt loop below, for the same reason.
+            idempotency_key=f"email:{run.id}:{node.id}",
+            # Scopes bounce/complaint suppression back to this institution.
+            institution_id=str(run.institution_id),
+            tenant_name=identity.tenant_name,
+            configuration_set=identity.configuration_set,
+        )
+        sender = get_patient_email_sender_for(identity.provider)
 
-        resend_id: str | None = None
+        provider_message_id: str | None = None
         last_error: Exception | None = None
         attempts = max(1, node.max_attempts)
 
         for attempt in range(1, attempts + 1):
             try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.post(_RESEND_URL, headers=headers, json=payload)
-
-                if response.status_code >= 400:
-                    raise RuntimeError(
-                        f"Resend returned {response.status_code}: {response.text[:200]}"
-                    )
-
-                try:
-                    resend_id = (response.json() or {}).get("id")
-                except Exception:  # noqa: BLE001 — body may not be JSON
-                    resend_id = None
-
+                result = await sender.send(message)
+                provider_message_id = result.provider_message_id
                 last_error = None
                 break
 
-            except Exception as exc:  # noqa: BLE001 — retried, then reported below
+            except EmailSendError as exc:
                 last_error = exc
                 logger.warning(
-                    "send_email attempt %d/%d failed: institution=%s run=%s node=%s error=%s",
+                    "send_email attempt %d/%d failed: provider=%s institution=%s "
+                    "run=%s node=%s retryable=%s error=%s",
+                    attempt, attempts, sender.provider, run.institution_id,
+                    run.id, node.id, exc.retryable, exc,
+                )
+                # A rejected address or malformed message will be rejected
+                # identically next time; retrying only burns sending quota.
+                if not exc.retryable:
+                    break
+                if attempt < attempts:
+                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+
+            except Exception as exc:  # noqa: BLE001 — reported below
+                last_error = exc
+                logger.warning(
+                    "send_email attempt %d/%d raised: institution=%s run=%s node=%s error=%s",
                     attempt, attempts, run.institution_id, run.id, node.id, exc,
                 )
                 if attempt < attempts:
@@ -285,7 +304,7 @@ class EmailNodeExecutor:
         # Meter the successful send (Plan 11). Best-effort: a metering hiccup
         # must never fail an email that already went out. Runs in this session
         # (celery/institution-scoped context is authorized for usage_events).
-        # Idempotent on the Resend message id, falling back to run+node.
+        # Idempotent on the provider message id, falling back to run+node.
         try:
             await UsageMeteringService(self.session).record(
                 institution_id=str(run.institution_id),
@@ -294,11 +313,15 @@ class EmailNodeExecutor:
                 workflow_id=str(run.workflow_id) if run.workflow_id else None,
                 channel="email",
                 direction="outbound",
-                provider="resend",
+                # Was hardcoded to "resend"; billing data would have been wrong
+                # for every SES send once the provider became configurable.
+                provider=sender.provider,
                 emails=1,
-                provider_message_id=resend_id,
+                provider_message_id=provider_message_id,
                 idempotency_key=(
-                    f"email:{resend_id}" if resend_id else f"email:{run.id}:{node.id}"
+                    f"email:{provider_message_id}"
+                    if provider_message_id
+                    else f"email:{run.id}:{node.id}"
                 ),
             )
         except Exception as exc:  # noqa: BLE001 — metering is best-effort
