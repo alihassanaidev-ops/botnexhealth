@@ -37,6 +37,7 @@ const DoNotContactAdmin = lazy(() => import("./pages/DoNotContactAdmin"));
 const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const CampaignEmailTemplates = lazy(() => import("./pages/CampaignEmailTemplates"));
+const EmailSendingIdentity = lazy(() => import("./pages/EmailSendingIdentity"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
 const Security = lazy(() => import("./pages/Security"));
 const Patients = lazy(() => import("./pages/Patients"));
@@ -133,6 +134,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <S><CampaignEmailTemplates /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/email-sending-address",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><EmailSendingIdentity /></S>
                             </RoleGuard>
                         ),
                     },

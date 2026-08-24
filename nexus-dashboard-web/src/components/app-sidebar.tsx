@@ -360,6 +360,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname.startsWith("/institution-admin/campaign-email-templates")}
                                     />
                                 )}
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Sending Address",
+                                            url: "/institution-admin/email-sending-address",
+                                            icon: Mail,
+                                        }}
+                                        isActive={location.pathname.startsWith("/institution-admin/email-sending-address")}
+                                    />
+                                )}
                                 <NavItem
                                     item={{
                                         title: "Email Preferences",

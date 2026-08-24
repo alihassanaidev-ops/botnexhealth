@@ -240,6 +240,12 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "PUT /api/institution/campaign-email-templates/{key}",
         "DELETE /api/institution/campaign-email-templates/{key}",
         "GET /api/institution/campaign-email-templates/{key}/preview",
+        # Sending identities: a clinic admin reads status, edits display fields
+        # and re-checks verification. Provisioning and deletion are super-admin
+        # only (below) because they create and destroy real AWS resources.
+        "GET /api/institution/email-sending-identities",
+        "PUT /api/institution/email-sending-identities/{identity_id}",
+        "POST /api/institution/email-sending-identities/{identity_id}/verify",
         "GET /api/institution/sms-templates",
         "POST /api/institution/sms-templates/preview/live",
         "POST /api/institution/sms-templates/validate",
@@ -377,6 +383,12 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # user's MFA is the rare operation where the
         # institution-admin-as-acceptable-admin shortcut does not apply.
         "POST /api/auth/admin/users/{user_id}/mfa/reset",
+        # Provisioning creates an SES identity, tenant, configuration set and
+        # DNS records against capped quotas; deletion destroys them. Onboarding
+        # operations, not a self-service button a clinic can hold down — and an
+        # institution admin acting as "an admin" is not sufficient here.
+        "POST /api/institution/email-sending-identities/provision",
+        "DELETE /api/institution/email-sending-identities/{identity_id}",
     ),
 }
 
