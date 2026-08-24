@@ -10,7 +10,8 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-from jinja2 import BaseLoader, Environment, TemplateSyntaxError
+from jinja2 import BaseLoader, TemplateSyntaxError
+from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,8 +19,13 @@ from src.app.models.email_template import EmailTemplate, EmailTemplateType
 
 logger = logging.getLogger(__name__)
 
-# Jinja2 environment with sandboxed rendering (no file access)
-_jinja_env = Environment(loader=BaseLoader(), autoescape=True)
+# Templates are authored by institution admins through the dashboard, so the
+# environment must actually be sandboxed rather than merely loader-less: a plain
+# Environment still permits attribute traversal out of the template context
+# (``{{ ''.__class__.__mro__ }}`` and friends). SandboxedEnvironment blocks that
+# while leaving normal templating — variables, conditionals, loops, filters —
+# untouched. autoescape guards against HTML injection via rendered patient data.
+_jinja_env = SandboxedEnvironment(loader=BaseLoader(), autoescape=True)
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +588,10 @@ class EmailTemplateService:
     def render(template_str: str, variables: dict[str, Any]) -> str:
         """Render a Jinja2 template string with the given variables."""
         tpl = _jinja_env.from_string(template_str)
-        return tpl.render(**variables)
+        # Pass the context as a dict, not **kwargs: a variable named ``self``
+        # would otherwise collide with ``Template.render``'s own parameter and
+        # raise TypeError mid-send.
+        return tpl.render(variables)
 
     @staticmethod
     def validate_template(template_str: str) -> str | None:
