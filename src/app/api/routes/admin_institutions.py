@@ -25,6 +25,7 @@ from src.app.models.institution import DEFAULT_JURISDICTION, Jurisdiction
 from src.app.models.outbound_voice import OutboundVoiceProfile
 from src.app.models.user import User, UserRole
 from src.app.services.automation.gotracker_subscription_service import (
+    GoTrackerSubscriptionReconnectError,
     GoTrackerSubscriptionLifecycleService,
     _location_callback_url,
 )
@@ -1528,6 +1529,96 @@ class TwilioWebhookConnectResponse(BaseModel):
     status: Literal["configured"]
     phone_number: str
     changed: bool
+
+
+class GoTrackerWebhookReconnectResponse(BaseModel):
+    status: Literal["configured"]
+    subscription_id: str
+    action: Literal["created", "rotated"]
+
+
+@router.post(
+    "/{slug}/locations/{loc_slug}/gotracker/webhook/reconnect",
+    response_model=GoTrackerWebhookReconnectResponse,
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    resource=lambda request, slug, loc_slug, _: (
+        f"institution:{slug}/location:{loc_slug}/gotracker-webhook"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def reconnect_location_gotracker_webhook(
+    request: Request,
+    slug: str,
+    loc_slug: str,
+    _: User = Depends(get_current_admin),
+) -> GoTrackerWebhookReconnectResponse:
+    """Rotate the stored subscription secret, or create the subscription if absent."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(
+            slug,
+            include_inactive=True,
+        )
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+        if institution.pms_type != "gotracker":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This institution is not configured for GoTracker",
+            )
+
+        location = await institution_service.get_location_by_slug(
+            loc_slug,
+            institution.id,
+        )
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
+        if not location.gotracker_product_key_encrypted:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Configure this location's GoTracker API key first",
+            )
+        if not settings.gotracker_webhook_callback_base_url:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="GOTRACKER_WEBHOOK_CALLBACK_BASE_URL is not configured",
+            )
+
+        callback_url = _location_callback_url(
+            settings.gotracker_webhook_callback_base_url,
+            str(location.id),
+        )
+        try:
+            reconnect = await GoTrackerSubscriptionLifecycleService(
+                session
+            ).reconnect_location_subscription(
+                institution=institution,
+                location=location,
+                callback_url=callback_url,
+            )
+        except GoTrackerSubscriptionReconnectError as exc:
+            logger.error(
+                "Failed to reconnect GoTracker webhook: %s",
+                safe_error_summary(exc),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="GoTracker Synchronizer could not reconnect the webhook",
+            ) from exc
+
+        return GoTrackerWebhookReconnectResponse(
+            status="configured",
+            subscription_id=str(reconnect.subscription.provider_subscription_id),
+            action=reconnect.action,
+        )
 
 
 @router.post(

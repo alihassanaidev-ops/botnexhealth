@@ -96,7 +96,7 @@ def test_minimal_sms_to_exit() -> None:
     assert d.nodes[0].response_mappings == []
 
 
-def test_sms_response_settings_validate() -> None:
+def test_legacy_sms_reply_key_is_ignored() -> None:
     defn = _sms_to_exit()
     defn["nodes"][0].update(
         {
@@ -115,7 +115,7 @@ def test_sms_response_settings_validate() -> None:
     d = WorkflowDefinition.model_validate(defn)
     sms = d.nodes[0]
     assert sms.expect_response is True
-    assert sms.include_reply_key is True
+    assert "include_reply_key" not in sms.model_dump()
     assert sms.response_mappings[0].tokens == ["YES", "confirm"]
 
 
@@ -142,7 +142,7 @@ def test_legacy_wait_for_sms_reply_node_still_validates() -> None:
     d = WorkflowDefinition.model_validate(defn)
     wait = d.nodes[1]
     assert wait.type == "wait_for_sms_reply"
-    assert wait.include_reply_key is True
+    assert "include_reply_key" not in wait.model_dump()
     assert wait.response_mappings[0].tokens == ["YES", "Y"]
 
 
@@ -173,7 +173,7 @@ def test_unified_sms_reply_wait_validates() -> None:
 
     assert wait.type == "wait"
     assert wait.wait_for.type == "sms_reply"
-    assert wait.wait_for.include_reply_key is True
+    assert "include_reply_key" not in wait.wait_for.model_dump()
     assert wait.wait_for.response_mappings[0].tokens == ["YES", "Y"]
 
 

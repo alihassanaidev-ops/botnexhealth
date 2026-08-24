@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from src.app.models.automation_workflow import AutomationWorkflowRun, AutomationWorkflowVersion
-from src.app.models.contact import Contact
 from src.app.services.automation.campaign_conversation_service import (
     CampaignConversationService,
 )
@@ -117,13 +116,7 @@ def _explicit_wait_version():
     return version
 
 
-def _contact(phone_hash="hash-1"):
-    contact = MagicMock(spec=Contact)
-    contact.phone_hash = phone_hash
-    return contact
-
-
-def _session(*, run=None, version=None, contact=None, execute_results=None):
+def _session(*, run=None, version=None, execute_results=None):
     session = AsyncMock()
     session.flush = AsyncMock()
     session.add = MagicMock()
@@ -134,42 +127,17 @@ def _session(*, run=None, version=None, contact=None, execute_results=None):
             return run
         if model is AutomationWorkflowVersion:
             return version
-        if model is Contact:
-            return contact
         return None
 
     session.get = AsyncMock(side_effect=_get)
     return session
 
 
-def test_reply_key_requires_sender_phone_to_match_thread_contact():
+def test_contact_thread_resolves_when_response_window_is_open():
     thread = _thread()
     session = _session(
         run=_run(),
         version=_version(),
-        contact=_contact("different-hash"),
-        execute_results=[_result(scalars_all=[thread])],
-    )
-
-    resolved = asyncio.run(
-        CampaignConversationService(session).resolve_sms_thread(
-            institution_id="inst-1",
-            location_id="loc-1",
-            contact_id=None,
-            body="DONE R2ABCD",
-            from_phone_hash="hash-1",
-        )
-    )
-
-    assert resolved is None
-
-
-def test_reply_key_resolves_when_sender_matches_and_window_open():
-    thread = _thread()
-    session = _session(
-        run=_run(),
-        version=_version(),
-        contact=_contact("hash-1"),
         execute_results=[
             _result(scalars_all=[thread]),
             _result(scalar_one_or_none="sms-1"),
@@ -180,9 +148,7 @@ def test_reply_key_resolves_when_sender_matches_and_window_open():
         CampaignConversationService(session).resolve_sms_thread(
             institution_id="inst-1",
             location_id="loc-1",
-            contact_id=None,
-            body="DONE R2ABCD",
-            from_phone_hash="hash-1",
+            contact_id="contact-1",
         )
     )
 
@@ -196,7 +162,6 @@ def test_expired_response_window_does_not_resolve_thread():
     session = _session(
         run=_run(),
         version=_version(response_window_seconds=60),
-        contact=_contact("hash-1"),
         execute_results=[
             _result(scalars_all=[thread]),
             _result(scalar_one_or_none="sms-1"),
@@ -207,9 +172,7 @@ def test_expired_response_window_does_not_resolve_thread():
         CampaignConversationService(session).resolve_sms_thread(
             institution_id="inst-1",
             location_id="loc-1",
-            contact_id=None,
-            body="DONE R2ABCD",
-            from_phone_hash="hash-1",
+            contact_id="contact-1",
         )
     )
 
@@ -219,13 +182,12 @@ def test_expired_response_window_does_not_resolve_thread():
 
 
 def test_open_sms_thread_reuses_handoff_thread_as_active():
-    thread = _thread(status="handoff", reply_key=None)
+    thread = _thread(status="handoff")
     session = _session(execute_results=[_result(scalar_one_or_none=thread)])
 
     resolved = asyncio.run(
         CampaignConversationService(session).open_sms_thread(
             _run(status="running"),
-            include_reply_key=False,
         )
     )
 

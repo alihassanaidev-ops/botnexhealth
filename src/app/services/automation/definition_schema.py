@@ -291,8 +291,17 @@ class SmsReplyWaitConfig(BaseModel):
 
     type: Literal["sms_reply"] = "sms_reply"
     response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
-    include_reply_key: bool = False
     response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_deprecated_reply_key(cls, value: object) -> object:
+        """Keep published definitions loadable after reply-key removal."""
+        if not isinstance(value, dict) or "include_reply_key" not in value:
+            return value
+        cleaned = dict(value)
+        cleaned.pop("include_reply_key", None)
+        return cleaned
 
 
 WaitForConfig = Annotated[
@@ -338,8 +347,17 @@ class WaitForSmsReplyNode(BaseModel):
     type: Literal["wait_for_sms_reply"] = "wait_for_sms_reply"
     next_node_id: str
     response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
-    include_reply_key: bool = False
     response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_deprecated_reply_key(cls, value: object) -> object:
+        """Keep legacy published definitions loadable after reply-key removal."""
+        if not isinstance(value, dict) or "include_reply_key" not in value:
+            return value
+        cleaned = dict(value)
+        cleaned.pop("include_reply_key", None)
+        return cleaned
 
 
 class SmsReplyWaitSpec(BaseModel):
@@ -349,7 +367,6 @@ class SmsReplyWaitSpec(BaseModel):
 
     node_id: str
     response_window_seconds: int
-    include_reply_key: bool
     response_mappings: list[SmsResponseMapping]
 
 
@@ -365,7 +382,6 @@ def sms_reply_wait_spec(
     return SmsReplyWaitSpec(
         node_id=node.id,
         response_window_seconds=config.response_window_seconds,
-        include_reply_key=config.include_reply_key,
         response_mappings=config.response_mappings,
     )
 
@@ -391,8 +407,17 @@ class SendSmsNode(BaseModel):
     max_attempts: int = Field(default=1, ge=1, le=3)
     expect_response: bool = False
     response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
-    include_reply_key: bool = False
     response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_deprecated_reply_key(cls, value: object) -> object:
+        """Keep published definitions loadable after reply-key removal."""
+        if not isinstance(value, dict) or "include_reply_key" not in value:
+            return value
+        cleaned = dict(value)
+        cleaned.pop("include_reply_key", None)
+        return cleaned
 
 
 class SendVoiceNode(BaseModel):

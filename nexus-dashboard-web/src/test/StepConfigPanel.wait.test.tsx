@@ -69,11 +69,59 @@ describe("StepConfigPanel appointment-relative wait", () => {
         await user.click(screen.getAllByRole("combobox")[0])
         await user.click(await screen.findByRole("option", { name: "SMS reply" }))
 
+        expect(screen.queryByText("Include reply key")).not.toBeInTheDocument()
         expect(onNodeChange).toHaveBeenLastCalledWith(
             expect.objectContaining({
                 type: "wait",
                 id: "wait-1",
                 wait_for: expect.objectContaining({ type: "sms_reply" }),
+            }),
+        )
+    })
+
+    it("edits deterministic SMS replies without exposing response mapping JSON", async () => {
+        const user = userEvent.setup()
+        const onNodeChange = vi.fn()
+
+        render(<WaitPanelHarness onNodeChange={onNodeChange} />)
+
+        await user.click(screen.getAllByRole("combobox")[0])
+        await user.click(await screen.findByRole("option", { name: "SMS reply" }))
+
+        const acceptedReplies = screen.getAllByLabelText("Accepted replies")[0]
+        expect(acceptedReplies).toHaveValue("YES, Y")
+        expect(screen.queryByText(/context_updates/)).not.toBeInTheDocument()
+
+        await user.clear(acceptedReplies)
+        await user.type(acceptedReplies, "CONFIRM, YES")
+        await user.tab()
+
+        expect(onNodeChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                wait_for: expect.objectContaining({
+                    response_mappings: expect.arrayContaining([
+                        expect.objectContaining({
+                            tokens: ["CONFIRM", "YES"],
+                            context_updates: { sms_reply: "yes" },
+                        }),
+                    ]),
+                }),
+            }),
+        )
+
+        await user.click(screen.getByRole("combobox", { name: "Action for reply rule 1" }))
+        await user.click(await screen.findByRole("option", { name: "Create staff handoff" }))
+
+        expect(onNodeChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                wait_for: expect.objectContaining({
+                    response_mappings: expect.arrayContaining([
+                        expect.objectContaining({
+                            tokens: ["CONFIRM", "YES"],
+                            handoff_reason: "sms_reply_requires_staff",
+                        }),
+                    ]),
+                }),
             }),
         )
     })

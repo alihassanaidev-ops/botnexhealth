@@ -181,6 +181,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
     const [isLoadingTwilio, setIsLoadingTwilio] = useState(false);
     const [twilioLoadError, setTwilioLoadError] = useState<string | null>(null);
     const [isConnectingTwilio, setIsConnectingTwilio] = useState(false);
+    const [isConnectingGoTracker, setIsConnectingGoTracker] = useState(false);
 
     const form = useForm<LocationFormValues>({
         resolver: zodResolver(locationSchema),
@@ -328,6 +329,27 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
         }
     }
 
+    async function reconnectGoTrackerWebhook() {
+        if (!location?.has_gotracker_product_key) return;
+        setIsConnectingGoTracker(true);
+        try {
+            const { data } = await api.post<{ action: "created" | "rotated" }>(
+                `/admin/institutions/${institutionSlug}/locations/${location.slug}/gotracker/webhook/reconnect`,
+            );
+            toast.success(
+                data.action === "rotated"
+                    ? "GoTracker webhook signing secret rotated"
+                    : "GoTracker webhook subscription created",
+            );
+            onSuccess();
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error.response?.data?.detail || "Failed to reconnect GoTracker webhook");
+        } finally {
+            setIsConnectingGoTracker(false);
+        }
+    }
+
     return (
         <TooltipProvider>
             <Form {...form}>
@@ -436,6 +458,25 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                     {isGoTracker && (
                     <SectionCard title="GoTracker Integration" description="Connect this location to the ScaleNexus GoTracker Synchronizer.">
                         <GoTrackerWebhookStatus location={location} />
+                        {isEditing && location?.has_gotracker_product_key && (
+                            <div className="flex justify-end">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-1.5"
+                                    onClick={reconnectGoTrackerWebhook}
+                                    disabled={isConnectingGoTracker || isDirty}
+                                    title={isDirty ? "Save location changes before reconnecting" : undefined}
+                                >
+                                    <RefreshCw className={cn(
+                                        "h-4 w-4",
+                                        isConnectingGoTracker && "animate-spin",
+                                    )} />
+                                    Reconnect webhook
+                                </Button>
+                            </div>
+                        )}
                         <FormField
                             control={form.control}
                             name="gotracker_base_url"

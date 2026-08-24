@@ -134,7 +134,6 @@ export interface TimeWaitConfig {
 export interface SmsReplyWaitConfig {
     type: "sms_reply"
     response_window_seconds?: number
-    include_reply_key?: boolean
     response_mappings?: SmsResponseMapping[]
 }
 export type WaitForConfig = TimeWaitConfig | SmsReplyWaitConfig
@@ -160,7 +159,6 @@ export interface SendSmsNode {
     max_attempts?: number
     expect_response?: boolean
     response_window_seconds?: number
-    include_reply_key?: boolean
     response_mappings?: SmsResponseMapping[]
 }
 export interface SmsResponseMapping {

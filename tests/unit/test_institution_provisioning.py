@@ -13,12 +13,16 @@ from src.app.api.routes.admin_institutions import (
     _fetch_institution_twilio_phone_numbers,
     _mask_sid,
     list_institution_twilio_phone_numbers,
+    reconnect_location_gotracker_webhook,
     reconnect_location_twilio_webhook,
 )
 from fastapi import HTTPException
 from src.app.config import settings
 from src.app.services.twilio_webhook_configuration import (
     TwilioWebhookConfigurationResult,
+)
+from src.app.services.automation.gotracker_subscription_service import (
+    GoTrackerSubscriptionReconnectResult,
 )
 
 
@@ -242,6 +246,58 @@ async def test_reconnect_location_twilio_webhook_uses_assigned_number():
     assert response.status == "configured"
     assert response.phone_number == "+15551234567"
     assert response.changed is True
+
+
+@pytest.mark.asyncio
+async def test_reconnect_location_gotracker_webhook_rotates_existing_secret(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    institution = SimpleNamespace(id="inst-1", pms_type="gotracker")
+    location = SimpleNamespace(
+        id="loc-1",
+        gotracker_product_key_encrypted="encrypted-key",
+    )
+    subscription = SimpleNamespace(provider_subscription_id="14")
+    lifecycle = MagicMock()
+    lifecycle.reconnect_location_subscription = AsyncMock(
+        return_value=GoTrackerSubscriptionReconnectResult(
+            subscription=subscription,
+            action="rotated",
+        )
+    )
+    monkeypatch.setattr(
+        settings,
+        "gotracker_webhook_callback_base_url",
+        "https://api.example.com",
+    )
+
+    with (
+        patch("src.app.api.routes.admin_institutions.get_db_session") as mock_get_db,
+        patch(
+            "src.app.api.routes.admin_institutions.InstitutionService"
+        ) as mock_service_class,
+        patch(
+            "src.app.api.routes.admin_institutions.GoTrackerSubscriptionLifecycleService",
+            return_value=lifecycle,
+        ),
+    ):
+        session = AsyncMock()
+        mock_get_db.return_value.__aenter__.return_value = session
+        service = mock_service_class.return_value
+        service.get_by_slug = AsyncMock(return_value=institution)
+        service.get_location_by_slug = AsyncMock(return_value=location)
+
+        route = reconnect_location_gotracker_webhook.__wrapped__
+        response = await route(MagicMock(), "clinic", "main", MagicMock())
+
+    lifecycle.reconnect_location_subscription.assert_awaited_once_with(
+        institution=institution,
+        location=location,
+        callback_url="https://api.example.com/api/v1/gotracker/webhooks/loc-1",
+    )
+    assert response.status == "configured"
+    assert response.subscription_id == "14"
+    assert response.action == "rotated"
 
 
 # ---------------------------------------------------------------------------

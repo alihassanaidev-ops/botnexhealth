@@ -55,6 +55,7 @@ import type {
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    SmsResponseMapping,
     SmsReplyWaitConfig,
     TimeWaitConfig,
     TriggerType,
@@ -535,23 +536,34 @@ function SmsReplyWaitFields({
     onChange: (config: SmsReplyWaitConfig) => void
     readOnly?: boolean
 }) {
-    const [mappingJson, setMappingJson] = useState(() => JSON.stringify(config.response_mappings ?? [], null, 2))
-
     const responseWindowHours = Math.round((config.response_window_seconds ?? 259200) / 3600)
+    const mappings = config.response_mappings ?? []
+    const updateMapping = (index: number, mapping: SmsResponseMapping) => {
+        onChange({
+            ...config,
+            response_mappings: mappings.map((current, currentIndex) => (
+                currentIndex === index ? mapping : current
+            )),
+        })
+    }
+    const removeMapping = (index: number) => {
+        onChange({
+            ...config,
+            response_mappings: mappings.filter((_, currentIndex) => currentIndex !== index),
+        })
+    }
+    const addMapping = () => {
+        onChange({
+            ...config,
+            response_mappings: [
+                ...mappings,
+                { tokens: [], context_updates: { sms_reply: "" } },
+            ],
+        })
+    }
 
     return (
         <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
-                <div>
-                    <Label className="text-sm">Include reply key</Label>
-                    <p className="text-xs text-muted-foreground">Adds a short code to the previous SMS for safer matching.</p>
-                </div>
-                <Switch
-                    checked={Boolean(config.include_reply_key)}
-                    disabled={readOnly}
-                    onCheckedChange={(checked) => onChange({ ...config, include_reply_key: checked })}
-                />
-            </div>
             <Field label="Response window hours">
                 <Input
                     type="number"
@@ -565,24 +577,127 @@ function SmsReplyWaitFields({
                     }}
                 />
             </Field>
-            <Field label="Response mappings">
-                <Textarea
-                    value={mappingJson}
-                    disabled={readOnly}
-                    rows={7}
-                    onChange={(e) => setMappingJson(e.target.value)}
-                    onBlur={() => {
-                        try {
-                            const parsed = JSON.parse(mappingJson)
-                            if (Array.isArray(parsed)) {
-                                onChange({ ...config, response_mappings: parsed })
-                            }
-                        } catch {
-                            setMappingJson(JSON.stringify(config.response_mappings ?? [], null, 2))
-                        }
-                    }}
-                />
-            </Field>
+            <div className="space-y-2">
+                <div>
+                    <Label className="text-sm">Reply rules</Label>
+                    <p className="text-xs text-muted-foreground">
+                        Match whole words without regard to capitalization, then continue the workflow or create a staff handoff.
+                    </p>
+                </div>
+                {mappings.map((mapping, index) => {
+                    const contextEntry = Object.entries(mapping.context_updates ?? {})[0]
+                    const contextField = contextEntry?.[0] ?? "sms_reply"
+                    const contextValue = contextEntry?.[1]
+                    const action = mapping.handoff_reason ? "handoff" : "continue"
+                    const tokensId = `sms-reply-rule-${index}-tokens`
+                    const fieldId = `sms-reply-rule-${index}-field`
+                    const valueId = `sms-reply-rule-${index}-value`
+
+                    return (
+                        <div key={index} className="space-y-3 rounded-md border border-border p-3">
+                            <Field
+                                label="Accepted replies"
+                                hint="Separate alternatives with commas, for example YES, Y."
+                                htmlFor={tokensId}
+                            >
+                                <Input
+                                    key={mapping.tokens.join("\u001f")}
+                                    id={tokensId}
+                                    defaultValue={mapping.tokens.join(", ")}
+                                    disabled={readOnly}
+                                    placeholder="YES, Y"
+                                    onBlur={(event) => updateMapping(index, {
+                                        ...mapping,
+                                        tokens: textToStringList(event.currentTarget.value),
+                                    })}
+                                />
+                            </Field>
+                            <Field label="When matched">
+                                <Select
+                                    value={action}
+                                    disabled={readOnly}
+                                    onValueChange={(value) => updateMapping(index, value === "handoff"
+                                        ? {
+                                            tokens: mapping.tokens,
+                                            handoff_reason: mapping.handoff_reason || "sms_reply_requires_staff",
+                                        }
+                                        : {
+                                            tokens: mapping.tokens,
+                                            context_updates: mapping.context_updates ?? { sms_reply: "" },
+                                        })}
+                                >
+                                    <SelectTrigger aria-label={`Action for reply rule ${index + 1}`}>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="continue">Continue workflow</SelectItem>
+                                        <SelectItem value="handoff">Create staff handoff</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </Field>
+                            {action === "continue" ? (
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    <Field label="Save to context field" htmlFor={fieldId}>
+                                        <Input
+                                            id={fieldId}
+                                            value={contextField}
+                                            disabled={readOnly}
+                                            placeholder="sms_reply"
+                                            onChange={(event) => updateMapping(index, {
+                                                tokens: mapping.tokens,
+                                                context_updates: {
+                                                    [event.target.value.trim() || "sms_reply"]: contextValue ?? "",
+                                                },
+                                            })}
+                                        />
+                                    </Field>
+                                    <Field label="Save value" htmlFor={valueId}>
+                                        <Input
+                                            id={valueId}
+                                            value={ruleValueToText(contextValue)}
+                                            disabled={readOnly}
+                                            placeholder="yes"
+                                            onChange={(event) => updateMapping(index, {
+                                                tokens: mapping.tokens,
+                                                context_updates: { [contextField]: event.target.value },
+                                            })}
+                                        />
+                                    </Field>
+                                </div>
+                            ) : (
+                                <Field label="Handoff reason" htmlFor={valueId}>
+                                    <Input
+                                        id={valueId}
+                                        value={mapping.handoff_reason ?? ""}
+                                        disabled={readOnly}
+                                        placeholder="sms_reply_requires_staff"
+                                        onChange={(event) => updateMapping(index, {
+                                            tokens: mapping.tokens,
+                                            handoff_reason: event.target.value,
+                                        })}
+                                    />
+                                </Field>
+                            )}
+                            {!readOnly && (
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="gap-1.5 text-destructive hover:text-destructive"
+                                    onClick={() => removeMapping(index)}
+                                >
+                                    <Trash2 className="h-3.5 w-3.5" /> Remove rule
+                                </Button>
+                            )}
+                        </div>
+                    )
+                })}
+                {!readOnly && (
+                    <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={addMapping}>
+                        <Plus className="h-3.5 w-3.5" /> Add reply rule
+                    </Button>
+                )}
+            </div>
         </div>
     )
 }
@@ -897,7 +1012,6 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                             ? {
                                 type: "sms_reply",
                                 response_window_seconds: 259200,
-                                include_reply_key: false,
                                 response_mappings: [
                                     { tokens: ["YES", "Y"], context_updates: { sms_reply: "yes" } },
                                     { tokens: ["NO", "N"], context_updates: { sms_reply: "no" } },

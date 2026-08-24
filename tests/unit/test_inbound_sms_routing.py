@@ -101,11 +101,3 @@ def test_intent_is_preserved():
     session = _session(contact_ids=["c-1"])
     msg = _record(session, intent="stop")
     assert msg.intent == "stop"
-
-
-def test_reply_key_can_correlate_shared_phone_to_thread_contact():
-    session = _session(contact_ids=["c-1", "c-2"])
-    msg = _record(session, thread=_thread(contact_id="c-2", workflow_run_id="r-2"))
-    assert msg.contact_id == "c-2"
-    assert msg.workflow_run_id == "r-2"
-    assert msg.conversation_thread_id == "thread-1"
