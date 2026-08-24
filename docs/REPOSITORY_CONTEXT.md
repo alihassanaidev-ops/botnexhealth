@@ -308,7 +308,9 @@ SMS replies resolve through that thread first, not by resuming every matching
 waiting run:
 
 - bare replies such as `YES` only correlate when exactly one active SMS thread
-  matches the patient/contact and location;
+  belonging to a running or waiting workflow run matches the patient/contact
+  and location; threads retained for staff handoff after a run becomes terminal
+  are excluded from automated correlation;
 - deterministic `response_mappings` on the SMS-reply-mode `wait` use whole-token,
   case-insensitive matching to update workflow context and resume the normal
   dispatcher; mappings that request staff handoff create a handoff and do not
@@ -325,7 +327,9 @@ mean any non-compliance inbound SMS can start the workflow.
 
 Active thread statuses are `open` and `handoff`. Terminal runs close active SMS
 threads unless an unresolved handoff (`open`/`assigned`) still exists, in which
-case the thread remains in `handoff` for staff review.
+case the thread remains in `handoff` for staff review. A retained handoff thread
+does not compete with a later running or waiting run when an inbound reply is
+correlated for automation.
 
 The public inbound webhook runs under the tenant/location-scoped `twilio` RLS
 context. That context has read-only access to workflow runs, versions, and step

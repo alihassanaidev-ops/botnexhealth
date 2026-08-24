@@ -81,7 +81,7 @@ class CampaignConversationService:
         location_id: str | None,
         contact_id: str | None,
     ) -> CampaignConversationThread | None:
-        """Resolve an inbound SMS reply to exactly one active thread."""
+        """Resolve an inbound SMS reply to exactly one reply-eligible thread."""
         if not location_id:
             return None
 
@@ -230,6 +230,11 @@ class CampaignConversationService:
     ) -> bool:
         run = await self.session.get(AutomationWorkflowRun, str(thread.workflow_run_id))
         if run is None:
+            return False
+        if run.status not in {
+            AutomationRunStatus.RUNNING.value,
+            AutomationRunStatus.WAITING.value,
+        }:
             return False
         version = await self.session.get(AutomationWorkflowVersion, run.workflow_version_id)
         if version is None:

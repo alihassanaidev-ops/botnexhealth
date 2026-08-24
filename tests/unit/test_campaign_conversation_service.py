@@ -181,6 +181,52 @@ def test_expired_response_window_does_not_resolve_thread():
     assert thread.completion_reason == "response_window_expired"
 
 
+def test_terminal_handoff_thread_does_not_make_waiting_run_ambiguous():
+    cancelled_thread = _thread(
+        id="thread-cancelled",
+        workflow_run_id="run-cancelled",
+        status="handoff",
+    )
+    waiting_thread = _thread(
+        id="thread-waiting",
+        workflow_run_id="run-waiting",
+    )
+    cancelled_run = _run(status="cancelled")
+    cancelled_run.id = "run-cancelled"
+    waiting_run = _run(status="waiting")
+    waiting_run.id = "run-waiting"
+
+    session = _session(
+        execute_results=[
+            _result(scalars_all=[cancelled_thread, waiting_thread]),
+            _result(scalar_one_or_none="sms-1"),
+            _result(scalar_one_or_none="sms-1"),
+        ],
+    )
+
+    async def _get(model, pk, **_kwargs):
+        if model is AutomationWorkflowRun:
+            return {
+                "run-cancelled": cancelled_run,
+                "run-waiting": waiting_run,
+            }.get(pk)
+        if model is AutomationWorkflowVersion:
+            return _version()
+        return None
+
+    session.get = AsyncMock(side_effect=_get)
+
+    resolved = asyncio.run(
+        CampaignConversationService(session).resolve_sms_thread(
+            institution_id="inst-1",
+            location_id="loc-1",
+            contact_id="contact-1",
+        )
+    )
+
+    assert resolved is waiting_thread
+
+
 def test_open_sms_thread_reuses_handoff_thread_as_active():
     thread = _thread(status="handoff")
     session = _session(execute_results=[_result(scalar_one_or_none=thread)])
