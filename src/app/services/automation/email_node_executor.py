@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from html import escape
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +49,24 @@ def _build_from(address: str, name: str | None) -> str:
     if name:
         return f"{name} <{address}>"
     return address
+
+
+def _unsubscribe_footer_html(url: str, clinic_name: str | None) -> str:
+    """HTML counterpart of ``unsubscribe_footer``.
+
+    The plain-text footer is appended to the text part; an HTML email needs its
+    own or the one-click unsubscribe is invisible to anyone reading the HTML
+    version — which is nearly everyone.
+    """
+    who = escape(clinic_name or "this clinic")
+    safe_url = escape(url, quote=True)
+    return (
+        '<hr style="margin:24px 0;border:none;border-top:1px solid #e5e7eb">'
+        '<p style="margin:0;font-size:12px;line-height:18px;color:#6b7280;">'
+        f"You're receiving this because you're a patient of {who}. "
+        f'<a href="{safe_url}" style="color:#6b7280;">Unsubscribe</a>.'
+        "</p>"
+    )
 
 
 class EmailNodeExecutor:
@@ -131,9 +150,38 @@ class EmailNodeExecutor:
             else None
         )
 
+        # --- Resolve content: a saved template, or the node's inline text ---
+        subject_tpl = node.subject_template
+        text_tpl = node.body_template
+        html_tpl = node.html_template
+
+        if node.template_key:
+            from src.app.services.campaign_email_template_service import (
+                CampaignEmailTemplateService,
+            )
+
+            saved = await CampaignEmailTemplateService(self.session).get_by_key(
+                str(run.institution_id), node.template_key
+            )
+            if saved is None or not saved.is_active:
+                # Publish-time validation rejects this, so reaching it means the
+                # template was deleted or deactivated after the workflow went
+                # live. Fail loudly rather than sending an empty email.
+                return await self._abort(
+                    run,
+                    node,
+                    step,
+                    "template_unavailable",
+                    f"send_email: template '{node.template_key}' is missing or inactive",
+                )
+            subject_tpl = saved.subject_template
+            text_tpl = saved.text_body
+            html_tpl = saved.html_body
+
         # --- Render templates ---
-        subject = render_sms_body(node.subject_template, contact, location, context)
-        body = render_sms_body(node.body_template, contact, location, context)
+        subject = render_sms_body(subject_tpl, contact, location, context)
+        body = render_sms_body(text_tpl, contact, location, context)
+        html = render_sms_body(html_tpl, contact, location, context) if html_tpl else None
 
         # --- Append the one-click unsubscribe footer (CAN-SPAM/CASL, Plan 05) ---
         # Patient-directed sends only. On a staff alert the footer is not merely
@@ -151,7 +199,10 @@ class EmailNodeExecutor:
             if _email_hash:
                 _token = make_unsubscribe_token(str(run.institution_id), _email_hash)
                 _url = unsubscribe_url(settings.public_base_url, _token)
-                body = body + unsubscribe_footer(_url, getattr(location, "name", None))
+                _clinic = getattr(location, "name", None)
+                body = body + unsubscribe_footer(_url, _clinic)
+                if html:
+                    html = html + _unsubscribe_footer_html(_url, _clinic)
 
         # --- Send via Resend ---
         headers = {
@@ -172,6 +223,10 @@ class EmailNodeExecutor:
             # back to this institution (Plan 05).
             "tags": [{"name": "institution_id", "value": str(run.institution_id)}],
         }
+        # Always multipart when HTML exists — never HTML-only. Text-only clients,
+        # screen readers and spam filters all want the plain part present.
+        if html:
+            payload["html"] = html
         if settings.resend_reply_to:
             payload["reply_to"] = settings.resend_reply_to
 

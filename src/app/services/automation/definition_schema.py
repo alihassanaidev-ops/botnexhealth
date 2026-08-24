@@ -542,8 +542,16 @@ class SendEmailNode(BaseModel):
 
     id: str = Field(min_length=1)
     type: Literal["send_email"] = "send_email"
-    subject_template: str = Field(min_length=1)
-    body_template: str = Field(min_length=1)
+    # Inline content. Required unless ``template_key`` names a saved template.
+    subject_template: str = Field(default="", max_length=500)
+    body_template: str = Field(default="")
+    # Optional HTML part sent alongside the text one. Inline mode only; a saved
+    # template carries its own HTML.
+    html_template: str | None = None
+    # Reference to a CampaignEmailTemplate owned by this institution. When set,
+    # the saved template supplies subject, text and HTML, so editing it once
+    # updates every campaign that uses it.
+    template_key: str | None = Field(default=None, max_length=80)
     next_node_id: str
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
@@ -553,6 +561,25 @@ class SendEmailNode(BaseModel):
     # A courtesy email failing should not necessarily kill the whole run.
     # Defaults to the historical behaviour (fail the run).
     on_failure: Literal["fail_run", "continue"] = "fail_run"
+
+    @model_validator(mode="after")
+    def require_content(self) -> "SendEmailNode":
+        """Exactly one content source: a saved template, or inline text.
+
+        Inline subject/body stayed required-by-default so every definition
+        published before ``template_key`` existed still validates unchanged.
+        """
+        if self.template_key:
+            if self.subject_template or self.body_template or self.html_template:
+                raise ValueError(
+                    "send_email: use either template_key or inline content, not both"
+                )
+            return self
+        if not self.subject_template.strip():
+            raise ValueError("send_email: subject_template is required")
+        if not self.body_template.strip():
+            raise ValueError("send_email: body_template is required")
+        return self
 
     @property
     def is_patient_directed(self) -> bool:
