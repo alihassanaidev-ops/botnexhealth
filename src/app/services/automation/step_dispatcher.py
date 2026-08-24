@@ -40,11 +40,13 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    TimeWaitConfig,
     UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
+    sms_reply_wait_spec,
 )
 from src.app.services.automation.action_registry import get_action_executor
 from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
@@ -144,10 +146,11 @@ class WorkflowStepDispatcher:
 
             steps_advanced += 1
 
-            if isinstance(node, WaitNode):
-                due_at = _compute_due_at(node.delay, location_timezone, now, context=context)
+            if isinstance(node, WaitNode) and isinstance(node.wait_for, TimeWaitConfig):
+                delay = node.wait_for.delay
+                due_at = _compute_due_at(delay, location_timezone, now, context=context)
                 # Smooth calendar (fixed local-time) sends to avoid vendor stampedes.
-                if self.calendar_jitter_seconds and isinstance(node.delay, CalendarDelay):
+                if self.calendar_jitter_seconds and isinstance(delay, CalendarDelay):
                     due_at += timedelta(
                         seconds=secrets.randbelow(self.calendar_jitter_seconds + 1)
                     )
@@ -166,6 +169,32 @@ class WorkflowStepDispatcher:
                     due_at=due_at,
                     timezone_name=location_timezone,
                 )
+                await self.runtime.wait_run(run, step)
+                return DispatchResult(
+                    status="waiting",
+                    timer_id=timer.id,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
+            elif (reply_wait := sms_reply_wait_spec(node)) is not None:
+                due_at = now + timedelta(seconds=reply_wait.response_window_seconds)
+                step = await self.runtime.begin_step(
+                    run,
+                    step_id=reply_wait.node_id,
+                    step_type="wait",
+                    scheduled_at=due_at,
+                    scheduled_timezone=location_timezone,
+                )
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=step.id,
+                    due_at=due_at,
+                    timezone_name=location_timezone,
+                )
+                step.result_code = "awaiting_sms_reply"
                 await self.runtime.wait_run(run, step)
                 return DispatchResult(
                     status="waiting",
@@ -292,9 +321,17 @@ class WorkflowStepDispatcher:
                 if executor_cls is None:
                     current_node_id = await self._dispatch_send_stub(run, node)
                 else:
+                    dispatch_node = node
+                    if isinstance(node, SendSmsNode):
+                        next_node = node_map.get(node.next_node_id)
+                        next_wait = sms_reply_wait_spec(next_node)
+                        if next_wait is not None:
+                            dispatch_node = node.model_copy(
+                                update={"include_reply_key": next_wait.include_reply_key}
+                            )
                     dispatch_result = await executor_cls(
                         self.session, self.runtime
-                    ).execute(run, node, context)
+                    ).execute(run, dispatch_node, context)
                     if isinstance(dispatch_result, VoiceParked):
                         # Voice node placed a call and is parking for its outcome
                         # webhook. Set a safety-timeout timer so a never-arriving
@@ -465,7 +502,8 @@ class WorkflowStepDispatcher:
         """Resume a WAITING run after its timer fires, then continue advancing.
 
         Two kinds of waits resume here:
-          * a WaitNode delay — advance the step pointer past the wait node;
+          * a time-mode WaitNode — advance the step pointer past the wait node;
+          * an SMS-reply-mode WaitNode (or legacy node) — advance after reply/timeout;
           * a compliance *hold* deferred at a send node — leave the pointer on the
             send node so advance() re-checks the gate and (if now permitted) sends.
         Finds the waiting step execution, resumes the run, repositions the pointer
@@ -488,12 +526,19 @@ class WorkflowStepDispatcher:
 
         node_map = {n.id: n for n in definition.nodes}
         current_node = node_map.get(run.current_step_id or "")
-        is_wait = isinstance(current_node, WaitNode)
+        is_wait = isinstance(current_node, WaitNode) and isinstance(
+            current_node.wait_for, TimeWaitConfig
+        )
+        is_sms_reply_wait = sms_reply_wait_spec(current_node) is not None
         is_drip = isinstance(current_node, DripNode)
         is_held_send = isinstance(current_node, (SendSmsNode, SendVoiceNode, SendEmailNode))
-        if not (is_wait or is_drip or is_held_send):
+        if not (is_wait or is_sms_reply_wait or is_drip or is_held_send):
             await self.runtime.fail_run(
-                run, reason=f"expected wait, drip, or held send node at '{run.current_step_id}'"
+                run,
+                reason=(
+                    "expected wait, SMS reply wait, drip, or held send node at "
+                    f"'{run.current_step_id}'"
+                ),
             )
             return DispatchResult(status="failed")
 
@@ -517,8 +562,15 @@ class WorkflowStepDispatcher:
         await self.runtime.resume_run(run, waiting_step)
         if is_drip:
             waiting_step.result_code = "drip_released"
+        if is_sms_reply_wait and waiting_step.result_code == "awaiting_sms_reply":
+            waiting_step.result_code = (
+                "sms_reply_received"
+                if context.get("sms_response_message_sid")
+                or context.get("sms_confirmation_message_sid")
+                else "sms_reply_timeout"
+            )
         is_parked_voice = is_held_send and waiting_step.result_code == _CALL_PLACED_AWAITING
-        if is_wait or is_drip or is_parked_voice:
+        if is_wait or is_sms_reply_wait or is_drip or is_parked_voice:
             # WaitNode/DripNode: move past the gate. Parked voice: the call already
             # went out, so advance PAST the send node (never re-dial) into whatever
             # follows — typically a ConditionNode that branches on `call_outcome`.

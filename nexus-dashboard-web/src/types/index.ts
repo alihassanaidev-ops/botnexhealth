@@ -447,6 +447,13 @@ export interface TwilioPhoneNumber {
     status: string | null;
 }
 
+export interface InstitutionProvisioningStatus {
+    twilio_configured: boolean;
+    twilio_account_sid_masked: string | null;
+    email_from_address: string | null;
+    email_from_name: string | null;
+}
+
 export interface RetellPhoneNumber {
     phone_number: string;
     phone_number_pretty: string | null;

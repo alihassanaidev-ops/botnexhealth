@@ -55,6 +55,8 @@ import type {
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    SmsReplyWaitConfig,
+    TimeWaitConfig,
     TriggerType,
     UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
@@ -342,6 +344,33 @@ function TriggerForm({
                         <ContextPreview triggerType={trigger.type} />
                     </>
                 )}
+                {trigger.type === "sms_reply" && (
+                    <>
+                        <Field label="Reply tokens" hint="Optional comma-separated whole-token filters. Leave empty for any non-compliance inbound SMS.">
+                            <Textarea
+                                value={(trigger.tokens ?? []).join(", ")}
+                                disabled={readOnly}
+                                placeholder="pricing, reschedule, question"
+                                onChange={(e) => onChange({
+                                    ...trigger,
+                                    tokens: textToStringList(e.target.value),
+                                })}
+                            />
+                        </Field>
+                        <Field label="Campaign goal">
+                            <Input
+                                value={trigger.campaign_goal ?? ""}
+                                disabled={readOnly}
+                                placeholder="inbound_sms_followup"
+                                onChange={(e) => onChange({
+                                    ...trigger,
+                                    campaign_goal: e.target.value.trim() || null,
+                                })}
+                            />
+                        </Field>
+                        <ContextPreview triggerType={trigger.type} />
+                    </>
+                )}
             </div>
         </>
     )
@@ -385,7 +414,7 @@ function NodeForm({
                         readOnly={readOnly}
                     />
                 )}
-                {node.type === "wait" && <WaitFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
+                {node.type === "wait" && <WaitFields key={`${node.id}-${node.wait_for.type}`} node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "drip" && <DripFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "update_patient_status" && (
                     <UpdatePatientStatusFields node={node} onChange={onNodeChange} readOnly={readOnly} />
@@ -428,8 +457,7 @@ function NodeForm({
                     />
                 )}
 
-                {(node.type === "wait" ||
-                    node.type === "send_sms" ||
+                {(node.type === "send_sms" ||
                     node.type === "send_voice" ||
                     node.type === "send_email") && (
                     <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
@@ -499,6 +527,67 @@ function SmsFields({
             </div>
             <AttemptsField value={node.max_attempts ?? 1} onChange={(v) => onChange({ ...node, max_attempts: v })} readOnly={readOnly} />
         </>
+    )
+}
+
+function SmsReplyWaitFields({
+    config,
+    onChange,
+    readOnly,
+}: {
+    config: SmsReplyWaitConfig
+    onChange: (config: SmsReplyWaitConfig) => void
+    readOnly?: boolean
+}) {
+    const [mappingJson, setMappingJson] = useState(() => JSON.stringify(config.response_mappings ?? [], null, 2))
+
+    const responseWindowHours = Math.round((config.response_window_seconds ?? 259200) / 3600)
+
+    return (
+        <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+                <div>
+                    <Label className="text-sm">Include reply key</Label>
+                    <p className="text-xs text-muted-foreground">Adds a short code to the previous SMS for safer matching.</p>
+                </div>
+                <Switch
+                    checked={Boolean(config.include_reply_key)}
+                    disabled={readOnly}
+                    onCheckedChange={(checked) => onChange({ ...config, include_reply_key: checked })}
+                />
+            </div>
+            <Field label="Response window hours">
+                <Input
+                    type="number"
+                    min={1}
+                    max={720}
+                    value={responseWindowHours}
+                    disabled={readOnly}
+                    onChange={(e) => {
+                        const hours = Math.max(1, Number(e.target.value || 1))
+                        onChange({ ...config, response_window_seconds: hours * 3600 })
+                    }}
+                />
+            </Field>
+            <Field label="Response mappings">
+                <Textarea
+                    value={mappingJson}
+                    disabled={readOnly}
+                    rows={7}
+                    onChange={(e) => setMappingJson(e.target.value)}
+                    onBlur={() => {
+                        try {
+                            const parsed = JSON.parse(mappingJson)
+                            if (Array.isArray(parsed)) {
+                                onChange({ ...config, response_mappings: parsed })
+                            }
+                        } catch {
+                            setMappingJson(JSON.stringify(config.response_mappings ?? [], null, 2))
+                        }
+                    }}
+                />
+            </Field>
+        </div>
     )
 }
 
@@ -799,23 +888,82 @@ function VoiceFields({
 }
 
 function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n: WorkflowNode) => void; readOnly?: boolean }) {
-    const delay = node.delay
+    const setWaitFor = (waitFor: WaitNode["wait_for"]) => onChange({ ...node, wait_for: waitFor })
+
     return (
         <>
-            <Field label="Wait type">
+            <Field label="Wait for">
+                <Select
+                    value={node.wait_for.type}
+                    disabled={readOnly}
+                    onValueChange={(v) =>
+                        setWaitFor(v === "sms_reply"
+                            ? {
+                                type: "sms_reply",
+                                response_window_seconds: 259200,
+                                include_reply_key: false,
+                                response_mappings: [
+                                    { tokens: ["YES", "Y"], context_updates: { sms_reply: "yes" } },
+                                    { tokens: ["NO", "N"], context_updates: { sms_reply: "no" } },
+                                ],
+                            }
+                            : {
+                                type: "time",
+                                delay: { delay_type: "duration", duration_seconds: 3600 },
+                                respect_quiet_hours: true,
+                            })
+                    }
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="time">Time</SelectItem>
+                        <SelectItem value="sms_reply">SMS reply</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+            {node.wait_for.type === "sms_reply" ? (
+                <SmsReplyWaitFields
+                    config={node.wait_for}
+                    onChange={setWaitFor}
+                    readOnly={readOnly}
+                />
+            ) : (
+                <TimeWaitFields
+                    config={node.wait_for}
+                    onChange={setWaitFor}
+                    readOnly={readOnly}
+                />
+            )}
+        </>
+    )
+}
+
+function TimeWaitFields({
+    config,
+    onChange,
+    readOnly,
+}: {
+    config: TimeWaitConfig
+    onChange: (config: TimeWaitConfig) => void
+    readOnly?: boolean
+}) {
+    const delay = config.delay
+    const setDelay = (nextDelay: TimeWaitConfig["delay"]) => onChange({ ...config, delay: nextDelay })
+
+    return (
+        <>
+            <Field label="Timing">
                 <Select
                     value={delay.delay_type}
                     disabled={readOnly}
                     onValueChange={(v) =>
-                        onChange({
-                            ...node,
-                            delay:
-                                v === "duration"
-                                    ? { delay_type: "duration", duration_seconds: 3600 }
-                                    : v === "appointment_relative"
-                                      ? { delay_type: "appointment_relative", offset_seconds: -3600, anchor_field: "appointment_at" }
-                                      : { delay_type: "calendar", offset_days: 0, time_of_day: "09:00" },
-                        })
+                        setDelay(
+                            v === "duration"
+                                ? { delay_type: "duration", duration_seconds: 3600 }
+                                : v === "appointment_relative"
+                                  ? { delay_type: "appointment_relative", offset_seconds: -3600, anchor_field: "appointment_at" }
+                                  : { delay_type: "calendar", offset_days: 0, time_of_day: "09:00" },
+                        )
                     }
                 >
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -835,10 +983,7 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                         value={round2(delay.duration_seconds / 3600)}
                         disabled={readOnly}
                         onChange={(e) =>
-                            onChange({
-                                ...node,
-                                delay: { delay_type: "duration", duration_seconds: Math.round(toFloat(e.target.value, 0) * 3600) },
-                            })
+                            setDelay({ delay_type: "duration", duration_seconds: Math.round(toFloat(e.target.value, 0) * 3600) })
                         }
                     />
                 </Field>
@@ -850,16 +995,16 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                             value={delay.offset_days}
                             disabled={readOnly}
                             onChange={(e) =>
-                                onChange({ ...node, delay: { ...delay, offset_days: toInt(e.target.value, 0) } })
+                                setDelay({ ...delay, offset_days: toInt(e.target.value, 0) })
                             }
                         />
                     </Field>
-                    <Field label="Send time (HH:MM, local)">
+                    <Field label="Resume time (HH:MM, local)">
                         <Input
                             type="time"
                             value={delay.time_of_day}
                             disabled={readOnly}
-                            onChange={(e) => onChange({ ...node, delay: { ...delay, time_of_day: e.target.value } })}
+                            onChange={(e) => setDelay({ ...delay, time_of_day: e.target.value })}
                         />
                     </Field>
                 </>
@@ -873,13 +1018,10 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                                 const offsetSeconds = v === CUSTOM_RELATIVE_WAIT
                                     ? (isRelativeWaitPreset(delay.offset_seconds) ? 0 : delay.offset_seconds)
                                     : Number(v)
-                                onChange({
-                                    ...node,
-                                    delay: {
-                                        delay_type: "appointment_relative",
-                                        offset_seconds: offsetSeconds,
-                                        anchor_field: delay.anchor_field ?? "appointment_at",
-                                    },
+                                setDelay({
+                                    delay_type: "appointment_relative",
+                                    offset_seconds: offsetSeconds,
+                                    anchor_field: delay.anchor_field ?? "appointment_at",
                                 })
                             }}
                         >
@@ -901,19 +1043,27 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                             value={round2(delay.offset_seconds / 3600)}
                             disabled={readOnly}
                             onChange={(e) =>
-                                onChange({
-                                    ...node,
-                                    delay: {
-                                        delay_type: "appointment_relative",
-                                        offset_seconds: Math.round(toFloat(e.target.value, 0) * 3600),
-                                        anchor_field: delay.anchor_field ?? "appointment_at",
-                                    },
+                                setDelay({
+                                    delay_type: "appointment_relative",
+                                    offset_seconds: Math.round(toFloat(e.target.value, 0) * 3600),
+                                    anchor_field: delay.anchor_field ?? "appointment_at",
                                 })
                             }
                         />
                     </Field>
                 </>
             )}
+            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
+                <div>
+                    <Label className="text-sm">Respect quiet hours</Label>
+                    <p className="text-xs text-muted-foreground">Hold the workflow outside the location's window.</p>
+                </div>
+                <Switch
+                    checked={config.respect_quiet_hours ?? true}
+                    disabled={readOnly}
+                    onCheckedChange={(checked) => onChange({ ...config, respect_quiet_hours: checked })}
+                />
+            </div>
         </>
     )
 }
@@ -1765,6 +1915,12 @@ function defaultTrigger(type: TriggerType): WorkflowTrigger {
                 type,
                 statuses: ["appointment_confirmed"],
                 campaign_goal: "post_op_followup",
+            }
+        case "sms_reply":
+            return {
+                type,
+                tokens: [],
+                campaign_goal: "inbound_sms_followup",
             }
     }
 }

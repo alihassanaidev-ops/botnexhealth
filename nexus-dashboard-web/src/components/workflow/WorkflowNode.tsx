@@ -23,12 +23,15 @@ function truncate(text: string, max = 44): string {
 function stepSummary(node: WfNode): string {
     switch (node.type) {
         case "wait":
-            if (node.delay.delay_type === "duration") return humanizeSeconds(node.delay.duration_seconds)
-            if (node.delay.delay_type === "appointment_relative") {
-                const direction = node.delay.offset_seconds < 0 ? "before" : "after"
-                return `${humanizeSeconds(Math.abs(node.delay.offset_seconds))} ${direction} appointment`
+            if (node.wait_for.type === "sms_reply") {
+                return `SMS reply · ${humanizeSeconds(node.wait_for.response_window_seconds ?? 259200)} window`
             }
-            return `${node.delay.offset_days} day(s) @ ${node.delay.time_of_day}`
+            if (node.wait_for.delay.delay_type === "duration") return humanizeSeconds(node.wait_for.delay.duration_seconds)
+            if (node.wait_for.delay.delay_type === "appointment_relative") {
+                const direction = node.wait_for.delay.offset_seconds < 0 ? "before" : "after"
+                return `${humanizeSeconds(Math.abs(node.wait_for.delay.offset_seconds))} ${direction} appointment`
+            }
+            return `${node.wait_for.delay.offset_days} day(s) @ ${node.wait_for.delay.time_of_day}`
         case "drip":
             return `${node.batch_size} every ${humanizeSeconds(node.interval_seconds)}`
         case "send_sms":
@@ -85,6 +88,8 @@ function triggerSummary(t: WorkflowTrigger): string {
             return "Callback request"
         case "patient_status_changed":
             return `Internal status: ${t.statuses.join(", ")}`
+        case "sms_reply":
+            return t.tokens?.length ? `Matches: ${t.tokens.join(", ")}` : "Any inbound SMS"
     }
 }
 

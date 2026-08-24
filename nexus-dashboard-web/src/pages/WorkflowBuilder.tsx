@@ -30,6 +30,7 @@ import {
     createNode,
     definitionToFlow,
     genId,
+    normalizeDefinition,
     removeNode,
     serializeDefinition,
     setEntry,
@@ -91,13 +92,15 @@ export default function WorkflowBuilder() {
             const wf = await getWorkflow(id)
             setWorkflow(wf)
             setName(wf.name)
-            const base = (wf.definition as WorkflowDefinition | null) ?? blankDefinition()
+            const base = wf.definition
+                ? normalizeDefinition(wf.definition as unknown as WorkflowDefinition)
+                : blankDefinition()
             serverDef.current = base
             // Restore a local unsaved draft if present (survives refresh).
             const raw = localStorage.getItem(draftKey(id))
             if (raw) {
                 try {
-                    setDef(JSON.parse(raw) as WorkflowDefinition)
+                    setDef(normalizeDefinition(JSON.parse(raw) as WorkflowDefinition))
                     setDirty(true)
                     toast.info("Restored unsaved changes from this browser.")
                 } catch {

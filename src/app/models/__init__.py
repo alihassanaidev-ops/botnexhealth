@@ -22,6 +22,9 @@ from src.app.models.campaign_response import (  # noqa: F401 — model registrat
     CampaignResponseEvent,
     CampaignStaffHandoff,
 )
+from src.app.models.campaign_conversation_thread import (  # noqa: F401 — model registration
+    CampaignConversationThread,
+)
 from src.app.models.campaign_analytics import (  # noqa: F401 — model registration
     CampaignMetricsDaily,
     CampaignOutcomeDefinition,
@@ -163,6 +166,7 @@ __all__ = [
     "PatientStatus",
     "CampaignResponseEvent",
     "CampaignStaffHandoff",
+    "CampaignConversationThread",
     "CampaignMetricsDaily",
     "CampaignOutcomeDefinition",
     "CampaignAudienceDefinition",

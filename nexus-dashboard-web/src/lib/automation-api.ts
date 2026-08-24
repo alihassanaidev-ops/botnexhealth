@@ -29,8 +29,13 @@ export async function getCampaign(id: string): Promise<AutomationWorkflow> {
     return data
 }
 
-export async function createDraftCampaign(name: string): Promise<AutomationWorkflow> {
-    const { data } = await api.post<AutomationWorkflow>("/automation/workflows/draft", { name })
+export async function createDraftCampaign(
+    name: string,
+    locationId?: string,
+): Promise<AutomationWorkflow> {
+    const body: { name: string; location_id?: string } = { name }
+    if (locationId) body.location_id = locationId
+    const { data } = await api.post<AutomationWorkflow>("/automation/workflows/draft", body)
     return data
 }
 

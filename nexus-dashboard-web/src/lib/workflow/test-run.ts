@@ -68,9 +68,17 @@ function describe(
 ): { step: TestRunStep; next?: string } {
     switch (node.type) {
         case "wait": {
-            const detail = waitDetail(node)
+            const summary = node.wait_for.type === "sms_reply" ? "Wait for SMS reply" : "Wait"
+            const detail = node.wait_for.type === "sms_reply"
+                ? `Pause up to ${humanizeSeconds(node.wait_for.response_window_seconds ?? 259200)}`
+                : waitDetail(node)
             return {
-                step: { node_id: node.id, node_type: "wait", summary: "Wait", detail },
+                step: {
+                    node_id: node.id,
+                    node_type: "wait",
+                    summary,
+                    detail,
+                },
                 next: node.next_node_id,
             }
         }
@@ -194,15 +202,16 @@ function describe(
 }
 
 function waitDetail(node: Extract<WorkflowNode, { type: "wait" }>): string {
-    if (node.delay.delay_type === "duration") {
-        return `Wait ${humanizeSeconds(node.delay.duration_seconds)}`
+    if (node.wait_for.type !== "time") return "Wait for event"
+    if (node.wait_for.delay.delay_type === "duration") {
+        return `Wait ${humanizeSeconds(node.wait_for.delay.duration_seconds)}`
     }
-    if (node.delay.delay_type === "appointment_relative") {
-        const seconds = node.delay.offset_seconds
+    if (node.wait_for.delay.delay_type === "appointment_relative") {
+        const seconds = node.wait_for.delay.offset_seconds
         const direction = seconds < 0 ? "before" : "after"
         return `Wait until ${humanizeSeconds(Math.abs(seconds))} ${direction} appointment`
     }
-    return `Wait ${node.delay.offset_days} day(s), then send at ${node.delay.time_of_day} local time`
+    return `Wait ${node.wait_for.delay.offset_days} day(s), then send at ${node.wait_for.delay.time_of_day} local time`
 }
 
 export function humanizeSeconds(seconds: number): string {

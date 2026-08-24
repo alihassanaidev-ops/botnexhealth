@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, XCircle, HelpCircle } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, HelpCircle, RefreshCw } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -29,7 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import api from "@/lib/api";
-import { verifyRetellAgent, listTwilioPhoneNumbers } from "@/lib/admin-api";
+import { verifyRetellAgent, listInstitutionTwilioPhoneNumbers } from "@/lib/admin-api";
 import { SUPPORTED_TIMEZONES } from "@/lib/timezones";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic, TwilioPhoneNumber } from "@/types";
 import { cn } from "@/lib/utils";
@@ -179,6 +179,8 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
     const [agentVerificationStatus, setAgentVerificationStatus] = useState<"idle" | "success" | "error">("idle");
     const [twilioNumbers, setTwilioNumbers] = useState<TwilioPhoneNumber[]>([]);
     const [isLoadingTwilio, setIsLoadingTwilio] = useState(false);
+    const [twilioLoadError, setTwilioLoadError] = useState<string | null>(null);
+    const [isConnectingTwilio, setIsConnectingTwilio] = useState(false);
 
     const form = useForm<LocationFormValues>({
         resolver: zodResolver(locationSchema),
@@ -224,17 +226,21 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
     useEffect(() => {
         async function fetchTwilioNumbers() {
             setIsLoadingTwilio(true);
+            setTwilioLoadError(null);
             try {
-                const numbers = await listTwilioPhoneNumbers();
+                const numbers = await listInstitutionTwilioPhoneNumbers(institutionSlug);
                 setTwilioNumbers(numbers.filter(n => n.capabilities.sms));
-            } catch {
-                // Non-critical — form still works without the list
+            } catch (err: unknown) {
+                const error = err as { response?: { data?: { detail?: string } } };
+                setTwilioLoadError(
+                    error.response?.data?.detail || "Unable to load this institution's Twilio numbers",
+                );
             } finally {
                 setIsLoadingTwilio(false);
             }
         }
         fetchTwilioNumbers();
-    }, []);
+    }, [institutionSlug]);
 
     const nexHealthLocations = nexHealthInstitutions.flatMap(inst => inst.locations);
 
@@ -303,6 +309,22 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || `Failed to ${isEditing ? "update" : "create"} location`);
+        }
+    }
+
+    async function reconnectTwilioWebhook() {
+        if (!location?.twilio_from_number) return;
+        setIsConnectingTwilio(true);
+        try {
+            await api.post(
+                `/admin/institutions/${institutionSlug}/locations/${location.slug}/twilio/webhook`,
+            );
+            toast.success("Twilio inbound SMS webhook connected");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error.response?.data?.detail || "Failed to connect Twilio webhook");
+        } finally {
+            setIsConnectingTwilio(false);
         }
     }
 
@@ -596,48 +618,91 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                     {/* Section: Twilio SMS */}
                     <SectionCard
                         title="Twilio SMS"
-                        description="Select the outbound number used to send post-call SMS messages to patients."
+                        description="Select this location's number for workflow messages and patient replies."
                     >
                         <FormField
                             control={form.control}
                             name="twilio_from_number"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>
-                                        Outbound SMS Number
-                                        <FieldHint text="When a call analysis includes a send_sms message, it will be sent from this number to the patient." />
-                                    </FormLabel>
-                                    <Select
-                                        onValueChange={(val) => field.onChange(val === "none" ? "" : val)}
-                                        value={field.value || "none"}
-                                        disabled={isLoadingTwilio}
-                                    >
-                                        <FormControl>
-                                            <SelectTrigger>
-                                                <SelectValue
-                                                    placeholder={
-                                                        isLoadingTwilio
-                                                            ? "Loading numbers…"
-                                                            : twilioNumbers.length === 0
-                                                                ? "No SMS-capable numbers found"
-                                                                : "Select a Twilio number"
-                                                    }
-                                                />
-                                            </SelectTrigger>
-                                        </FormControl>
-                                        <SelectContent>
-                                            <SelectItem value="none">None — disable auto-SMS</SelectItem>
-                                            {twilioNumbers.map((n) => (
-                                                <SelectItem key={n.sid} value={n.phone_number}>
-                                                    {n.phone_number}
-                                                    {n.friendly_name ? ` — ${n.friendly_name}` : ""}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
+                            render={({ field }) => {
+                                const options = field.value && !twilioNumbers.some(
+                                    number => number.phone_number === field.value,
+                                )
+                                    ? [{
+                                        sid: `assigned-${field.value}`,
+                                        phone_number: field.value,
+                                        friendly_name: "Currently assigned",
+                                        capabilities: { voice: false, sms: true, mms: false },
+                                        status: "active",
+                                    }, ...twilioNumbers]
+                                    : twilioNumbers;
+
+                                return (
+                                    <FormItem>
+                                        <FormLabel>
+                                            Outbound SMS Number
+                                            <FieldHint text="Saving connects this number to the deployment's inbound SMS webhook." />
+                                        </FormLabel>
+                                        <div className="flex items-center gap-2">
+                                            <Select
+                                                onValueChange={(val) => field.onChange(val === "none" ? "" : val)}
+                                                value={field.value || "none"}
+                                                disabled={isLoadingTwilio}
+                                            >
+                                                <FormControl>
+                                                    <SelectTrigger className="flex-1">
+                                                        <SelectValue
+                                                            placeholder={
+                                                                isLoadingTwilio
+                                                                    ? "Loading numbers…"
+                                                                    : options.length === 0
+                                                                        ? "No SMS-capable numbers found"
+                                                                        : "Select a Twilio number"
+                                                            }
+                                                        />
+                                                    </SelectTrigger>
+                                                </FormControl>
+                                                <SelectContent>
+                                                    <SelectItem value="none">None — disable auto-SMS</SelectItem>
+                                                    {options.map((n) => (
+                                                        <SelectItem key={n.sid} value={n.phone_number}>
+                                                            {n.phone_number}
+                                                            {n.friendly_name ? ` — ${n.friendly_name}` : ""}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                            {isEditing && location.twilio_from_number && (
+                                                <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            size="icon"
+                                                            className="shrink-0"
+                                                            onClick={reconnectTwilioWebhook}
+                                                            disabled={
+                                                                isConnectingTwilio
+                                                                || field.value !== location.twilio_from_number
+                                                            }
+                                                        >
+                                                            <RefreshCw className={cn(
+                                                                "h-4 w-4",
+                                                                isConnectingTwilio && "animate-spin",
+                                                            )} />
+                                                            <span className="sr-only">Reconnect inbound SMS webhook</span>
+                                                        </Button>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>Reconnect inbound SMS webhook</TooltipContent>
+                                                </Tooltip>
+                                            )}
+                                        </div>
+                                        {twilioLoadError && (
+                                            <p className="text-sm text-destructive">{twilioLoadError}</p>
+                                        )}
+                                        <FormMessage />
+                                    </FormItem>
+                                );
+                            }}
                         />
                     </SectionCard>
 

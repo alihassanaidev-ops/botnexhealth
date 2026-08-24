@@ -10,6 +10,10 @@ from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import SendSmsNode
+from src.app.services.automation.campaign_conversation_service import (
+    CampaignConversationService,
+    render_reply_key,
+)
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.template_renderer import render_sms_body
 from src.app.services.sms_service import SmsService
@@ -78,8 +82,14 @@ class SmsNodeExecutor:
             await self.runtime.fail_run(run, reason="send_sms: location has no twilio_from_number")
             return node.next_node_id
 
+        thread = await CampaignConversationService(self.session).open_sms_thread(
+            run,
+            include_reply_key=node.include_reply_key,
+        )
+
         # --- Render body ---
         body = render_sms_body(node.body_template, contact, location, context)
+        body = render_reply_key(body, thread.reply_key if node.include_reply_key else None)
 
         # --- Send ---
         try:
@@ -92,7 +102,9 @@ class SmsNodeExecutor:
                 patient_contact_id=str(run.contact_id),
                 workflow_run_id=str(run.id),
                 workflow_id=str(run.workflow_id),
+                conversation_thread_id=str(thread.id),
             )
+            await CampaignConversationService(self.session).mark_message_seen(thread)
         except Exception as exc:
             logger.error(
                 "send_sms failed: institution=%s run=%s node=%s error=%s",

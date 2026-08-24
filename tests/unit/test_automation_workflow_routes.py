@@ -255,8 +255,68 @@ def test_create_draft_workflow_does_not_publish():
         result = asyncio.run(create_draft_workflow(WorkflowDraftCreateRequest(name="Scratch"), user))
 
     assert result.status == "draft"
-    mock_svc.create_draft.assert_awaited_once_with(institution_id="inst-1", name="Scratch")
+    mock_svc.create_draft.assert_awaited_once_with(
+        institution_id="inst-1",
+        name="Scratch",
+        location_id=None,
+    )
     mock_svc.publish_version.assert_not_awaited()
+
+
+def test_create_draft_workflow_scopes_to_selected_location():
+    user = _make_user()
+    wf = _make_workflow(status="draft")
+    wf.location_id = "loc-1"
+    mock_svc = AsyncMock()
+    mock_svc.create_draft = AsyncMock(return_value=wf)
+    session = _make_session()
+    location_result = MagicMock()
+    location_result.scalar_one_or_none.return_value = "loc-1"
+    session.execute.return_value = location_result
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(
+            create_draft_workflow(
+                WorkflowDraftCreateRequest(name="Scratch", location_id="loc-1"),
+                user,
+            )
+        )
+
+    assert result.location_id == "loc-1"
+    mock_svc.create_draft.assert_awaited_once_with(
+        institution_id="inst-1",
+        name="Scratch",
+        location_id="loc-1",
+    )
+
+
+def test_create_draft_workflow_rejects_location_outside_institution():
+    user = _make_user()
+    session = _make_session()
+    location_result = MagicMock()
+    location_result.scalar_one_or_none.return_value = None
+    session.execute.return_value = location_result
+
+    with patch(
+        "src.app.api.routes.automation_workflows.get_db_session",
+        return_value=session,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                create_draft_workflow(
+                    WorkflowDraftCreateRequest(name="Scratch", location_id="other-loc"),
+                    user,
+                )
+            )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Location not found"
 
 
 # ---------------------------------------------------------------------------

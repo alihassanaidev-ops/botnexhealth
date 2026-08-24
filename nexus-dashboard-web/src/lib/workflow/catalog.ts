@@ -11,6 +11,7 @@ import {
     GitBranch,
     Mail,
     MessageSquare,
+    MessageSquareReply,
     MousePointerClick,
     Phone,
     RefreshCw,
@@ -99,7 +100,7 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
     },
     wait: {
         label: "Wait",
-        description: "Pause for a duration or until a time.",
+        description: "Pause for time or an incoming event.",
         icon: Clock,
         group: "control",
         accent: "bg-slate-100 text-slate-700 dark:bg-slate-800/70 dark:text-slate-300",
@@ -162,11 +163,16 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
         description: "Enroll when a workflow records an internal status.",
         icon: ClipboardList,
     },
+    sms_reply: {
+        label: "SMS reply",
+        description: "Enroll when a patient texts the clinic.",
+        icon: MessageSquareReply,
+    },
 }
 
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
-    { title: "Channels", group: "channel", types: ["send_voice"] },
+    { title: "Channels", group: "channel", types: ["send_sms", "send_voice"] },
     { title: "Actions", group: "action", types: ["drip", "llm", "update_appointment", "update_gotracker_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },

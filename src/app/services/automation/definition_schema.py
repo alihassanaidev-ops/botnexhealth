@@ -2,7 +2,7 @@
 
 Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, appointment_state_changed, recall_scan, manual,
-            bulk_import, callback_requested, patient_status_changed
+            bulk_import, callback_requested, patient_status_changed, sms_reply
   Nodes:    wait, drip, send_sms, send_voice, send_email, update_patient_status,
             update_appointment, update_gotracker_appointment, json_mapper, llm,
             condition, exit
@@ -152,6 +152,34 @@ class PatientStatusChangedTrigger(BaseModel):
         return normalized or None
 
 
+class SmsReplyTrigger(BaseModel):
+    """Enroll when an inbound patient SMS matches optional whole-token filters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["sms_reply"] = "sms_reply"
+    tokens: list[str] = Field(default_factory=list)
+    campaign_goal: str | None = None
+
+    @field_validator("tokens")
+    @classmethod
+    def normalize_tokens(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            token = value.strip()
+            if token and token.casefold() not in {item.casefold() for item in normalized}:
+                normalized.append(token)
+        return normalized
+
+    @field_validator("campaign_goal")
+    @classmethod
+    def normalize_campaign_goal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 WorkflowTrigger = Annotated[
     Union[
         AppointmentOffsetTrigger,
@@ -161,6 +189,7 @@ WorkflowTrigger = Annotated[
         BulkImportTrigger,
         CallbackRequestedTrigger,
         PatientStatusChangedTrigger,
+        SmsReplyTrigger,
     ],
     Field(discriminator="type"),
 ]
@@ -235,14 +264,114 @@ class ConditionRule(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class SmsResponseMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tokens: list[str] = Field(default_factory=list)
+    context_updates: dict[str, Any] = Field(default_factory=dict)
+    handoff_reason: str | None = None
+
+    @field_validator("tokens")
+    @classmethod
+    def normalize_tokens(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            token = value.strip()
+            if token and token.casefold() not in {item.casefold() for item in normalized}:
+                normalized.append(token)
+        return normalized
+
+
+class TimeWaitConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["time"] = "time"
+    delay: WaitDelay
+    respect_quiet_hours: bool = True
+
+
+class SmsReplyWaitConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["sms_reply"] = "sms_reply"
+    response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
+    include_reply_key: bool = False
+    response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+
+WaitForConfig = Annotated[
+    Union[TimeWaitConfig, SmsReplyWaitConfig],
+    Field(discriminator="type"),
+]
+
+
 class WaitNode(BaseModel):
+    """One public wait node with typed time/event behavior.
+
+    The before-validator upgrades the original ``wait`` shape so already-published
+    definitions continue to execute without a data migration.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
     type: Literal["wait"] = "wait"
-    delay: WaitDelay
+    wait_for: WaitForConfig
     next_node_id: str
-    respect_quiet_hours: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_legacy_time_wait(cls, value: object) -> object:
+        if not isinstance(value, dict) or "wait_for" in value or "delay" not in value:
+            return value
+        upgraded = dict(value)
+        upgraded["wait_for"] = {
+            "type": "time",
+            "delay": upgraded.pop("delay"),
+            "respect_quiet_hours": upgraded.pop("respect_quiet_hours", True),
+        }
+        return upgraded
+
+
+class WaitForSmsReplyNode(BaseModel):
+    """Legacy compatibility input. New definitions use WaitNode + SmsReplyWaitConfig."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["wait_for_sms_reply"] = "wait_for_sms_reply"
+    next_node_id: str
+    response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
+    include_reply_key: bool = False
+    response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+
+class SmsReplyWaitSpec(BaseModel):
+    """Small internal interface shared by SMS correlation and dispatch modules."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    response_window_seconds: int
+    include_reply_key: bool
+    response_mappings: list[SmsResponseMapping]
+
+
+def sms_reply_wait_spec(
+    node: WaitNode | WaitForSmsReplyNode | object,
+) -> SmsReplyWaitSpec | None:
+    if isinstance(node, WaitNode) and isinstance(node.wait_for, SmsReplyWaitConfig):
+        config = node.wait_for
+    elif isinstance(node, WaitForSmsReplyNode):
+        config = node
+    else:
+        return None
+    return SmsReplyWaitSpec(
+        node_id=node.id,
+        response_window_seconds=config.response_window_seconds,
+        include_reply_key=config.include_reply_key,
+        response_mappings=config.response_mappings,
+    )
 
 
 class DripNode(BaseModel):
@@ -264,6 +393,10 @@ class SendSmsNode(BaseModel):
     next_node_id: str
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
+    expect_response: bool = False
+    response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
+    include_reply_key: bool = False
+    response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
 
 
 class SendVoiceNode(BaseModel):
@@ -525,6 +658,7 @@ class ExitNode(BaseModel):
 WorkflowNode = Annotated[
     Union[
         WaitNode,
+        WaitForSmsReplyNode,
         DripNode,
         SendSmsNode,
         SendVoiceNode,
@@ -601,6 +735,7 @@ class WorkflowDefinition(BaseModel):
                 node,
                 (
                     WaitNode,
+                    WaitForSmsReplyNode,
                     DripNode,
                     SendSmsNode,
                     SendVoiceNode,

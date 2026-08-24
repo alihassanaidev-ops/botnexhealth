@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     # App settings
     app_env: str = "local"
     log_level: str = "info"
+    # Public backend origin for provider webhooks. This is deployment metadata,
+    # not a credential. It may include a deployment path prefix, but no query.
+    public_api_url: str | None = None
 
     # NexHealth API settings
     nexhealth_api_key: str = ""
@@ -78,11 +81,15 @@ class Settings(BaseSettings):
     # Optional NexHealth settings
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
-    nexhealth_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound webhook signatures
+    nexhealth_webhook_secret: str = (
+        ""  # HMAC-SHA256 secret for inbound webhook signatures
+    )
     nexhealth_webhook_callback_url: str | None = None
     nexhealth_shadow_webhook_callback_base_url: str | None = None
     gotracker_base_url: str = "https://synchronizer.scalenexus.ai"
-    gotracker_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound GoTracker webhooks
+    gotracker_webhook_secret: str = (
+        ""  # HMAC-SHA256 secret for inbound GoTracker webhooks
+    )
     gotracker_webhook_callback_base_url: str | None = None
 
     # Retell AI settings
@@ -139,10 +146,9 @@ class Settings(BaseSettings):
     retention_dead_letter_raw_days: int = 30
     retention_idempotency_days: int = 7
 
-
     # Twilio (SMS / phone numbers)
-    twillio_sid: str | None = None          # Account SID (env: TWILLIO_SID)
-    twillio_api_secret: str | None = None   # Auth Token (env: TWILLIO_API_SECRET)
+    twillio_sid: str | None = None  # Account SID (env: TWILLIO_SID)
+    twillio_api_secret: str | None = None  # Auth Token (env: TWILLIO_API_SECRET)
     twilio_sms_status_callback_url: str | None = None
 
     # Database (PostgreSQL)
@@ -209,7 +215,9 @@ class Settings(BaseSettings):
     jwt_audience: str = "nexhealth-dashboard"
     jwt_secret_file: str | None = None
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     @model_validator(mode="after")
     def load_secrets_from_files(self) -> "Settings":
@@ -244,6 +252,31 @@ class Settings(BaseSettings):
             nexhealth_api_contract.accept_header,
         )
 
+        for field_name in (
+            "public_api_url",
+            "twilio_sms_status_callback_url",
+        ):
+            value = getattr(self, field_name)
+            if not value:
+                continue
+            normalized = value.strip().rstrip("/")
+            parsed = urlparse(normalized)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    f"{field_name.upper()} must be an absolute HTTP(S) URL "
+                    "without credentials, query parameters, or a fragment"
+                )
+            if self.is_production and parsed.scheme != "https":
+                raise ValueError(f"{field_name.upper()} must use https in production")
+            object.__setattr__(self, field_name, normalized)
+
         # Block wildcard CORS in production
         if self.is_production and self.cors_allowed_origins.strip() == "*":
             raise ValueError(
@@ -273,9 +306,7 @@ class Settings(BaseSettings):
             )
 
         if self.cookie_samesite.lower() not in {"strict", "lax", "none"}:
-            raise ValueError(
-                "COOKIE_SAMESITE must be 'strict', 'lax', or 'none'."
-            )
+            raise ValueError("COOKIE_SAMESITE must be 'strict', 'lax', or 'none'.")
         if self.is_production and not self.cookie_secure:
             raise ValueError("COOKIE_SECURE must be true in production.")
         if self.cookie_samesite.lower() == "none" and not self.cookie_secure:
@@ -315,11 +346,14 @@ class Settings(BaseSettings):
             and self.nexhealth_webhook_callback_url
             and urlparse(self.nexhealth_webhook_callback_url).scheme != "https"
         ):
-            raise ValueError("NEXHEALTH_WEBHOOK_CALLBACK_URL must use https in production")
+            raise ValueError(
+                "NEXHEALTH_WEBHOOK_CALLBACK_URL must use https in production"
+            )
         if (
             self.is_production
             and self.nexhealth_shadow_webhook_callback_base_url
-            and urlparse(self.nexhealth_shadow_webhook_callback_base_url).scheme != "https"
+            and urlparse(self.nexhealth_shadow_webhook_callback_base_url).scheme
+            != "https"
         ):
             raise ValueError(
                 "NEXHEALTH_SHADOW_WEBHOOK_CALLBACK_BASE_URL must use https in production"
@@ -391,6 +425,22 @@ class Settings(BaseSettings):
         return normalize_redis_url(self.celery_broker_url)
 
     @property
+    def twilio_inbound_sms_webhook_url(self) -> str | None:
+        """Return the Twilio inbound SMS webhook for this deployment."""
+        if not self.public_api_url:
+            return None
+        return f"{self.public_api_url}/api/v1/twilio/webhooks/inbound-sms"
+
+    @property
+    def effective_twilio_sms_status_callback_url(self) -> str | None:
+        """Return the explicit or deployment-derived SMS delivery callback."""
+        if self.twilio_sms_status_callback_url:
+            return self.twilio_sms_status_callback_url
+        if not self.public_api_url:
+            return None
+        return f"{self.public_api_url}/api/v1/twilio/webhooks/sms-status"
+
+    @property
     def effective_redis_url(self) -> str | None:
         """Return the best available Redis URL for session storage."""
         return self.normalized_redis_url or self.normalized_celery_broker_url
@@ -451,7 +501,6 @@ class Settings(BaseSettings):
         )
 
 
-
 def setup_logging(log_level: str = "info", app_env: str = "local") -> None:
     """Configure application logging."""
     level = getattr(logging, log_level.upper(), logging.INFO)
@@ -461,9 +510,7 @@ def setup_logging(log_level: str = "info", app_env: str = "local") -> None:
         if is_dev
         else structlog.processors.JSONRenderer()
     )
-    exception_processors = (
-        [] if is_dev else [structlog.processors.format_exc_info]
-    )
+    exception_processors = [] if is_dev else [structlog.processors.format_exc_info]
     shared_processors = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,

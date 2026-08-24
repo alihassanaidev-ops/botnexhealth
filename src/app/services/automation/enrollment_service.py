@@ -185,6 +185,21 @@ class AutomationWorkflowEnrollmentService:
         if reason:
             run.blocked_reason = reason
         await self.session.flush()
+        try:
+            from src.app.services.automation.campaign_conversation_service import (
+                CampaignConversationService,
+            )
+
+            await CampaignConversationService(self.session).close_terminal_threads_for_run(
+                run,
+                completion_reason="workflow_cancelled",
+            )
+        except Exception:  # noqa: BLE001 - cancellation must not fail on thread cleanup.
+            logger.warning(
+                "Failed to close SMS conversation threads for cancelled run=%s",
+                run.id,
+                exc_info=True,
+            )
 
         self.session.add(
             AutomationWorkflowEvent(

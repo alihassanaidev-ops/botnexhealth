@@ -1023,15 +1023,14 @@ class NexHealthPlatformStack(Stack):
             environment["WEBAUTHN_ALLOWED_ORIGINS"] = ",".join(allowed_origins)
         if self.config.webauthn_rp_name:
             environment["WEBAUTHN_RP_NAME"] = self.config.webauthn_rp_name
-        # GoTracker Synchronizer integration (outbound workflow QA). BASE_URL has
-        # a correct app-side default; the webhook callback base is derived from
-        # this environment's API host so auto-created subscription callback URLs
-        # point back here (GOTRACKER_WEBHOOK_SECRET is wired via externalSecrets).
+        # Provider callbacks use the deployment's API host. PUBLIC_API_URL is
+        # non-secret runtime metadata used to derive Twilio inbound/status URLs.
+        # GoTracker uses the same host for auto-created subscription callbacks.
         environment["GOTRACKER_BASE_URL"] = "https://synchronizer.scalenexus.ai"
         if self.config.api.domain_name:
-            environment["GOTRACKER_WEBHOOK_CALLBACK_BASE_URL"] = (
-                f"https://{self.config.api.domain_name}"
-            )
+            public_api_url = f"https://{self.config.api.domain_name}"
+            environment["PUBLIC_API_URL"] = public_api_url
+            environment["GOTRACKER_WEBHOOK_CALLBACK_BASE_URL"] = public_api_url
         # Non-prod only: let SUPER_ADMIN enrol a TOTP authenticator app (the
         # "use authenticator app" flow) instead of requiring a passkey — needed
         # for QA on machines without a platform authenticator. The app property

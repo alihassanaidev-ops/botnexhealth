@@ -43,11 +43,14 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    TimeWaitConfig,
     UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
+    WaitForSmsReplyNode,
     WaitNode,
     WorkflowDefinition,
     WorkflowNode,
+    sms_reply_wait_spec,
 )
 from src.app.services.automation.launch_checklist_service import CampaignLaunchChecklistService
 
@@ -1179,7 +1182,7 @@ def _step_output_snapshot(
             output["next_node_id"] = node.true_next_node_id
         elif branch == "false":
             output["next_node_id"] = node.false_next_node_id
-    elif isinstance(node, (WaitNode, DripNode)):
+    elif isinstance(node, (WaitNode, WaitForSmsReplyNode, DripNode)):
         output["scheduled_at"] = step.scheduled_at
         output["scheduled_local_at"] = step.scheduled_local_at
         output["scheduled_timezone"] = step.scheduled_timezone
@@ -1205,8 +1208,15 @@ def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
     if node is None:
         return {}
     base: dict[str, Any] = {"id": node.id, "type": node.type}
-    if isinstance(node, WaitNode):
-        base["delay"] = node.delay.model_dump(mode="json")
+    reply_wait = sms_reply_wait_spec(node)
+    if isinstance(node, WaitNode) and isinstance(node.wait_for, TimeWaitConfig):
+        base["wait_for"] = node.wait_for.model_dump(mode="json")
+        base["next_node_id"] = node.next_node_id
+    elif reply_wait is not None:
+        base["wait_for"] = "sms_reply"
+        base["response_window_seconds"] = reply_wait.response_window_seconds
+        base["include_reply_key"] = reply_wait.include_reply_key
+        base["response_mapping_count"] = len(reply_wait.response_mappings)
         base["next_node_id"] = node.next_node_id
     elif isinstance(node, DripNode):
         base["batch_size"] = node.batch_size

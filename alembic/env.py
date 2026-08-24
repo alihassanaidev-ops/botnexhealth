@@ -33,6 +33,7 @@ from src.app.models import (  # noqa: F401 — side-effect import
     AutomationWorkflowTimer,
     AutomationWorkflowVersion,
     Call,
+    CampaignConversationThread,
     Contact,
     ContactLocationAccess,
     CustomFieldDefinition,

@@ -102,6 +102,32 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.node_id === "drip-1" && i.message.includes("interval"))).toBe(true)
     })
 
+    it("validates the response window for an SMS reply wait mode", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "wait-1",
+            nodes: [
+                {
+                    type: "wait",
+                    id: "wait-1",
+                    wait_for: {
+                        type: "sms_reply",
+                        response_window_seconds: 30,
+                        include_reply_key: true,
+                        response_mappings: [],
+                    },
+                    next_node_id: "exit-1",
+                },
+                { type: "exit", id: "exit-1", outcome: "timed_out" },
+            ],
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((i) => i.node_id === "wait-1" && i.message.includes("response window"))).toBe(true)
+    })
+
     it("flags out-of-range max_attempts", () => {
         const def = base()
         ;(def.nodes[0] as { max_attempts: number }).max_attempts = 9
@@ -159,7 +185,7 @@ describe("workflow validation", () => {
 
     it("warns when a merge field is unavailable for the message channel", () => {
         const def = base()
-        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{appointment_type}}"
+        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{location_address}}"
         const issues = validateDefinition(def)
         expect(
             issues.some((i) => i.severity === "warning" && i.message.includes("Unavailable merge field")),
@@ -185,7 +211,7 @@ describe("workflow validation", () => {
         const def = base()
         def.trigger = { type: "patient_status_changed", statuses: [] }
         const issues = validateDefinition(def)
-        expect(issues.some((i) => i.message.includes("Patient status trigger"))).toBe(true)
+        expect(issues.some((i) => i.message.includes("Internal status trigger"))).toBe(true)
     })
 
     it("flags condition branches that are not connected", () => {

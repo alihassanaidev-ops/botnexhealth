@@ -19,9 +19,11 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    TimeWaitConfig,
     UpdateGoTrackerAppointmentNode,
     WaitNode,
     WorkflowDefinition,
+    sms_reply_wait_spec,
 )
 from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG
 from src.app.services.automation.step_dispatcher import (
@@ -60,9 +62,13 @@ def _sample_context(extra: dict | None) -> dict:
 
 
 def _describe_wait(node: WaitNode) -> str:
-    delay = node.delay
+    if not isinstance(node.wait_for, TimeWaitConfig):
+        return "Wait for event"
+    delay = node.wait_for.delay
     if delay.delay_type == "duration":
         return f"Wait {delay.duration_seconds} seconds"
+    if delay.delay_type == "appointment_relative":
+        return f"Wait until appointment offset {delay.offset_seconds} seconds"
     return f"Wait until day +{delay.offset_days} at {delay.time_of_day} (local)"
 
 
@@ -101,7 +107,18 @@ def simulate_run(
             break
         steps += 1
 
-        if isinstance(node, WaitNode):
+        reply_wait = sms_reply_wait_spec(node)
+        if reply_wait is not None:
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    "wait",
+                    "Wait for SMS reply",
+                    f"Pause up to {reply_wait.response_window_seconds} seconds",
+                )
+            )
+            current = node.next_node_id
+        elif isinstance(node, WaitNode):
             result.steps.append(DryRunStep(node.id, "wait", _describe_wait(node)))
             current = node.next_node_id
         elif isinstance(node, DripNode):
