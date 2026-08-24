@@ -97,6 +97,7 @@ from src.app.models.institution_location_transfer_number import InstitutionLocat
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
+from src.app.models.campaign_email_template import CampaignEmailTemplate
 from src.app.models.email_template import EmailTemplate, EmailTemplateType
 from src.app.models.sms_template import SmsTemplate, SmsTemplateType
 from src.app.models.external_notification_recipient import ExternalNotificationRecipient
@@ -186,6 +187,7 @@ __all__ = [
     "RetellWebhookStatus",
     "RetellFunctionInvocation",
     "RetellFunctionStatus",
+    "CampaignEmailTemplate",
     "EmailTemplate",
     "EmailTemplateType",
     "SmsTemplate",
