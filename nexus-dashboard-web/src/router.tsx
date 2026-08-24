@@ -38,6 +38,7 @@ const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const CampaignEmailTemplates = lazy(() => import("./pages/CampaignEmailTemplates"));
 const EmailSendingIdentity = lazy(() => import("./pages/EmailSendingIdentity"));
+const Inbox = lazy(() => import("./pages/Inbox"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
 const Security = lazy(() => import("./pages/Security"));
 const Patients = lazy(() => import("./pages/Patients"));
@@ -142,6 +143,17 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <S><EmailSendingIdentity /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Every signed-in role reaches the inbox; the API narrows
+                        // what each one may see, and refuses conversation content
+                        // to group admins entirely.
+                        path: "inbox",
+                        element: (
+                            <RoleGuard allowed={["SUPER_ADMIN", "GROUP_ADMIN", "INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <S><Inbox /></S>
                             </RoleGuard>
                         ),
                     },

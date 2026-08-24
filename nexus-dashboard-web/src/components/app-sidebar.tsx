@@ -28,6 +28,7 @@ import {
     MessageSquare,
     Mail,
     MailCheck,
+    Inbox as InboxIcon,
     Settings,
     ClipboardList,
     Layers,
@@ -350,6 +351,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname === "/institution-admin/email-templates"}
                                     />
                                 )}
+                                {/* Every role reaches the inbox; the API narrows what each
+                                    one sees, and gives group admins figures rather than
+                                    patient conversations. */}
+                                <NavItem
+                                    item={{
+                                        title: "Inbox",
+                                        url: "/inbox",
+                                        icon: InboxIcon,
+                                    }}
+                                    isActive={location.pathname.startsWith("/inbox")}
+                                />
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{
