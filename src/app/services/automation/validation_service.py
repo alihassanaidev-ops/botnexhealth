@@ -37,6 +37,7 @@ from src.app.services.automation.definition_schema import (
     SendVoiceNode,
     UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
+    WaitForSmsReplyNode,
     WaitNode,
     WorkflowDefinition,
 )
@@ -180,6 +181,7 @@ class WorkflowValidationService:
                 node,
                 (
                     WaitNode,
+                    WaitForSmsReplyNode,
                     DripNode,
                     UpdatePatientStatusNode,
                     UpdateGoTrackerAppointmentNode,

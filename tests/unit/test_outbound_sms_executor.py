@@ -186,9 +186,14 @@ def test_executor_sends_and_completes_step():
     run = _make_run()
     node = _make_node()
 
+    thread = MagicMock(id="thread-1", reply_key="R2ABCD")
     with patch(
         "src.app.services.automation.sms_node_executor.SmsService"
-    ) as MockSms:
+    ) as MockSms, patch(
+        "src.app.services.automation.sms_node_executor.CampaignConversationService"
+    ) as MockThreads:
+        MockThreads.return_value.open_sms_thread = AsyncMock(return_value=thread)
+        MockThreads.return_value.mark_message_seen = AsyncMock()
         instance = MockSms.return_value
         instance.send_sms = AsyncMock(return_value=MagicMock())
         result = asyncio.run(executor.execute(run, node, {}))
@@ -199,6 +204,7 @@ def test_executor_sends_and_completes_step():
     send_kwargs = instance.send_sms.call_args.kwargs
     assert send_kwargs["workflow_run_id"] == "run-1"
     assert send_kwargs["workflow_id"] == "wf-1"
+    assert send_kwargs["conversation_thread_id"] == "thread-1"
     runtime.complete_step.assert_called_once()
     assert runtime.complete_step.call_args.kwargs.get("result_code") == "sent"
     runtime.fail_run.assert_not_called()
@@ -233,9 +239,14 @@ def test_executor_fails_run_on_twilio_error():
     run = _make_run()
     node = _make_node()
 
+    thread = MagicMock(id="thread-1", reply_key=None)
     with patch(
         "src.app.services.automation.sms_node_executor.SmsService"
-    ) as MockSms:
+    ) as MockSms, patch(
+        "src.app.services.automation.sms_node_executor.CampaignConversationService"
+    ) as MockThreads:
+        MockThreads.return_value.open_sms_thread = AsyncMock(return_value=thread)
+        MockThreads.return_value.mark_message_seen = AsyncMock()
         instance = MockSms.return_value
         instance.send_sms = AsyncMock(side_effect=RuntimeError("Twilio boom"))
         asyncio.run(executor.execute(run, node, {}))
@@ -243,3 +254,26 @@ def test_executor_fails_run_on_twilio_error():
     runtime.fail_step.assert_called_once()
     runtime.fail_run.assert_called_once()
     assert "send_sms error" in _fail_run_reason(runtime)
+
+
+def test_executor_appends_reply_key_when_configured():
+    contact = _make_contact()
+    location = _make_location()
+    executor, runtime = _make_executor(contact=contact, location=location)
+    run = _make_run()
+    node = _make_node(body_template="Please confirm")
+    node.include_reply_key = True
+    thread = MagicMock(id="thread-1", reply_key="R2ABCD")
+
+    with patch("src.app.services.automation.sms_node_executor.SmsService") as MockSms, patch(
+        "src.app.services.automation.sms_node_executor.CampaignConversationService"
+    ) as MockThreads:
+        MockThreads.return_value.open_sms_thread = AsyncMock(return_value=thread)
+        MockThreads.return_value.mark_message_seen = AsyncMock()
+        instance = MockSms.return_value
+        instance.send_sms = AsyncMock(return_value=MagicMock())
+        asyncio.run(executor.execute(run, node, {}))
+
+    send_kwargs = instance.send_sms.call_args.kwargs
+    assert "R2ABCD" in send_kwargs["body"]
+    runtime.complete_step.assert_called_once()

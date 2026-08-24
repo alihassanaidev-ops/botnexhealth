@@ -59,6 +59,10 @@ Optional:
 
 The stack injects database host, port, name, username, and password directly into ECS, so you do not need a separate `DATABASE_URL` secret.
 
+The stack also derives the non-secret `PUBLIC_API_URL` deployment setting from
+`api.domainName`. The application uses it to configure Twilio inbound SMS
+webhooks and outbound delivery callbacks; it does not belong in Secrets Manager.
+
 ## Deploy flow
 
 1. `cdk deploy` the stack for the target environment.

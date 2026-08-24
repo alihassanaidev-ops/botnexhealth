@@ -133,29 +133,47 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
         switch (node.type) {
             case "wait": {
                 refError(node, node.next_node_id, "Wait step")
-                if (node.delay.delay_type === "duration") {
-                    if (node.delay.duration_seconds < 0) {
+                if (node.wait_for.type === "sms_reply") {
+                    const windowSeconds = node.wait_for.response_window_seconds ?? 259200
+                    if (!Number.isFinite(windowSeconds) || windowSeconds < 60 || windowSeconds > 2592000) {
+                        issues.push({
+                            node_id: node.id,
+                            severity: "error",
+                            message: "SMS reply response window must be between 60 seconds and 30 days.",
+                        })
+                    }
+                    for (const mapping of node.wait_for.response_mappings ?? []) {
+                        if (!mapping.tokens?.length) {
+                            issues.push({
+                                node_id: node.id,
+                                severity: "warning",
+                                message: "SMS response mapping has no tokens.",
+                            })
+                        }
+                    }
+                } else if (node.wait_for.delay.delay_type === "duration") {
+                    if (node.wait_for.delay.duration_seconds < 0) {
                         issues.push({
                             node_id: node.id,
                             severity: "error",
                             message: "Wait duration cannot be negative.",
                         })
-                    } else if (node.delay.duration_seconds === 0) {
+                    } else if (node.wait_for.delay.duration_seconds === 0) {
                         issues.push({
                             node_id: node.id,
                             severity: "warning",
                             message: "Wait duration is zero — the step will not pause.",
                         })
                     }
-                } else if (node.delay.delay_type === "calendar" && !HHMM_RE.test(node.delay.time_of_day)) {
+                } else if (node.wait_for.delay.delay_type === "calendar" && !HHMM_RE.test(node.wait_for.delay.time_of_day)) {
                     issues.push({
                         node_id: node.id,
                         severity: "error",
-                        message: `Send time "${node.delay.time_of_day}" is not a valid HH:MM time.`,
+                        message: `Send time "${node.wait_for.delay.time_of_day}" is not a valid HH:MM time.`,
                     })
                 } else if (
-                    node.delay.delay_type === "appointment_relative" &&
-                    !Number.isFinite(node.delay.offset_seconds)
+                    node.wait_for.delay.delay_type === "appointment_relative" &&
+                    !Number.isFinite(node.wait_for.delay.offset_seconds)
                 ) {
                     issues.push({
                         node_id: node.id,
@@ -194,6 +212,22 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                     })
                 }
                 checkAttempts(node.max_attempts, node.id, issues)
+                if ((node.response_window_seconds ?? 259200) < 60) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "SMS response window must be at least 60 seconds.",
+                    })
+                }
+                for (const mapping of node.response_mappings ?? []) {
+                    if (!mapping.tokens?.length) {
+                        issues.push({
+                            node_id: node.id,
+                            severity: "warning",
+                            message: "SMS response mapping has no tokens.",
+                        })
+                    }
+                }
                 checkTokens(node.body_template, node.id, def, "sms", issues)
                 break
             }

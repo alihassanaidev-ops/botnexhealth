@@ -80,7 +80,10 @@ describe("dry-run simulation", () => {
                 {
                     type: "wait",
                     id: "wait-1",
-                    delay: { delay_type: "duration", duration_seconds: 60 },
+                    wait_for: {
+                        type: "time",
+                        delay: { delay_type: "duration", duration_seconds: 60 },
+                    },
                     next_node_id: "wait-1",
                 },
                 { type: "exit", id: "exit-1", outcome: "never" },

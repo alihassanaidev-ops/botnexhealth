@@ -18,6 +18,7 @@ const ALL_TRIGGERS: TriggerType[] = [
     "bulk_import",
     "callback_requested",
     "patient_status_changed",
+    "sms_reply",
 ]
 const ALL_CHANNELS: MergeChannel[] = ["sms", "email", "voice"]
 const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = ["appointment_offset", "patient_status_changed"]
@@ -54,6 +55,9 @@ export const FALLBACK_MERGE_FIELDS: MergeField[] = [
     field("callback_requested_at", "Callback requested at", "July 18, 2026 at 10:30 AM", "callback", "required_context", "low", ALL_CHANNELS, ["callback_requested"]),
     field("callback_reason", "Callback reason", "Reschedule request", "callback", "optional_context", "medium", ["email", "voice"], ["callback_requested"]),
     field("preferred_callback_time", "Preferred callback time", "Today after 3:00 PM", "callback", "optional_context", "low", ALL_CHANNELS, ["callback_requested"]),
+    field("sms_reply_body", "SMS reply body", "I need to reschedule", "sms_reply", "required_context", "high", ["email", "voice"], ["sms_reply"]),
+    field("sms_reply_intent", "SMS reply intent", "free_text", "sms_reply", "required_context", "none", ALL_CHANNELS, ["sms_reply"]),
+    field("inbound_sms_message_id", "Inbound SMS message ID", "inbound-1", "sms_reply", "required_context", "none", ALL_CHANNELS, ["sms_reply"]),
 ]
 
 let catalog: MergeField[] = FALLBACK_MERGE_FIELDS

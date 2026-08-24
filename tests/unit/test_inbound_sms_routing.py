@@ -3,28 +3,36 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.app.services.automation.inbound_sms_routing_service import (
     InboundSmsRoutingService,
 )
 
 
-def _session(*, contact_ids=None, run_ids=None):
-    """Session whose two execute() calls return contact ids then run ids."""
+def _session(*, contact_ids=None):
+    """Session whose execute() call returns contact ids."""
     session = AsyncMock()
     session.add = MagicMock()
     session.flush = AsyncMock()
 
     contact_result = MagicMock()
     contact_result.scalars.return_value.all.return_value = contact_ids or []
-    run_result = MagicMock()
-    run_result.scalars.return_value.all.return_value = run_ids or []
-    session.execute = AsyncMock(side_effect=[contact_result, run_result])
+    session.execute = AsyncMock(return_value=contact_result)
     return session
 
 
-def _record(session, **over):
+def _thread(**over):
+    thread = MagicMock()
+    thread.id = "thread-1"
+    thread.contact_id = "c-1"
+    thread.workflow_run_id = "r-1"
+    for key, value in over.items():
+        setattr(thread, key, value)
+    return thread
+
+
+def _record(session, *, thread=None, **over):
     svc = InboundSmsRoutingService(session)
     kw = dict(
         institution_id="inst-1",
@@ -36,11 +44,18 @@ def _record(session, **over):
         message_sid="SM123",
     )
     kw.update(over)
-    return asyncio.run(svc.record_inbound(**kw))
+    with patch(
+        "src.app.services.automation.inbound_sms_routing_service.CampaignConversationService"
+    ) as MockThreads:
+        instance = MockThreads.return_value
+        instance.resolve_sms_thread = AsyncMock(return_value=thread)
+        instance.mark_message_seen = AsyncMock()
+        msg = asyncio.run(svc.record_inbound(**kw))
+    return msg
 
 
 def test_persists_row_with_hashed_masked_phones_and_encrypted_body():
-    session = _session(contact_ids=["c-1"], run_ids=["r-1"])
+    session = _session(contact_ids=["c-1"])
     msg = _record(session)
     session.add.assert_called_once()
     session.flush.assert_awaited()
@@ -54,35 +69,43 @@ def test_persists_row_with_hashed_masked_phones_and_encrypted_body():
 
 
 def test_correlates_contact_and_run_when_unambiguous():
-    session = _session(contact_ids=["c-1"], run_ids=["r-1"])
-    msg = _record(session)
+    session = _session(contact_ids=["c-1"])
+    msg = _record(session, thread=_thread())
     assert msg.contact_id == "c-1"
     assert msg.workflow_run_id == "r-1"
+    assert msg.conversation_thread_id == "thread-1"
 
 
 def test_shared_phone_multiple_contacts_stays_uncorrelated():
-    session = _session(contact_ids=["c-1", "c-2"], run_ids=["r-1"])
+    session = _session(contact_ids=["c-1", "c-2"])
     msg = _record(session)
     assert msg.contact_id is None
-    # no contact → run lookup skipped
     assert msg.workflow_run_id is None
 
 
-def test_multiple_waiting_runs_leaves_run_null():
-    session = _session(contact_ids=["c-1"], run_ids=["r-1", "r-2"])
+def test_multiple_active_threads_leaves_run_null():
+    session = _session(contact_ids=["c-1"])
     msg = _record(session)
     assert msg.contact_id == "c-1"
     assert msg.workflow_run_id is None  # ambiguous → staff notified instead
 
 
 def test_no_contact_match_leaves_both_null():
-    session = _session(contact_ids=[], run_ids=[])
+    session = _session(contact_ids=[])
     msg = _record(session)
     assert msg.contact_id is None
     assert msg.workflow_run_id is None
 
 
 def test_intent_is_preserved():
-    session = _session(contact_ids=["c-1"], run_ids=[])
+    session = _session(contact_ids=["c-1"])
     msg = _record(session, intent="stop")
     assert msg.intent == "stop"
+
+
+def test_reply_key_can_correlate_shared_phone_to_thread_contact():
+    session = _session(contact_ids=["c-1", "c-2"])
+    msg = _record(session, thread=_thread(contact_id="c-2", workflow_run_id="r-2"))
+    assert msg.contact_id == "c-2"
+    assert msg.workflow_run_id == "r-2"
+    assert msg.conversation_thread_id == "thread-1"

@@ -1,0 +1,274 @@
+"""Run-scoped campaign SMS conversation service."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
+
+from src.app.models.automation_workflow import AutomationWorkflowRun, AutomationWorkflowVersion
+from src.app.models.contact import Contact
+from src.app.services.automation.campaign_conversation_service import (
+    CampaignConversationService,
+)
+
+
+def _result(*, scalars_all=None, scalar_one_or_none=None):
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = scalars_all or []
+    result.scalar_one_or_none.return_value = scalar_one_or_none
+    return result
+
+
+def _definition(*, response_window_seconds=259200):
+    return {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "sms-1",
+        "nodes": [
+            {
+                "type": "send_sms",
+                "id": "sms-1",
+                "body_template": "Reply DONE",
+                "next_node_id": "wait-1",
+                "response_window_seconds": response_window_seconds,
+            },
+            {
+                "type": "wait",
+                "id": "wait-1",
+                "delay": {"delay_type": "duration", "duration_seconds": 3600},
+                "next_node_id": "exit-1",
+            },
+            {"type": "exit", "id": "exit-1"},
+        ],
+    }
+
+
+def _explicit_wait_definition():
+    return {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "sms-1",
+        "nodes": [
+            {
+                "type": "send_sms",
+                "id": "sms-1",
+                "body_template": "Reply YES or NO",
+                "next_node_id": "wait-sms-1",
+                "response_mappings": [
+                    {
+                        "tokens": ["YES"],
+                        "context_updates": {"legacy_reply": "yes"},
+                    }
+                ],
+            },
+            {
+                "type": "wait",
+                "id": "wait-sms-1",
+                "next_node_id": "exit-1",
+                "wait_for": {
+                    "type": "sms_reply",
+                    "response_window_seconds": 3600,
+                    "response_mappings": [
+                        {
+                            "tokens": ["YES"],
+                            "context_updates": {"sms_reply": "yes"},
+                        }
+                    ],
+                },
+            },
+            {"type": "exit", "id": "exit-1"},
+        ],
+    }
+
+
+def _thread(**over):
+    thread = MagicMock()
+    thread.id = "thread-1"
+    thread.contact_id = "contact-1"
+    thread.workflow_run_id = "run-1"
+    thread.status = "open"
+    thread.last_message_at = datetime.now(timezone.utc)
+    thread.opened_at = thread.last_message_at
+    for key, value in over.items():
+        setattr(thread, key, value)
+    return thread
+
+
+def _run(status="waiting"):
+    run = MagicMock(spec=AutomationWorkflowRun)
+    run.id = "run-1"
+    run.institution_id = "inst-1"
+    run.location_id = "loc-1"
+    run.workflow_id = "wf-1"
+    run.workflow_version_id = "ver-1"
+    run.current_step_id = "wait-1"
+    run.status = status
+    return run
+
+
+def _version(response_window_seconds=259200):
+    version = MagicMock(spec=AutomationWorkflowVersion)
+    version.definition = _definition(response_window_seconds=response_window_seconds)
+    return version
+
+
+def _explicit_wait_version():
+    version = MagicMock(spec=AutomationWorkflowVersion)
+    version.definition = _explicit_wait_definition()
+    return version
+
+
+def _contact(phone_hash="hash-1"):
+    contact = MagicMock(spec=Contact)
+    contact.phone_hash = phone_hash
+    return contact
+
+
+def _session(*, run=None, version=None, contact=None, execute_results=None):
+    session = AsyncMock()
+    session.flush = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(side_effect=execute_results or [])
+
+    async def _get(model, pk, **_kwargs):
+        if model is AutomationWorkflowRun:
+            return run
+        if model is AutomationWorkflowVersion:
+            return version
+        if model is Contact:
+            return contact
+        return None
+
+    session.get = AsyncMock(side_effect=_get)
+    return session
+
+
+def test_reply_key_requires_sender_phone_to_match_thread_contact():
+    thread = _thread()
+    session = _session(
+        run=_run(),
+        version=_version(),
+        contact=_contact("different-hash"),
+        execute_results=[_result(scalars_all=[thread])],
+    )
+
+    resolved = asyncio.run(
+        CampaignConversationService(session).resolve_sms_thread(
+            institution_id="inst-1",
+            location_id="loc-1",
+            contact_id=None,
+            body="DONE R2ABCD",
+            from_phone_hash="hash-1",
+        )
+    )
+
+    assert resolved is None
+
+
+def test_reply_key_resolves_when_sender_matches_and_window_open():
+    thread = _thread()
+    session = _session(
+        run=_run(),
+        version=_version(),
+        contact=_contact("hash-1"),
+        execute_results=[
+            _result(scalars_all=[thread]),
+            _result(scalar_one_or_none="sms-1"),
+        ],
+    )
+
+    resolved = asyncio.run(
+        CampaignConversationService(session).resolve_sms_thread(
+            institution_id="inst-1",
+            location_id="loc-1",
+            contact_id=None,
+            body="DONE R2ABCD",
+            from_phone_hash="hash-1",
+        )
+    )
+
+    assert resolved is thread
+
+
+def test_expired_response_window_does_not_resolve_thread():
+    thread = _thread(
+        last_message_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    session = _session(
+        run=_run(),
+        version=_version(response_window_seconds=60),
+        contact=_contact("hash-1"),
+        execute_results=[
+            _result(scalars_all=[thread]),
+            _result(scalar_one_or_none="sms-1"),
+        ],
+    )
+
+    resolved = asyncio.run(
+        CampaignConversationService(session).resolve_sms_thread(
+            institution_id="inst-1",
+            location_id="loc-1",
+            contact_id=None,
+            body="DONE R2ABCD",
+            from_phone_hash="hash-1",
+        )
+    )
+
+    assert resolved is None
+    assert thread.status == "completed"
+    assert thread.completion_reason == "response_window_expired"
+
+
+def test_open_sms_thread_reuses_handoff_thread_as_active():
+    thread = _thread(status="handoff", reply_key=None)
+    session = _session(execute_results=[_result(scalar_one_or_none=thread)])
+
+    resolved = asyncio.run(
+        CampaignConversationService(session).open_sms_thread(
+            _run(status="running"),
+            include_reply_key=False,
+        )
+    )
+
+    assert resolved is thread
+    session.add.assert_not_called()
+
+
+def test_response_mapping_prefers_current_sms_reply_wait_node():
+    run = _run()
+    run.current_step_id = "wait-sms-1"
+    session = _session(
+        run=run,
+        version=_explicit_wait_version(),
+    )
+
+    match = asyncio.run(
+        CampaignConversationService(session).match_sms_response_mapping(
+            workflow_run_id="run-1",
+            body="yes",
+        )
+    )
+
+    assert match is not None
+    assert match.node_id == "wait-sms-1"
+    assert match.mapping.context_updates == {"sms_reply": "yes"}
+
+
+def test_terminal_run_closes_thread_without_unresolved_handoff():
+    thread = _thread()
+    run = _run(status="completed")
+    session = _session(
+        execute_results=[
+            _result(scalars_all=[thread]),
+            _result(scalar_one_or_none=None),
+        ]
+    )
+
+    asyncio.run(
+        CampaignConversationService(session).close_terminal_threads_for_run(
+            run,
+            completion_reason="workflow_completed",
+        )
+    )
+
+    assert thread.status == "completed"
+    assert thread.completion_reason == "workflow_completed"

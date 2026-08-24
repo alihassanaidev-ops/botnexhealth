@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.inbound_sms_message import InboundSmsMessage
 from src.app.services.automation.campaign_response_service import CampaignResponseService
-from src.app.services.automation.sms_intent_parser import parse_sms_intent
+from src.app.services.automation.sms_intent_parser import SmsIntentResult, parse_sms_intent
 
 
 def _result(value=None):
@@ -33,6 +33,7 @@ def _inbound(intent="free_text"):
         location_id="loc-1",
         contact_id="contact-1",
         workflow_run_id="run-1",
+        conversation_thread_id="thread-1",
         message_sid="SM123",
         intent=intent,
         from_phone_masked="***1234",
@@ -71,6 +72,7 @@ def test_sms_cancel_request_creates_response_event_and_handoff():
     assert event.normalized_intent == "cancel_requested"
     assert event.normalized_outcome == "staff_handoff_required"
     assert event.workflow_id == "wf-1"
+    assert event.conversation_thread_id == "thread-1"
     assert event.raw_body == "cancel my appointment"
     assert handoff is not None
     assert handoff.reason == "cancel_requested"
@@ -97,6 +99,48 @@ def test_sms_confirmation_records_event_without_handoff():
     assert handoff is None
     assert run.trigger_metadata["patient_response_outcome"] == "confirmed_by_reply"
     assert session.add.call_count == 1
+
+
+def test_uncorrelated_sms_confirmation_creates_ambiguous_handoff():
+    session = _session(run=None)
+    inbound = _inbound("confirm")
+    inbound.workflow_run_id = None
+    inbound.conversation_thread_id = None
+
+    event, handoff = asyncio.run(
+        CampaignResponseService(session).record_sms_response(
+            inbound,
+            body="YES",
+            parsed=parse_sms_intent("YES"),
+        )
+    )
+
+    assert event.normalized_intent == "confirm"
+    assert event.normalized_outcome == "staff_handoff_required"
+    assert handoff is not None
+    assert handoff.reason == "ambiguous_response"
+
+
+def test_mapped_sms_handoff_creates_staff_handoff():
+    run = _run()
+    session = _session(run=run)
+
+    event, handoff = asyncio.run(
+        CampaignResponseService(session).record_sms_response(
+            _inbound("mapped_response"),
+            body="CALL R2ABCD",
+            parsed=SmsIntentResult(
+                "mapped_response",
+                outcome="staff_handoff_required",
+                handoff_reason="patient_asks_for_staff",
+            ),
+        )
+    )
+
+    assert event.normalized_intent == "mapped_response"
+    assert event.normalized_outcome == "staff_handoff_required"
+    assert handoff is not None
+    assert handoff.reason == "patient_asks_for_staff"
 
 
 def test_voice_unknown_outcome_creates_handoff():

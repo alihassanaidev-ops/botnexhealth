@@ -91,6 +91,103 @@ def test_minimal_sms_to_exit() -> None:
     assert d.schema_version == "1.0"
     assert d.entry_node_id == "sms-1"
     assert len(d.nodes) == 2
+    assert d.nodes[0].expect_response is False
+    assert d.nodes[0].response_window_seconds == 72 * 60 * 60
+    assert d.nodes[0].response_mappings == []
+
+
+def test_sms_response_settings_validate() -> None:
+    defn = _sms_to_exit()
+    defn["nodes"][0].update(
+        {
+            "expect_response": True,
+            "include_reply_key": True,
+            "response_window_seconds": 3600,
+            "response_mappings": [
+                {
+                    "tokens": ["YES", "confirm"],
+                    "context_updates": {"appointment_status": "confirmed"},
+                }
+            ],
+        }
+    )
+
+    d = WorkflowDefinition.model_validate(defn)
+    sms = d.nodes[0]
+    assert sms.expect_response is True
+    assert sms.include_reply_key is True
+    assert sms.response_mappings[0].tokens == ["YES", "confirm"]
+
+
+def test_legacy_wait_for_sms_reply_node_still_validates() -> None:
+    defn = _sms_to_exit()
+    defn["nodes"][0]["next_node_id"] = "wait-reply"
+    defn["nodes"].insert(
+        1,
+        {
+            "type": "wait_for_sms_reply",
+            "id": "wait-reply",
+            "next_node_id": "exit-1",
+            "include_reply_key": True,
+            "response_window_seconds": 3600,
+            "response_mappings": [
+                {
+                    "tokens": ["YES", "Y"],
+                    "context_updates": {"sms_reply": "yes"},
+                }
+            ],
+        },
+    )
+
+    d = WorkflowDefinition.model_validate(defn)
+    wait = d.nodes[1]
+    assert wait.type == "wait_for_sms_reply"
+    assert wait.include_reply_key is True
+    assert wait.response_mappings[0].tokens == ["YES", "Y"]
+
+
+def test_unified_sms_reply_wait_validates() -> None:
+    defn = _sms_to_exit()
+    defn["nodes"][0]["next_node_id"] = "wait-reply"
+    defn["nodes"].insert(
+        1,
+        {
+            "type": "wait",
+            "id": "wait-reply",
+            "next_node_id": "exit-1",
+            "wait_for": {
+                "type": "sms_reply",
+                "include_reply_key": True,
+                "response_window_seconds": 3600,
+                "response_mappings": [
+                    {
+                        "tokens": ["YES", "Y"],
+                        "context_updates": {"sms_reply": "yes"},
+                    }
+                ],
+            },
+        },
+    )
+
+    wait = WorkflowDefinition.model_validate(defn).nodes[1]
+
+    assert wait.type == "wait"
+    assert wait.wait_for.type == "sms_reply"
+    assert wait.wait_for.include_reply_key is True
+    assert wait.wait_for.response_mappings[0].tokens == ["YES", "Y"]
+
+
+def test_sms_reply_trigger_validates() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {
+        "type": "sms_reply",
+        "tokens": ["pricing", "Pricing", "reschedule"],
+        "campaign_goal": "inbound_sms_followup",
+    }
+
+    d = WorkflowDefinition.model_validate(defn)
+    assert d.trigger.type == "sms_reply"
+    assert d.trigger.tokens == ["pricing", "reschedule"]
 
 
 def test_condition_branch_definition() -> None:
@@ -102,11 +199,12 @@ def test_calendar_wait_definition() -> None:
     d = WorkflowDefinition.model_validate(_with_wait())
     wait = d.nodes[0]
     assert wait.type == "wait"
-    assert wait.delay.delay_type == "calendar"
-    assert wait.delay.time_of_day == "09:00"
+    assert wait.wait_for.type == "time"
+    assert wait.wait_for.delay.delay_type == "calendar"
+    assert wait.wait_for.delay.time_of_day == "09:00"
 
 
-def test_duration_wait() -> None:
+def test_legacy_duration_wait_is_upgraded() -> None:
     defn = _sms_to_exit()
     defn["entry_node_id"] = "wait-1"
     defn["nodes"].insert(0, {
@@ -116,7 +214,8 @@ def test_duration_wait() -> None:
         "next_node_id": "sms-1",
     })
     d = WorkflowDefinition.model_validate(defn)
-    assert d.nodes[0].delay.duration_seconds == 3600
+    assert d.nodes[0].wait_for.type == "time"
+    assert d.nodes[0].wait_for.delay.duration_seconds == 3600
 
 
 def test_drip_node() -> None:

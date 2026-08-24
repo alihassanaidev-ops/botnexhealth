@@ -25,6 +25,7 @@ WorkflowTriggerType = Literal[
     "bulk_import",
     "callback_requested",
     "patient_status_changed",
+    "sms_reply",
 ]
 MergeChannel = Literal["sms", "email", "voice"]
 MergeAvailability = Literal["required_context", "optional_context", "derived"]
@@ -38,6 +39,7 @@ ALL_TRIGGERS: tuple[WorkflowTriggerType, ...] = (
     "bulk_import",
     "callback_requested",
     "patient_status_changed",
+    "sms_reply",
 )
 ALL_CHANNELS: tuple[MergeChannel, ...] = ("sms", "email", "voice")
 
@@ -740,6 +742,48 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         channels=ALL_CHANNELS,
         triggers=("callback_requested",),
         resolve=_preferred_callback_time,
+    ),
+    MergeFieldSpec(
+        name="sms_reply_body",
+        label="SMS reply body",
+        description="The inbound text that started an SMS reply workflow.",
+        sample="I need to reschedule",
+        group="sms_reply",
+        source="context",
+        availability="required_context",
+        requires=("sms_reply_body",),
+        phi_level="high",
+        channels=("email", "voice"),
+        triggers=("sms_reply",),
+        resolve=_context_field("sms_reply_body"),
+    ),
+    MergeFieldSpec(
+        name="sms_reply_intent",
+        label="SMS reply intent",
+        description="The deterministic intent classifier result for the inbound SMS.",
+        sample="free_text",
+        group="sms_reply",
+        source="context",
+        availability="required_context",
+        requires=("sms_reply_intent",),
+        phi_level="none",
+        channels=ALL_CHANNELS,
+        triggers=("sms_reply",),
+        resolve=_context_field("sms_reply_intent"),
+    ),
+    MergeFieldSpec(
+        name="inbound_sms_message_id",
+        label="Inbound SMS message ID",
+        description="The internal inbound SMS record id.",
+        sample="inbound-1",
+        group="sms_reply",
+        source="context",
+        availability="required_context",
+        requires=("inbound_sms_message_id",),
+        phi_level="none",
+        channels=ALL_CHANNELS,
+        triggers=("sms_reply",),
+        resolve=_context_field("inbound_sms_message_id"),
     ),
 )
 

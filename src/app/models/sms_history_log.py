@@ -155,6 +155,12 @@ class SmsHistoryLog(Base):
     workflow_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), nullable=True
     )
+    conversation_thread_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("campaign_conversation_threads.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # --- Encrypted field properties ---
 

@@ -22,6 +22,7 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowStatus,
     AutomationWorkflowVersion,
 )
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_halt import OutboundEmergencyHalt
 from src.app.models.user import User
 from src.app.services.automation.definition_schema import WorkflowDefinition
@@ -90,6 +91,7 @@ class WorkflowCreateRequest(BaseModel):
 
 class WorkflowDraftCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    location_id: str | None = None
 
 
 class WorkflowUpdateRequest(BaseModel):
@@ -674,8 +676,27 @@ async def create_draft_workflow(
 ) -> WorkflowResponse:
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
+        if data.location_id:
+            location_id = (
+                await session.execute(
+                    sa_select(InstitutionLocation.id).where(
+                        InstitutionLocation.id == data.location_id,
+                        InstitutionLocation.institution_id == inst_id,
+                        InstitutionLocation.is_active.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            if location_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Location not found",
+                )
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await svc.create_draft(institution_id=inst_id, name=data.name)
+        wf = await svc.create_draft(
+            institution_id=inst_id,
+            name=data.name,
+            location_id=data.location_id,
+        )
         return WorkflowResponse.from_model(wf)
 
 

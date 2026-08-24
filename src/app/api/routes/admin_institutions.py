@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Annotated, Literal
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from twilio.base.exceptions import TwilioException
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, Field
@@ -30,6 +32,13 @@ from src.app.services.audit import log_audit
 from src.app.services.audit_decorator import audit
 from src.app.services.institution_service import InstitutionService
 from src.app.services.sms_privacy import safe_error_summary
+from src.app.services.twilio_webhook_configuration import (
+    TwilioPhoneNumberNotFoundError,
+    TwilioPhoneNumberSmsUnsupportedError,
+    TwilioSmsApplicationConflictError,
+    TwilioWebhookConfigurationResult,
+    configure_inbound_sms_webhook,
+)
 from src.app.services.user_invite_service import UserInviteService
 from src.app.api.pagination import PaginationQuery, page_count, paginate
 from src.app.api.models import (
@@ -1105,6 +1114,61 @@ async def _ensure_gotracker_webhook_after_location_save(
     return row
 
 
+async def _configure_location_twilio_webhook(
+    institution: Any,
+    phone_number: str,
+) -> TwilioWebhookConfigurationResult:
+    """Connect an explicitly assigned location number to inbound SMS routing."""
+    webhook_url = settings.twilio_inbound_sms_webhook_url
+    if not webhook_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "PUBLIC_API_URL is not configured for this deployment. "
+                "Set it before assigning a Twilio SMS number."
+            ),
+        )
+
+    account_sid = institution.twilio_account_sid
+    auth_token = institution.twilio_auth_token
+    if not account_sid or not auth_token:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Configure this institution's Twilio credentials first",
+        )
+
+    try:
+        return await asyncio.to_thread(
+            configure_inbound_sms_webhook,
+            account_sid=account_sid,
+            auth_token=auth_token,
+            phone_number=phone_number,
+            webhook_url=webhook_url,
+        )
+    except (
+        TwilioPhoneNumberNotFoundError,
+        TwilioPhoneNumberSmsUnsupportedError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except TwilioSmsApplicationConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except TwilioException as exc:
+        logger.error(
+            "Failed to configure Twilio inbound SMS webhook: %s",
+            safe_error_summary(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Twilio could not configure the selected number's SMS webhook",
+        ) from exc
+
+
 # =============================================================================
 # Location Routes
 # =============================================================================
@@ -1147,6 +1211,13 @@ async def create_location(
         location_data = data.model_dump(
             exclude={"gotracker_webhook_subscription_id", "gotracker_webhook_secret"}
         )
+        twilio_from_number = (location_data.get("twilio_from_number") or "").strip()
+        if twilio_from_number:
+            await _configure_location_twilio_webhook(
+                institution,
+                twilio_from_number,
+            )
+            location_data["twilio_from_number"] = twilio_from_number
         try:
             location = await institution_service.create_location(
                 institution.id, **location_data
@@ -1291,9 +1362,15 @@ async def list_admin_outbound_voice_profiles(
         result = await session.execute(
             select(OutboundVoiceProfile)
             .where(OutboundVoiceProfile.location_id == str(location.id))
-            .order_by(OutboundVoiceProfile.display_name.asc().nulls_last(), OutboundVoiceProfile.created_at.desc())
+            .order_by(
+                OutboundVoiceProfile.display_name.asc().nulls_last(),
+                OutboundVoiceProfile.created_at.desc(),
+            )
         )
-        return [AdminOutboundVoiceProfileResponse.from_profile(p) for p in result.scalars().all()]
+        return [
+            AdminOutboundVoiceProfileResponse.from_profile(p)
+            for p in result.scalars().all()
+        ]
 
 
 @router.post(
@@ -1348,7 +1425,9 @@ async def update_admin_outbound_voice_profile(
         location = await _get_admin_location_or_404(session, slug, loc_slug)
         profile = await session.get(OutboundVoiceProfile, profile_id)
         if profile is None or str(profile.location_id) != str(location.id):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice profile not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Voice profile not found"
+            )
         for field, value in data.model_dump(exclude_unset=True).items():
             if field == "purpose":
                 value = _normalize_voice_purpose(value)
@@ -1378,7 +1457,9 @@ async def delete_admin_outbound_voice_profile(
         location = await _get_admin_location_or_404(session, slug, loc_slug)
         profile = await session.get(OutboundVoiceProfile, profile_id)
         if profile is None or str(profile.location_id) != str(location.id):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice profile not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Voice profile not found"
+            )
         await session.delete(profile)
 
 
@@ -1421,6 +1502,14 @@ async def update_location(
             exclude_unset=True,
             exclude={"gotracker_webhook_subscription_id", "gotracker_webhook_secret"},
         )
+        if "twilio_from_number" in updates:
+            twilio_from_number = (updates["twilio_from_number"] or "").strip()
+            updates["twilio_from_number"] = twilio_from_number or None
+            if twilio_from_number:
+                await _configure_location_twilio_webhook(
+                    institution,
+                    twilio_from_number,
+                )
         location = await institution_service.update_location(location, **updates)
         gotracker_subscription = await _ensure_gotracker_webhook_after_location_save(
             session,
@@ -1432,6 +1521,69 @@ async def update_location(
         await session.flush()
         return LocationResponse.from_location(
             location, gotracker_subscription=gotracker_subscription
+        )
+
+
+class TwilioWebhookConnectResponse(BaseModel):
+    status: Literal["configured"]
+    phone_number: str
+    changed: bool
+
+
+@router.post(
+    "/{slug}/locations/{loc_slug}/twilio/webhook",
+    response_model=TwilioWebhookConnectResponse,
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    resource=lambda request, slug, loc_slug, _: (
+        f"institution:{slug}/location:{loc_slug}/twilio-webhook"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def reconnect_location_twilio_webhook(
+    request: Request,
+    slug: str,
+    loc_slug: str,
+    _: User = Depends(get_current_admin),
+) -> TwilioWebhookConnectResponse:
+    """Reconnect an already assigned number after a deployment URL change."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(
+            slug,
+            include_inactive=True,
+        )
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        location = await institution_service.get_location_by_slug(
+            loc_slug,
+            institution.id,
+        )
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
+        phone_number = (location.twilio_from_number or "").strip()
+        if not phone_number:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Assign a Twilio SMS number to this location first",
+            )
+
+        result = await _configure_location_twilio_webhook(
+            institution,
+            phone_number,
+        )
+        return TwilioWebhookConnectResponse(
+            status="configured",
+            phone_number=phone_number,
+            changed=result.changed,
         )
 
 
@@ -2089,10 +2241,26 @@ class ProvisioningStatusResponse(BaseModel):
 
 
 class ProvisioningUpdateRequest(BaseModel):
-    twilio_account_sid: str | None = Field(default=None, description="Twilio sub-account SID")
-    twilio_auth_token: str | None = Field(default=None, description="Twilio sub-account auth token")
-    email_from_address: str | None = Field(default=None, description="From-address for outbound email")
-    email_from_name: str | None = Field(default=None, description="Display name for outbound email")
+    twilio_account_sid: str | None = Field(
+        default=None, description="Twilio sub-account SID"
+    )
+    twilio_auth_token: str | None = Field(
+        default=None, description="Twilio sub-account auth token"
+    )
+    email_from_address: str | None = Field(
+        default=None, description="From-address for outbound email"
+    )
+    email_from_name: str | None = Field(
+        default=None, description="Display name for outbound email"
+    )
+
+
+class InstitutionTwilioPhoneNumberResponse(BaseModel):
+    sid: str
+    phone_number: str
+    friendly_name: str
+    capabilities: dict[str, bool]
+    status: str | None = None
 
 
 def _mask_sid(sid: str | None) -> str | None:
@@ -2100,6 +2268,30 @@ def _mask_sid(sid: str | None) -> str | None:
     if not sid or len(sid) < 9:
         return sid
     return f"{sid[:4]}****{sid[-4:]}"
+
+
+def _fetch_institution_twilio_phone_numbers(
+    account_sid: str,
+    auth_token: str,
+) -> list[InstitutionTwilioPhoneNumberResponse]:
+    """List numbers using only the institution's Twilio account credentials."""
+    from twilio.rest import Client
+
+    client = Client(account_sid, auth_token)
+    return [
+        InstitutionTwilioPhoneNumberResponse(
+            sid=number.sid,
+            phone_number=number.phone_number,
+            friendly_name=number.friendly_name or number.phone_number,
+            capabilities={
+                "voice": bool(number.capabilities.get("voice", False)),
+                "sms": bool(number.capabilities.get("sms", False)),
+                "mms": bool(number.capabilities.get("mms", False)),
+            },
+            status="active",
+        )
+        for number in client.incoming_phone_numbers.list()
+    ]
 
 
 @router.get("/{slug}/provisioning", response_model=ProvisioningStatusResponse)
@@ -2112,10 +2304,15 @@ async def get_provisioning(
         institution_service = InstitutionService(session)
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
         return ProvisioningStatusResponse(
-            twilio_configured=bool(institution.twilio_account_sid),
+            twilio_configured=bool(
+                institution.twilio_account_sid and institution.twilio_auth_token
+            ),
             twilio_account_sid_masked=_mask_sid(institution.twilio_account_sid),
             email_from_address=institution.email_from_address,
             email_from_name=institution.email_from_name,
@@ -2133,7 +2330,10 @@ async def update_provisioning(
         institution_service = InstitutionService(session)
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
         if body.twilio_account_sid is not None:
             institution.twilio_account_sid = body.twilio_account_sid or None
@@ -2149,7 +2349,13 @@ async def update_provisioning(
         # Audit the credential/config change (PR-1). Never log the token or raw SID —
         # only which fields changed + the masked SID.
         changed = [
-            f for f in ("twilio_account_sid", "twilio_auth_token", "email_from_address", "email_from_name")
+            f
+            for f in (
+                "twilio_account_sid",
+                "twilio_auth_token",
+                "email_from_address",
+                "email_from_name",
+            )
             if getattr(body, f) is not None
         ]
         await log_audit(
@@ -2162,17 +2368,65 @@ async def update_provisioning(
                 "actor_role": current_user.role,
                 "institution_id": str(institution.id),
                 "fields_changed": changed,
-                "twilio_configured": bool(institution.twilio_account_sid),
+                "twilio_configured": bool(
+                    institution.twilio_account_sid and institution.twilio_auth_token
+                ),
                 "twilio_account_sid_masked": _mask_sid(institution.twilio_account_sid),
             },
         )
 
         return ProvisioningStatusResponse(
-            twilio_configured=bool(institution.twilio_account_sid),
+            twilio_configured=bool(
+                institution.twilio_account_sid and institution.twilio_auth_token
+            ),
             twilio_account_sid_masked=_mask_sid(institution.twilio_account_sid),
             email_from_address=institution.email_from_address,
             email_from_name=institution.email_from_name,
         )
+
+
+@router.get(
+    "/{slug}/twilio/phone-numbers",
+    response_model=list[InstitutionTwilioPhoneNumberResponse],
+)
+async def list_institution_twilio_phone_numbers(
+    slug: str,
+    _: User = Depends(get_current_admin),
+) -> list[InstitutionTwilioPhoneNumberResponse]:
+    """List numbers owned by the Twilio account configured for an institution."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(slug, include_inactive=True)
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        account_sid = institution.twilio_account_sid
+        auth_token = institution.twilio_auth_token
+        if not account_sid or not auth_token:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Configure this institution's Twilio credentials first",
+            )
+
+        try:
+            return await asyncio.to_thread(
+                _fetch_institution_twilio_phone_numbers,
+                account_sid,
+                auth_token,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to list Twilio numbers for institution %s: %s",
+                institution.id,
+                safe_error_summary(exc),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to retrieve phone numbers from this institution's Twilio account",
+            ) from exc
 
 
 @router.delete("/{slug}/provisioning/twilio", status_code=status.HTTP_204_NO_CONTENT)
@@ -2185,7 +2439,10 @@ async def clear_twilio_provisioning(
         institution_service = InstitutionService(session)
         institution = await institution_service.get_by_slug(slug, include_inactive=True)
         if not institution:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Institution '{slug}' not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
 
         institution.twilio_account_sid = None
         institution.twilio_auth_token = None

@@ -2,10 +2,10 @@
 
 Persists every inbound SMS reply as an `InboundSmsMessage` (encrypted body,
 hashed/masked phones, intent), best-effort correlated to a contact and — only
-when unambiguous — to an open workflow run. v1 boundary: this does NOT interpret
-free text (no NLU). Free-text replies are surfaced to staff as a notification by
-the caller; only template-defined keywords (handled elsewhere) drive a workflow
-event.
+when unambiguous — to an active run-scoped SMS conversation thread. v1 boundary:
+this does NOT interpret free text (no NLU). Free-text replies are surfaced to
+staff as a notification by the caller; only deterministic keywords/mappings
+drive a workflow event.
 """
 
 from __future__ import annotations
@@ -15,9 +15,11 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.app.models.automation_workflow import AutomationRunStatus, AutomationWorkflowRun
 from src.app.models.contact import Contact
 from src.app.models.inbound_sms_message import InboundSmsMessage
+from src.app.services.automation.campaign_conversation_service import (
+    CampaignConversationService,
+)
 from src.app.services.sms_privacy import hash_phone, mask_phone
 
 logger = logging.getLogger(__name__)
@@ -42,19 +44,32 @@ class InboundSmsRoutingService:
 
         The row is added + flushed on the caller's session (the caller owns the
         commit). Correlation is best-effort: `workflow_run_id` is set only when
-        exactly one WAITING run matches (Decision 2 — never guess the run).
+        exactly one active conversation thread matches (never guess the run).
         """
         from_hash = hash_phone(from_number)
         contact_id = await self._resolve_contact_id(institution_id, from_hash)
-        workflow_run_id = await self._resolve_unambiguous_run_id(
-            institution_id, location_id, contact_id
+        conversation = await CampaignConversationService(self.session).resolve_sms_thread(
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_id=contact_id,
+            body=body,
+            from_phone_hash=from_hash,
         )
+        if conversation is not None:
+            contact_id = str(conversation.contact_id)
+            workflow_run_id = str(conversation.workflow_run_id)
+            conversation_thread_id = str(conversation.id)
+            await CampaignConversationService(self.session).mark_message_seen(conversation)
+        else:
+            workflow_run_id = None
+            conversation_thread_id = None
 
         msg = InboundSmsMessage(
             institution_id=institution_id,
             location_id=location_id,
             contact_id=contact_id,
             workflow_run_id=workflow_run_id,
+            conversation_thread_id=conversation_thread_id,
             message_sid=message_sid,
             from_phone_hash=from_hash,
             from_phone_masked=mask_phone(from_number),
@@ -79,21 +94,4 @@ class InboundSmsRoutingService:
         )
         ids = result.scalars().all()
         # Exactly one contact → correlate; a shared-phone ambiguity stays uncorrelated.
-        return str(ids[0]) if len(ids) == 1 else None
-
-    async def _resolve_unambiguous_run_id(
-        self, institution_id: str, location_id: str | None, contact_id: str | None
-    ) -> str | None:
-        if not contact_id or not location_id:
-            return None
-        result = await self.session.execute(
-            select(AutomationWorkflowRun.id).where(
-                AutomationWorkflowRun.institution_id == institution_id,
-                AutomationWorkflowRun.location_id == location_id,
-                AutomationWorkflowRun.contact_id == contact_id,
-                AutomationWorkflowRun.status == AutomationRunStatus.WAITING.value,
-            )
-        )
-        ids = result.scalars().all()
-        # Exactly one WAITING run → link; zero or several → leave null (staff notified).
         return str(ids[0]) if len(ids) == 1 else None

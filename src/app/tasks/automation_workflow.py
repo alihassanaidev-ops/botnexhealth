@@ -2330,12 +2330,14 @@ def _dial_outcome_for_attempt(
 def _waiting_step_targets_field(
     definition: WorkflowDefinition, current_step_id: str | None, field: str
 ) -> bool:
-    """True when the current WaitNode flows into a ConditionNode reading field."""
+    """True when the current wait-like node flows into a ConditionNode reading field."""
     if not current_step_id:
         return False
+    from src.app.services.automation.definition_schema import WaitForSmsReplyNode
+
     node_map = {node.id: node for node in definition.nodes}
     current = node_map.get(current_step_id)
-    if not isinstance(current, WaitNode):
+    if not isinstance(current, (WaitNode, WaitForSmsReplyNode)):
         return False
     next_node = node_map.get(current.next_node_id)
     if not isinstance(next_node, ConditionNode):
@@ -2357,6 +2359,8 @@ def resume_sms_confirmation(
     from_number: str,
     body: str,
     message_sid: str | None = None,
+    workflow_run_id: str | None = None,
+    conversation_thread_id: str | None = None,
 ) -> dict:
     """Resume a WAITING confirmation run from a patient's inbound SMS reply."""
     _ensure_db()
@@ -2368,6 +2372,8 @@ def resume_sms_confirmation(
                 from_number=from_number,
                 body=body,
                 message_sid=message_sid,
+                workflow_run_id=workflow_run_id,
+                conversation_thread_id=conversation_thread_id,
             )
         )
     except Exception as exc:
@@ -2387,6 +2393,8 @@ async def _resume_sms_confirmation_async(
     from_number: str,
     body: str,
     message_sid: str | None = None,
+    workflow_run_id: str | None = None,
+    conversation_thread_id: str | None = None,
 ) -> dict:
     from sqlalchemy import select
 
@@ -2395,12 +2403,14 @@ async def _resume_sms_confirmation_async(
     phone_hash = Contact.find_by_phone_hash(from_number)
     if not phone_hash:
         return {"resumed": 0, "reason": "phone_hash_unavailable"}
+    if not workflow_run_id:
+        return {"resumed": 0, "reason": "conversation_thread_required"}
 
     async with get_system_db_session(
         "celery",
         institution_id=institution_id,
         location_id=location_id,
-        external_id=f"sms_confirmation:{message_sid or phone_hash}",
+        external_id=f"sms_confirmation:{conversation_thread_id or workflow_run_id}",
     ) as session:
         contacts = (
             (
@@ -2417,6 +2427,26 @@ async def _resume_sms_confirmation_async(
         if not contacts:
             return {"resumed": 0, "reason": "contact_not_found"}
 
+        mapped = await _resume_mapped_sms_response(
+            session=session,
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_ids=[str(contact_id) for contact_id in contacts],
+            workflow_run_id=workflow_run_id,
+            body=body,
+            message_sid=message_sid,
+            conversation_thread_id=conversation_thread_id,
+        )
+        if mapped is not None:
+            await session.commit()
+            return mapped
+
+        from src.app.services.automation.sms_intent_parser import parse_sms_intent
+
+        if parse_sms_intent(body).intent != "confirm":
+            await session.commit()
+            return {"resumed": 0, "reason": "no_sms_response_mapping"}
+
         result = await _resume_waiting_runs_for_context_field(
             session=session,
             institution_id=institution_id,
@@ -2428,7 +2458,9 @@ async def _resume_sms_confirmation_async(
                 "appointment_status": "confirmed",
                 "sms_confirmation_reply": body.strip(),
                 "sms_confirmation_message_sid": message_sid,
+                "sms_confirmation_conversation_thread_id": conversation_thread_id,
             },
+            workflow_run_id=workflow_run_id,
         )
 
         confirmed = result.get("outcomes", {}).get("confirmed", 0)
@@ -2445,6 +2477,79 @@ async def _resume_sms_confirmation_async(
             "matched": result["matched"],
             "outcomes": result["outcomes"],
         }
+
+
+async def _resume_mapped_sms_response(
+    *,
+    session,
+    institution_id: str,
+    location_id: str,
+    contact_ids: list[str],
+    workflow_run_id: str,
+    body: str,
+    message_sid: str | None,
+    conversation_thread_id: str | None,
+) -> dict | None:
+    from sqlalchemy import select
+
+    from src.app.models.campaign_response import CampaignResponseEvent
+    from src.app.services.automation.campaign_conversation_service import (
+        CampaignConversationService,
+    )
+
+    match = await CampaignConversationService(session).match_sms_response_mapping(
+        workflow_run_id=workflow_run_id,
+        body=body,
+    )
+    if match is None:
+        return None
+
+    mapping = match.mapping
+    response_event_id = None
+    if message_sid:
+        event = (
+            await session.execute(
+                select(CampaignResponseEvent).where(
+                    CampaignResponseEvent.institution_id == institution_id,
+                    CampaignResponseEvent.channel == "sms",
+                    CampaignResponseEvent.source_event_id == message_sid,
+                )
+            )
+        ).scalar_one_or_none()
+        response_event_id = str(event.id) if event is not None else None
+
+    metadata_updates = {
+        "sms_response_reply": body.strip(),
+        "sms_response_message_sid": message_sid,
+        "sms_response_conversation_thread_id": conversation_thread_id,
+        "sms_response_node_id": match.node_id,
+        "sms_response_mapping_tokens": mapping.tokens,
+        "last_campaign_response_event_id": response_event_id,
+    }
+
+    if not mapping.context_updates:
+        return {
+            "resumed": 0,
+            "matched": 1,
+            "outcomes": {},
+            "reason": "mapping_created_handoff" if mapping.handoff_reason else "mapping_no_context_updates",
+        }
+
+    result = await _resume_waiting_run_with_context_updates(
+        session=session,
+        institution_id=institution_id,
+        location_id=location_id,
+        contact_ids=contact_ids,
+        workflow_run_id=workflow_run_id,
+        context_updates=dict(mapping.context_updates),
+        metadata_updates=metadata_updates,
+    )
+    return {
+        "resumed": result["resumed"],
+        "matched": result["matched"],
+        "outcomes": result["outcomes"],
+        "mapping_node_id": match.node_id,
+    }
 
 
 @celery_app.task(
@@ -2516,6 +2621,78 @@ async def _resume_reactivation_booking_async(
         }
 
 
+async def _resume_waiting_run_with_context_updates(
+    *,
+    session,
+    institution_id: str,
+    location_id: str,
+    contact_ids: list[str],
+    workflow_run_id: str,
+    context_updates: dict,
+    metadata_updates: dict,
+) -> dict:
+    from sqlalchemy import select
+
+    if not contact_ids:
+        return {"matched": 0, "resumed": 0, "outcomes": {}, "outcome_runs": {}}
+
+    run = (
+        await session.execute(
+            select(AutomationWorkflowRun).where(
+                AutomationWorkflowRun.id == workflow_run_id,
+                AutomationWorkflowRun.institution_id == institution_id,
+                AutomationWorkflowRun.location_id == location_id,
+                AutomationWorkflowRun.contact_id.in_(contact_ids),
+                AutomationWorkflowRun.status == AutomationRunStatus.WAITING.value,
+            )
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        return {"matched": 0, "resumed": 0, "outcomes": {}, "outcome_runs": {}}
+
+    version = await session.get(AutomationWorkflowVersion, run.workflow_version_id)
+    if version is None:
+        return {"matched": 0, "resumed": 0, "outcomes": {}, "outcome_runs": {}}
+
+    definition = WorkflowDefinition.model_validate(version.definition)
+    target_fields = [field for field in context_updates if field]
+    if target_fields and not any(
+        _waiting_step_targets_field(definition, run.current_step_id, field)
+        for field in target_fields
+    ):
+        return {"matched": 0, "resumed": 0, "outcomes": {}, "outcome_runs": {}}
+
+    await AutomationWorkflowSchedulerService(session).cancel_timers_for_run(run.id)
+    md = dict(run.trigger_metadata or {})
+    md.update({k: v for k, v in metadata_updates.items() if v is not None})
+    md.update(context_updates)
+    run.trigger_metadata = md
+    await session.flush()
+
+    dispatcher, location_timezone = await build_dispatcher(
+        session,
+        location_id=run.location_id,
+        revalidator=PmsLiveRevalidationService(session),
+    )
+    result = await dispatcher.resume_after_timer(
+        run, definition, context=md, location_timezone=location_timezone
+    )
+    outcomes: dict[str, int] = {}
+    outcome_runs: dict[str, list[AutomationWorkflowRun]] = {}
+    resumed = 0
+    if result.status == "completed":
+        resumed = 1
+        if result.outcome:
+            outcomes[result.outcome] = 1
+            outcome_runs[result.outcome] = [run]
+    return {
+        "matched": 1,
+        "resumed": resumed,
+        "outcomes": outcomes,
+        "outcome_runs": outcome_runs,
+    }
+
+
 async def _resume_waiting_runs_for_context_field(
     *,
     session,
@@ -2525,26 +2702,22 @@ async def _resume_waiting_runs_for_context_field(
     context_field: str,
     context_value,
     metadata_updates: dict,
+    workflow_run_id: str | None = None,
 ) -> dict:
     from sqlalchemy import select
 
     if not contact_ids:
         return {"matched": 0, "resumed": 0, "outcomes": {}, "outcome_runs": {}}
 
-    rows = (
-        (
-            await session.execute(
-                select(AutomationWorkflowRun).where(
-                    AutomationWorkflowRun.institution_id == institution_id,
-                    AutomationWorkflowRun.location_id == location_id,
-                    AutomationWorkflowRun.contact_id.in_(contact_ids),
-                    AutomationWorkflowRun.status == AutomationRunStatus.WAITING.value,
-                )
-            )
-        )
-        .scalars()
-        .all()
+    stmt = select(AutomationWorkflowRun).where(
+        AutomationWorkflowRun.institution_id == institution_id,
+        AutomationWorkflowRun.location_id == location_id,
+        AutomationWorkflowRun.contact_id.in_(contact_ids),
+        AutomationWorkflowRun.status == AutomationRunStatus.WAITING.value,
     )
+    if workflow_run_id:
+        stmt = stmt.where(AutomationWorkflowRun.id == workflow_run_id)
+    rows = ((await session.execute(stmt)).scalars().all())
 
     scheduler = AutomationWorkflowSchedulerService(session)
     matched = 0

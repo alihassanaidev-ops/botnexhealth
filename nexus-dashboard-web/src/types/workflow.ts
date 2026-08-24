@@ -21,6 +21,7 @@ export type TriggerType =
     | "bulk_import"
     | "callback_requested"
     | "patient_status_changed"
+    | "sms_reply"
 
 export interface AppointmentOffsetTrigger {
     type: "appointment_offset"
@@ -58,6 +59,12 @@ export interface PatientStatusChangedTrigger {
     statuses: string[]
     campaign_goal?: string | null
 }
+export interface SmsReplyTrigger {
+    type: "sms_reply"
+    /** Optional whole-token filters. Empty means any non-compliance inbound SMS. */
+    tokens?: string[]
+    campaign_goal?: string | null
+}
 
 export type WorkflowTrigger =
     | AppointmentOffsetTrigger
@@ -67,6 +74,7 @@ export type WorkflowTrigger =
     | BulkImportTrigger
     | CallbackRequestedTrigger
     | PatientStatusChangedTrigger
+    | SmsReplyTrigger
 
 // ---------------------------------------------------------------------------
 // Wait delay (discriminated on `delay_type`)
@@ -118,12 +126,23 @@ export type NodeType =
     | "condition"
     | "exit"
 
+export interface TimeWaitConfig {
+    type: "time"
+    delay: WaitDelay
+    respect_quiet_hours?: boolean
+}
+export interface SmsReplyWaitConfig {
+    type: "sms_reply"
+    response_window_seconds?: number
+    include_reply_key?: boolean
+    response_mappings?: SmsResponseMapping[]
+}
+export type WaitForConfig = TimeWaitConfig | SmsReplyWaitConfig
 export interface WaitNode {
     type: "wait"
     id: string
-    delay: WaitDelay
+    wait_for: WaitForConfig
     next_node_id: string
-    respect_quiet_hours?: boolean
 }
 export interface DripNode {
     type: "drip"
@@ -139,6 +158,15 @@ export interface SendSmsNode {
     next_node_id: string
     respect_quiet_hours?: boolean
     max_attempts?: number
+    expect_response?: boolean
+    response_window_seconds?: number
+    include_reply_key?: boolean
+    response_mappings?: SmsResponseMapping[]
+}
+export interface SmsResponseMapping {
+    tokens: string[]
+    context_updates?: Record<string, boolean | number | string | string[] | null>
+    handoff_reason?: string | null
 }
 export interface SendVoiceNode {
     type: "send_voice"

@@ -213,6 +213,7 @@ class AutomationWorkflowRuntimeService:
         run.outcome = outcome
         run.completed_at = datetime.now(tz=timezone.utc)
         await self.session.flush()
+        await self._close_sms_threads(run, completion_reason="workflow_completed")
         await self._emit(run, "run.completed", metadata={"outcome": outcome})
         return run
 
@@ -228,8 +229,31 @@ class AutomationWorkflowRuntimeService:
         run.blocked_reason = reason
         run.completed_at = datetime.now(tz=timezone.utc)
         await self.session.flush()
+        await self._close_sms_threads(run, completion_reason="workflow_failed")
         await self._emit(run, "run.failed", metadata={"reason": reason})
         return run
+
+    async def _close_sms_threads(
+        self,
+        run: AutomationWorkflowRun,
+        *,
+        completion_reason: str,
+    ) -> None:
+        try:
+            from src.app.services.automation.campaign_conversation_service import (
+                CampaignConversationService,
+            )
+
+            await CampaignConversationService(self.session).close_terminal_threads_for_run(
+                run,
+                completion_reason=completion_reason,
+            )
+        except Exception:  # noqa: BLE001 - run lifecycle should not fail on thread cleanup.
+            logger.warning(
+                "Failed to close SMS conversation threads for run=%s",
+                run.id,
+                exc_info=True,
+            )
 
     async def _emit(
         self,
