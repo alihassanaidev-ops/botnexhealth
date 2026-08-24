@@ -57,10 +57,17 @@ MAX_LOCAL_PART = 64
 
 
 def _short(value: str | None) -> str:
-    """Hex-only prefix of an id, safe for an address local part."""
+    """Hex-only prefix of an id, safe for an address local part.
+
+    Non-hex characters are dropped rather than passed through. Ids are UUIDs in
+    practice, but a token built from anything else would be generated happily
+    and then fail to parse on the way back in — a silent, one-way failure that
+    would look like the patient never replied.
+    """
     if not value:
         return ""
-    return str(value).replace("-", "").lower()[:_ID_LEN]
+    cleaned = "".join(c for c in str(value).lower() if c in "0123456789abcdef")
+    return cleaned[:_ID_LEN]
 
 
 def _signature(institution: str, location: str, contact: str, run: str) -> str:

@@ -155,6 +155,26 @@ class Settings(BaseSettings):
     # rather than a provider rejection mid-campaign.
     ses_enforce_verified_recipients_in_sandbox: bool = True
 
+    # ── Inbound email (patient replies) ──────────────────────────────────
+    # One shared receiving domain for the whole platform, not one per clinic:
+    # SES caps receipt rules at 200 per rule set with no increase path, so a
+    # rule-per-clinic design would wall at ~200 clinics. The clinic a reply
+    # belongs to is carried in the signed Reply-To instead.
+    ses_inbound_domain: str | None = None
+    #: Bucket the receipt rule writes the full MIME into.
+    ses_inbound_bucket: str | None = None
+    ses_inbound_prefix: str = "inbound/"
+    #: SQS queue subscribed to the receipt rule's SNS topic. A queue rather than
+    #: a public HTTPS endpoint: no signature-verification surface to get wrong,
+    #: and mail survives a deploy or an outage instead of being retried at us.
+    ses_inbound_queue_url: str | None = None
+    #: Messages larger than this are recorded with their metadata but the body is
+    #: left in object storage rather than pulled into the database.
+    inbound_email_max_body_bytes: int = 256_000
+    #: Per-sender cap over an hour, so a loop or a flood on the catch-all cannot
+    #: fill the inbox.
+    inbound_email_sender_hourly_limit: int = 60
+
     # Celery
     celery_broker_url: str | None = None
     redis_url: str | None = None
