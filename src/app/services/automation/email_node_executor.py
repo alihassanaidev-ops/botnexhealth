@@ -22,9 +22,10 @@ from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import SendEmailNode
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
-from src.app.services.automation.template_renderer import render_sms_body
+from src.app.services.automation.template_renderer import build_merge_vars
 from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
 from src.app.services.staff_recipients import resolve_staff_recipients, unique_emails
+from src.app.services.template_engine import render_html, render_text
 from src.app.services.usage_metering_service import UsageMeteringService
 
 logger = logging.getLogger(__name__)
@@ -179,9 +180,14 @@ class EmailNodeExecutor:
             html_tpl = saved.html_body
 
         # --- Render templates ---
-        subject = render_sms_body(subject_tpl, contact, location, context)
-        body = render_sms_body(text_tpl, contact, location, context)
-        html = render_sms_body(html_tpl, contact, location, context) if html_tpl else None
+        # Email renders through the Jinja engine so a template authored in the
+        # editor behaves identically here — conditionals and filters included.
+        # Text and subject render unescaped; the HTML part escapes rendered
+        # patient data so a name cannot inject markup.
+        merge_vars = build_merge_vars(contact, location, context)
+        subject = render_text(subject_tpl, merge_vars)
+        body = render_text(text_tpl, merge_vars)
+        html = render_html(html_tpl, merge_vars) if html_tpl else None
 
         # --- Append the one-click unsubscribe footer (CAN-SPAM/CASL, Plan 05) ---
         # Patient-directed sends only. On a staff alert the footer is not merely

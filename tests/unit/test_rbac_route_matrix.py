@@ -230,6 +230,16 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/email-templates/{template_type}/reset",
         "GET /api/institution/email-templates/{template_type}/preview",
         "GET /api/institution/email-templates/{template_type}/variables",
+        # Clinic-authored campaign email templates — same boundary as the system
+        # notification templates above: institution-scoped content, admin-only.
+        "GET /api/institution/campaign-email-templates",
+        "POST /api/institution/campaign-email-templates",
+        "GET /api/institution/campaign-email-templates/merge-fields",
+        "POST /api/institution/campaign-email-templates/preview/live",
+        "GET /api/institution/campaign-email-templates/{key}",
+        "PUT /api/institution/campaign-email-templates/{key}",
+        "DELETE /api/institution/campaign-email-templates/{key}",
+        "GET /api/institution/campaign-email-templates/{key}/preview",
         "GET /api/institution/sms-templates",
         "POST /api/institution/sms-templates/preview/live",
         "POST /api/institution/sms-templates/validate",
