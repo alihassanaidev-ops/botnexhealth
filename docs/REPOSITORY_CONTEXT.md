@@ -327,6 +327,12 @@ Active thread statuses are `open` and `handoff`. Terminal runs close active SMS
 threads unless an unresolved handoff (`open`/`assigned`) still exists, in which
 case the thread remains in `handoff` for staff review.
 
+The public inbound webhook runs under the tenant/location-scoped `twilio` RLS
+context. That context has read-only access to workflow runs, versions, and step
+executions so it can correlate a reply; workflow writes remain restricted to
+the Celery execution context. Replies requiring staff review emit an
+`inbound_sms_reply` in-app notification.
+
 Appointment-triggered campaigns use a disposable working set rather than live PMS
 reads on every dispatch:
 
