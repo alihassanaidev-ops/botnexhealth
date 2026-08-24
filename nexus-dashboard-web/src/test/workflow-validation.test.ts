@@ -114,7 +114,6 @@ describe("workflow validation", () => {
                     wait_for: {
                         type: "sms_reply",
                         response_window_seconds: 30,
-                        include_reply_key: true,
                         response_mappings: [],
                     },
                     next_node_id: "exit-1",

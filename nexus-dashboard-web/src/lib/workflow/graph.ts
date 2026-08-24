@@ -446,7 +446,6 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 max_attempts: 1,
                 expect_response: false,
                 response_window_seconds: 259200,
-                include_reply_key: false,
                 response_mappings: [],
             }
         case "send_voice":
@@ -788,12 +787,22 @@ export function normalizeDefinition(def: WorkflowDefinition): WorkflowDefinition
                 wait_for: {
                     type: "sms_reply",
                     response_window_seconds: Number(node.response_window_seconds ?? 259200),
-                    include_reply_key: Boolean(node.include_reply_key),
                     response_mappings: Array.isArray(node.response_mappings)
                         ? node.response_mappings as SmsResponseMapping[]
                         : [],
                 },
             }
+        }
+        if (node.type === "wait" && typeof node.wait_for === "object" && node.wait_for !== null) {
+            const waitFor = node.wait_for as Record<string, unknown>
+            if (waitFor.type === "sms_reply") {
+                const { include_reply_key: _deprecatedReplyKey, ...cleanWaitFor } = waitFor
+                return { ...node, wait_for: cleanWaitFor } as unknown as WorkflowNode
+            }
+        }
+        if (node.type === "send_sms") {
+            const { include_reply_key: _deprecatedReplyKey, ...cleanNode } = node
+            return cleanNode as unknown as WorkflowNode
         }
         if (node.type === "wait" && !("wait_for" in node) && node.delay) {
             return {

@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 import re
-import secrets
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +18,6 @@ from src.app.models.automation_workflow import (
 )
 from src.app.models.campaign_conversation_thread import CampaignConversationThread
 from src.app.models.campaign_response import CampaignStaffHandoff
-from src.app.models.contact import Contact
 from src.app.services.automation.definition_schema import (
     SendSmsNode,
     SmsReplyWaitSpec,
@@ -28,8 +26,6 @@ from src.app.services.automation.definition_schema import (
     sms_reply_wait_spec,
 )
 
-_REPLY_KEY_RE = re.compile(r"\bR[A-Z0-9]{5}\b", re.IGNORECASE)
-_KEY_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _ACTIVE_THREAD_STATUSES = ("open", "handoff")
 _UNRESOLVED_HANDOFF_STATUSES = ("open", "assigned")
@@ -51,8 +47,6 @@ class CampaignConversationService:
     async def open_sms_thread(
         self,
         run: AutomationWorkflowRun,
-        *,
-        include_reply_key: bool,
     ) -> CampaignConversationThread:
         """Open or reuse the active SMS thread for a workflow run."""
         existing = (
@@ -65,11 +59,6 @@ class CampaignConversationService:
             )
         ).scalar_one_or_none()
         if existing is not None:
-            if include_reply_key and not existing.reply_key:
-                existing.reply_key = await self._new_reply_key(
-                    institution_id=str(run.institution_id),
-                    location_id=str(run.location_id),
-                )
             return existing
 
         thread = CampaignConversationThread(
@@ -79,14 +68,6 @@ class CampaignConversationService:
             workflow_id=str(run.workflow_id),
             workflow_run_id=str(run.id),
             channel="sms",
-            reply_key=(
-                await self._new_reply_key(
-                    institution_id=str(run.institution_id),
-                    location_id=str(run.location_id),
-                )
-                if include_reply_key
-                else None
-            ),
             status="open",
         )
         self.session.add(thread)
@@ -99,31 +80,10 @@ class CampaignConversationService:
         institution_id: str,
         location_id: str | None,
         contact_id: str | None,
-        body: str | None,
-        from_phone_hash: str | None = None,
     ) -> CampaignConversationThread | None:
         """Resolve an inbound SMS reply to exactly one active thread."""
         if not location_id:
             return None
-
-        for key in extract_reply_keys(body):
-            result = await self.session.execute(
-                select(CampaignConversationThread).where(
-                    CampaignConversationThread.institution_id == institution_id,
-                    CampaignConversationThread.location_id == location_id,
-                    CampaignConversationThread.channel == "sms",
-                    CampaignConversationThread.reply_key == key,
-                    CampaignConversationThread.status.in_(_ACTIVE_THREAD_STATUSES),
-                )
-            )
-            threads = [
-                thread
-                for thread in result.scalars().all()
-                if await self._sender_matches_thread(thread, from_phone_hash)
-                and await self._thread_accepts_response(thread)
-            ]
-            if len(threads) == 1:
-                return threads[0]
 
         if not contact_id:
             return None
@@ -264,16 +224,6 @@ class CampaignConversationService:
         ]
         return candidates[0] if len(candidates) == 1 else None
 
-    async def _sender_matches_thread(
-        self,
-        thread: CampaignConversationThread,
-        from_phone_hash: str | None,
-    ) -> bool:
-        if not from_phone_hash:
-            return False
-        contact = await self.session.get(Contact, str(thread.contact_id))
-        return bool(contact and contact.phone_hash == from_phone_hash)
-
     async def _thread_accepts_response(
         self,
         thread: CampaignConversationThread,
@@ -297,39 +247,6 @@ class CampaignConversationService:
         thread.completion_reason = "response_window_expired"
         await self.session.flush()
         return False
-
-    async def _new_reply_key(self, *, institution_id: str, location_id: str) -> str:
-        for _ in range(16):
-            key = "R" + "".join(secrets.choice(_KEY_ALPHABET) for _ in range(5))
-            exists = (
-                await self.session.execute(
-                    select(CampaignConversationThread.id).where(
-                        CampaignConversationThread.institution_id == institution_id,
-                        CampaignConversationThread.location_id == location_id,
-                        CampaignConversationThread.channel == "sms",
-                        CampaignConversationThread.reply_key == key,
-                        CampaignConversationThread.status.in_(_ACTIVE_THREAD_STATUSES),
-                    )
-                )
-            ).scalar_one_or_none()
-            if exists is None:
-                return key
-        raise RuntimeError("Unable to allocate unique campaign SMS reply key")
-
-
-def extract_reply_keys(body: str | None) -> list[str]:
-    if not body:
-        return []
-    return list(dict.fromkeys(match.group(0).upper() for match in _REPLY_KEY_RE.finditer(body)))
-
-
-def render_reply_key(body: str, reply_key: str | None) -> str:
-    if not reply_key:
-        return body
-    if reply_key.casefold() in body.casefold():
-        return body
-    return f"{body.rstrip()}\nReply with {reply_key} so we can match this conversation."
-
 
 def _whole_token_match(body: str | None, token: str) -> bool:
     cleaned = token.strip()

@@ -52,8 +52,6 @@ class InboundSmsRoutingService:
             institution_id=institution_id,
             location_id=location_id,
             contact_id=contact_id,
-            body=body,
-            from_phone_hash=from_hash,
         )
         if conversation is not None:
             contact_id = str(conversation.contact_id)

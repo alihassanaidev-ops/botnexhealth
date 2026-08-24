@@ -293,21 +293,20 @@ and channel. The thread links outbound `sms_history_logs`, inbound
 `wait` is the single first-class pause step and has a typed `wait_for`
 configuration. `wait_for.type = time` owns duration, calendar, or
 appointment-relative timing. `wait_for.type = sms_reply` parks the workflow run
-with a timeout timer and owns the response window, reply-key setting, and
-deterministic `response_mappings`; the normal dispatcher then resumes into the
-next node (usually a `condition`) after an inbound mapping or timeout. The
-builder exposes these as modes inside the same Wait node so future event waits
-can use the same public node without mixing their runtime correlation logic.
+with a timeout timer and owns the response window and deterministic
+`response_mappings`; the normal dispatcher then resumes into the next node
+(usually a `condition`) after an inbound mapping or timeout. The builder exposes
+these as modes inside the same Wait node and authors reply mappings through
+structured accepted-reply, context-output, and staff-handoff controls. The JSON
+representation remains an internal workflow-definition detail. Future event
+waits can use the same public node without mixing their runtime correlation
+logic.
 Legacy `wait_for_sms_reply`, direct-delay `wait`, and Send SMS response settings
 remain accepted as compatibility inputs for already-published definitions.
 
 SMS replies resolve through that thread first, not by resuming every matching
 waiting run:
 
-- reply keys (`Rxxxxx`) are generated when the following SMS-reply-mode `wait`
-  node has `include_reply_key` enabled, appended to the outbound SMS copy, and
-  accepted only when the inbound sender phone hash matches the thread contact
-  and the response window is still open;
 - bare replies such as `YES` only correlate when exactly one active SMS thread
   matches the patient/contact and location;
 - deterministic `response_mappings` on the SMS-reply-mode `wait` use whole-token,
@@ -341,6 +340,15 @@ reads on every dispatch:
   patient events for `pms_type="gotracker"` locations, updates the same working
   set, cancels runs for non-attending/cancelled states, and records writeback
   completion/failure events.
+- Location administration owns an explicit GoTracker webhook reconnect operation.
+  When a local provider subscription id exists it calls the Synchronizer's
+  `POST /api/webhooks/subscriptions/{id}/rotate-secret` operation and stores the
+  returned signing secret encrypted. A `404` from rotation means the stored id is
+  stale, so reconnect creates a replacement subscription and stores its new id and
+  secret. Without a stored provider id it follows the same create path. Reconnect
+  commits the credentials immediately after the Synchronizer response; persistence
+  failure is a hard reconnect error. Routine location saves and scheduled lifecycle
+  reconciliation never rotate healthy secrets.
 - `GoTrackerAppointmentWritebackService` tracks ScaleNexus-originated GoTracker
   appointment writes until the synchronizer confirms or fails them. It serializes
   writes per appointment with an advisory lock because GoTracker has one pending
@@ -395,7 +403,9 @@ operations, but it is not used by the location picker.
 
 Both **require Twilio signature validation** (`RequestValidator` against the raw
 URL + form): **503** if the secret isn't configured, **401** on missing/invalid
-`X-Twilio-Signature`. Unmatched location / `MessageSid` → dead-letter.
+`X-Twilio-Signature`. In ECS, Gunicorn/Uvicorn trusts the CDK
+`trustedProxyCidrs` so the ALB's `X-Forwarded-Proto` preserves the public HTTPS
+URL Twilio signed. Unmatched location / `MessageSid` → dead-letter.
 
 ### 6.3 Outbound SMS
 

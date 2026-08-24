@@ -321,17 +321,9 @@ class WorkflowStepDispatcher:
                 if executor_cls is None:
                     current_node_id = await self._dispatch_send_stub(run, node)
                 else:
-                    dispatch_node = node
-                    if isinstance(node, SendSmsNode):
-                        next_node = node_map.get(node.next_node_id)
-                        next_wait = sms_reply_wait_spec(next_node)
-                        if next_wait is not None:
-                            dispatch_node = node.model_copy(
-                                update={"include_reply_key": next_wait.include_reply_key}
-                            )
                     dispatch_result = await executor_cls(
                         self.session, self.runtime
-                    ).execute(run, dispatch_node, context)
+                    ).execute(run, node, context)
                     if isinstance(dispatch_result, VoiceParked):
                         # Voice node placed a call and is parking for its outcome
                         # webhook. Set a safety-timeout timer so a never-arriving

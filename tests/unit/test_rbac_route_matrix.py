@@ -164,6 +164,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/admin/institutions/{slug}/locations",
         "GET /api/admin/institutions/{slug}/locations/{loc_slug}",
         "PATCH /api/admin/institutions/{slug}/locations/{loc_slug}",
+        "POST /api/admin/institutions/{slug}/locations/{loc_slug}/gotracker/webhook/reconnect",
         "POST /api/admin/institutions/{slug}/locations/{loc_slug}/twilio/webhook",
         "DELETE /api/admin/institutions/{slug}/locations/{loc_slug}",
         "GET /api/admin/institutions/{slug}/locations/{loc_slug}/outbound-voice-profiles",

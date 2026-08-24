@@ -31,14 +31,6 @@ class CampaignConversationThread(Base):
             "status",
         ),
         Index(
-            "ix_campaign_conversation_threads_reply_key",
-            "institution_id",
-            "location_id",
-            "channel",
-            "reply_key",
-            "status",
-        ),
-        Index(
             "uq_campaign_conversation_threads_active_run_channel",
             "workflow_run_id",
             "channel",
@@ -81,7 +73,6 @@ class CampaignConversationThread(Base):
         index=True,
     )
     channel: Mapped[str] = mapped_column(String(24), nullable=False, default="sms")
-    reply_key: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
     status: Mapped[str] = mapped_column(
         String(24), nullable=False, default="open", server_default=text("'open'"), index=True
     )

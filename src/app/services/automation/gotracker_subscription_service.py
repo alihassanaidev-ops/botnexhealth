@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -39,6 +39,16 @@ class GoTrackerSubscriptionHealthSummary:
     disabled: int = 0
     failed: int = 0
     stale_marked: int = 0
+
+
+@dataclass(frozen=True)
+class GoTrackerSubscriptionReconnectResult:
+    subscription: GoTrackerWebhookSubscription
+    action: Literal["created", "rotated"]
+
+
+class GoTrackerSubscriptionReconnectError(RuntimeError):
+    """Raised when an explicit reconnect cannot obtain a usable signing secret."""
 
 
 class GoTrackerSubscriptionLifecycleService:
@@ -145,6 +155,39 @@ class GoTrackerSubscriptionLifecycleService:
                 event_types=events,
             )
         return existing, was_created
+
+    async def reconnect_location_subscription(
+        self,
+        *,
+        institution: Institution,
+        location: InstitutionLocation,
+        callback_url: str,
+        event_types: list[str] | None = None,
+    ) -> GoTrackerSubscriptionReconnectResult:
+        """Rotate an existing subscription secret or create a fresh subscription.
+
+        This is intentionally separate from routine reconciliation. Calling it from
+        the hourly lifecycle task would rotate a healthy secret on every run.
+        """
+        events = event_types or DEFAULT_GOTRACKER_WEBHOOK_EVENTS
+        row, _ = await self.ensure_location_subscription(
+            institution=institution,
+            location=location,
+            callback_url=None,
+            event_types=events,
+        )
+        row.callback_url = callback_url
+        row.event_types = events
+        row.updated_at = datetime.now(timezone.utc)
+
+        action = await self._try_remote_reconnect(
+            row=row,
+            institution=institution,
+            location=location,
+            callback_url=callback_url,
+            event_types=events,
+        )
+        return GoTrackerSubscriptionReconnectResult(subscription=row, action=action)
 
     async def record_event_seen(self, *, institution_id: str, location_id: str) -> None:
         row = (
@@ -284,6 +327,102 @@ class GoTrackerSubscriptionLifecycleService:
             return
         row.status = GoTrackerWebhookSubscriptionStatus.ACTIVE.value
         row.error_metadata = None
+
+    async def _try_remote_reconnect(
+        self,
+        *,
+        row: GoTrackerWebhookSubscription,
+        institution: Institution,
+        location: InstitutionLocation,
+        callback_url: str,
+        event_types: list[str],
+    ) -> Literal["created", "rotated"]:
+        from src.app.pms.gotracker.adapter import GoTrackerAdapter
+        from src.app.pms.gotracker.client import GoTrackerAPIError
+
+        adapter = None
+        provider_id = (row.provider_subscription_id or "").split(",", 1)[0].strip()
+        action: Literal["created", "rotated"] = "rotated" if provider_id else "created"
+        try:
+            adapter = await GoTrackerAdapter.create(institution, location)
+            if provider_id:
+                try:
+                    raw = await adapter._client.request(  # noqa: SLF001
+                        "POST",
+                        f"/api/webhooks/subscriptions/{provider_id}/rotate-secret",
+                    )
+                except GoTrackerAPIError as exc:
+                    if exc.status_code != 404:
+                        raise
+                    provider_id = ""
+                    action = "created"
+
+            if not provider_id:
+                raw = await adapter._client.request(  # noqa: SLF001
+                    "POST",
+                    "/api/webhooks/subscriptions",
+                    json=_subscription_payload(
+                        callback_url=callback_url,
+                        event_types=event_types,
+                        secret=None,
+                        include_secret=False,
+                    ),
+                )
+                provider_id = _extract_provider_subscription_id(raw) or ""
+
+            returned_secret = _extract_webhook_secret(raw)
+            if not provider_id:
+                raise GoTrackerSubscriptionReconnectError(
+                    "Synchronizer did not return a subscription id"
+                )
+            if not returned_secret:
+                raise GoTrackerSubscriptionReconnectError(
+                    "Synchronizer did not return a signing secret"
+                )
+
+            row.provider_subscription_id = provider_id
+            location.gotracker_webhook_secret = returned_secret
+            row.status = GoTrackerWebhookSubscriptionStatus.ACTIVE.value
+            row.error_metadata = None
+            try:
+                await self.session.flush()
+                await self.session.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "gotracker reconnect credential persistence failed institution=%s "
+                    "location=%s type=%s",
+                    institution.id,
+                    location.id,
+                    type(exc).__name__,
+                )
+                raise GoTrackerSubscriptionReconnectError(
+                    "Rotated webhook credentials could not be saved"
+                ) from exc
+            return action
+        except GoTrackerSubscriptionReconnectError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "gotracker subscription reconnect failed institution=%s location=%s type=%s",
+                institution.id,
+                location.id,
+                type(exc).__name__,
+            )
+            raise GoTrackerSubscriptionReconnectError(
+                "Synchronizer webhook reconnect failed"
+            ) from exc
+        finally:
+            if adapter is not None:
+                try:
+                    await adapter.close()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "gotracker adapter close failed after reconnect institution=%s "
+                        "location=%s type=%s",
+                        institution.id,
+                        location.id,
+                        type(exc).__name__,
+                    )
 
 
 def _location_callback_url(callback_base_url: str | None, location_id: str) -> str:

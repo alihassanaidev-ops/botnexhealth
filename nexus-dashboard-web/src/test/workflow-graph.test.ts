@@ -191,9 +191,40 @@ describe("workflow graph — factories", () => {
             wait_for: {
                 type: "sms_reply",
                 response_window_seconds: 3600,
-                include_reply_key: true,
             },
         })
+        expect(normalizeDefinition(legacy).nodes[0]).not.toHaveProperty("wait_for.include_reply_key")
+    })
+    it("removes deprecated reply keys from current wait and SMS nodes", () => {
+        const legacy = {
+            ...LINEAR,
+            nodes: [
+                {
+                    type: "send_sms",
+                    id: "sms-1",
+                    body_template: "Reply YES",
+                    next_node_id: "wait-1",
+                    include_reply_key: true,
+                },
+                {
+                    type: "wait",
+                    id: "wait-1",
+                    next_node_id: "exit-1",
+                    wait_for: {
+                        type: "sms_reply",
+                        include_reply_key: true,
+                        response_mappings: [],
+                    },
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+            entry_node_id: "sms-1",
+        } as unknown as WorkflowDefinition
+
+        const normalized = normalizeDefinition(legacy)
+
+        expect(normalized.nodes[0]).not.toHaveProperty("include_reply_key")
+        expect(normalized.nodes[1]).not.toHaveProperty("wait_for.include_reply_key")
     })
     it("createTrigger yields sensible defaults", () => {
         expect(createTrigger("appointment_offset")).toMatchObject({ offset_hours: -24 })

@@ -63,7 +63,3 @@ _Avoid_: Global SMS listener without tenant/location scoping
 **Campaign Conversation Thread**:
 The patient conversation scoped to one workflow run, carrying that run's outbound messages and patient replies for staff review or automation decisions.
 _Avoid_: Global patient conversation when discussing run-specific campaign replies
-
-**Conversation Reply Key**:
-A short patient-facing token included in workflow SMS copy when an automated reply must be correlated to a specific campaign conversation thread.
-_Avoid_: OTP, confirmation code

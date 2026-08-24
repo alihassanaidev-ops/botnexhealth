@@ -1215,7 +1215,6 @@ def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
     elif reply_wait is not None:
         base["wait_for"] = "sms_reply"
         base["response_window_seconds"] = reply_wait.response_window_seconds
-        base["include_reply_key"] = reply_wait.include_reply_key
         base["response_mapping_count"] = len(reply_wait.response_mappings)
         base["next_node_id"] = node.next_node_id
     elif isinstance(node, DripNode):
