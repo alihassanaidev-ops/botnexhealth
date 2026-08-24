@@ -235,25 +235,3 @@ class CampaignEmailTemplateService:
             html_body=template.html_body,
             text_body=template.text_body,
         )
-
-    # ------------------------------------------------------------------
-    # Publish-time validation
-    # ------------------------------------------------------------------
-
-    async def assert_keys_publishable(
-        self, institution_id: str, keys: list[str]
-    ) -> list[str]:
-        """Return human-readable problems for template keys a definition uses.
-
-        Publishing a workflow that points at a missing or deactivated template
-        would fail at send time, on a live patient campaign — so it is rejected
-        at publish instead.
-        """
-        problems: list[str] = []
-        for key in dict.fromkeys(keys):
-            template = await self.get_by_key(institution_id, key)
-            if template is None:
-                problems.append(f"Email template '{key}' does not exist")
-            elif not template.is_active:
-                problems.append(f"Email template '{key}' is inactive")
-        return problems

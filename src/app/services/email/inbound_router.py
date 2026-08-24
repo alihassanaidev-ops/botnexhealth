@@ -41,10 +41,6 @@ from src.app.services.sms_privacy import hash_email
 
 logger = logging.getLogger(__name__)
 
-#: Verdict values the provider uses for a clean message.
-_PASSING = {"PASS", "GRAY", "PROCESSING_FAILED", None, ""}
-
-
 @dataclass(frozen=True)
 class InboundVerdicts:
     """Provider-supplied content and authentication checks."""

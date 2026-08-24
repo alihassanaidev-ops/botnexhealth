@@ -58,11 +58,7 @@ def poll_inbound_email(self, *, max_batches: int = _MAX_BATCHES) -> dict:
 async def _poll_async(*, max_batches: int) -> dict:
     import boto3
 
-    from src.app.services.email.inbound_receiver import (
-        InboundMailStore,
-        parse_notification,
-        storage_key_for,
-    )
+    from src.app.services.email.inbound_receiver import InboundMailStore
 
     sqs = boto3.client("sqs", region_name=settings.ses_region)
     store = InboundMailStore()
@@ -160,7 +156,14 @@ async def _handle_one(queue_message: dict, store) -> bool:  # noqa: ANN001
         if result.suppress_email_hash and result.message.institution_id:
             await _suppress(result)
 
-        resumed = await _resume_waiting_run(session, result)
+        # The helper dispatches internally, so the run advances within this
+        # transaction rather than needing a follow-up task.
+        resumed_run_id = await _resume_waiting_run(session, result)
+        if resumed_run_id:
+            logger.info(
+                "inbound email resumed workflow run %s from message %s",
+                resumed_run_id, result.message.id,
+            )
 
         if result.needs_staff_attention:
             await _hand_off(session, result)

@@ -14,7 +14,6 @@ import pytest
 
 from tests.conftest import FakeEmailSender, make_resolved_identity
 from src.app.services.automation.definition_schema import (
-    ContactRecipient,
     MergeFieldRecipient,
     SendEmailNode,
     StaffRecipient,

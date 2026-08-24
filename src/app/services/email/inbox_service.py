@@ -30,6 +30,7 @@ from src.app.models.contact import Contact
 from src.app.models.inbound_email_message import InboundEmailMessage
 from src.app.models.inbound_sms_message import InboundSmsMessage
 from src.app.models.institution import Institution
+from src.app.models.sms_history_log import SmsHistoryLog
 from src.app.models.user import User, UserRole
 
 logger = logging.getLogger(__name__)
@@ -340,6 +341,32 @@ class InboxService:
                 )
             )
 
+        # Outbound SMS, so an SMS conversation reads as a conversation rather
+        # than as a list of the patient's replies with our side missing.
+        #
+        # There is no equivalent for email yet: outbound email is not logged
+        # per-message, so an email thread still shows only the inbound side. See
+        # the session notes — the same missing log is what blocks in-app replying
+        # and Message-ID threading fallback, so all three want fixing together.
+        sent = await self.session.execute(
+            select(SmsHistoryLog)
+            .where(SmsHistoryLog.conversation_thread_id == str(thread.id))
+            .order_by(SmsHistoryLog.timestamp)
+        )
+        for message in sent.scalars().all():
+            messages.append(
+                ThreadMessage(
+                    id=str(message.id),
+                    direction="outbound",
+                    channel="sms",
+                    body=_safe_body(message),
+                    subject=None,
+                    intent=None,
+                    created_at=message.timestamp,
+                    from_masked=message.to_number_masked,
+                )
+            )
+
         messages.sort(key=lambda m: m.created_at or datetime.min.replace(tzinfo=timezone.utc))
         return await self._summarize(thread), messages
 
@@ -491,6 +518,23 @@ def _contact_name(contact: Contact | None) -> str | None:
     parts = [getattr(contact, "first_name", None), getattr(contact, "last_name", None)]
     joined = " ".join(p for p in parts if p).strip()
     return joined or None
+
+
+def _safe_body(message: SmsHistoryLog) -> str | None:
+    """Read a sent SMS body, tolerating retention having purged it.
+
+    Message bodies have a shorter retention window than the delivery record, so
+    an older conversation legitimately has rows whose body is gone. That is the
+    retention policy working, not an error — show the gap rather than failing
+    the whole thread.
+    """
+    if getattr(message, "body_purged_at", None):
+        return None
+    try:
+        return message.body
+    except Exception:  # noqa: BLE001 — a decrypt failure must not break the view
+        logger.warning("could not read sms body for %s", message.id)
+        return None
 
 
 def _mask(address: str | None) -> str | None:

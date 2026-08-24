@@ -150,11 +150,6 @@ class Settings(BaseSettings):
     # Prefix for the per-clinic configuration set that carries event
     # destinations (bounce/complaint) and reputation options.
     ses_configuration_set_prefix: str = "scalenexus"
-    # Refuse to hand SES a message whose recipient domain is not verified while
-    # the account is still in the sandbox, so the failure is ours and legible
-    # rather than a provider rejection mid-campaign.
-    ses_enforce_verified_recipients_in_sandbox: bool = True
-
     # ── Inbound email (patient replies) ──────────────────────────────────
     # One shared receiving domain for the whole platform, not one per clinic:
     # SES caps receipt rules at 200 per rule set with no increase path, so a

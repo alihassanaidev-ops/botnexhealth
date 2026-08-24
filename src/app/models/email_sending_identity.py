@@ -53,17 +53,6 @@ class EmailIdentityStatus(str, Enum):
     REVOKED = "revoked"
 
 
-#: Statuses from which sending is refused.
-UNSENDABLE_STATUSES = frozenset(
-    {
-        EmailIdentityStatus.PENDING_DNS.value,
-        EmailIdentityStatus.VERIFYING.value,
-        EmailIdentityStatus.FAILED.value,
-        EmailIdentityStatus.REVOKED.value,
-    }
-)
-
-
 class EmailSendingIdentity(Base):
     """The address a clinic's patient email is sent from."""
 
