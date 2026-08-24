@@ -14,6 +14,7 @@ is retained for already-published definitions.
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal, Union
 
 import phonenumbers
@@ -476,6 +477,66 @@ class SendVoiceNode(BaseModel):
         return self
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
+
+
+class ContactRecipient(BaseModel):
+    """Send to the enrolled patient. The behaviour of every definition
+    published before ``recipient`` existed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["contact"] = "contact"
+
+
+class StaffRecipient(BaseModel):
+    """Send to the clinic's own staff — institution admins plus the run
+    location's admins and staff. Used for internal alerts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["staff"] = "staff"
+    # When set, users who opted out of this notification type are excluded and
+    # matching external recipients are included.
+    notification_type: str | None = Field(default=None, max_length=50)
+    include_external: bool = True
+
+
+class StaticRecipient(BaseModel):
+    """Send to fixed addresses — an ops mailbox, a monitoring alias."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["static"] = "static"
+    addresses: list[str] = Field(min_length=1, max_length=10)
+
+    @field_validator("addresses")
+    @classmethod
+    def validate_addresses(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for raw in value:
+            address = (raw or "").strip()
+            if not _EMAIL_RE.match(address):
+                raise ValueError(f"'{raw}' is not a valid email address")
+            cleaned.append(address)
+        return cleaned
+
+
+class MergeFieldRecipient(BaseModel):
+    """Send to an address resolved from a merge field at send time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["merge_field"] = "merge_field"
+    field: str = Field(min_length=1, max_length=80)
+
+
+EmailRecipient = Annotated[
+    ContactRecipient | StaffRecipient | StaticRecipient | MergeFieldRecipient,
+    Field(discriminator="kind"),
+]
+
+
 class SendEmailNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -486,6 +547,23 @@ class SendEmailNode(BaseModel):
     next_node_id: str
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
+    # Who receives this email. Defaults to the enrolled patient so definitions
+    # published before this field existed keep their original behaviour.
+    recipient: EmailRecipient = Field(default_factory=ContactRecipient)
+    # A courtesy email failing should not necessarily kill the whole run.
+    # Defaults to the historical behaviour (fail the run).
+    on_failure: Literal["fail_run", "continue"] = "fail_run"
+
+    @property
+    def is_patient_directed(self) -> bool:
+        """True when this email goes to the patient.
+
+        ``merge_field`` counts as patient-directed: it usually resolves to the
+        contact, and where it does not, keeping the consent check is the
+        conservative outcome — a send that is wrongly blocked is recoverable,
+        one that wrongly bypasses consent is not.
+        """
+        return self.recipient.kind in ("contact", "merge_field")
 
 
 class UpdatePatientStatusNode(BaseModel):

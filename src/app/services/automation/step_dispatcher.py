@@ -49,7 +49,11 @@ from src.app.services.automation.definition_schema import (
     sms_reply_wait_spec,
 )
 from src.app.services.automation.action_registry import get_action_executor
-from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
+from src.app.services.automation.compliance_gate import (
+    ComplianceGate,
+    GateResult,
+    NoOpComplianceGate,
+)
 from src.app.services.automation.revalidation import NoOpRevalidator, RunRevalidator
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
@@ -66,6 +70,18 @@ _MAX_STEPS = 50
 # "9 AM reminder" batch doesn't hit the vendor in one burst. Full budget-aware
 # pacing across NexHealth/Retell/Twilio is coordinated with Plans 09/11.
 _DEFAULT_CALENDAR_JITTER_SECONDS = 300
+
+
+def _is_patient_directed(node: object) -> bool:
+    """Whether a send node contacts the patient.
+
+    SMS and voice always do. Email can also be addressed to the clinic's own
+    staff or to a fixed address, and those are not patient contact — see
+    ``SendEmailNode.is_patient_directed``.
+    """
+    if isinstance(node, SendEmailNode):
+        return node.is_patient_directed
+    return True
 
 
 class WorkflowGoTrackerWritebackError(RuntimeError):
@@ -272,7 +288,18 @@ class WorkflowStepDispatcher:
                 content_class = (
                     definition.compliance.content_class if definition.compliance else None
                 )
-                gate_result = await self.gate.check(run, node.type, content_class=content_class)
+                # The gate models *patient* protection — consent, do-not-contact
+                # and the quiet-hours hold. An email addressed to the clinic's own
+                # staff or to a fixed ops mailbox is not patient contact, so
+                # running it through the gate would let a patient's marketing
+                # opt-out silently drop an internal alert, and would hold an
+                # urgent one until the next permitted window.
+                if _is_patient_directed(node):
+                    gate_result = await self.gate.check(
+                        run, node.type, content_class=content_class
+                    )
+                else:
+                    gate_result = GateResult(action="allow", reason="non_patient_recipient")
                 if gate_result.action == "block":
                     step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
                     await self.runtime.fail_step(step, result_code="compliance_blocked")

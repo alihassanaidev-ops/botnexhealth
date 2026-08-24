@@ -1,7 +1,14 @@
-"""Executor for SendEmailNode — sends plain-text campaign emails via Resend (Plan 05)."""
+"""Executor for SendEmailNode — sends plain-text campaign emails via Resend (Plan 05).
+
+The node addresses the enrolled patient by default, but can also target the
+clinic's own staff, fixed addresses, or an address resolved from a merge field.
+Consent gating and the unsubscribe footer apply to patient-directed sends only —
+see ``SendEmailNode.is_patient_directed`` and ``step_dispatcher._is_patient_directed``.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -16,11 +23,24 @@ from src.app.services.automation.definition_schema import SendEmailNode
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.template_renderer import render_sms_body
 from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
+from src.app.services.staff_recipients import resolve_staff_recipients, unique_emails
 from src.app.services.usage_metering_service import UsageMeteringService
 
 logger = logging.getLogger(__name__)
 
 _RESEND_URL = "https://api.resend.com/emails"
+# Linear backoff between send attempts. Deliberately short: the run holds a row
+# lock while this executes, so a long sleep would stall the dispatcher.
+_RETRY_BACKOFF_SECONDS = 2
+
+
+class _RecipientError(Exception):
+    """Recipient resolution failed in a way the caller reports as a step failure."""
+
+    def __init__(self, result_code: str, reason: str) -> None:
+        super().__init__(reason)
+        self.result_code = result_code
+        self.reason = reason
 
 
 def _build_from(address: str, name: str | None) -> str:
@@ -57,23 +77,36 @@ class EmailNodeExecutor:
 
         step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
 
-        # --- Resolve contact email ---
-        if not run.contact_id:
-            await self.runtime.fail_step(step, result_code="no_contact")
-            await self.runtime.fail_run(run, reason="send_email: no contact_id on run")
-            return node.next_node_id
+        # --- Resolve the contact (needed for merge fields even when the email
+        # is addressed elsewhere; a staff alert still renders patient details) ---
+        contact: Contact | None = None
+        if run.contact_id:
+            contact = await self.session.get(Contact, run.contact_id)
 
-        contact: Contact | None = await self.session.get(Contact, run.contact_id)
-        if contact is None:
-            await self.runtime.fail_step(step, result_code="contact_not_found")
-            await self.runtime.fail_run(run, reason=f"send_email: contact {run.contact_id} not found")
-            return node.next_node_id
+        patient_directed = node.is_patient_directed
+        if patient_directed:
+            if not run.contact_id:
+                return await self._abort(
+                    run, node, step, "no_contact", "send_email: no contact_id on run"
+                )
+            if contact is None:
+                return await self._abort(
+                    run,
+                    node,
+                    step,
+                    "contact_not_found",
+                    f"send_email: contact {run.contact_id} not found",
+                )
 
-        to_email = contact.email
-        if not to_email:
-            await self.runtime.fail_step(step, result_code="no_email")
-            await self.runtime.fail_run(run, reason="send_email: contact has no email address")
-            return node.next_node_id
+        try:
+            recipients = await self._resolve_recipients(run, node, contact)
+        except _RecipientError as exc:
+            return await self._abort(run, node, step, exc.result_code, exc.reason)
+
+        if not recipients:
+            return await self._abort(
+                run, node, step, "no_email", "send_email: no recipient address resolved"
+            )
 
         # --- Resolve from-address (institution → platform fallback) ---
         institution: Institution | None = await self.session.get(Institution, run.institution_id)
@@ -83,9 +116,13 @@ class EmailNodeExecutor:
 
         api_key = settings.resend_api_key
         if not api_key or not from_address:
-            await self.runtime.fail_step(step, result_code="resend_not_configured")
-            await self.runtime.fail_run(run, reason="send_email: Resend not configured (RESEND_API_KEY / from address)")
-            return node.next_node_id
+            return await self._abort(
+                run,
+                node,
+                step,
+                "resend_not_configured",
+                "send_email: Resend not configured (RESEND_API_KEY / from address)",
+            )
 
         # --- Resolve location for template merge vars ---
         location: InstitutionLocation | None = (
@@ -99,63 +136,88 @@ class EmailNodeExecutor:
         body = render_sms_body(node.body_template, contact, location, context)
 
         # --- Append the one-click unsubscribe footer (CAN-SPAM/CASL, Plan 05) ---
-        from src.app.services.email_unsubscribe import (
-            make_unsubscribe_token,
-            unsubscribe_footer,
-            unsubscribe_url,
-        )
-        from src.app.services.sms_privacy import hash_email
+        # Patient-directed sends only. On a staff alert the footer is not merely
+        # noise: clicking it would write a *patient* consent revocation keyed on
+        # the staff member's address.
+        if patient_directed:
+            from src.app.services.email_unsubscribe import (
+                make_unsubscribe_token,
+                unsubscribe_footer,
+                unsubscribe_url,
+            )
+            from src.app.services.sms_privacy import hash_email
 
-        _email_hash = hash_email(to_email)
-        if _email_hash:
-            _token = make_unsubscribe_token(str(run.institution_id), _email_hash)
-            _url = unsubscribe_url(settings.public_base_url, _token)
-            body = body + unsubscribe_footer(_url, getattr(location, "name", None))
+            _email_hash = hash_email(recipients[0])
+            if _email_hash:
+                _token = make_unsubscribe_token(str(run.institution_id), _email_hash)
+                _url = unsubscribe_url(settings.public_base_url, _token)
+                body = body + unsubscribe_footer(_url, getattr(location, "name", None))
 
         # --- Send via Resend ---
-        try:
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                # Crash-window idempotency (XC-1b): a stable per-(run, node) key so a
-                # retry after a crash between send and commit is deduped by Resend
-                # rather than emailing the patient twice.
-                "Idempotency-Key": f"email:{run.id}:{node.id}",
-            }
-            payload = {
-                "from": _build_from(from_address, from_name),
-                "to": [to_email],
-                "subject": subject,
-                "text": body,
-                # Tag so the Resend bounce/complaint webhook can scope suppression
-                # back to this institution (Plan 05).
-                "tags": [{"name": "institution_id", "value": str(run.institution_id)}],
-            }
-            if settings.resend_reply_to:
-                payload["reply_to"] = settings.resend_reply_to
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            # Crash-window idempotency (XC-1b): a stable per-(run, node) key so a
+            # retry after a crash between send and commit is deduped by Resend
+            # rather than emailing the patient twice. The key is deliberately
+            # stable across the attempt loop below for the same reason.
+            "Idempotency-Key": f"email:{run.id}:{node.id}",
+        }
+        payload = {
+            "from": _build_from(from_address, from_name),
+            "to": recipients,
+            "subject": subject,
+            "text": body,
+            # Tag so the Resend bounce/complaint webhook can scope suppression
+            # back to this institution (Plan 05).
+            "tags": [{"name": "institution_id", "value": str(run.institution_id)}],
+        }
+        if settings.resend_reply_to:
+            payload["reply_to"] = settings.resend_reply_to
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(_RESEND_URL, headers=headers, json=payload)
+        resend_id: str | None = None
+        last_error: Exception | None = None
+        attempts = max(1, node.max_attempts)
 
-            if response.status_code >= 400:
-                raise RuntimeError(
-                    f"Resend returned {response.status_code}: {response.text[:200]}"
-                )
-
-            resend_id: str | None = None
+        for attempt in range(1, attempts + 1):
             try:
-                resend_id = (response.json() or {}).get("id")
-            except Exception:  # noqa: BLE001 — body may not be JSON
-                resend_id = None
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    response = await client.post(_RESEND_URL, headers=headers, json=payload)
 
-        except Exception as exc:
+                if response.status_code >= 400:
+                    raise RuntimeError(
+                        f"Resend returned {response.status_code}: {response.text[:200]}"
+                    )
+
+                try:
+                    resend_id = (response.json() or {}).get("id")
+                except Exception:  # noqa: BLE001 — body may not be JSON
+                    resend_id = None
+
+                last_error = None
+                break
+
+            except Exception as exc:  # noqa: BLE001 — retried, then reported below
+                last_error = exc
+                logger.warning(
+                    "send_email attempt %d/%d failed: institution=%s run=%s node=%s error=%s",
+                    attempt, attempts, run.institution_id, run.id, node.id, exc,
+                )
+                if attempt < attempts:
+                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+
+        if last_error is not None:
             logger.error(
-                "send_email failed: institution=%s run=%s node=%s error=%s",
-                run.institution_id, run.id, node.id, exc,
+                "send_email failed after %d attempt(s): institution=%s run=%s node=%s error=%s",
+                attempts, run.institution_id, run.id, node.id, last_error,
             )
-            await self.runtime.fail_step(step, result_code="send_failed")
-            await self.runtime.fail_run(run, reason=f"send_email error: {type(exc).__name__}")
-            return node.next_node_id
+            return await self._abort(
+                run,
+                node,
+                step,
+                "send_failed",
+                f"send_email error: {type(last_error).__name__}",
+            )
 
         await self.runtime.complete_step(step, result_code="sent")
 
@@ -185,3 +247,95 @@ class EmailNodeExecutor:
             )
 
         return node.next_node_id
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    async def _abort(
+        self,
+        run: AutomationWorkflowRun,
+        node: SendEmailNode,
+        step,  # AutomationWorkflowStepExecution
+        result_code: str,
+        reason: str,
+    ) -> str:
+        """Fail the step, then either fail the run or carry on down the branch.
+
+        ``on_failure="continue"`` exists because an optional courtesy email
+        should not abandon an appointment workflow that has already done its
+        real work. The step is still recorded as failed either way, so the
+        failure stays visible in campaign reporting.
+        """
+        await self.runtime.fail_step(step, result_code=result_code)
+        if node.on_failure == "continue":
+            logger.warning(
+                "send_email %s — continuing (on_failure=continue): run=%s node=%s",
+                result_code, run.id, node.id,
+            )
+        else:
+            await self.runtime.fail_run(run, reason=reason)
+        return node.next_node_id
+
+    async def _resolve_recipients(
+        self,
+        run: AutomationWorkflowRun,
+        node: SendEmailNode,
+        contact: Contact | None,
+    ) -> list[str]:
+        """Resolve the address list for this node's configured recipient."""
+        recipient = node.recipient
+        kind = recipient.kind
+
+        if kind == "contact":
+            email = (contact.email or "").strip() if contact else ""
+            if not email:
+                raise _RecipientError(
+                    "no_email", "send_email: contact has no email address"
+                )
+            return [email]
+
+        if kind == "staff":
+            emails = await resolve_staff_recipients(
+                self.session,
+                institution_id=str(run.institution_id),
+                location_id=str(run.location_id) if run.location_id else None,
+                notification_type=recipient.notification_type,
+                include_external=recipient.include_external,
+            )
+            if not emails:
+                raise _RecipientError(
+                    "no_staff_recipients",
+                    "send_email: no active staff recipients for this institution/location",
+                )
+            return emails
+
+        if kind == "static":
+            return unique_emails(list(recipient.addresses))
+
+        if kind == "merge_field":
+            from src.app.services.automation.merge_field_catalog import (
+                MergeContextBuilder,
+            )
+
+            location = (
+                await self.session.get(InstitutionLocation, run.location_id)
+                if run.location_id
+                else None
+            )
+            merge_vars = MergeContextBuilder.build(
+                contact=contact,
+                location=location,
+                context=MergeContextBuilder.normalize_raw_context(run.context or {}),
+            )
+            email = (merge_vars.get(recipient.field) or "").strip()
+            if not email:
+                raise _RecipientError(
+                    "no_email",
+                    f"send_email: merge field '{recipient.field}' resolved to no address",
+                )
+            return [email]
+
+        raise _RecipientError(
+            "unsupported_recipient", f"send_email: unsupported recipient kind '{kind}'"
+        )
