@@ -181,6 +181,15 @@ export interface SendVoiceNode {
     phone_country_region?: string | null
     wait_for_outcome?: boolean
 }
+/** Who a `send_email` node addresses. Mirrors the backend `EmailRecipient`
+ *  union in definition_schema.py. Omitted on definitions published before the
+ *  field existed, which the backend reads as `contact`. */
+export type EmailRecipient =
+    | { kind: "contact" }
+    | { kind: "staff"; notification_type?: string | null; include_external?: boolean }
+    | { kind: "static"; addresses: string[] }
+    | { kind: "merge_field"; field: string }
+
 export interface SendEmailNode {
     type: "send_email"
     id: string
@@ -189,6 +198,9 @@ export interface SendEmailNode {
     next_node_id: string
     respect_quiet_hours?: boolean
     max_attempts?: number
+    recipient?: EmailRecipient
+    /** `continue` lets an optional email fail without abandoning the run. */
+    on_failure?: "fail_run" | "continue"
 }
 export interface UpdatePatientStatusNode {
     type: "update_patient_status"

@@ -50,6 +50,7 @@ import type {
     ConditionOp,
     ConditionRule,
     DripNode,
+    EmailRecipient,
     JsonMapperNode,
     LlmNode,
     SendEmailNode,
@@ -717,8 +718,98 @@ function EmailFields({
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
+    // Definitions published before `recipient` existed have no value; the
+    // backend reads that as the patient, so mirror it here.
+    const recipient = node.recipient ?? { kind: "contact" as const }
+    const patientDirected = recipient.kind === "contact" || recipient.kind === "merge_field"
+
+    const setRecipient = (next: EmailRecipient) => onChange({ ...node, recipient: next })
+
+    const onKindChange = (kind: EmailRecipient["kind"]) => {
+        if (kind === recipient.kind) return
+        // Each variant carries different fields; rebuild rather than merge so a
+        // stale `addresses` or `field` can't ride along and fail backend validation.
+        if (kind === "contact") setRecipient({ kind: "contact" })
+        else if (kind === "staff") setRecipient({ kind: "staff", include_external: true })
+        else if (kind === "static") setRecipient({ kind: "static", addresses: [] })
+        else setRecipient({ kind: "merge_field", field: "" })
+    }
+
     return (
         <>
+            <Field
+                label="Send to"
+                hint={
+                    patientDirected
+                        ? "Patient emails respect consent, quiet hours, and carry an unsubscribe link."
+                        : "Internal emails skip consent checks, quiet hours, and the unsubscribe footer."
+                }
+            >
+                <Select value={recipient.kind} disabled={readOnly} onValueChange={onKindChange}>
+                    <SelectTrigger>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="contact">The patient</SelectItem>
+                        <SelectItem value="staff">Clinic staff</SelectItem>
+                        <SelectItem value="static">Specific address</SelectItem>
+                        <SelectItem value="merge_field">Address from a merge field</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+
+            {recipient.kind === "staff" && (
+                <Field
+                    label="Notification type"
+                    hint="Optional. Respects each staff member's notification preferences and includes any external recipients configured for this type."
+                >
+                    <Input
+                        value={recipient.notification_type ?? ""}
+                        placeholder="e.g. urgent_alert"
+                        disabled={readOnly}
+                        onChange={(e) =>
+                            setRecipient({
+                                ...recipient,
+                                notification_type: e.target.value.trim() || null,
+                            })
+                        }
+                    />
+                </Field>
+            )}
+
+            {recipient.kind === "static" && (
+                <Field label="Addresses" hint="Comma-separated. Up to 10.">
+                    <Input
+                        value={recipient.addresses.join(", ")}
+                        placeholder="ops@clinic.com, alerts@clinic.com"
+                        disabled={readOnly}
+                        onChange={(e) =>
+                            setRecipient({
+                                ...recipient,
+                                addresses: e.target.value
+                                    .split(",")
+                                    .map((a) => a.trim())
+                                    .filter(Boolean),
+                            })
+                        }
+                    />
+                </Field>
+            )}
+
+            {recipient.kind === "merge_field" && (
+                <Field
+                    label="Merge field"
+                    hint="Treated as a patient email — consent and quiet hours still apply."
+                >
+                    <Input
+                        value={recipient.field}
+                        placeholder="e.g. patient_email"
+                        disabled={readOnly}
+                        onChange={(e) => setRecipient({ ...recipient, field: e.target.value.trim() })}
+                    />
+                </Field>
+            )}
+
             <Field label="Subject">
                 <Input
                     value={node.subject_template}
@@ -739,6 +830,26 @@ function EmailFields({
                 <EmailPreview node={node} />
             </div>
             <AttemptsField value={node.max_attempts ?? 1} onChange={(v) => onChange({ ...node, max_attempts: v })} readOnly={readOnly} />
+            <Field
+                label="If sending fails"
+                hint="Continue is for optional emails that should not abandon a run that has already done its real work."
+            >
+                <Select
+                    value={node.on_failure ?? "fail_run"}
+                    disabled={readOnly}
+                    onValueChange={(v) =>
+                        onChange({ ...node, on_failure: v as "fail_run" | "continue" })
+                    }
+                >
+                    <SelectTrigger>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="fail_run">Stop the workflow</SelectItem>
+                        <SelectItem value="continue">Carry on to the next step</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
         </>
     )
 }
