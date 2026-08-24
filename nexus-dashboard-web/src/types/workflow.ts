@@ -193,8 +193,14 @@ export type EmailRecipient =
 export interface SendEmailNode {
     type: "send_email"
     id: string
+    /** Inline content. Empty when `template_key` names a saved template —
+     *  the backend rejects a node that carries both. */
     subject_template: string
     body_template: string
+    /** Optional HTML part for inline mode. A saved template brings its own. */
+    html_template?: string | null
+    /** Key of a saved campaign email template owned by this institution. */
+    template_key?: string | null
     next_node_id: string
     respect_quiet_hours?: boolean
     max_attempts?: number

@@ -33,6 +33,10 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
+import {
+    listCampaignEmailTemplates,
+    type CampaignEmailTemplate,
+} from "@/lib/campaign-email-templates-api"
 import { listPhoneCountryRegions, listWorkflowLlmModels, type PhoneCountryRegion } from "@/lib/workflow-api"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
@@ -718,6 +722,40 @@ function EmailFields({
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
+    const [savedTemplates, setSavedTemplates] = useState<CampaignEmailTemplate[]>([])
+    const usingSavedTemplate = Boolean(node.template_key)
+
+    useEffect(() => {
+        let cancelled = false
+        listCampaignEmailTemplates(true)
+            .then((list) => {
+                if (!cancelled) setSavedTemplates(list)
+            })
+            // A failed lookup must not break the config panel; the picker simply
+            // shows as empty and inline content still works.
+            .catch(() => undefined)
+        return () => {
+            cancelled = true
+        }
+    }, [])
+
+    // The backend rejects a node carrying both a template key and inline
+    // content, so switching clears the other side rather than leaving a
+    // leftover that fails validation on publish.
+    const onContentModeChange = (mode: string) => {
+        if (mode === "template") {
+            onChange({
+                ...node,
+                template_key: savedTemplates[0]?.key ?? "",
+                subject_template: "",
+                body_template: "",
+                html_template: null,
+            })
+        } else {
+            onChange({ ...node, template_key: null })
+        }
+    }
+
     // Definitions published before `recipient` existed have no value; the
     // backend reads that as the patient, so mirror it here.
     const recipient = node.recipient ?? { kind: "contact" as const }
@@ -810,25 +848,78 @@ function EmailFields({
                 </Field>
             )}
 
-            <Field label="Subject">
-                <Input
-                    value={node.subject_template}
+            <Field
+                label="Content"
+                hint={
+                    usingSavedTemplate
+                        ? "Edited in Campaign Emails. Changing it there updates every campaign using it."
+                        : "Written here and used only by this step."
+                }
+            >
+                <Select
+                    value={usingSavedTemplate ? "template" : "inline"}
                     disabled={readOnly}
-                    onChange={(e) => onChange({ ...node, subject_template: e.target.value })}
-                />
+                    onValueChange={onContentModeChange}
+                >
+                    <SelectTrigger>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="inline">Write it here</SelectItem>
+                        <SelectItem value="template">Use a saved template</SelectItem>
+                    </SelectContent>
+                </Select>
             </Field>
-            <MessageField
-                label="Body"
-                value={node.body_template}
-                onChange={(v) => onChange({ ...node, body_template: v })}
-                triggerType={def.trigger.type}
-                channel="email"
-                readOnly={readOnly}
-            />
-            <div className="space-y-1.5">
-                <Label className="text-sm">Preview</Label>
-                <EmailPreview node={node} />
-            </div>
+
+            {usingSavedTemplate ? (
+                <Field
+                    label="Template"
+                    hint={
+                        savedTemplates.length === 0
+                            ? "No templates yet — create one under Campaign Emails."
+                            : undefined
+                    }
+                >
+                    <Select
+                        value={node.template_key ?? ""}
+                        disabled={readOnly || savedTemplates.length === 0}
+                        onValueChange={(v) => onChange({ ...node, template_key: v })}
+                    >
+                        <SelectTrigger>
+                            <SelectValue placeholder="Select a template" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {savedTemplates.map((t) => (
+                                <SelectItem key={t.key} value={t.key}>
+                                    {t.name}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </Field>
+            ) : (
+                <>
+                    <Field label="Subject">
+                        <Input
+                            value={node.subject_template}
+                            disabled={readOnly}
+                            onChange={(e) => onChange({ ...node, subject_template: e.target.value })}
+                        />
+                    </Field>
+                    <MessageField
+                        label="Body"
+                        value={node.body_template}
+                        onChange={(v) => onChange({ ...node, body_template: v })}
+                        triggerType={def.trigger.type}
+                        channel="email"
+                        readOnly={readOnly}
+                    />
+                    <div className="space-y-1.5">
+                        <Label className="text-sm">Preview</Label>
+                        <EmailPreview node={node} />
+                    </div>
+                </>
+            )}
             <AttemptsField value={node.max_attempts ?? 1} onChange={(v) => onChange({ ...node, max_attempts: v })} readOnly={readOnly} />
             <Field
                 label="If sending fails"
