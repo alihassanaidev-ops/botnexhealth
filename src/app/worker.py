@@ -27,6 +27,7 @@ def _build_celery_app() -> Celery:
             "src.app.tasks.webhooks",
             "src.app.tasks.automation_workflow",
             "src.app.tasks.email_identity_verification",
+            "src.app.tasks.inbound_email",
         ],
     )
 
@@ -71,6 +72,13 @@ def _build_celery_app() -> Celery:
             "scan-recall-workflows": {
                 "task": "src.app.tasks.automation_workflow.scan_recall_workflows",
                 "schedule": 3600.0,  # hourly — patient visit history changes slowly
+            },
+            "poll-inbound-email": {
+                "task": "src.app.tasks.inbound_email.poll_inbound_email",
+                # Frequent: a patient waiting on an answer should not sit behind
+                # a long poll interval. No-ops immediately when the queue is
+                # empty or inbound is not configured.
+                "schedule": 60.0,
             },
             "sweep-email-identities": {
                 "task": "src.app.tasks.email_identity_verification.sweep_email_identities",

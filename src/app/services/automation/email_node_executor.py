@@ -27,6 +27,7 @@ from src.app.services.automation.definition_schema import SendEmailNode
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.template_renderer import build_merge_vars
 from src.app.services.email.identity_service import EmailIdentityService
+from src.app.services.email.reply_address import make_reply_address
 from src.app.services.email.sender import (
     EmailMessage,
     EmailSender,
@@ -231,6 +232,21 @@ class EmailNodeExecutor:
         # --- Send through the configured provider ---
         # Always multipart when HTML exists — never HTML-only. Text-only clients,
         # screen readers and spam filters all want the plain part present.
+        # Patient mail replies to a signed address that carries the conversation,
+        # so an answer can be routed back to this clinic, patient and run.
+        # Staff and ops mail keeps the identity's own reply-to: those recipients
+        # are not in a patient conversation, and pointing them at the inbound
+        # router would file colleagues' replies as patient messages.
+        reply_to = identity.reply_to
+        if patient_directed and settings.ses_inbound_domain:
+            reply_to = make_reply_address(
+                settings.ses_inbound_domain,
+                institution_id=str(run.institution_id),
+                location_id=str(run.location_id) if run.location_id else None,
+                contact_id=str(run.contact_id) if run.contact_id else None,
+                workflow_run_id=str(run.id),
+            )
+
         message = EmailMessage(
             from_address=identity.from_address,
             from_name=identity.from_name,
@@ -238,7 +254,7 @@ class EmailNodeExecutor:
             subject=subject,
             text=body,
             html=html,
-            reply_to=identity.reply_to,
+            reply_to=reply_to,
             # Crash-window idempotency (XC-1b): a stable per-(run, node) key so a
             # retry after a crash between send and commit is deduped by the
             # provider rather than emailing the patient twice. Deliberately

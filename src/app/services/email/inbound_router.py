@@ -152,11 +152,17 @@ class InboundEmailRouter:
         contact = await self._resolve_contact(institution, route, parsed)
         if contact is not None:
             message.contact_id = str(contact.id)
-            message.location_id = _first_id(contact, "location_id") or _short_to_none(
-                route.location_prefix
-            )
+            message.location_id = _first_id(contact, "location_id")
             # The token proves which conversation, never who is writing.
             message.sender_mismatch = _addresses_differ(contact.email, parsed.from_address)
+
+        # Resolve the run from the token so a reply can resume the workflow that
+        # sent the message, rather than only the most recent thread.
+        run = await self._resolve_run(institution, route)
+        if run is not None:
+            message.workflow_run_id = str(run.id)
+            if not message.location_id:
+                message.location_id = _first_id(run, "location_id")
 
         body = parsed.body_text or ""
         if len(body.encode("utf-8", "ignore")) > settings.inbound_email_max_body_bytes:
@@ -259,6 +265,23 @@ class InboundEmailRouter:
             if len(matches) == 1:
                 return matches[0]
         return None
+
+    async def _resolve_run(self, institution: Institution, route: ReplyRoute):  # noqa: ANN201
+        """Find the workflow run the token points at, scoped to the institution."""
+        if not route.run_prefix:
+            return None
+        from src.app.models.automation_workflow import AutomationWorkflowRun
+
+        result = await self.session.execute(
+            select(AutomationWorkflowRun)
+            .where(
+                AutomationWorkflowRun.institution_id == str(institution.id),
+                _id_prefix_matches(AutomationWorkflowRun.id, route.run_prefix),
+            )
+            .limit(2)
+        )
+        matches = list(result.scalars().all())
+        return matches[0] if len(matches) == 1 else None
 
     async def _attach_thread(
         self,
@@ -374,8 +397,3 @@ def _addresses_differ(a: str | None, b: str | None) -> bool:
 def _first_id(obj: object, attr: str) -> str | None:
     value = getattr(obj, attr, None)
     return str(value) if value else None
-
-
-def _short_to_none(prefix: str) -> None:
-    """A location *prefix* is not an id; never store it as one."""
-    return None

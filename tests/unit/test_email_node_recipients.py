@@ -443,3 +443,71 @@ def test_no_sending_address_fails_the_step():
 
     runtime.fail_run.assert_called_once()
     assert "no sending address" in runtime.fail_run.call_args.kwargs["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Reply-To — routing patient replies back to the conversation
+# ---------------------------------------------------------------------------
+
+
+def _run_with_inbound(executor, node, inbound_domain="inbound.example.com", **kw):
+    """Execute with an inbound receiving domain configured."""
+    sender = kw.pop("sender", None) or FakeEmailSender()
+    resolved = kw.pop("identity", None) or make_resolved_identity(
+        reply_to="frontdesk@clinic.com"
+    )
+    resolver = AsyncMock()
+    resolver.resolve = AsyncMock(return_value=resolved)
+
+    with patch("src.app.services.automation.email_node_executor.settings") as s:
+        s.resend_reply_to = None
+        s.public_base_url = "https://api.example.com"
+        s.ses_inbound_domain = inbound_domain
+
+        with patch(
+            "src.app.services.automation.email_node_executor.EmailIdentityService",
+            return_value=resolver,
+        ), patch(
+            "src.app.services.automation.email_node_executor.get_patient_email_sender_for",
+            return_value=sender,
+        ):
+            asyncio.run(executor.execute(_make_run(), node, {}))
+    return sender.last
+
+
+def test_patient_email_replies_to_a_signed_routing_address():
+    from src.app.services.email.reply_address import parse_reply_address
+
+    executor, _ = _make_executor(
+        contact=_make_contact(), institution=_make_institution()
+    )
+    message = _run_with_inbound(executor, _node())
+
+    assert message.reply_to.endswith("@inbound.example.com")
+    route = parse_reply_address(message.reply_to)
+    assert route is not None
+    # The token carries the run so a reply can resume the workflow that sent it.
+    assert route.run_prefix
+
+
+def test_staff_email_keeps_the_clinic_reply_to():
+    """Pointing staff mail at the inbound router would file colleagues' replies
+    as patient messages."""
+    executor, _ = _make_executor(
+        contact=_make_contact(), institution=_make_institution()
+    )
+    node = _node(recipient=StaticRecipient(addresses=["ops@clinic.com"]))
+
+    message = _run_with_inbound(executor, node)
+
+    assert message.reply_to == "frontdesk@clinic.com"
+
+
+def test_no_inbound_domain_keeps_the_clinic_reply_to():
+    """Before inbound is stood up, replies should still reach the clinic."""
+    executor, _ = _make_executor(
+        contact=_make_contact(), institution=_make_institution()
+    )
+    message = _run_with_inbound(executor, _node(), inbound_domain=None)
+
+    assert message.reply_to == "frontdesk@clinic.com"
