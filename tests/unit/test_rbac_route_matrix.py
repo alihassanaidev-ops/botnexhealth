@@ -77,6 +77,15 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/events",
     ),
     ACTIVE_USER: (
+        # The inbox serves five roles from one set of endpoints; the narrowing
+        # is enforced in InboxService, not per-handler, so a new endpoint cannot
+        # forget a scope check. Group admins are refused the conversation
+        # endpoints there and get /activity, which carries no patient content.
+        "GET /api/inbox/threads",
+        "GET /api/inbox/threads/{thread_id}",
+        "POST /api/inbox/threads/{thread_id}/assign",
+        "POST /api/inbox/threads/{thread_id}/resolve",
+        "GET /api/inbox/activity",
         "GET /api/v1/health",
         "GET /api/auth/users/me",
         "GET /api/auth/mfa/status",
