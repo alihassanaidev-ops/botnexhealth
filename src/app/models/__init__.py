@@ -33,6 +33,11 @@ from src.app.models.campaign_audience import (  # noqa: F401 — model registrat
     CampaignAudienceDefinition,
     CampaignAudiencePreview,
 )
+from src.app.models.inbound_email_message import (  # noqa: F401 — model registration
+    InboundEmailIntent,
+    InboundEmailMessage,
+    InboundEmailStatus,
+)
 from src.app.models.inbound_sms_message import (  # noqa: F401 — model registration
     InboundSmsMessage,
 )
@@ -216,6 +221,9 @@ __all__ = [
     "DeadLetterStatus",
     "OutboundEmergencyHalt",
     "AppointmentWorkingSet",
+    "InboundEmailIntent",
+    "InboundEmailMessage",
+    "InboundEmailStatus",
     "InboundSmsMessage",
     "NexHealthWebhookEvent",
     "NexHealthWebhookStatus",
