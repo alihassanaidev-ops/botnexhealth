@@ -293,3 +293,83 @@ def test_addresses_differ_is_case_insensitive():
     assert _addresses_differ("a@b.com", "A@B.COM") is False
     assert _addresses_differ("a@b.com", "c@d.com") is True
     assert _addresses_differ(None, "a@b.com") is False
+
+
+# ---------------------------------------------------------------------------
+# Reply-driven workflow resume — schema
+# ---------------------------------------------------------------------------
+
+
+def test_email_reply_wait_is_recognised():
+    from src.app.services.automation.definition_schema import (
+        EmailReplyWaitConfig,
+        WaitNode,
+        email_reply_wait_spec,
+        sms_reply_wait_spec,
+    )
+
+    node = WaitNode(
+        id="w1",
+        wait_for=EmailReplyWaitConfig(response_window_seconds=3600),
+        next_node_id="n2",
+    )
+    spec = email_reply_wait_spec(node)
+
+    assert spec is not None
+    assert spec.node_id == "w1"
+    assert spec.response_window_seconds == 3600
+    # The two wait kinds must not be confused for one another.
+    assert sms_reply_wait_spec(node) is None
+
+
+def test_email_reply_wait_defaults_to_a_week():
+    """People answer email on a slower rhythm than SMS; a 72-hour window would
+    treat an ordinary weekend as a non-response."""
+    from src.app.services.automation.definition_schema import EmailReplyWaitConfig
+
+    assert EmailReplyWaitConfig().response_window_seconds == 604800
+
+
+def test_sms_reply_wait_is_not_an_email_wait():
+    from src.app.services.automation.definition_schema import (
+        SmsReplyWaitConfig,
+        WaitNode,
+        email_reply_wait_spec,
+    )
+
+    node = WaitNode(id="w1", wait_for=SmsReplyWaitConfig(), next_node_id="n2")
+    assert email_reply_wait_spec(node) is None
+
+
+def test_time_wait_is_not_an_email_wait():
+    from src.app.services.automation.definition_schema import (
+        DurationDelay,
+        TimeWaitConfig,
+        WaitNode,
+        email_reply_wait_spec,
+    )
+
+    node = WaitNode(
+        id="w1",
+        wait_for=TimeWaitConfig(delay=DurationDelay(duration_seconds=60)),
+        next_node_id="n2",
+    )
+    assert email_reply_wait_spec(node) is None
+
+
+def test_email_reply_trigger_normalises_tokens():
+    from src.app.services.automation.definition_schema import EmailReplyTrigger
+
+    trigger = EmailReplyTrigger(tokens=[" Yes ", "yes", "NO", ""])
+    assert trigger.tokens == ["Yes", "NO"]
+
+
+def test_legacy_sms_reply_key_is_still_dropped():
+    """The deprecated include_reply_key must keep loading on published
+    definitions — adding the email variant must not disturb that."""
+    from src.app.services.automation.definition_schema import SmsReplyWaitConfig
+
+    config = SmsReplyWaitConfig.model_validate(
+        {"type": "sms_reply", "include_reply_key": True, "response_window_seconds": 3600}
+    )
+    assert config.response_window_seconds == 3600

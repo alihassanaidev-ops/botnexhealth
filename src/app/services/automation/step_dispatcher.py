@@ -46,6 +46,7 @@ from src.app.services.automation.definition_schema import (
     UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
+    email_reply_wait_spec,
     sms_reply_wait_spec,
 )
 from src.app.services.automation.action_registry import get_action_executor
@@ -211,6 +212,35 @@ class WorkflowStepDispatcher:
                     timezone_name=location_timezone,
                 )
                 step.result_code = "awaiting_sms_reply"
+                await self.runtime.wait_run(run, step)
+                return DispatchResult(
+                    status="waiting",
+                    timer_id=timer.id,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
+            elif (email_wait := email_reply_wait_spec(node)) is not None:
+                # Same shape as the SMS wait: park the run with a timer bounding
+                # the window, and let the inbound router resume it early if the
+                # patient answers. The timer is the floor, not the expectation.
+                due_at = now + timedelta(seconds=email_wait.response_window_seconds)
+                step = await self.runtime.begin_step(
+                    run,
+                    step_id=email_wait.node_id,
+                    step_type="wait",
+                    scheduled_at=due_at,
+                    scheduled_timezone=location_timezone,
+                )
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=step.id,
+                    due_at=due_at,
+                    timezone_name=location_timezone,
+                )
+                step.result_code = "awaiting_email_reply"
                 await self.runtime.wait_run(run, step)
                 return DispatchResult(
                     status="waiting",
@@ -549,13 +579,14 @@ class WorkflowStepDispatcher:
             current_node.wait_for, TimeWaitConfig
         )
         is_sms_reply_wait = sms_reply_wait_spec(current_node) is not None
+        is_email_reply_wait = email_reply_wait_spec(current_node) is not None
         is_drip = isinstance(current_node, DripNode)
         is_held_send = isinstance(current_node, (SendSmsNode, SendVoiceNode, SendEmailNode))
-        if not (is_wait or is_sms_reply_wait or is_drip or is_held_send):
+        if not (is_wait or is_sms_reply_wait or is_email_reply_wait or is_drip or is_held_send):
             await self.runtime.fail_run(
                 run,
                 reason=(
-                    "expected wait, SMS reply wait, drip, or held send node at "
+                    "expected wait, reply wait, drip, or held send node at "
                     f"'{run.current_step_id}'"
                 ),
             )
@@ -588,8 +619,16 @@ class WorkflowStepDispatcher:
                 or context.get("sms_confirmation_message_sid")
                 else "sms_reply_timeout"
             )
+        if is_email_reply_wait and waiting_step.result_code == "awaiting_email_reply":
+            # The timer is the window's floor. Reaching it without a reply is a
+            # legitimate outcome a downstream branch can act on, not a failure.
+            waiting_step.result_code = (
+                "email_reply_received"
+                if context.get("email_reply_message_id")
+                else "email_reply_timeout"
+            )
         is_parked_voice = is_held_send and waiting_step.result_code == _CALL_PLACED_AWAITING
-        if is_wait or is_sms_reply_wait or is_drip or is_parked_voice:
+        if is_wait or is_sms_reply_wait or is_email_reply_wait or is_drip or is_parked_voice:
             # WaitNode/DripNode: move past the gate. Parked voice: the call already
             # went out, so advance PAST the send node (never re-dial) into whatever
             # follows — typically a ConditionNode that branches on `call_outcome`.

@@ -160,6 +160,8 @@ async def _handle_one(queue_message: dict, store) -> bool:  # noqa: ANN001
         if result.suppress_email_hash and result.message.institution_id:
             await _suppress(result)
 
+        resumed = await _resume_waiting_run(session, result)
+
         if result.needs_staff_attention:
             await _hand_off(session, result)
 
@@ -174,6 +176,71 @@ async def _handle_one(queue_message: dict, store) -> bool:  # noqa: ANN001
         _forward_to_clinic.delay(inbound_message_id=str(result.message.id))
 
     return True
+
+
+async def _resume_waiting_run(session, result) -> str | None:  # noqa: ANN001
+    """Wake a run parked on an email reply, if this message is that reply.
+
+    The run's timer bounds the window; this shortcuts it when the patient
+    actually answers, which is the whole point of waiting rather than guessing.
+
+    Deliberately narrow: only a run that is WAITING on a step whose result code
+    is ``awaiting_email_reply``. An auto-responder or a bounce must not count as
+    the patient answering, and those never reach here — the router marks them
+    and returns before escalation.
+    """
+    from src.app.models.automation_workflow import (
+        AutomationRunStatus,
+        AutomationStepStatus,
+        AutomationWorkflowRun,
+        AutomationWorkflowStepExecution,
+    )
+    from sqlalchemy import select
+
+    message = result.message
+    if not message.workflow_run_id or message.status != "routed":
+        return None
+
+    run = await session.get(AutomationWorkflowRun, message.workflow_run_id)
+    if run is None or run.status != AutomationRunStatus.WAITING.value:
+        return None
+
+    waiting = await session.execute(
+        select(AutomationWorkflowStepExecution)
+        .where(
+            AutomationWorkflowStepExecution.workflow_run_id == run.id,
+            AutomationWorkflowStepExecution.status == AutomationStepStatus.WAITING.value,
+            AutomationWorkflowStepExecution.result_code == "awaiting_email_reply",
+        )
+        .limit(1)
+    )
+    if waiting.scalar_one_or_none() is None:
+        return None
+
+    # Reuse the resume helper the SMS path already uses, so both channels wake a
+    # run through one code path rather than two that can drift apart.
+    from src.app.tasks.automation_workflow import (
+        _resume_waiting_run_with_context_updates,
+    )
+
+    updates = {
+        # A following condition node branches on what the patient actually said.
+        "email_reply_message_id": str(message.id),
+        "email_reply_intent": message.intent,
+    }
+    outcome = await _resume_waiting_run_with_context_updates(
+        session=session,
+        institution_id=str(message.institution_id),
+        location_id=str(message.location_id) if message.location_id else "",
+        contact_ids=[str(message.contact_id)] if message.contact_id else [],
+        workflow_run_id=str(run.id),
+        context_updates=updates,
+        metadata_updates=updates,
+    )
+    if outcome.get("resumed"):
+        logger.info("inbound email resumed run %s", run.id)
+        return str(run.id)
+    return None
 
 
 async def _suppress(result) -> None:  # noqa: ANN001

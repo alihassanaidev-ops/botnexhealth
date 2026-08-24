@@ -181,6 +181,30 @@ class SmsReplyTrigger(BaseModel):
         return normalized or None
 
 
+class EmailReplyTrigger(BaseModel):
+    """Enroll when an inbound patient email matches optional whole-token filters.
+
+    The email counterpart to ``SmsReplyTrigger``. Only replies that routed to a
+    known clinic reach this — unattributable mail is held, never enrolled.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["email_reply"] = "email_reply"
+    tokens: list[str] = Field(default_factory=list)
+    campaign_goal: str | None = None
+
+    @field_validator("tokens")
+    @classmethod
+    def normalize_tokens(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            token = value.strip()
+            if token and token.casefold() not in {item.casefold() for item in normalized}:
+                normalized.append(token)
+        return normalized
+
+
 WorkflowTrigger = Annotated[
     Union[
         AppointmentOffsetTrigger,
@@ -191,6 +215,7 @@ WorkflowTrigger = Annotated[
         CallbackRequestedTrigger,
         PatientStatusChangedTrigger,
         SmsReplyTrigger,
+        EmailReplyTrigger,
     ],
     Field(discriminator="type"),
 ]
@@ -309,8 +334,27 @@ class SmsReplyWaitConfig(BaseModel):
         return cleaned
 
 
+class EmailReplyWaitConfig(BaseModel):
+    """Park the run until the patient replies to the email, or the window closes.
+
+    The default window is a week rather than SMS's three days: people answer
+    email on a slower rhythm, and a campaign that gives up after 72 hours would
+    treat an ordinary weekend as a non-response.
+
+    ``response_mappings`` reuses ``SmsResponseMapping`` — it is a token-to-context
+    mapping, not anything SMS-specific — so a workflow author configures replies
+    the same way on both channels.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["email_reply"] = "email_reply"
+    response_window_seconds: int = Field(default=604800, ge=60, le=2592000)
+    response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+
 WaitForConfig = Annotated[
-    Union[TimeWaitConfig, SmsReplyWaitConfig],
+    Union[TimeWaitConfig, SmsReplyWaitConfig, EmailReplyWaitConfig],
     Field(discriminator="type"),
 ]
 
@@ -388,6 +432,26 @@ def sms_reply_wait_spec(
         node_id=node.id,
         response_window_seconds=config.response_window_seconds,
         response_mappings=config.response_mappings,
+    )
+
+
+class EmailReplyWaitSpec(BaseModel):
+    """Internal interface shared by email correlation and dispatch."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    response_window_seconds: int
+    response_mappings: list[SmsResponseMapping]
+
+
+def email_reply_wait_spec(node: object) -> EmailReplyWaitSpec | None:
+    if not isinstance(node, WaitNode) or not isinstance(node.wait_for, EmailReplyWaitConfig):
+        return None
+    return EmailReplyWaitSpec(
+        node_id=node.id,
+        response_window_seconds=node.wait_for.response_window_seconds,
+        response_mappings=node.wait_for.response_mappings,
     )
 
 
