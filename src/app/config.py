@@ -4,6 +4,7 @@ import ipaddress
 import logging
 import os
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 import structlog
@@ -127,6 +128,32 @@ class Settings(BaseSettings):
     resend_webhook_secret: str | None = None
     # Public base URL used to build one-click links in outbound emails (unsubscribe).
     public_base_url: str = "https://app.scalenexus.ai"
+
+    # ── Patient-facing email provider ────────────────────────────────────
+    # Auth emails and staff call alerts always go through Resend. This selects
+    # the provider for patient-facing campaign email only, which is the traffic
+    # that carries health information and therefore has to sit under an
+    # agreement covering it (see docs/compliance/04-gap-register.md G-013/G-017).
+    #
+    # "resend" keeps today's behaviour. "ses" routes patient mail through
+    # Amazon SES in ``ses_region`` — same AWS account and region as the rest of
+    # the platform, so the content stays inside our own infrastructure.
+    patient_email_provider: Literal["resend", "ses"] = "resend"
+
+    ses_region: str = "ca-central-1"
+    # Parent domain that per-clinic sending subdomains are created under, e.g.
+    # "brightsmile.mail.scalenexus.ai". Must be a Route 53 hosted zone this
+    # account controls, so DKIM records can be published without the clinic
+    # touching DNS.
+    ses_sending_domain: str | None = None
+    ses_sending_hosted_zone_id: str | None = None
+    # Prefix for the per-clinic configuration set that carries event
+    # destinations (bounce/complaint) and reputation options.
+    ses_configuration_set_prefix: str = "scalenexus"
+    # Refuse to hand SES a message whose recipient domain is not verified while
+    # the account is still in the sandbox, so the failure is ours and legible
+    # rather than a provider rejection mid-campaign.
+    ses_enforce_verified_recipients_in_sandbox: bool = True
 
     # Celery
     celery_broker_url: str | None = None
