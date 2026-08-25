@@ -141,7 +141,6 @@ class SmsService:
             )
             prepared_body = prepare_outbound_sms_body(
                 body=body,
-                clinic_identity=location.name,
                 include_opt_out_footer=include_opt_out_footer,
             )
         except SmsSendBlockedError as blocked:

@@ -117,7 +117,7 @@ const institutionAdminNav: NavItemDef[] = [
         icon: CalendarClock,
     },
     {
-        title: "Do Not Contact",
+        title: "DNC Patients",
         url: "/institution-admin/do-not-contact",
         icon: ShieldOff,
     },

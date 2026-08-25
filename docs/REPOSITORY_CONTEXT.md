@@ -440,11 +440,12 @@ row (encrypted body, masked/hashed number), calls Twilio (offloaded via
 task (`tasks/sms.py`, 5 retries, exp backoff, dead-letters on exhaustion).
 Call-triggered auto-SMS is enqueued from the post-call pipeline only if a body +
 patient phone + `twilio_from_number` are all present.
-Outbound bodies are normalized with the location name. Send SMS nodes default to
-appending `Reply STOP to opt out.` when equivalent case-insensitive copy is not
-already present; workflow authors may disable that footer per node. Manual/admin
-SMS entry points retain the enabled default. STOP suppression itself remains
-centralized and cannot be disabled by a workflow.
+Outbound bodies preserve the rendered template text without automatically
+prepending the location name. Send SMS nodes default to appending `Reply STOP to
+opt out.` when equivalent case-insensitive copy is not already present; workflow
+authors may disable that footer per node. Manual/admin SMS entry points retain
+the enabled default. STOP suppression itself remains centralized and cannot be
+disabled by a workflow.
 
 Every outbound Twilio message gets a delivery callback URL. By default it is
 derived as `<PUBLIC_API_URL>/api/v1/twilio/webhooks/sms-status`; the legacy
@@ -453,7 +454,26 @@ Twilio posts message state transitions such as `sent`, `delivered`, `failed`,
 and `undelivered` to that route, which verifies the Twilio signature and updates
 the existing `SmsHistoryLog` by `MessageSid`.
 
-### 6.4 Gotchas
+### 6.4 DNC patients and channel opt-outs
+
+Institution admins manage opt-outs from the **DNC Patients** page
+(`/institution-admin/do-not-contact`). Its API projection groups three durable
+sources by contact/identity: active `SmsSuppression` rows for SMS STOP replies,
+latest revoked `ConsentRecord` rows for voice/email (and legacy SMS consent
+revocations), and legacy/staff `DoNotContact` rows that block all channels. The
+page shows an independently removable SMS, voice, or email tag plus its location
+when the restriction is location-scoped. Removing a tag uses its opaque row ID,
+is audited, writes the corresponding granted consent state, and leaves every
+other channel restriction intact. Legacy all-channel rows appear as a single
+**All channels** tag and are released as one unit.
+
+Spoken Retell opt-outs now write a location-scoped revoked **voice** consent;
+they do not suppress SMS or email. Email unsubscribe/bounce/complaint handling
+writes an email-identity revocation. SMS STOP continues to create a
+location-scoped SMS suppression and now retains an unambiguous matched
+`contact_id` so the patient can be named on the DNC page.
+
+### 6.5 Gotchas
 
 - **Env var is misspelled `TWILLIO_` (double-L)**: `TWILLIO_SID`,
   `TWILLIO_API_SECRET` — but `TWILIO_SMS_STATUS_CALLBACK_URL` is spelled
@@ -541,7 +561,7 @@ the `retell_agent_id` location lookup) · `sync_service` (pull providers/appt-ty
 operatories from the PMS adapter) · `slot_filter` (trim slots to operating hours) ·
 `automation/*` (workflow definition, enrollment, scheduling, channel dispatch,
 appointment projection, campaign analytics, GoTracker writeback) ·
-`sms_service` / `sms_compliance` / `sms_privacy` (SMS send + consent/DNC) ·
+`sms_service` / `sms_compliance` / `sms_privacy` (SMS send + multichannel consent/DNC) ·
 `email_notification_service` / `auth_email_service` / `email_template_service`
 (Resend + templates) · `mfa` (WebAuthn/TOTP/recovery) ·
 `refresh_token_service` (Redis sessions) · `event_bus` (SSE over Redis) ·

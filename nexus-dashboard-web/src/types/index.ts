@@ -297,19 +297,30 @@ export interface WorkflowStatus {
     created_at: string;
 }
 
-/**
- * An active do-not-contact record (staff-initiated opt-out). Phone is masked
- * server-side; `scope` is "location" | "institution"; `source` distinguishes
- * staff/system origin.
- */
-export interface DncRecord {
-    phone_masked: string;
+export type DncChannel = "sms" | "voice" | "email" | "all";
+export type DncRecordType = "sms_suppression" | "consent_record" | "do_not_contact";
+
+/** One independently releasable channel opt-out shown on the DNC patients page. */
+export interface DncChannelRecord {
+    id: string;
+    channel: DncChannel;
+    record_type: DncRecordType;
     scope: string;
     source: string;
     reason: string | null;
     location_id: string | null;
-    contact_id: string | null;
     created_at: string;
+}
+
+/** Active opt-outs grouped by patient (or by masked identity when unmatched). */
+export interface DncPatientRecord {
+    id: string;
+    contact_id: string | null;
+    patient_name: string | null;
+    phone_masked: string | null;
+    email_masked: string | null;
+    channels: DncChannelRecord[];
+    latest_opt_out_at: string;
 }
 
 /** The status reference embedded on a call (id/name/color only). */

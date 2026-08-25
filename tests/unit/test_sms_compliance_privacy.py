@@ -133,17 +133,17 @@ def test_redact_payload_retell_payload_only_keeps_allowlisted_identifiers() -> N
     }
 
 
-def test_prepare_outbound_sms_body_adds_identity_and_casl_footer() -> None:
-    prepared = prepare_outbound_sms_body(body="Your appointment is confirmed.", clinic_identity="Downtown Clinic")
+def test_prepare_outbound_sms_body_keeps_message_body_and_adds_casl_footer() -> None:
+    prepared = prepare_outbound_sms_body(body="Your appointment is confirmed.")
 
-    assert prepared.startswith("Downtown Clinic:")
+    assert prepared.startswith("Your appointment is confirmed.")
+    assert "Downtown Clinic" not in prepared
     assert CASL_FOOTER in prepared
 
 
 def test_prepare_outbound_sms_body_detects_stop_copy_case_insensitively() -> None:
     prepared = prepare_outbound_sms_body(
         body="Your appointment is confirmed. RePlY sToP to opt out.",
-        clinic_identity="Downtown Clinic",
     )
 
     assert prepared.lower().count("reply stop") == 1
@@ -152,11 +152,10 @@ def test_prepare_outbound_sms_body_detects_stop_copy_case_insensitively() -> Non
 def test_prepare_outbound_sms_body_can_omit_stop_footer() -> None:
     prepared = prepare_outbound_sms_body(
         body="Your appointment is confirmed.",
-        clinic_identity="Downtown Clinic",
         include_opt_out_footer=False,
     )
 
-    assert prepared == "Downtown Clinic: Your appointment is confirmed."
+    assert prepared == "Your appointment is confirmed."
 
 
 @pytest.mark.asyncio

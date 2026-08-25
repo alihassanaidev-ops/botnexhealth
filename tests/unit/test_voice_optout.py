@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.app.models.sms_consent import ConsentSource, DncScope
+from src.app.models.sms_consent import ConsentChannel, ConsentSource, ConsentStatus
 from src.app.services.automation import voice_optout_service
 from src.app.services.automation.voice_optout_service import (
     detect_voice_optout,
@@ -17,19 +17,25 @@ from src.app.services.automation.voice_optout_service import (
 
 
 def test_detection_off_when_key_unset():
-    with patch.object(voice_optout_service.settings, "retell_optout_analysis_key", None):
+    with patch.object(
+        voice_optout_service.settings, "retell_optout_analysis_key", None
+    ):
         assert detect_voice_optout({"patient_opted_out": True}) is False
 
 
 def test_detection_true_when_configured_key_truthy():
-    with patch.object(voice_optout_service.settings, "retell_optout_analysis_key", "patient_opted_out"):
+    with patch.object(
+        voice_optout_service.settings, "retell_optout_analysis_key", "patient_opted_out"
+    ):
         assert detect_voice_optout({"patient_opted_out": True}) is True
         assert detect_voice_optout({"patient_opted_out": "yes"}) is True
         assert detect_voice_optout({"patient_opted_out": 1}) is True
 
 
 def test_detection_false_when_configured_key_falsy_or_missing():
-    with patch.object(voice_optout_service.settings, "retell_optout_analysis_key", "patient_opted_out"):
+    with patch.object(
+        voice_optout_service.settings, "retell_optout_analysis_key", "patient_opted_out"
+    ):
         assert detect_voice_optout({"patient_opted_out": False}) is False
         assert detect_voice_optout({"patient_opted_out": "no"}) is False
         assert detect_voice_optout({}) is False
@@ -46,24 +52,27 @@ def _session_cm(session):
     return cm
 
 
-def test_suppress_writes_location_scoped_dnc():
+def test_suppress_writes_location_scoped_voice_revocation():
     session = AsyncMock()
     session.commit = AsyncMock()
     captured = {}
 
-    async def _set_dnc(**kwargs):
+    async def _record_consent(**kwargs):
         captured.update(kwargs)
         return MagicMock()
 
     mock_compliance = MagicMock()
-    mock_compliance.set_do_not_contact = AsyncMock(side_effect=_set_dnc)
+    mock_compliance.record_consent = AsyncMock(side_effect=_record_consent)
 
-    with patch(
-        "src.app.services.automation.voice_optout_service.get_system_db_session",
-        return_value=_session_cm(session),
-    ), patch(
-        "src.app.services.automation.voice_optout_service.SmsComplianceService",
-        return_value=mock_compliance,
+    with (
+        patch(
+            "src.app.services.automation.voice_optout_service.get_system_db_session",
+            return_value=_session_cm(session),
+        ),
+        patch(
+            "src.app.services.automation.voice_optout_service.SmsComplianceService",
+            return_value=mock_compliance,
+        ),
     ):
         ok = asyncio.run(
             suppress_voice_optout(
@@ -76,7 +85,8 @@ def test_suppress_writes_location_scoped_dnc():
         )
 
     assert ok is True
-    assert captured["scope"] == DncScope.LOCATION
+    assert captured["status"] == ConsentStatus.REVOKED
+    assert captured["channel"] == ConsentChannel.VOICE
     assert captured["source"] == ConsentSource.SYSTEM
     assert captured["location_id"] == "loc-1"
     assert captured["contact_id"] == "c-1"
@@ -100,7 +110,10 @@ def test_suppress_failopen_on_error():
     ):
         ok = asyncio.run(
             suppress_voice_optout(
-                institution_id="inst-1", location_id="loc-1", contact_id="c-1", phone="+14165551234"
+                institution_id="inst-1",
+                location_id="loc-1",
+                contact_id="c-1",
+                phone="+14165551234",
             )
         )
     assert ok is False  # never raises

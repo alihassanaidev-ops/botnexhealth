@@ -347,8 +347,8 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
     ``appointment_booked`` SMS template, populated with the authoritative PMS
     booking (real provider name + slot time) resolved from the ``book_appointment``
     invocation — not Retell's free-text message. Only fires when an appointment
-    was actually booked during the call. Consent, suppression, clinic identity,
-    and the CASL/TCPA footer are enforced downstream by the SMS pipeline.
+    was actually booked during the call. Consent, suppression, and the
+    CASL/TCPA footer are enforced downstream by the SMS pipeline.
     """
     event = RetellWebhookEvent.model_validate(payload)
     call = event.call

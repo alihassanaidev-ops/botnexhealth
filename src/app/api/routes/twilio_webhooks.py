@@ -150,6 +150,7 @@ async def inbound_sms(request: Request) -> Response:
             await compliance.suppress(
                 institution_id=location.institution_id,
                 location_id=str(location.id),
+                contact_id=_inbound_msg.contact_id,
                 phone=from_number,
                 source=ConsentSource.TWILIO_KEYWORD,
                 keyword=keyword,

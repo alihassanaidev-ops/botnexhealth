@@ -64,8 +64,7 @@ def get_sample_data(template_type: str) -> dict[str, str]:
 SMS_DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     SmsTemplateType.APPOINTMENT_BOOKED.value: {
         "name": "Appointment Booked Confirmation",
-        # No clinic name / opt-out here — sms_privacy prepends clinic identity
-        # and appends the CASL footer at send time.
+        # The CASL footer is appended by sms_privacy at send time.
         "body": (
             "Hi {{ patient_name }}, your appointment is confirmed for "
             "{{ appointment_datetime }} with {{ appointment_provider }}"
