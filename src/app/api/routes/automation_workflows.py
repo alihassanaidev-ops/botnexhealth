@@ -574,6 +574,7 @@ class TimelineItemResponse(BaseModel):
 class RunTimelineResponse(BaseModel):
     run: CampaignRunListItemResponse
     contact: dict[str, Any]
+    workflow_version: dict[str, Any] = Field(default_factory=dict)
     items: list[TimelineItemResponse] = Field(default_factory=list)
 
 
@@ -1674,6 +1675,7 @@ async def get_run_timeline(
     return RunTimelineResponse(
         run=CampaignRunListItemResponse(**timeline.run.__dict__),
         contact=timeline.contact,
+        workflow_version=timeline.workflow_version,
         items=[TimelineItemResponse(**item.__dict__) for item in timeline.items],
     )
 

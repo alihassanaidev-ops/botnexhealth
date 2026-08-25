@@ -10,16 +10,16 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from src.app.api.deps import get_current_admin, get_current_institution_or_location_user
+from src.app.api.deps import get_current_active_user, get_current_admin
 from src.app.database import get_db_session
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.retell_sms import RetellSmsChatProfile
-from src.app.models.user import User
+from src.app.models.user import User, UserRole
 
 router = APIRouter(prefix="/retell-sms", tags=["Retell SMS"])
 
 _SuperAdmin = Annotated[User, Depends(get_current_admin)]
-_Reader = Annotated[User, Depends(get_current_institution_or_location_user)]
+_Reader = Annotated[User, Depends(get_current_active_user)]
 
 
 class RetellSmsChatProfileCreate(BaseModel):
@@ -141,19 +141,53 @@ async def list_profiles(
     location_id: str | None = Query(default=None),
     is_active: bool | None = Query(default=None),
 ) -> list[RetellSmsChatProfileResponse]:
-    institution_id = _institution_id(current_user)
-    async with get_db_session() as session:
-        query = select(RetellSmsChatProfile).where(
-            RetellSmsChatProfile.institution_id == institution_id
+    is_super_admin = current_user.role == UserRole.SUPER_ADMIN.value
+    if not is_super_admin and current_user.role not in (
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires a platform or institution user",
         )
-        if location_id is not None:
-            query = query.where(RetellSmsChatProfile.location_id == location_id)
+
+    if is_super_admin and location_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="location_id is required for platform administrators",
+        )
+
+    if (
+        not is_super_admin
+        and current_user.location_id is not None
+        and location_id is not None
+        and str(current_user.location_id) != location_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location is outside the user's assigned scope",
+        )
+
+    effective_location_id = (
+        location_id
+        if is_super_admin or current_user.location_id is None
+        else str(current_user.location_id)
+    )
+    async with get_db_session() as session:
+        query = select(RetellSmsChatProfile)
+        if not is_super_admin:
+            query = query.where(
+                RetellSmsChatProfile.institution_id == _institution_id(current_user)
+            )
+        if effective_location_id is not None:
+            query = query.where(RetellSmsChatProfile.location_id == effective_location_id)
         if is_active is not None:
             query = query.where(RetellSmsChatProfile.is_active.is_(is_active))
         query = query.order_by(RetellSmsChatProfile.display_name, RetellSmsChatProfile.created_at)
         profiles = (await session.execute(query)).scalars().all()
     return [
-        RetellSmsChatProfileResponse.from_model(profile, include_sensitive=False)
+        RetellSmsChatProfileResponse.from_model(profile, include_sensitive=is_super_admin)
         for profile in profiles
     ]
 

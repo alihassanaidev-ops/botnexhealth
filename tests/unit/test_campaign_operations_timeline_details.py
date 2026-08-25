@@ -6,6 +6,7 @@ from src.app.services.automation.campaign_operations_service import (
     _branch_from_result_code,
     _timeline_safe_mapping,
 )
+from src.app.services.automation.execution_trace import trace_safe_mapping
 
 
 def test_timeline_safe_mapping_keeps_operational_context_and_redacts_phi() -> None:
@@ -32,3 +33,9 @@ def test_branch_from_result_code_returns_condition_branch() -> None:
     assert _branch_from_result_code("branch_true") == "true"
     assert _branch_from_result_code("branch_false") == "false"
     assert _branch_from_result_code("confirmed") is None
+
+
+def test_execution_trace_values_are_json_compatible() -> None:
+    projected = trace_safe_mapping({"appointment_id": "appt-1", "unknown": object()})
+
+    assert projected == {"appointment_id": "appt-1", "unknown": "[redacted]"}

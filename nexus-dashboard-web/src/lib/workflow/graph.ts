@@ -55,13 +55,29 @@ const NODE_H = 92
  * `issueLevel` is a validation overlay injected by the builder page (undefined = clean).
  */
 export type FlowNodeData =
-    | { kind: "trigger"; trigger: WorkflowTrigger; issueLevel?: "error" | "warning" | null }
+    | {
+          kind: "trigger"
+          trigger: WorkflowTrigger
+          issueLevel?: "error" | "warning" | null
+          executionStatus?: ExecutionNodeStatus
+      }
     | {
           kind: "step"
           node: WorkflowNode
           isEntry: boolean
           issueLevel?: "error" | "warning" | null
+          executionStatus?: ExecutionNodeStatus
+          executionAttempts?: number
       }
+
+export type ExecutionNodeStatus =
+    | "pending"
+    | "running"
+    | "waiting"
+    | "completed"
+    | "skipped"
+    | "failed"
+    | "blocked"
 
 export type FlowNode = Node<FlowNodeData>
 export type FlowEdge = Edge & {
@@ -458,15 +474,6 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 id,
                 chat_profile_id: "",
                 next_node_id: "",
-                inactivity_timeout_seconds: 3600,
-                max_duration_seconds: 259200,
-                max_patient_turns: 12,
-                dynamic_variable_mappings: [],
-                human_handoff_tokens: ["HUMAN", "AGENT", "CALL ME"],
-                timeout_behavior: "handoff",
-                failure_behavior: "handoff",
-                respect_quiet_hours: true,
-                max_response_segments: 3,
             }
         case "send_voice":
             return {
@@ -838,6 +845,14 @@ export function normalizeDefinition(def: WorkflowDefinition): WorkflowDefinition
                     delay: node.delay as WaitDelay,
                     respect_quiet_hours: node.respect_quiet_hours !== false,
                 },
+            }
+        }
+        if (node.type === "retell_sms_conversation") {
+            return {
+                type: "retell_sms_conversation",
+                id: String(node.id),
+                chat_profile_id: String(node.chat_profile_id ?? ""),
+                next_node_id: String(node.next_node_id ?? ""),
             }
         }
         return raw as WorkflowNode

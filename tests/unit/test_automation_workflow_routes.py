@@ -705,6 +705,12 @@ def test_get_run_timeline_returns_phi_light_items():
         return_value=RunTimeline(
             run=_run_list_item(),
             contact={"id": "contact-1", "display_name": "Jordan Rivera", "phone_masked": None},
+            workflow_version={
+                "id": "version-1",
+                "version_number": 3,
+                "definition": {"schema_version": "1.0"},
+                "published_at": _NOW,
+            },
             items=[
                 TimelineItem(
                     id="event-1",
@@ -739,6 +745,7 @@ def test_get_run_timeline_returns_phi_light_items():
         result = asyncio.run(get_run_timeline("wf-1", "run-1", user))
 
     assert result.contact["display_name"] == "Jordan Rivera"
+    assert result.workflow_version["version_number"] == 3
     assert result.items[0].kind == "inbound_reply"
     assert "body" not in result.items[0].metadata
     assert result.items[0].input["context"]["appointment_time"] == "10:00 AM"

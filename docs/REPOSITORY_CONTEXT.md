@@ -277,6 +277,15 @@ Drafts created from the Campaigns page inherit the institution admin's currently
 selected location so channel readiness, enrollment, and inbound reply routing all
 use the same location-level Twilio number.
 
+Every step attempt records a PHI-safe input snapshot when execution starts and an
+output snapshot when it completes, fails, waits, or resumes. These snapshots are
+stored on `automation_workflow_step_executions`; unknown context keys are redacted
+before persistence. The run timeline also returns the immutable workflow version
+used by that run. The builder's **Executions** view uses that version and the
+attempt ledger to render the traversed path, per-node status, retries, duration,
+result, error, and recorded input/output. Older step rows without snapshots retain
+the legacy timeline projection as a compatibility fallback.
+
 Current schema version `1.0` supports triggers such as `appointment_offset`,
 `appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
 `callback_requested`, `patient_status_changed`, and `sms_reply`; node types
@@ -302,22 +311,38 @@ reply to the configured SMS segment limit, and sends it through the existing
 `SmsService`. `RetellSmsTurn` rows deduplicate Twilio webhook retries and prevent
 blind replay after an ambiguous mutating Retell request.
 
-The local session—not Retell—is the lifecycle authority. The inactivity TTL
-defaults to one hour and resets after each accepted turn, subject to a 72-hour
-maximum-duration cap and a configured patient-turn limit. Timeout, explicit
-handoff phrases, Retell-ended chats, STOP, and provider failures end the local
-session. A later unmatched patient SMS can start a new `sms_reply` workflow,
+The local session—not Retell—is the lifecycle authority. Platform policy fixes
+the inactivity TTL at one hour and resets it after each accepted turn, subject
+to a 24-hour maximum-duration cap, 12 patient turns, and three SMS segments per
+generated reply. These are not workflow-author settings. Inactivity ends the
+session and advances to the next step without creating a handoff; provider or
+delivery failure creates a staff handoff. Retell-ended chats and STOP also end
+the local session. A later unmatched patient SMS can start a new `sms_reply` workflow,
 which creates a new local session and a new Retell `chat_id`; terminal chat IDs
 are never reused. When that new run parks directly on a Retell SMS node, the
 triggering inbound message becomes its first turn—the patient does not need to
 text twice. See [ADR 0002](adr/0002-retell-chat-generation-with-platform-sms-transport.md).
 
-Retell dynamic variables are deliberately allow-listed. The standard set is
-`patient_first_name`, `clinic_name`, `clinic_phone`, `clinic_timezone`,
-`conversation_goal`, and `previous_sms_message` when those values exist. The
-node can add explicit `name` → workflow-context-path mappings with defaults.
-Internal institution/location/workflow-run/session IDs go in Retell metadata.
-The worker never forwards the entire trigger context.
+Retell dynamic variables are automatic and deliberately allow-listed. NexHealth
+and GoTracker deliveries first become the same normalized workflow/merge
+context; Retell then receives only available patient first-name/language,
+clinic, appointment, booking, recall, callback, conversation-goal, and previous
+message values. Workflow authors cannot map arbitrary fields. Internal
+institution/location/workflow-run/session IDs go in Retell metadata. The worker
+never forwards the entire trigger context or a raw PMS delivery. If the Retell
+agent ends the chat with a collected `conversation_outcome`, the runtime exposes
+it as `retell_sms_agent_outcome` for a downstream Condition node.
+
+Retell SMS chat profiles are provisioned by a platform operator from
+**Superadmin → Institutions → Location → Edit → Retell SMS Profiles**. The
+location editor can create, verify, edit, activate/deactivate, or delete an
+unused profile and records its display name, Retell agent ID, optional pinned
+agent version, and optional purpose. Workflow authors only select active
+profiles for their current location. `GET /api/retell-sms/profiles` returns
+sanitized location-scoped choices to institution users; a superadmin must pass
+`location_id` and receives the technical fields needed by the editor. Retell
+agent creation and prompt configuration still happen manually in Retell's own
+dashboard, and no Retell phone number is required for this SMS mode.
 
 `wait` is the single first-class pause step and has a typed `wait_for`
 configuration. `wait_for.type = time` owns duration, calendar, or

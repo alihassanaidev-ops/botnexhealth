@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
-import { ArrowLeft, History, Loader2 } from "lucide-react"
+import { Activity, ArrowLeft, History, Loader2, Pencil } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -46,6 +46,7 @@ import WorkflowPalette from "@/components/workflow/WorkflowPalette"
 import StepConfigPanel from "@/components/workflow/StepConfigPanel"
 import WorkflowValidationPanel from "@/components/workflow/WorkflowValidationPanel"
 import WorkflowPublishControls from "@/components/workflow/WorkflowPublishControls"
+import WorkflowExecutionsView from "@/components/workflow/WorkflowExecutionsView"
 import TestRunDialog from "@/components/workflow/TestRunDialog"
 import type { AutomationWorkflow, RetellSmsChatProfile } from "@/types"
 import type { OutboundVoiceProfile } from "@/types"
@@ -80,6 +81,7 @@ export default function WorkflowBuilder() {
     const [selectedId, setSelectedId] = useState<string | null>(null)
     const [panelOpen, setPanelOpen] = useState(false)
     const [testOpen, setTestOpen] = useState(false)
+    const [view, setView] = useState<"build" | "executions">("build")
     const [backendIssues, setBackendIssues] = useState<ValidationIssue[]>([])
     const [voiceProfiles, setVoiceProfiles] = useState<OutboundVoiceProfile[]>([])
     const [retellSmsProfiles, setRetellSmsProfiles] = useState<RetellSmsChatProfile[]>([])
@@ -371,7 +373,7 @@ export default function WorkflowBuilder() {
                 </Button>
                 <Input
                     value={name}
-                    disabled={readOnly}
+                    disabled={readOnly || view === "executions"}
                     onChange={(e) => {
                         setName(e.target.value)
                         setDirty(true)
@@ -388,13 +390,22 @@ export default function WorkflowBuilder() {
                 </span>
                 {dirty && <span className="text-xs text-amber-600 dark:text-amber-400">● Unsaved</span>}
 
+                <div className="ml-3 flex rounded-md border border-border bg-muted/40 p-0.5">
+                    <button type="button" onClick={() => setView("build")} className={cn("inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-xs font-medium", view === "build" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>
+                        <Pencil className="h-3.5 w-3.5" /> Build
+                    </button>
+                    <button type="button" onClick={() => setView("executions")} className={cn("inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-xs font-medium", view === "executions" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>
+                        <Activity className="h-3.5 w-3.5" /> Executions
+                    </button>
+                </div>
+
                 <div className="ml-auto flex items-center gap-2">
                     <Button variant="outline" size="sm" className="gap-1.5" asChild>
                         <Link to={`/institution-admin/campaigns/${id}/versions`}>
                             <History className="h-3.5 w-3.5" /> Versions
                         </Link>
                     </Button>
-                    <WorkflowPublishControls
+                    {view === "build" && <WorkflowPublishControls
                         status={workflow.status}
                         dirty={dirty}
                         errorCount={errorCount}
@@ -405,12 +416,14 @@ export default function WorkflowBuilder() {
                         onResume={() => runLifecycle(resumeWorkflow, "Campaign resumed")}
                         onDelete={onDelete}
                         onTestRun={() => setTestOpen(true)}
-                    />
+                    />}
                 </div>
             </div>
 
             {/* Body: palette | canvas | validation rail */}
-            <div className="flex min-h-0 flex-1">
+            {view === "executions" ? (
+                <WorkflowExecutionsView workflowId={id as string} />
+            ) : <div className="flex min-h-0 flex-1">
                 <aside className="w-56 shrink-0 border-r border-border">
                     <WorkflowPalette
                         trigger={def.trigger}
@@ -443,9 +456,9 @@ export default function WorkflowBuilder() {
                     />
                     {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </aside>
-            </div>
+            </div>}
 
-            <StepConfigPanel
+            {view === "build" && <StepConfigPanel
                 open={panelOpen}
                 onOpenChange={setPanelOpen}
                 def={def}
@@ -459,7 +472,7 @@ export default function WorkflowBuilder() {
                 voiceProfiles={voiceProfiles}
                 retellSmsProfiles={retellSmsProfiles}
                 readOnly={readOnly}
-            />
+            />}
             <TestRunDialog open={testOpen} onOpenChange={setTestOpen} def={def} />
         </div>
     )

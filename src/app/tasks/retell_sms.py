@@ -44,6 +44,10 @@ from src.app.services.automation.retell_sms_conversation_service import (
     RetellSmsConversationService,
     agent_response_text,
 )
+from src.app.services.automation.retell_sms_policy import (
+    RETELL_SMS_AGENT_OUTCOME_VARIABLE,
+    RETELL_SMS_POLICY,
+)
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.step_dispatcher import build_dispatcher
@@ -135,30 +139,17 @@ async def _process_turn_async(
                 outcome="timeout",
                 now=now,
             )
-            extra: dict[str, str] = {}
-            if node.timeout_behavior == "handoff":
-                handoff = await service.create_handoff(
-                    retell_session,
-                    reason="automation_failed",
-                    summary=(
-                        "A patient reply reached an expired Retell SMS conversation "
-                        "and needs staff follow-up."
-                    ),
-                    inbound=inbound,
-                )
-                extra["retell_sms_handoff_id"] = str(handoff.id)
             await _resume_terminal(
                 db,
                 run,
                 definition,
                 node,
                 retell_session,
-                extra_context=extra,
             )
             await db.commit()
             return {"processed": False, "reason": "session_expired"}
 
-        if node.respect_quiet_hours:
+        if RETELL_SMS_POLICY.respect_quiet_hours:
             gate = await ComplianceGateService(db).check(
                 run,
                 "send_sms",
@@ -171,7 +162,8 @@ async def _process_turn_async(
                 retry_at = gate.retry_at or (now + timedelta(hours=1))
                 retell_session.last_activity_at = now
                 retell_session.expires_at = min(
-                    retry_at + timedelta(seconds=node.inactivity_timeout_seconds),
+                    retry_at
+                    + timedelta(seconds=RETELL_SMS_POLICY.inactivity_timeout_seconds),
                     retell_session.max_expires_at,
                 )
                 scheduler = AutomationWorkflowSchedulerService(db)
@@ -224,40 +216,10 @@ async def _process_turn_async(
         # timer/worker race favor the patient message while still respecting the
         # hard maximum session lifetime.
         retell_session.expires_at = min(
-            now + timedelta(seconds=node.inactivity_timeout_seconds),
+            now + timedelta(seconds=RETELL_SMS_POLICY.inactivity_timeout_seconds),
             retell_session.max_expires_at,
         )
         await db.commit()
-
-        if service.is_handoff_requested(inbound.body, node):
-            service = RetellSmsConversationService(db)
-            retell_session = await db.get(RetellSmsSession, session_id)
-            turn = await db.get(type(turn), turn.id)
-            assert retell_session is not None and turn is not None
-            service.mark_terminal(
-                retell_session,
-                status=RetellSmsSessionStatus.HANDOFF.value,
-                outcome="patient_requested_handoff",
-            )
-            handoff = await service.create_handoff(
-                retell_session,
-                reason="patient_asks_for_staff",
-                summary="Patient asked for a staff member during the AI SMS conversation.",
-                inbound=inbound,
-            )
-            turn.status = RetellSmsTurnStatus.COMPLETED.value
-            turn.completed_at = datetime.now(timezone.utc)
-            await _resume_terminal(
-                db,
-                run,
-                definition,
-                node,
-                retell_session,
-                extra_context={"retell_sms_handoff_id": str(handoff.id)},
-            )
-            await db.commit()
-            await _best_effort_end_chat(retell_session)
-            return {"processed": True, "outcome": "patient_requested_handoff"}
 
         try:
             client = RetellChatClient(settings.retell_api_secret or "")
@@ -265,7 +227,6 @@ async def _process_turn_async(
             if not retell_session.retell_chat_id:
                 dynamic_variables = await service.dynamic_variables(
                     retell_session=retell_session,
-                    node=node,
                     context=context,
                 )
                 created = await client.create_chat(
@@ -287,7 +248,7 @@ async def _process_turn_async(
                 content=inbound.body or "",
             )
             response_text, message_ids = agent_response_text(
-                messages, max_segments=node.max_response_segments
+                messages, max_segments=RETELL_SMS_POLICY.max_response_segments
             )
             if not response_text:
                 raise RetellChatPermanentError("retell_completion_empty_agent_response")
@@ -329,13 +290,21 @@ async def _process_turn_async(
                 turn=turn,
                 outbound_sms_history_id=str(sms_log.id),
                 retell_message_ids=message_ids,
-                node=node,
             )
             await db.commit()
             chat_ended = False
+            terminal_context: dict[str, str] = {}
             try:
                 details = await client.get_chat(str(retell_session.retell_chat_id))
                 chat_ended = (details.status or "").lower() in {"ended", "error"}
+                agent_outcome = str(
+                    (details.collected_dynamic_variables or {}).get(
+                        RETELL_SMS_AGENT_OUTCOME_VARIABLE,
+                        "",
+                    )
+                ).strip()
+                if chat_ended and agent_outcome:
+                    terminal_context["retell_sms_agent_outcome"] = agent_outcome[:120]
             except RetellChatTransientError:
                 logger.info("Retell chat status read deferred session=%s", session_id)
             except RetellChatPermanentError:
@@ -352,7 +321,14 @@ async def _process_turn_async(
                 terminal = True
 
             if terminal:
-                await _resume_terminal(db, run, definition, node, retell_session)
+                await _resume_terminal(
+                    db,
+                    run,
+                    definition,
+                    node,
+                    retell_session,
+                    extra_context=terminal_context,
+                )
             else:
                 scheduler = AutomationWorkflowSchedulerService(db)
                 await scheduler.cancel_timers_for_run(str(run.id))
@@ -413,27 +389,15 @@ async def _handle_failure(
         outcome="failed",
         failure_code=failure_code,
     )
-    if node.failure_behavior == "fail":
-        scheduler = AutomationWorkflowSchedulerService(db)
-        await scheduler.cancel_timers_for_run(str(run.id))
-        runtime = AutomationWorkflowRuntimeService(db)
-        step = await db.get(
-            AutomationWorkflowStepExecution, retell_session.step_execution_id
-        )
-        if step is not None:
-            await runtime.fail_step(step, result_code="retell_sms_failed")
-        await runtime.fail_run(run, reason="retell_sms_failed")
-        return
-
-    extra: dict[str, str] = {}
-    if node.failure_behavior == "handoff":
-        handoff = await service.create_handoff(
-            retell_session,
-            reason="automation_failed",
-            summary="The AI SMS conversation could not continue and needs staff follow-up.",
-        )
-        extra["retell_sms_handoff_id"] = str(handoff.id)
-    await _resume_terminal(db, run, definition, node, retell_session, extra_context=extra)
+    handoff = await service.create_handoff(
+        retell_session,
+        reason="automation_failed",
+        summary="The AI SMS conversation could not continue and needs staff follow-up.",
+    )
+    extra = {"retell_sms_handoff_id": str(handoff.id)}
+    await _resume_terminal(
+        db, run, definition, node, retell_session, extra_context=extra
+    )
 
 
 async def _resume_terminal(
@@ -461,6 +425,7 @@ async def _resume_terminal(
     step.result_code = f"retell_sms_{retell_session.terminal_outcome or retell_session.status}"
     step.result_metadata = context
     runtime = AutomationWorkflowRuntimeService(db)
+    runtime.set_trace_context(metadata)
     await runtime.resume_run(run, step)
     run.current_step_id = node.next_node_id
     dispatcher, location_timezone = await build_dispatcher(

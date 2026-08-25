@@ -570,7 +570,7 @@ def test_patient_status_changed_rejects_blank_statuses() -> None:
         WorkflowDefinition.model_validate(defn)
 
 
-def test_retell_sms_conversation_defaults_and_dynamic_variables() -> None:
+def test_retell_sms_conversation_has_profile_and_next_step_only() -> None:
     definition = WorkflowDefinition.model_validate(
         {
             "schema_version": "1.0",
@@ -582,6 +582,9 @@ def test_retell_sms_conversation_defaults_and_dynamic_variables() -> None:
                     "id": "chat-1",
                     "chat_profile_id": "profile-1",
                     "next_node_id": "exit-1",
+                    # Legacy published definitions remain loadable, but author
+                    # policy is discarded in favor of platform-owned policy.
+                    "inactivity_timeout_seconds": 7200,
                     "dynamic_variable_mappings": [
                         {
                             "name": "appointment_reason",
@@ -596,28 +599,42 @@ def test_retell_sms_conversation_defaults_and_dynamic_variables() -> None:
 
     node = definition.nodes[0]
     assert node.type == "retell_sms_conversation"
-    assert node.inactivity_timeout_seconds == 3600
-    assert node.max_duration_seconds == 259200
-    assert node.human_handoff_tokens == ["HUMAN", "AGENT", "CALL ME"]
+    assert node.model_dump() == {
+        "id": "chat-1",
+        "type": "retell_sms_conversation",
+        "chat_profile_id": "profile-1",
+        "next_node_id": "exit-1",
+    }
 
 
-def test_retell_sms_conversation_rejects_ttl_above_hard_max() -> None:
-    with pytest.raises(ValidationError):
-        WorkflowDefinition.model_validate(
-            {
-                "schema_version": "1.0",
-                "trigger": {"type": "manual"},
-                "entry_node_id": "chat-1",
-                "nodes": [
-                    {
-                        "type": "retell_sms_conversation",
-                        "id": "chat-1",
-                        "chat_profile_id": "profile-1",
-                        "next_node_id": "exit-1",
-                        "inactivity_timeout_seconds": 7200,
-                        "max_duration_seconds": 3600,
-                    },
-                    {"type": "exit", "id": "exit-1"},
-                ],
-            }
-        )
+def test_retell_sms_conversation_ignores_all_legacy_author_policy() -> None:
+    definition = WorkflowDefinition.model_validate(
+        {
+            "schema_version": "1.0",
+            "trigger": {"type": "manual"},
+            "entry_node_id": "chat-1",
+            "nodes": [
+                {
+                    "type": "retell_sms_conversation",
+                    "id": "chat-1",
+                    "chat_profile_id": "profile-1",
+                    "next_node_id": "exit-1",
+                    "max_duration_seconds": 1,
+                    "max_patient_turns": 999,
+                    "human_handoff_tokens": ["HUMAN"],
+                    "timeout_behavior": "handoff",
+                    "failure_behavior": "continue",
+                    "respect_quiet_hours": False,
+                    "max_response_segments": 99,
+                },
+                {"type": "exit", "id": "exit-1"},
+            ],
+        }
+    )
+
+    assert set(definition.nodes[0].model_dump()) == {
+        "id",
+        "type",
+        "chat_profile_id",
+        "next_node_id",
+    }

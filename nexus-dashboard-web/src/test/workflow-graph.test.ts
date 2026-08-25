@@ -167,9 +167,7 @@ describe("workflow graph — factories", () => {
         })
         expect(createNode("retell_sms_conversation", "chat")).toMatchObject({
             chat_profile_id: "",
-            inactivity_timeout_seconds: 3600,
-            max_patient_turns: 12,
-            timeout_behavior: "handoff",
+            next_node_id: "",
         })
         expect(createNode("send_voice", "v")).toMatchObject({
             wait_for_outcome: false,
@@ -235,6 +233,31 @@ describe("workflow graph — factories", () => {
 
         expect(normalized.nodes[0]).not.toHaveProperty("include_reply_key")
         expect(normalized.nodes[1]).not.toHaveProperty("wait_for.include_reply_key")
+    })
+    it("removes legacy author policy from Retell SMS nodes", () => {
+        const legacy = {
+            ...LINEAR,
+            entry_node_id: "chat-1",
+            nodes: [
+                {
+                    type: "retell_sms_conversation",
+                    id: "chat-1",
+                    chat_profile_id: "profile-1",
+                    next_node_id: "exit-1",
+                    inactivity_timeout_seconds: 900,
+                    failure_behavior: "continue",
+                    dynamic_variable_mappings: [{ name: "raw", source_field: "payload" }],
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+        } as unknown as WorkflowDefinition
+
+        expect(normalizeDefinition(legacy).nodes[0]).toEqual({
+            type: "retell_sms_conversation",
+            id: "chat-1",
+            chat_profile_id: "profile-1",
+            next_node_id: "exit-1",
+        })
     })
     it("createTrigger yields sensible defaults", () => {
         expect(createTrigger("appointment_offset")).toMatchObject({ offset_hours: -24 })

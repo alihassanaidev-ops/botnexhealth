@@ -87,7 +87,7 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.node_id === "sms-1" && i.message.includes("body is empty"))).toBe(true)
     })
 
-    it("validates Retell SMS profile and lifecycle bounds", () => {
+    it("requires a Retell SMS profile", () => {
         const def: WorkflowDefinition = {
             schema_version: "1.0",
             trigger: { type: "sms_reply" },
@@ -98,15 +98,12 @@ describe("workflow validation", () => {
                     id: "chat-1",
                     chat_profile_id: "",
                     next_node_id: "exit-1",
-                    inactivity_timeout_seconds: 7200,
-                    max_duration_seconds: 3600,
                 },
                 { type: "exit", id: "exit-1", outcome: "done" },
             ],
         }
         const issues = validateDefinition(def)
         expect(issues.some((issue) => issue.message.includes("no chat profile"))).toBe(true)
-        expect(issues.some((issue) => issue.message.includes("cannot exceed"))).toBe(true)
     })
 
     it("validates drip batch size and interval", () => {

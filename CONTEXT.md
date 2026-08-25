@@ -67,3 +67,7 @@ _Avoid_: Global patient conversation when discussing run-specific campaign repli
 **Retell-backed SMS Conversation**:
 A run-scoped patient SMS conversation in which Retell generates reply text while BotNexHealth owns Twilio transport, compliance, correlation, local expiry, and workflow advancement.
 _Avoid_: Retell-managed SMS, Retell SMS transport, using `chat_id` as the local conversation identity
+
+**AI SMS Context**:
+The provider-neutral patient, clinic, appointment, and workflow values supplied to a response-generating SMS agent. It is resolved from BotNexHealth records rather than exposing a PMS delivery verbatim.
+_Avoid_: Raw NexHealth payload, raw GoTracker payload, client-authored dynamic-variable map

@@ -34,6 +34,7 @@ import { SUPPORTED_TIMEZONES } from "@/lib/timezones";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic, TwilioPhoneNumber } from "@/types";
 import { cn } from "@/lib/utils";
 import { OutboundVoiceProfilesAdmin } from "./OutboundVoiceProfilesAdmin";
+import { RetellSmsProfilesAdmin } from "./RetellSmsProfilesAdmin";
 
 const US_STATES = [
     { value: "AL", label: "AL — Alabama" }, { value: "AK", label: "AK — Alaska" },
@@ -653,6 +654,15 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                                 institutionSlug={institutionSlug}
                                 locationSlug={location.slug}
                             />
+                        </SectionCard>
+                    )}
+
+                    {isEditing && location && (
+                        <SectionCard
+                            title="Retell SMS Profiles"
+                            description="Response-generator agents available to Retell SMS Conversation workflow nodes."
+                        >
+                            <RetellSmsProfilesAdmin locationId={location.id} />
                         </SectionCard>
                     )}
 

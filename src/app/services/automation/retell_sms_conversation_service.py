@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -33,9 +32,11 @@ from src.app.services.automation.campaign_conversation_service import (
 )
 from src.app.services.automation.definition_schema import RetellSmsConversationNode
 from src.app.services.automation.merge_field_catalog import MergeContextBuilder
+from src.app.services.automation.retell_sms_policy import (
+    AUTOMATIC_RETELL_SMS_VARIABLES,
+    RETELL_SMS_POLICY,
+)
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
-
-_SPACE_RE = re.compile(r"\s+")
 
 
 class RetellSmsConversationConfigurationError(RuntimeError):
@@ -115,8 +116,10 @@ class RetellSmsConversationService:
             )
 
         thread = await CampaignConversationService(self.session).open_sms_thread(run)
-        expires_at = now + timedelta(seconds=node.inactivity_timeout_seconds)
-        max_expires_at = now + timedelta(seconds=node.max_duration_seconds)
+        expires_at = now + timedelta(
+            seconds=RETELL_SMS_POLICY.inactivity_timeout_seconds
+        )
+        max_expires_at = now + timedelta(seconds=RETELL_SMS_POLICY.max_duration_seconds)
         step = await runtime.begin_step(
             run,
             step_id=node.id,
@@ -243,7 +246,6 @@ class RetellSmsConversationService:
         self,
         *,
         retell_session: RetellSmsSession,
-        node: RetellSmsConversationNode,
         context: dict[str, Any],
     ) -> dict[str, str]:
         contact = await self.session.get(Contact, retell_session.contact_id)
@@ -253,15 +255,17 @@ class RetellSmsConversationService:
             location=location,
             context=context,
         )
-        values: dict[str, str] = {
-            "patient_first_name": merge.get("patient_first_name", ""),
-            "clinic_name": merge.get("clinic_name", "")
-            or merge.get("location_name", "")
-            or getattr(location, "name", ""),
-            "clinic_phone": merge.get("location_phone", ""),
-            "clinic_timezone": getattr(location, "timezone", "") or "UTC",
-            "conversation_goal": str(context.get("campaign_goal") or ""),
-        }
+        values = {name: merge.get(name, "") for name in AUTOMATIC_RETELL_SMS_VARIABLES}
+        values.update(
+            {
+                "clinic_name": values.get("clinic_name", "")
+                or values.get("location_name", "")
+                or getattr(location, "name", ""),
+                "clinic_phone": values.get("location_phone", ""),
+                "clinic_timezone": getattr(location, "timezone", "") or "UTC",
+                "conversation_goal": str(context.get("campaign_goal") or ""),
+            }
+        )
         previous = (
             await self.session.execute(
                 select(SmsHistoryLog)
@@ -275,11 +279,6 @@ class RetellSmsConversationService:
             )
         ).scalar_one_or_none()
         values["previous_sms_message"] = previous.body if previous and previous.body else ""
-        for mapping in node.dynamic_variable_mappings:
-            raw = _context_path(merge, context, mapping.source_field)
-            if raw is None or raw == "":
-                raw = mapping.default_value or ""
-            values[mapping.name] = str(raw)
         return {key: value[:1000] for key, value in values.items() if value != ""}
 
     async def finish_turn(
@@ -289,7 +288,6 @@ class RetellSmsConversationService:
         turn: RetellSmsTurn,
         outbound_sms_history_id: str,
         retell_message_ids: list[str],
-        node: RetellSmsConversationNode,
         now: datetime | None = None,
     ) -> bool:
         """Complete a sent turn and reset inactivity TTL; return max-turn terminal."""
@@ -302,10 +300,10 @@ class RetellSmsConversationService:
         retell_session.last_activity_at = now
         retell_session.status = RetellSmsSessionStatus.AWAITING_USER.value
         retell_session.expires_at = min(
-            now + timedelta(seconds=node.inactivity_timeout_seconds),
+            now + timedelta(seconds=RETELL_SMS_POLICY.inactivity_timeout_seconds),
             retell_session.max_expires_at,
         )
-        terminal = retell_session.turn_count >= node.max_patient_turns
+        terminal = retell_session.turn_count >= RETELL_SMS_POLICY.max_patient_turns
         if terminal:
             self.mark_terminal(
                 retell_session,
@@ -398,17 +396,6 @@ class RetellSmsConversationService:
             "retell_sms_chat_id": retell_session.retell_chat_id,
         }
 
-    @staticmethod
-    def is_handoff_requested(body: str | None, node: RetellSmsConversationNode) -> bool:
-        normalized = _SPACE_RE.sub(" ", (body or "").strip().upper())
-        if not normalized:
-            return False
-        return any(
-            re.search(rf"(?<!\w){re.escape(token)}(?!\w)", normalized)
-            for token in node.human_handoff_tokens
-        )
-
-
 def agent_response_text(messages: tuple[Any, ...], *, max_segments: int) -> tuple[str, list[str]]:
     """Return bounded agent text and message ids; never forward tool/user messages."""
     agent_messages = [
@@ -424,16 +411,3 @@ def agent_response_text(messages: tuple[Any, ...], *, max_segments: int) -> tupl
     return content, [
         str(message.message_id) for message in agent_messages if message.message_id
     ]
-
-
-def _context_path(flat: dict[str, str], raw: dict[str, Any], path: str) -> Any:
-    if path in flat:
-        return flat[path]
-    current: Any = raw
-    for part in path.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return None
-        current = current[part]
-    if isinstance(current, (dict, list)):
-        return None
-    return current

@@ -131,6 +131,7 @@ class WorkflowStepDispatcher:
         """Advance run from current_step_id (or entry node) until wait or exit."""
         now = now or datetime.now(tz=timezone.utc)
         context = {**(run.trigger_metadata or {}), **(context or {})}
+        self.runtime.set_trace_context(context)
         node_map = {n.id: n for n in definition.nodes}
         current_node_id = run.current_step_id or definition.entry_node_id
         steps_advanced = 0
@@ -280,18 +281,7 @@ class WorkflowStepDispatcher:
                         result_code="retell_sms_start_failed",
                         error_message=type(exc).__name__,
                     )
-                    if node.failure_behavior == "fail":
-                        await self.runtime.fail_run(run, reason="retell_sms_start_failed")
-                        return DispatchResult(
-                            status="failed",
-                            steps_advanced=steps_advanced,
-                            patient_status_event_ids=patient_status_event_ids,
-                        )
-                    if (
-                        node.failure_behavior == "handoff"
-                        and run.location_id
-                        and run.contact_id
-                    ):
+                    if run.location_id and run.contact_id:
                         from src.app.models.campaign_response import CampaignStaffHandoff
                         from src.app.services.automation.campaign_conversation_service import (
                             CampaignConversationService,
@@ -686,13 +676,6 @@ class WorkflowStepDispatcher:
                     now=effective_now,
                 )
             result_context = conversation_service.result_context(retell_session)
-            if is_active_retell_session and current_node.timeout_behavior == "handoff":
-                handoff = await conversation_service.create_handoff(
-                    retell_session,
-                    reason="automation_failed",
-                    summary="Retell SMS conversation expired after patient inactivity.",
-                )
-                result_context["retell_sms_handoff_id"] = str(handoff.id)
             metadata = dict(run.trigger_metadata or {})
             metadata.update(result_context)
             run.trigger_metadata = metadata
@@ -704,6 +687,7 @@ class WorkflowStepDispatcher:
             )
             waiting_step.result_metadata = result_context
 
+        self.runtime.set_trace_context(context)
         await self.runtime.resume_run(run, waiting_step)
         if is_drip:
             waiting_step.result_code = "drip_released"

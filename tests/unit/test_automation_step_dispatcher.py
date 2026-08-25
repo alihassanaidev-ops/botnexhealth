@@ -84,6 +84,7 @@ def _make_step(
 
 def _make_runtime() -> AsyncMock:
     rt = AsyncMock()
+    rt.set_trace_context = MagicMock()
     step = MagicMock()
     step.id = "step-exec-1"
     step.step_id = "step-1"

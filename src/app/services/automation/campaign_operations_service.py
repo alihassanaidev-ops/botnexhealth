@@ -53,6 +53,10 @@ from src.app.services.automation.definition_schema import (
     WorkflowNode,
     sms_reply_wait_spec,
 )
+from src.app.services.automation.execution_trace import (
+    trace_safe_mapping,
+    trace_safe_value,
+)
 from src.app.services.automation.launch_checklist_service import CampaignLaunchChecklistService
 
 SEND_STEP_TYPES = {
@@ -132,6 +136,7 @@ class TimelineItem:
 class RunTimeline:
     run: CampaignRunListItem
     contact: dict[str, Any]
+    workflow_version: dict[str, Any]
     items: list[TimelineItem]
 
 
@@ -364,7 +369,17 @@ class CampaignOperationsService:
         items.extend(await self._usage_items(run))
 
         items.sort(key=lambda item: item.occurred_at)
-        return RunTimeline(run=run_item, contact=contact, items=items)
+        return RunTimeline(
+            run=run_item,
+            contact=contact,
+            workflow_version={
+                "id": str(version.id),
+                "version_number": version.version_number,
+                "definition": version.definition,
+                "published_at": version.published_at,
+            } if version else {},
+            items=items,
+        )
 
     async def operations(
         self,
@@ -608,8 +623,16 @@ class CampaignOperationsService:
                     "scheduled_timezone": step.scheduled_timezone,
                     "completed_at": step.completed_at,
                 },
-                input=_step_input_snapshot(run, step, node_by_id.get(step.step_id)),
-                output=_step_output_snapshot(step, node_by_id.get(step.step_id), run),
+                input=(
+                    step.input_snapshot
+                    if step.input_snapshot is not None
+                    else _step_input_snapshot(run, step, node_by_id.get(step.step_id))
+                ),
+                output=(
+                    step.output_snapshot
+                    if step.output_snapshot is not None
+                    else _step_output_snapshot(step, node_by_id.get(step.step_id), run)
+                ),
                 node=_node_snapshot(node_by_id.get(step.step_id)),
                 duration_ms=_duration_ms(step.started_at or step.created_at, step.completed_at),
                 error_message=step.error_message,
@@ -1055,88 +1078,6 @@ def _step_summary(step: AutomationWorkflowStepExecution) -> str | None:
     return None
 
 
-_TIMELINE_SAFE_CONTEXT_KEYS = {
-    "appointment_at",
-    "appointment_date",
-    "appointment_datetime",
-    "appointment_id",
-    "appointment_location",
-    "appointment_start_time",
-    "appointment_status",
-    "appointment_time",
-    "appointment_type",
-    "appointment_type_id",
-    "appointment_type_name",
-    "booking_link",
-    "call_outcome",
-    "campaign_goal",
-    "confirmation_link",
-    "disconnection_reason",
-    "location_id",
-    "location_name",
-    "operatory_id",
-    "operatory_name",
-    "patient_status",
-    "patient_workflow_status",
-    "provider_id",
-    "provider_name",
-    "qa_reason",
-    "recall_due_date",
-    "recall_type",
-    "reschedule_link",
-    "source",
-    "source_patient_status_event_id",
-    "source_workflow_id",
-    "source_workflow_run_id",
-    "source_workflow_step_id",
-    "trigger_ref_id",
-    "trigger_ref_type",
-    "trigger_type",
-}
-
-_TIMELINE_SAFE_METADATA_KEYS = {
-    *_TIMELINE_SAFE_CONTEXT_KEYS,
-    "attempt_number",
-    "branch",
-    "branch_taken",
-    "batch_number",
-    "batch_position",
-    "batch_size",
-    "call_outcome",
-    "completed_at",
-    "currency",
-    "direction",
-    "due_at",
-    "due_local_at",
-    "duration_ms",
-    "external_ref",
-    "fired_at",
-    "interval_seconds",
-    "max_attempts",
-    "next_node_id",
-    "outcome",
-    "provider",
-    "provider_message_id",
-    "result_code",
-    "retell_call_id",
-    "retell_agent_configured",
-    "retell_agent_source",
-    "retell_from_number_masked",
-    "retell_from_number_normalized",
-    "retell_from_number_source",
-    "scheduled_at",
-    "scheduled_local_at",
-    "scheduled_timezone",
-    "status",
-    "status_written",
-    "timezone",
-    "to_number_masked",
-    "to_number_normalized",
-    "voice_profile_id",
-    "voice_profile_name",
-}
-
-
 def _step_input_snapshot(
     run: AutomationWorkflowRun,
     step: AutomationWorkflowStepExecution,
@@ -1216,10 +1157,6 @@ def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
         base["next_node_id"] = node.next_node_id
     elif isinstance(node, RetellSmsConversationNode):
         base["chat_profile_id"] = node.chat_profile_id
-        base["inactivity_timeout_seconds"] = node.inactivity_timeout_seconds
-        base["max_duration_seconds"] = node.max_duration_seconds
-        base["max_patient_turns"] = node.max_patient_turns
-        base["respect_quiet_hours"] = node.respect_quiet_hours
         base["next_node_id"] = node.next_node_id
     elif reply_wait is not None:
         base["wait_for"] = "sms_reply"
@@ -1290,33 +1227,11 @@ def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
 
 
 def _timeline_safe_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
-    return {
-        str(key): _timeline_safe_value(str(key), value)
-        for key, value in mapping.items()
-        if value is not None
-    }
+    return trace_safe_mapping(mapping)
 
 
 def _timeline_safe_value(key: str, value: Any) -> Any:
-    normalized = key.lower().replace("-", "_")
-    if normalized not in _TIMELINE_SAFE_METADATA_KEYS:
-        return "[redacted]"
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    if isinstance(value, (datetime, Decimal)):
-        return value
-    if isinstance(value, list):
-        return [
-            _timeline_safe_value(key, item)
-            for item in value[:20]
-        ]
-    if isinstance(value, dict):
-        return {
-            str(child_key): _timeline_safe_value(str(child_key), child_value)
-            for child_key, child_value in value.items()
-            if child_value is not None
-        }
-    return str(value)
+    return trace_safe_value(key, value)
 
 
 def _branch_from_result_code(result_code: str | None) -> str | None:

@@ -169,25 +169,11 @@ export interface SmsResponseMapping {
     context_updates?: Record<string, boolean | number | string | string[] | null>
     handoff_reason?: string | null
 }
-export interface RetellSmsDynamicVariableMapping {
-    name: string
-    source_field: string
-    default_value?: string | null
-}
 export interface RetellSmsConversationNode {
     type: "retell_sms_conversation"
     id: string
     chat_profile_id: string
     next_node_id: string
-    inactivity_timeout_seconds?: number
-    max_duration_seconds?: number
-    max_patient_turns?: number
-    dynamic_variable_mappings?: RetellSmsDynamicVariableMapping[]
-    human_handoff_tokens?: string[]
-    timeout_behavior?: "handoff" | "continue"
-    failure_behavior?: "handoff" | "fail" | "continue"
-    respect_quiet_hours?: boolean
-    max_response_segments?: number
 }
 export interface SendVoiceNode {
     type: "send_voice"

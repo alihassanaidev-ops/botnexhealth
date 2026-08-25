@@ -36,6 +36,7 @@ class RetellChatDetails:
     chat_id: str
     status: str | None
     messages: tuple[RetellChatMessage, ...] = ()
+    collected_dynamic_variables: dict[str, str] | None = None
 
 
 class RetellChatClient:
@@ -158,9 +159,19 @@ def _messages(value: object) -> tuple[RetellChatMessage, ...]:
 
 
 def _chat_details(body: dict, *, fallback_chat_id: str) -> RetellChatDetails:
+    collected = body.get("collected_dynamic_variables")
+    normalized_collected = (
+        {
+            str(key): str(value)[:1000]
+            for key, value in collected.items()
+            if isinstance(key, str) and isinstance(value, (str, int, float, bool))
+        }
+        if isinstance(collected, dict)
+        else None
+    )
     return RetellChatDetails(
         chat_id=str(body.get("chat_id") or fallback_chat_id),
         status=str(body["chat_status"]) if body.get("chat_status") else None,
         messages=_messages(body.get("messages")),
+        collected_dynamic_variables=normalized_collected,
     )
-

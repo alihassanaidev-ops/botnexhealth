@@ -41,6 +41,7 @@ from src.app.services.automation.definition_schema import (
 )
 from src.app.services.automation.nexhealth_sync_status_service import assess_sync_status
 from src.app.services.automation.pms_capability_service import PmsCapabilityService
+from src.app.services.automation.retell_sms_policy import RETELL_SMS_POLICY
 from src.app.services.automation.validation_service import WorkflowValidationService
 
 ChecklistStatus = Literal["pass", "warning", "blocked", "unknown"]
@@ -1125,9 +1126,9 @@ def _planned_sends_per_contact(send_nodes: list[Any]) -> dict[str, int]:
         if isinstance(node, SendSmsNode):
             volume["sms"] += attempts
         elif isinstance(node, RetellSmsConversationNode):
-            # Conversation replies are demand-driven; expose the configured
-            # worst-case ceiling instead of pretending this is one fixed send.
-            volume["sms"] += node.max_patient_turns
+            # Conversation replies are demand-driven; expose the hidden platform
+            # ceiling instead of pretending this is one fixed send.
+            volume["sms"] += RETELL_SMS_POLICY.max_patient_turns
         elif isinstance(node, SendEmailNode):
             volume["email"] += attempts
         elif isinstance(node, SendVoiceNode):

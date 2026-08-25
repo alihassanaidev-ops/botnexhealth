@@ -195,6 +195,12 @@ beforeEach(() => {
             display_name: "Browser Phone QA",
             phone_masked: "(***) ***-0843",
         },
+        workflow_version: {
+            id: "ver-1",
+            version_number: 1,
+            definition: {},
+            published_at: "2026-07-01T00:00:00Z",
+        },
         items: [
             {
                 id: "step-1",

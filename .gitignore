@@ -99,7 +99,7 @@ cdk.out/
 
 # Graphify knowledge graph (generated; large graph.json). Rebuild with `graphify .`
 graphify-out/
-
+git 
 .claude
 /docs/
 # Architecture decisions are source-controlled even though other ad-hoc docs are not.

@@ -65,6 +65,30 @@ def test_create_chat_maps_chat_id() -> None:
     assert result.status == "ongoing"
 
 
+def test_get_chat_exposes_scalar_collected_dynamic_variables() -> None:
+    client = RetellChatClient("key")
+    result = _with_client(
+        client.get_chat("chat-1"),
+        response=_response(
+            200,
+            {
+                "chat_id": "chat-1",
+                "chat_status": "ended",
+                "collected_dynamic_variables": {
+                    "conversation_outcome": "handoff",
+                    "attempts": 2,
+                    "nested": {"ignored": True},
+                },
+            },
+        ),
+    )
+
+    assert result.collected_dynamic_variables == {
+        "conversation_outcome": "handoff",
+        "attempts": "2",
+    }
+
+
 def test_completion_returns_only_structured_messages() -> None:
     client = RetellChatClient("key")
     result = _with_client(

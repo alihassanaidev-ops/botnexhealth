@@ -78,10 +78,50 @@ def test_begin_step_creates_execution_and_updates_run_pointer() -> None:
     run = _make_run(AutomationRunStatus.RUNNING.value)
     step = asyncio.run(svc.begin_step(run, step_id="step-wait", step_type="wait"))
     assert step.step_id == "step-wait"
-    assert step.status == AutomationStepStatus.PENDING.value
+    assert step.status == AutomationStepStatus.RUNNING.value
     assert step.attempt_number == 1  # first attempt for this (run, step)
+    assert step.started_at is not None
     assert run.current_step_id == "step-wait"
     session.add.assert_called()
+
+
+def test_step_snapshots_are_captured_at_execution_time_and_redacted() -> None:
+    session = _make_session()
+    svc = AutomationWorkflowRuntimeService(session)
+    context = {
+        "appointment_id": "appt-1",
+        "appointment_time": "10:00 AM",
+        "patient_first_name": "Jordan",
+    }
+    svc.set_trace_context(context)
+    run = _make_run(AutomationRunStatus.RUNNING.value)
+
+    step = asyncio.run(svc.begin_step(run, step_id="step-send", step_type="send_sms"))
+    context["appointment_time"] = "11:00 AM"
+    result = asyncio.run(
+        svc.complete_step(step, result_code="sent", result_metadata={"provider_message_id": "msg-1"})
+    )
+
+    assert result.input_snapshot == {
+        "appointment_id": "appt-1",
+        "appointment_time": "10:00 AM",
+        "patient_first_name": "[redacted]",
+    }
+    assert result.output_snapshot == {
+        "context": {
+            "appointment_id": "appt-1",
+            "appointment_time": "11:00 AM",
+            "patient_first_name": "[redacted]",
+        },
+        "result_code": "sent",
+        "result_metadata": {"provider_message_id": "msg-1"},
+    }
+    event_types = [
+        call.args[0].event_type
+        for call in session.add.call_args_list
+        if hasattr(call.args[0], "event_type")
+    ]
+    assert event_types == ["step.started", "step.completed"]
 
 
 def test_begin_step_auto_increments_attempt_number() -> None:
@@ -125,6 +165,7 @@ def test_fail_step_sets_failed_status() -> None:
     result = asyncio.run(svc.fail_step(step, error_message="timeout"))
     assert result.status == AutomationStepStatus.FAILED.value
     assert result.error_message == "timeout"
+    assert result.output_snapshot is not None
 
 
 # --- wait_run ---

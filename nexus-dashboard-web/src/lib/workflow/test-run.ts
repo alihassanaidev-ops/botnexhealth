@@ -108,7 +108,7 @@ function describe(
                     node_id: node.id,
                     node_type: "retell_sms_conversation",
                     summary: "Wait for Retell-powered SMS conversation",
-                    detail: `${humanizeSeconds(node.inactivity_timeout_seconds ?? 3600)} inactivity timeout · ${node.max_patient_turns ?? 12} patient turns max`,
+                    detail: "Patient and appointment context supplied automatically",
                 },
                 next: node.next_node_id,
             }

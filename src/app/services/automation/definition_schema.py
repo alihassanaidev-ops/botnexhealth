@@ -425,14 +425,19 @@ class SendSmsNode(BaseModel):
         return cleaned
 
 
-class RetellSmsDynamicVariableMapping(BaseModel):
-    """Allow-listed workflow context value exposed to the Retell chat agent."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    source_field: str = Field(min_length=1, max_length=160)
-    default_value: str | None = Field(default=None, max_length=500)
+_LEGACY_RETELL_SMS_POLICY_FIELDS = frozenset(
+    {
+        "inactivity_timeout_seconds",
+        "max_duration_seconds",
+        "max_patient_turns",
+        "dynamic_variable_mappings",
+        "human_handoff_tokens",
+        "timeout_behavior",
+        "failure_behavior",
+        "respect_quiet_hours",
+        "max_response_segments",
+    }
+)
 
 
 class RetellSmsConversationNode(BaseModel):
@@ -449,42 +454,17 @@ class RetellSmsConversationNode(BaseModel):
     type: Literal["retell_sms_conversation"] = "retell_sms_conversation"
     chat_profile_id: str = Field(min_length=1)
     next_node_id: str
-    inactivity_timeout_seconds: int = Field(default=3600, ge=120, le=259200)
-    max_duration_seconds: int = Field(default=259200, ge=120, le=259200)
-    max_patient_turns: int = Field(default=12, ge=1, le=50)
-    dynamic_variable_mappings: list[RetellSmsDynamicVariableMapping] = Field(
-        default_factory=list, max_length=30
-    )
-    human_handoff_tokens: list[str] = Field(
-        default_factory=lambda: ["HUMAN", "AGENT", "CALL ME"], max_length=20
-    )
-    timeout_behavior: Literal["handoff", "continue"] = "handoff"
-    failure_behavior: Literal["handoff", "fail", "continue"] = "handoff"
-    respect_quiet_hours: bool = True
-    max_response_segments: int = Field(default=3, ge=1, le=5)
-
-    @field_validator("human_handoff_tokens")
+    @model_validator(mode="before")
     @classmethod
-    def normalize_handoff_tokens(cls, values: list[str]) -> list[str]:
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            token = value.strip().upper()
-            if token and token not in seen:
-                normalized.append(token)
-                seen.add(token)
-        return normalized
-
-    @model_validator(mode="after")
-    def validate_lifecycle(self) -> "RetellSmsConversationNode":
-        if self.inactivity_timeout_seconds > self.max_duration_seconds:
-            raise ValueError(
-                "inactivity_timeout_seconds must not exceed max_duration_seconds"
-            )
-        names = [mapping.name for mapping in self.dynamic_variable_mappings]
-        if len(names) != len(set(names)):
-            raise ValueError("dynamic variable names must be unique")
-        return self
+    def discard_legacy_author_policy(cls, value: Any) -> Any:
+        """Load old published definitions while enforcing platform policy now."""
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: item
+            for key, item in value.items()
+            if key not in _LEGACY_RETELL_SMS_POLICY_FIELDS
+        }
 
 
 class SendVoiceNode(BaseModel):

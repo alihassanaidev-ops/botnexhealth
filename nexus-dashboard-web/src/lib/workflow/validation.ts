@@ -262,37 +262,6 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                         fix: "Choose an active location Retell SMS profile.",
                     })
                 }
-                const inactivity = node.inactivity_timeout_seconds ?? 3600
-                const maximum = node.max_duration_seconds ?? 259200
-                if (!Number.isInteger(inactivity) || inactivity < 120 || inactivity > 259200) {
-                    issues.push({ node_id: node.id, severity: "error", message: "Inactivity timeout must be 2 minutes to 72 hours." })
-                }
-                if (!Number.isInteger(maximum) || maximum < 120 || maximum > 259200) {
-                    issues.push({ node_id: node.id, severity: "error", message: "Maximum conversation duration must be 2 minutes to 72 hours." })
-                }
-                if (inactivity > maximum) {
-                    issues.push({ node_id: node.id, severity: "error", message: "Inactivity timeout cannot exceed maximum duration." })
-                }
-                const turns = node.max_patient_turns ?? 12
-                if (!Number.isInteger(turns) || turns < 1 || turns > 50) {
-                    issues.push({ node_id: node.id, severity: "error", message: "Maximum patient turns must be 1 to 50." })
-                }
-                const segments = node.max_response_segments ?? 3
-                if (!Number.isInteger(segments) || segments < 1 || segments > 5) {
-                    issues.push({ node_id: node.id, severity: "error", message: "Maximum response segments must be 1 to 5." })
-                }
-                const names = new Set<string>()
-                for (const mapping of node.dynamic_variable_mappings ?? []) {
-                    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(mapping.name) || !mapping.source_field.trim()) {
-                        issues.push({ node_id: node.id, severity: "error", message: "Each dynamic variable needs a valid name and context field." })
-                        break
-                    }
-                    if (names.has(mapping.name)) {
-                        issues.push({ node_id: node.id, severity: "error", message: `Dynamic variable "${mapping.name}" is duplicated.` })
-                        break
-                    }
-                    names.add(mapping.name)
-                }
                 break
             }
             case "send_voice": {

@@ -782,12 +782,11 @@ function RetellSmsFields({
     profiles: RetellSmsChatProfile[]
     readOnly?: boolean
 }) {
-    const mappings = node.dynamic_variable_mappings ?? []
     return (
         <>
             <Field
-                label="Retell chat profile"
-                hint="The response-generator agent for this location. Twilio still sends and receives every SMS."
+                label="AI SMS agent profile"
+                hint="Choose the response agent. Patient, clinic, and appointment context is supplied automatically; Twilio sends and receives every SMS."
             >
                 <Select
                     value={node.chat_profile_id || NONE}
@@ -812,172 +811,6 @@ function RetellSmsFields({
                     No Retell SMS chat profiles are configured for this location. Ask a platform admin to add one.
                 </p>
             )}
-            <div className="grid grid-cols-2 gap-3">
-                <Field label="Inactivity timeout" hint="A later SMS starts a new Retell chat.">
-                    <Select
-                        value={String(node.inactivity_timeout_seconds ?? 3600)}
-                        disabled={readOnly}
-                        onValueChange={(value) => onChange({ ...node, inactivity_timeout_seconds: Number(value) })}
-                    >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="900">15 minutes</SelectItem>
-                            <SelectItem value="1800">30 minutes</SelectItem>
-                            <SelectItem value="3600">1 hour</SelectItem>
-                            <SelectItem value="14400">4 hours</SelectItem>
-                            <SelectItem value="86400">24 hours</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </Field>
-                <Field label="Maximum duration" hint="Hard cap, even while active.">
-                    <Select
-                        value={String(node.max_duration_seconds ?? 259200)}
-                        disabled={readOnly}
-                        onValueChange={(value) => onChange({ ...node, max_duration_seconds: Number(value) })}
-                    >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="3600">1 hour</SelectItem>
-                            <SelectItem value="14400">4 hours</SelectItem>
-                            <SelectItem value="86400">24 hours</SelectItem>
-                            <SelectItem value="259200">72 hours</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </Field>
-                <Field label="Maximum patient turns">
-                    <Input
-                        type="number"
-                        min={1}
-                        max={50}
-                        value={node.max_patient_turns ?? 12}
-                        disabled={readOnly}
-                        onChange={(event) => onChange({ ...node, max_patient_turns: Number(event.target.value) })}
-                    />
-                </Field>
-                <Field label="Maximum SMS segments">
-                    <Input
-                        type="number"
-                        min={1}
-                        max={5}
-                        value={node.max_response_segments ?? 3}
-                        disabled={readOnly}
-                        onChange={(event) => onChange({ ...node, max_response_segments: Number(event.target.value) })}
-                    />
-                </Field>
-            </div>
-            <Field label="Human handoff phrases" hint="Comma-separated whole phrases, matched without case sensitivity.">
-                <Input
-                    value={(node.human_handoff_tokens ?? ["HUMAN", "AGENT", "CALL ME"]).join(", ")}
-                    disabled={readOnly}
-                    onChange={(event) => onChange({
-                        ...node,
-                        human_handoff_tokens: event.target.value.split(",").map((v) => v.trim()).filter(Boolean),
-                    })}
-                />
-            </Field>
-            <div className="grid grid-cols-2 gap-3">
-                <Field label="On timeout">
-                    <Select
-                        value={node.timeout_behavior ?? "handoff"}
-                        disabled={readOnly}
-                        onValueChange={(value: "handoff" | "continue") => onChange({ ...node, timeout_behavior: value })}
-                    >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="handoff">Create handoff</SelectItem>
-                            <SelectItem value="continue">Continue workflow</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </Field>
-                <Field label="On failure">
-                    <Select
-                        value={node.failure_behavior ?? "handoff"}
-                        disabled={readOnly}
-                        onValueChange={(value: "handoff" | "fail" | "continue") => onChange({ ...node, failure_behavior: value })}
-                    >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="handoff">Create handoff</SelectItem>
-                            <SelectItem value="continue">Continue workflow</SelectItem>
-                            <SelectItem value="fail">Fail workflow</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </Field>
-            </div>
-            <div className="space-y-2 rounded-md border border-border p-3">
-                <div className="flex items-center justify-between gap-2">
-                    <div>
-                        <Label className="text-sm">Additional dynamic variables</Label>
-                        <p className="text-xs text-muted-foreground">
-                            Only these mapped context fields are added to the standard minimal patient/clinic variables.
-                        </p>
-                    </div>
-                    <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={readOnly || mappings.length >= 30}
-                        onClick={() => onChange({
-                            ...node,
-                            dynamic_variable_mappings: [...mappings, { name: "", source_field: "", default_value: null }],
-                        })}
-                    >
-                        <Plus className="mr-1 h-3.5 w-3.5" /> Add
-                    </Button>
-                </div>
-                {mappings.map((mapping, index) => (
-                    <div key={`${node.id}-dynamic-${index}`} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2">
-                        <Input
-                            aria-label={`Variable name ${index + 1}`}
-                            placeholder="variable_name"
-                            value={mapping.name}
-                            disabled={readOnly}
-                            onChange={(event) => {
-                                const next = [...mappings]
-                                next[index] = { ...mapping, name: event.target.value }
-                                onChange({ ...node, dynamic_variable_mappings: next })
-                            }}
-                        />
-                        <Input
-                            aria-label={`Default value ${index + 1}`}
-                            placeholder="default"
-                            value={mapping.default_value ?? ""}
-                            disabled={readOnly}
-                            onChange={(event) => {
-                                const next = [...mappings]
-                                next[index] = {
-                                    ...mapping,
-                                    default_value: event.target.value || null,
-                                }
-                                onChange({ ...node, dynamic_variable_mappings: next })
-                            }}
-                        />
-                        <Input
-                            aria-label={`Context field ${index + 1}`}
-                            placeholder="appointment.reason"
-                            value={mapping.source_field}
-                            disabled={readOnly}
-                            onChange={(event) => {
-                                const next = [...mappings]
-                                next[index] = { ...mapping, source_field: event.target.value }
-                                onChange({ ...node, dynamic_variable_mappings: next })
-                            }}
-                        />
-                        <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            disabled={readOnly}
-                            onClick={() => onChange({
-                                ...node,
-                                dynamic_variable_mappings: mappings.filter((_, i) => i !== index),
-                            })}
-                        >
-                            <Trash2 className="h-4 w-4" />
-                        </Button>
-                    </div>
-                ))}
-            </div>
         </>
     )
 }

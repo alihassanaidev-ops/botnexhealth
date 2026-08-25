@@ -135,10 +135,7 @@ def simulate_run(
                     node.id,
                     node.type,
                     "Wait for Retell-powered SMS conversation",
-                    (
-                        f"{node.inactivity_timeout_seconds}s inactivity timeout; "
-                        f"{node.max_patient_turns} patient turns maximum"
-                    ),
+                    "Patient and appointment context supplied automatically",
                 )
             )
             current = node.next_node_id

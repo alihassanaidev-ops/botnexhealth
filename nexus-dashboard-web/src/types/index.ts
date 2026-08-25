@@ -822,6 +822,12 @@ export interface RunTimeline {
         display_name: string | null;
         phone_masked: string | null;
     };
+    workflow_version: {
+        id: string;
+        version_number: number;
+        definition: Record<string, unknown>;
+        published_at: string;
+    };
     items: RunTimelineItem[];
 }
 
