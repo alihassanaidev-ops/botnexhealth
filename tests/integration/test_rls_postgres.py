@@ -17,6 +17,11 @@ from src.app.services.institution_service import InstitutionService
 from src.app.services.automation.campaign_conversation_service import (
     CampaignConversationService,
 )
+from src.app.services.automation.sms_opt_out_workflow_service import (
+    SmsOptOutWorkflowService,
+)
+from src.app.models.sms_consent import ConsentSource
+from src.app.services.sms_compliance import SmsComplianceService
 
 pytestmark = pytest.mark.rls
 
@@ -887,14 +892,15 @@ async def test_outbound_voice_attempt_visibility_for_webhook_and_poller_contexts
 
 
 @pytest.mark.asyncio
-async def test_twilio_context_resolves_tenant_scoped_sms_workflow_thread(
+async def test_twilio_context_atomically_suppresses_and_cancels_sms_workflow_run(
     rls_engine,
 ) -> None:
-    """Inbound Twilio replies can read the run/version needed for correlation."""
+    """Twilio STOP can suppress and terminate its tenant/location-scoped SMS run."""
     workflow_id = "92000000-0000-0000-0000-000000000001"
     version_id = "92000000-0000-0000-0000-000000000002"
     run_id = "92000000-0000-0000-0000-000000000003"
     thread_id = "92000000-0000-0000-0000-000000000004"
+    timer_id = "92000000-0000-0000-0000-000000000005"
     definition = {
         "trigger": {"type": "manual"},
         "entry_node_id": "sms-1",
@@ -989,6 +995,24 @@ async def test_twilio_context_resolves_tenant_scoped_sms_workflow_thread(
         await conn.execute(
             text(
                 """
+                INSERT INTO automation_workflow_timers
+                  (id, institution_id, location_id, workflow_run_id, due_at, status)
+                VALUES (
+                  :timer_id, :inst_a, :loc_a1, :run_id,
+                  now() + interval '1 hour', 'claimed'
+                )
+                """
+            ),
+            {
+                "timer_id": timer_id,
+                "run_id": run_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        await conn.execute(
+            text(
+                """
                 INSERT INTO campaign_conversation_threads
                   (id, institution_id, location_id, contact_id, workflow_id,
                    workflow_run_id, channel, status)
@@ -1025,6 +1049,67 @@ async def test_twilio_context_resolves_tenant_scoped_sms_workflow_thread(
         assert resolved is not None
         assert resolved.id == thread_id
         assert resolved.workflow_run_id == run_id
+
+        await SmsComplianceService(session).suppress(
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            contact_id=CONTACT_A1,
+            phone="+14165550100",
+            source=ConsentSource.TWILIO_KEYWORD,
+            keyword="STOP",
+            reason="integration test",
+        )
+        cancelled = await SmsOptOutWorkflowService(session).cancel_active_sms_runs(
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            phone="+14165550100",
+            correlated_run_id=run_id,
+        )
+        assert cancelled == 1
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        run_row = (
+            await conn.execute(
+                text(
+                    "SELECT status, blocked_reason FROM automation_workflow_runs "
+                    "WHERE id = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+        ).one()
+        timer_row = (
+            await conn.execute(
+                text(
+                    "SELECT status, cancelled_at FROM automation_workflow_timers "
+                    "WHERE id = :timer_id"
+                ),
+                {"timer_id": timer_id},
+            )
+        ).one()
+        thread_row = (
+            await conn.execute(
+                text(
+                    "SELECT status, completion_reason FROM campaign_conversation_threads "
+                    "WHERE id = :thread_id"
+                ),
+                {"thread_id": thread_id},
+            )
+        ).one()
+        suppression_count = await conn.scalar(
+            text(
+                "SELECT count(*) FROM sms_suppressions "
+                "WHERE institution_id = :inst_a AND location_id = :loc_a1 "
+                "AND is_active = true"
+            ),
+            {"inst_a": INST_A, "loc_a1": LOC_A1},
+        )
+
+        assert tuple(run_row) == ("cancelled", "sms_opt_out")
+        assert timer_row.status == "cancelled"
+        assert timer_row.cancelled_at is not None
+        assert tuple(thread_row) == ("completed", "sms_opt_out")
+        assert suppression_count == 1
 
 
 @pytest.mark.asyncio

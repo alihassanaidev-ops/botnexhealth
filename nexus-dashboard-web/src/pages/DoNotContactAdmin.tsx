@@ -8,7 +8,6 @@ import {
     RefreshCcw,
     Search,
     ShieldOff,
-    X,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import { Badge } from "@/components/ui/badge"
@@ -119,25 +118,29 @@ function ChannelTag({
     const Icon = CHANNEL_ICONS[entry.channel]
     const scopeLabel = entry.scope === "location" && locationName ? ` · ${locationName}` : ""
     return (
-        <Badge
-            variant="outline"
-            className={`gap-1 py-1 pr-1 font-medium ${CHANNEL_STYLES[entry.channel]}`}
-            title={`${entry.reason ?? "Patient opted out"}${scopeLabel}`}
-        >
-            <Icon className="h-3 w-3" />
-            {CHANNEL_LABELS[entry.channel]}
-            {entry.scope === "location" && locationName && (
-                <span className="max-w-28 truncate opacity-70">· {locationName}</span>
-            )}
-            <button
+        <div className="inline-flex items-center gap-1.5">
+            <Badge
+                variant="outline"
+                className={`gap-1 py-1 font-medium ${CHANNEL_STYLES[entry.channel]}`}
+                title={`${entry.reason ?? "Patient opted out"}${scopeLabel}`}
+            >
+                <Icon className="h-3 w-3" />
+                {CHANNEL_LABELS[entry.channel]}
+                {entry.scope === "location" && locationName && (
+                    <span className="max-w-28 truncate opacity-70">· {locationName}</span>
+                )}
+            </Badge>
+            <Button
                 type="button"
-                className="ml-0.5 rounded-sm p-0.5 hover:bg-black/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/10"
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
                 onClick={onRemove}
                 aria-label={`Remove ${CHANNEL_LABELS[entry.channel]} DNC tag`}
             >
-                <X className="h-3 w-3" />
-            </button>
-        </Badge>
+                Remove
+            </Button>
+        </div>
     )
 }
 

@@ -280,3 +280,22 @@ def test_terminal_run_closes_thread_without_unresolved_handoff():
 
     assert thread.status == "completed"
     assert thread.completion_reason == "workflow_completed"
+
+
+def test_sms_opt_out_force_closes_thread_even_with_unresolved_handoff():
+    thread = _thread(status="handoff")
+    run = _run(status="cancelled")
+    session = _session(execute_results=[_result(scalars_all=[thread])])
+
+    asyncio.run(
+        CampaignConversationService(session).close_terminal_threads_for_run(
+            run,
+            completion_reason="sms_opt_out",
+            preserve_unresolved_handoffs=False,
+        )
+    )
+
+    assert thread.status == "completed"
+    assert thread.completed_at is not None
+    assert thread.completion_reason == "sms_opt_out"
+    assert session.execute.await_count == 1

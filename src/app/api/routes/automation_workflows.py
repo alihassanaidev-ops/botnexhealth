@@ -22,6 +22,7 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowStatus,
     AutomationWorkflowVersion,
 )
+from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_halt import OutboundEmergencyHalt
 from src.app.models.user import User
@@ -53,6 +54,7 @@ from src.app.services.automation.merge_field_catalog import fields_for
 from src.app.services.automation.validation_service import WorkflowValidationService
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.step_dispatcher import build_dispatcher
+from src.app.services.sms_compliance import SmsComplianceService
 
 router = APIRouter(prefix="/automation/workflows", tags=["Automation Workflows"])
 _OPENAI_MODELS_CACHE: tuple[datetime, list["WorkflowLlmModelResponse"]] | None = None
@@ -1494,6 +1496,27 @@ async def enroll_in_workflow(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Workflow has no published version",
             )
+
+        if data.contact_id:
+            contact = await session.get(Contact, data.contact_id)
+            if contact is None or str(contact.institution_id) != inst_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Patient not found",
+                )
+            if await SmsComplianceService(session).is_do_not_contact(
+                institution_id=inst_id,
+                location_id=location_id,
+                phone_hash=contact.phone_hash,
+                contact_id=str(contact.id),
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Patient has an active all-channel DNC restriction and "
+                        "cannot be enrolled. Remove the DNC restriction before enrolling."
+                    ),
+                )
 
         enroll_svc = AutomationWorkflowEnrollmentService(session)
         run, created = await enroll_svc.enroll(

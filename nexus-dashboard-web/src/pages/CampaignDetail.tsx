@@ -249,8 +249,10 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
             toast.success(`${contact.full_name ?? "Patient"} enrolled`)
             onEnrolled(run)
             onClose()
-        } catch {
-            toast.error("Failed to enroll patient")
+        } catch (error) {
+            const detail = (error as { response?: { data?: { detail?: string } } })
+                ?.response?.data?.detail
+            toast.error(detail ?? "Failed to enroll patient")
         } finally {
             setEnrolling(null)
         }

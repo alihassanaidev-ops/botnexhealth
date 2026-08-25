@@ -172,8 +172,16 @@ class AutomationWorkflowEnrollmentService:
         run: AutomationWorkflowRun,
         *,
         reason: str | None = None,
+        sms_completion_reason: str = "workflow_cancelled",
+        preserve_unresolved_sms_handoffs: bool = True,
+        require_sms_thread_close: bool = False,
     ) -> AutomationWorkflowRun:
-        """Cancel an active or waiting run. No-op for already-terminal runs."""
+        """Cancel an active or waiting run. No-op for already-terminal runs.
+
+        Ordinary lifecycle cleanup keeps SMS thread closure best-effort. A
+        compliance path can set ``require_sms_thread_close`` so failure aborts
+        the caller-owned transaction instead of committing a partial opt-out.
+        """
         if run.status in (
             AutomationRunStatus.COMPLETED.value,
             AutomationRunStatus.CANCELLED.value,
@@ -192,9 +200,12 @@ class AutomationWorkflowEnrollmentService:
 
             await CampaignConversationService(self.session).close_terminal_threads_for_run(
                 run,
-                completion_reason="workflow_cancelled",
+                completion_reason=sms_completion_reason,
+                preserve_unresolved_handoffs=preserve_unresolved_sms_handoffs,
             )
-        except Exception:  # noqa: BLE001 - cancellation must not fail on thread cleanup.
+        except Exception:  # noqa: BLE001 - best-effort except when caller requires atomicity.
+            if require_sms_thread_close:
+                raise
             logger.warning(
                 "Failed to close SMS conversation threads for cancelled run=%s",
                 run.id,

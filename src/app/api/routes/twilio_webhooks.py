@@ -16,6 +16,9 @@ from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_consent import ConsentSource
 from src.app.services.audit import log_audit
+from src.app.services.automation.sms_opt_out_workflow_service import (
+    SmsOptOutWorkflowService,
+)
 from src.app.services.dead_letter import capture_dead_letter
 from src.app.services.sms_compliance import SmsComplianceService
 from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
@@ -155,6 +158,12 @@ async def inbound_sms(request: Request) -> Response:
                 source=ConsentSource.TWILIO_KEYWORD,
                 keyword=keyword,
                 reason=f"Twilio inbound keyword: {keyword}",
+            )
+            await SmsOptOutWorkflowService(session).cancel_active_sms_runs(
+                institution_id=str(location.institution_id),
+                location_id=str(location.id),
+                phone=from_number,
+                correlated_run_id=_inbound_msg.workflow_run_id,
             )
             await _audit_keyword(
                 location, from_number, AuditAction.SMS_SUPPRESSION_CREATE, keyword

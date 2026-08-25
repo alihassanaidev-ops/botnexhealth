@@ -112,6 +112,7 @@ class CampaignConversationService:
         run: AutomationWorkflowRun,
         *,
         completion_reason: str,
+        preserve_unresolved_handoffs: bool = True,
     ) -> None:
         if run.status not in {
             AutomationRunStatus.COMPLETED.value,
@@ -131,19 +132,20 @@ class CampaignConversationService:
             return
         now = datetime.now(timezone.utc)
         for thread in threads:
-            has_handoff = (
-                await self.session.execute(
-                    select(CampaignStaffHandoff.id)
-                    .where(
-                        CampaignStaffHandoff.conversation_thread_id == str(thread.id),
-                        CampaignStaffHandoff.status.in_(_UNRESOLVED_HANDOFF_STATUSES),
+            if preserve_unresolved_handoffs:
+                has_handoff = (
+                    await self.session.execute(
+                        select(CampaignStaffHandoff.id)
+                        .where(
+                            CampaignStaffHandoff.conversation_thread_id == str(thread.id),
+                            CampaignStaffHandoff.status.in_(_UNRESOLVED_HANDOFF_STATUSES),
+                        )
+                        .limit(1)
                     )
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if has_handoff:
-                thread.status = "handoff"
-                continue
+                ).scalar_one_or_none()
+                if has_handoff:
+                    thread.status = "handoff"
+                    continue
             thread.status = "completed"
             thread.completed_at = now
             thread.completion_reason = completion_reason

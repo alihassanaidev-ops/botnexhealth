@@ -2,9 +2,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
+import { toast } from "sonner"
 import CampaignDetail from "@/pages/CampaignDetail"
 import {
     deleteCampaign,
+    enrollContactInCampaign,
     enrollCampaignAudience,
     getCampaign,
     getCampaignAudience,
@@ -18,6 +20,7 @@ import {
     previewCampaignAudience,
     saveCampaignAudience,
 } from "@/lib/automation-api"
+import { listContacts } from "@/lib/contacts-api"
 
 vi.mock("@/lib/automation-api", () => ({
     getCampaign: vi.fn(),
@@ -56,6 +59,10 @@ const saveAudience = saveCampaignAudience as ReturnType<typeof vi.fn>
 const enrollAudience = enrollCampaignAudience as ReturnType<typeof vi.fn>
 const timeline = getRunTimeline as ReturnType<typeof vi.fn>
 const remove = deleteCampaign as ReturnType<typeof vi.fn>
+const enrollContact = enrollContactInCampaign as ReturnType<typeof vi.fn>
+const contacts = listContacts as ReturnType<typeof vi.fn>
+const errorToast = toast.error as ReturnType<typeof vi.fn>
+const successToast = toast.success as ReturnType<typeof vi.fn>
 
 beforeEach(() => {
     campaign.mockReset()
@@ -71,6 +78,10 @@ beforeEach(() => {
     enrollAudience.mockReset()
     timeline.mockReset()
     remove.mockReset()
+    enrollContact.mockReset()
+    contacts.mockReset()
+    errorToast.mockReset()
+    successToast.mockReset()
 
     campaign.mockResolvedValue({
         id: "wf-1",
@@ -288,9 +299,49 @@ beforeEach(() => {
         counts_by_reason: {},
     })
     remove.mockResolvedValue(undefined)
+    contacts.mockResolvedValue({
+        items: [
+            {
+                id: "contact-dnc",
+                full_name: "DNC Patient",
+                phone_masked: "+1******0100",
+            },
+        ],
+        limit: 10,
+        next_cursor: null,
+    })
 })
 
 describe("CampaignDetail lifecycle actions", () => {
+    it("shows the backend DNC reason when manual enrollment is rejected", async () => {
+        const user = userEvent.setup()
+        enrollContact.mockRejectedValue({
+            response: {
+                data: {
+                    detail: "Patient has an active all-channel DNC restriction and cannot be enrolled.",
+                },
+            },
+        })
+        render(
+            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
+                <Routes>
+                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("button", { name: "Enroll" }))
+        await user.click(await screen.findByRole("button", { name: "Enroll" }))
+
+        await waitFor(() => {
+            expect(errorToast).toHaveBeenCalledWith(
+                "Patient has an active all-channel DNC restriction and cannot be enrolled.",
+            )
+        })
+        expect(successToast).not.toHaveBeenCalled()
+    })
+
     it("deletes a campaign after confirmation and returns to the campaign list", async () => {
         const user = userEvent.setup()
         render(

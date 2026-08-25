@@ -77,7 +77,9 @@ describe("DNC Patients", () => {
         expect(screen.getByText("Voice")).toBeInTheDocument()
         expect(await screen.findAllByText(/Downtown/)).toHaveLength(2)
 
-        fireEvent.click(screen.getByRole("button", { name: "Remove SMS DNC tag" }))
+        const removeSmsButton = screen.getByRole("button", { name: "Remove SMS DNC tag" })
+        expect(removeSmsButton).toHaveTextContent("Remove")
+        fireEvent.click(removeSmsButton)
         fireEvent.click(screen.getByRole("button", { name: "Remove tag" }))
 
         await waitFor(() => {

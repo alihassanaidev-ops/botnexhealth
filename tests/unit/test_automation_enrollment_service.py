@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.app.models.automation_workflow import AutomationRunStatus, AutomationWorkflowRun
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
@@ -163,6 +165,56 @@ def test_cancel_run_transitions_to_cancelled() -> None:
     assert result.status == AutomationRunStatus.CANCELLED.value
     assert result.blocked_reason == "test-cancel"
     assert result.cancelled_at is not None
+
+
+def test_sms_opt_out_cancellation_force_closes_sms_thread_with_opt_out_reason() -> None:
+    session = _make_session()
+    conversation = AsyncMock()
+    run = _make_run(AutomationRunStatus.WAITING.value)
+
+    with patch(
+        "src.app.services.automation.campaign_conversation_service."
+        "CampaignConversationService",
+        return_value=conversation,
+    ):
+        asyncio.run(
+            AutomationWorkflowEnrollmentService(session).cancel_run(
+                run,
+                reason="sms_opt_out",
+                sms_completion_reason="sms_opt_out",
+                preserve_unresolved_sms_handoffs=False,
+                require_sms_thread_close=True,
+            )
+        )
+
+    conversation.close_terminal_threads_for_run.assert_awaited_once_with(
+        run,
+        completion_reason="sms_opt_out",
+        preserve_unresolved_handoffs=False,
+    )
+
+
+def test_sms_opt_out_cancellation_propagates_thread_close_failure() -> None:
+    session = _make_session()
+    conversation = AsyncMock()
+    conversation.close_terminal_threads_for_run.side_effect = RuntimeError("close failed")
+    run = _make_run(AutomationRunStatus.WAITING.value)
+
+    with patch(
+        "src.app.services.automation.campaign_conversation_service."
+        "CampaignConversationService",
+        return_value=conversation,
+    ):
+        with pytest.raises(RuntimeError, match="close failed"):
+            asyncio.run(
+                AutomationWorkflowEnrollmentService(session).cancel_run(
+                    run,
+                    reason="sms_opt_out",
+                    sms_completion_reason="sms_opt_out",
+                    preserve_unresolved_sms_handoffs=False,
+                    require_sms_thread_close=True,
+                )
+            )
 
 
 def test_cancel_run_is_noop_for_completed() -> None:

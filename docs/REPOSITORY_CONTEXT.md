@@ -318,9 +318,10 @@ waiting run:
   case-insensitive matching to update workflow context and resume the normal
   dispatcher; mappings that request staff handoff create a handoff and do not
   resume;
-- the Twilio webhook persists the inbound message and campaign response event but
-  treats the correlated workflow run as read-only. The Celery resume task owns
-  workflow-run metadata updates and advancement under its worker database context;
+- for ordinary replies, the Twilio webhook persists the inbound message and
+  campaign response event but treats the correlated workflow run as read-only.
+  The Celery resume task owns workflow-run metadata updates and advancement under
+  its worker database context. STOP is the narrow exception described below;
 - ordinary and mapped replies return empty TwiML. Reply acknowledgments are not
   hardcoded; authors must add another Send SMS node when a workflow should send
   a follow-up message;
@@ -341,10 +342,12 @@ does not compete with a later running or waiting run when an inbound reply is
 correlated for automation.
 
 The public inbound webhook runs under the tenant/location-scoped `twilio` RLS
-context. That context has read-only access to workflow runs, versions, and step
-executions so it can correlate a reply; workflow writes remain restricted to
-the Celery execution context. Replies requiring staff review emit an
-`inbound_sms_reply` in-app notification.
+context. It has read access to the workflow rows needed for reply correlation.
+Its workflow write access is limited to the STOP terminal path: updating the
+correlated run and pending/claimed timers, inserting the cancellation event, and
+closing the SMS thread. Other workflow mutation remains restricted to the Celery
+execution context. Replies requiring staff review emit an `inbound_sms_reply`
+in-app notification.
 
 Appointment-triggered campaigns use a disposable working set rather than live PMS
 reads on every dispatch:
@@ -419,8 +422,12 @@ operations, but it is not used by the location picker.
   (STOP/UNSUBSCRIBE/… → suppress; START/UNSTOP → release; HELP/INFO → help
   text). Suppression is scoped to the location resolved from the receiving `To`
   number, so the same phone may still receive SMS from another location. Every
-  contact sharing that phone is suppressed at the receiving location. Routes
-  `To` via `twilio_from_number` and replies with TwiML.
+  contact sharing that phone is suppressed at the receiving location. In the
+  same transaction, STOP cancels the unambiguously correlated active workflow
+  run, its pending/claimed timers, and its SMS thread with reason `sms_opt_out`.
+  For a shared-phone ambiguity it cancels every active run with an active SMS
+  thread for that phone and location, without touching unrelated email/voice-only
+  runs. Routes `To` via `twilio_from_number` and replies with TwiML.
 - `POST /sms-status` — delivery-status callback; updates the `SmsHistoryLog`.
 
 Both **require Twilio signature validation** (`RequestValidator` against the raw
@@ -472,6 +479,14 @@ they do not suppress SMS or email. Email unsubscribe/bounce/complaint handling
 writes an email-identity revocation. SMS STOP continues to create a
 location-scoped SMS suppression and now retains an unambiguous matched
 `contact_id` so the patient can be named on the DNC page.
+
+Manual campaign enrollment resolves the selected contact and checks active
+all-channel `DoNotContact` rows by both contact ID and phone hash before creating
+a workflow run. A matching institution- or campaign-location-scoped DNC returns
+HTTP 409 with a clear instruction to remove the restriction; the dashboard shows
+that detail instead of reporting a successful enrollment. Dispatch-time channel
+gates remain authoritative for opt-outs recorded after enrollment and other
+send-time consent changes.
 
 ### 6.5 Gotchas
 
