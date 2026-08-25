@@ -153,7 +153,9 @@ def _extract_call_id(
     """
     candidates = (
         ("payload.call_id", request.call_id),
+        ("payload.chat_id", payload.get("chat_id")),
         ("payload.call.call_id", _dict_value(payload.get("call")).get("call_id")),
+        ("payload.chat.chat_id", _dict_value(payload.get("chat")).get("chat_id")),
         ("payload.chat.call_id", _dict_value(payload.get("chat")).get("call_id")),
         ("payload.tool_call_id", payload.get("tool_call_id")),
         (
@@ -300,8 +302,8 @@ async def handle_function_call(
         )
 
         # Resolve call_id from every place Retell can put it (voice payloads
-        # nest under ``call.call_id``; chat/debug variants use
-        # ``chat.call_id``; tool-call invocations expose ``tool_call_id``).
+        # nest under ``call.call_id``; chat variants use ``chat_id`` or
+        # ``chat.chat_id``; tool-call invocations expose ``tool_call_id``).
         # Query-string ``?call_id=`` was already merged into ``payload``
         # above, so it's seen as ``payload.call_id`` by the helper —
         # nothing more to do here.

@@ -33,6 +33,7 @@ from src.app.services.automation.channel_readiness import ChannelReadinessServic
 from src.app.services.automation.definition_schema import (
     ConditionNode,
     ExitNode,
+    RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -44,7 +45,12 @@ from src.app.services.automation.validation_service import WorkflowValidationSer
 
 ChecklistStatus = Literal["pass", "warning", "blocked", "unknown"]
 
-_SEND_NODE_TYPES = (SendSmsNode, SendEmailNode, SendVoiceNode)
+_SEND_NODE_TYPES = (
+    SendSmsNode,
+    RetellSmsConversationNode,
+    SendEmailNode,
+    SendVoiceNode,
+)
 _BROAD_TRIGGER_TYPES = {"recall_scan"}
 _APPOINTMENT_TRIGGER_TYPES = {"appointment_offset", "recall_scan"}
 _STATUS_EVENT_TRIGGER_TYPES = {"patient_status_changed"}
@@ -1062,7 +1068,7 @@ def _issue_payload(issue: Any) -> dict[str, Any]:
 def _channels_used(definition: WorkflowDefinition) -> set[str]:
     channels: set[str] = set()
     for node in definition.nodes:
-        if isinstance(node, SendSmsNode):
+        if isinstance(node, (SendSmsNode, RetellSmsConversationNode)):
             channels.add("sms")
         elif isinstance(node, SendEmailNode):
             channels.add("email")
@@ -1118,6 +1124,10 @@ def _planned_sends_per_contact(send_nodes: list[Any]) -> dict[str, int]:
         attempts = int(getattr(node, "max_attempts", 1) or 1)
         if isinstance(node, SendSmsNode):
             volume["sms"] += attempts
+        elif isinstance(node, RetellSmsConversationNode):
+            # Conversation replies are demand-driven; expose the configured
+            # worst-case ceiling instead of pretending this is one fixed send.
+            volume["sms"] += node.max_patient_turns
         elif isinstance(node, SendEmailNode):
             volume["email"] += attempts
         elif isinstance(node, SendVoiceNode):

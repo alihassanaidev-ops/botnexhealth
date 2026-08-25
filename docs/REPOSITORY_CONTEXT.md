@@ -166,8 +166,10 @@ depending on sensitivity — check the per-route `dependencies=` when editing it
 
 There is **no code in this repo that creates, duplicates, or configures Retell
 agents**, imports phone numbers, or defines tool/function JSON schemas. All of
-that is done in the **Retell dashboard**. The repo's only outbound Retell API
-calls are **read-only**, used by admins to pick/verify an existing agent:
+that is done in the **Retell dashboard**. Admin provisioning calls are
+**read-only**, used to pick/verify an existing agent; workflow execution also
+uses Retell's create-chat/completion/get/end endpoints for the
+`retell_sms_conversation` response-generator node:
 
 - `GET /api/.../retell/agents` → Retell `list-agents` (`admin_institutions.py`)
 - `GET /api/.../retell/agents/{id}` → Retell `get-agent/{id}` — *"verify a manually
@@ -279,8 +281,8 @@ Current schema version `1.0` supports triggers such as `appointment_offset`,
 `appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
 `callback_requested`, `patient_status_changed`, and `sms_reply`; node types
 include `wait`, `drip`, `send_sms`, `send_voice`, `send_email`,
-`update_patient_status`, `update_gotracker_appointment`, `json_mapper`, `llm`,
-`condition`, and `exit`.
+`retell_sms_conversation`, `update_patient_status`,
+`update_gotracker_appointment`, `json_mapper`, `llm`, `condition`, and `exit`.
 
 `send_sms` is run-scoped and only sends the message. The node does **not** carry
 an arbitrary recipient number; it sends to the workflow run's `Contact.phone`
@@ -289,6 +291,33 @@ sends open or reuse one active `CampaignConversationThread` for the workflow run
 and channel. The thread links outbound `sms_history_logs`, inbound
 `inbound_sms_messages`, normalized `campaign_response_events`, and
 `campaign_staff_handoffs` without duplicating encrypted message bodies.
+
+`retell_sms_conversation` is a stateful response-generator node. It parks the
+run and owns a local `RetellSmsSession`; Retell does **not** own the phone number
+or send SMS. The Twilio webhook keeps transport, signature validation,
+STOP/START/HELP processing, consent, encrypted logs, delivery callbacks, and
+thread correlation. On the first non-compliance patient reply, a worker lazily
+creates a Retell Chat API `chat_id`, submits the inbound text, bounds the agent
+reply to the configured SMS segment limit, and sends it through the existing
+`SmsService`. `RetellSmsTurn` rows deduplicate Twilio webhook retries and prevent
+blind replay after an ambiguous mutating Retell request.
+
+The local session—not Retell—is the lifecycle authority. The inactivity TTL
+defaults to one hour and resets after each accepted turn, subject to a 72-hour
+maximum-duration cap and a configured patient-turn limit. Timeout, explicit
+handoff phrases, Retell-ended chats, STOP, and provider failures end the local
+session. A later unmatched patient SMS can start a new `sms_reply` workflow,
+which creates a new local session and a new Retell `chat_id`; terminal chat IDs
+are never reused. When that new run parks directly on a Retell SMS node, the
+triggering inbound message becomes its first turn—the patient does not need to
+text twice. See [ADR 0002](adr/0002-retell-chat-generation-with-platform-sms-transport.md).
+
+Retell dynamic variables are deliberately allow-listed. The standard set is
+`patient_first_name`, `clinic_name`, `clinic_phone`, `clinic_timezone`,
+`conversation_goal`, and `previous_sms_message` when those values exist. The
+node can add explicit `name` → workflow-context-path mappings with defaults.
+Internal institution/location/workflow-run/session IDs go in Retell metadata.
+The worker never forwards the entire trigger context.
 
 `wait` is the single first-class pause step and has a typed `wait_for`
 configuration. `wait_for.type = time` owns duration, calendar, or

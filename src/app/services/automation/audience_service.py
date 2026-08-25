@@ -33,6 +33,7 @@ from src.app.models.sms_consent import (
     SmsSuppression,
 )
 from src.app.services.automation.definition_schema import (
+    RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -813,7 +814,7 @@ def _channels_for_preview(
         return set()
     channels: set[str] = set()
     for node in definition.nodes:
-        if isinstance(node, SendSmsNode):
+        if isinstance(node, (SendSmsNode, RetellSmsConversationNode)):
             channels.add("sms")
         elif isinstance(node, SendEmailNode):
             channels.add("email")

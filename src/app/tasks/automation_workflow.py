@@ -39,6 +39,7 @@ from src.app.services.automation.callback_trigger_service import (
 )
 from src.app.services.automation.definition_schema import (
     ConditionNode,
+    RetellSmsConversationNode,
     WaitNode,
     WorkflowDefinition,
 )
@@ -1106,6 +1107,7 @@ async def _enroll_and_start_async(
     idempotency_key: str,
     trigger_metadata: dict,
 ) -> dict:
+    retell_seed: tuple[str, str] | None = None
     async with get_system_db_session(
         "celery",
         institution_id=institution_id,
@@ -1158,7 +1160,42 @@ async def _enroll_and_start_async(
             context=trigger_metadata,
             location_timezone=location_timezone,
         )
+        current_node = next(
+            (node for node in definition.nodes if node.id == run.current_step_id),
+            None,
+        )
+        inbound_sms_message_id = trigger_metadata.get("inbound_sms_message_id")
+        if (
+            result.status == "waiting"
+            and isinstance(current_node, RetellSmsConversationNode)
+            and isinstance(inbound_sms_message_id, str)
+            and inbound_sms_message_id
+        ):
+            from sqlalchemy import select
+
+            from src.app.models.retell_sms import RetellSmsSession
+
+            retell_session_id = (
+                await session.execute(
+                    select(RetellSmsSession.id).where(
+                        RetellSmsSession.workflow_run_id == str(run.id),
+                        RetellSmsSession.step_id == current_node.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if retell_session_id is not None:
+                retell_seed = (str(retell_session_id), inbound_sms_message_id)
         await session.commit()
+
+    if retell_seed is not None and location_id is not None:
+        from src.app.tasks.retell_sms import process_retell_sms_turn
+
+        process_retell_sms_turn.delay(
+            institution_id=institution_id,
+            location_id=location_id,
+            session_id=retell_seed[0],
+            inbound_sms_message_id=retell_seed[1],
+        )
 
     _enqueue_patient_status_triggers(
         institution_id=institution_id,

@@ -40,6 +40,7 @@ from src.app.services.automation.definition_schema import (
     ExitNode,
     JsonMapperNode,
     LlmNode,
+    RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -56,6 +57,7 @@ from src.app.services.automation.launch_checklist_service import CampaignLaunchC
 
 SEND_STEP_TYPES = {
     "send_sms": "sms",
+    "retell_sms_conversation": "sms",
     "send_email": "email",
     "send_voice": "voice",
 }
@@ -975,7 +977,7 @@ def _channels_used(definition: WorkflowDefinition | None) -> set[str]:
         return set()
     channels: set[str] = set()
     for node in definition.nodes:
-        if isinstance(node, SendSmsNode):
+        if isinstance(node, (SendSmsNode, RetellSmsConversationNode)):
             channels.add("sms")
         elif isinstance(node, SendEmailNode):
             channels.add("email")
@@ -1211,6 +1213,13 @@ def _node_snapshot(node: WorkflowNode | None) -> dict[str, Any]:
     reply_wait = sms_reply_wait_spec(node)
     if isinstance(node, WaitNode) and isinstance(node.wait_for, TimeWaitConfig):
         base["wait_for"] = node.wait_for.model_dump(mode="json")
+        base["next_node_id"] = node.next_node_id
+    elif isinstance(node, RetellSmsConversationNode):
+        base["chat_profile_id"] = node.chat_profile_id
+        base["inactivity_timeout_seconds"] = node.inactivity_timeout_seconds
+        base["max_duration_seconds"] = node.max_duration_seconds
+        base["max_patient_turns"] = node.max_patient_turns
+        base["respect_quiet_hours"] = node.respect_quiet_hours
         base["next_node_id"] = node.next_node_id
     elif reply_wait is not None:
         base["wait_for"] = "sms_reply"

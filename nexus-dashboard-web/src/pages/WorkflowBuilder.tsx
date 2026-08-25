@@ -23,6 +23,7 @@ import {
     resumeWorkflow,
 } from "@/lib/workflow-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
+import { listRetellSmsChatProfiles } from "@/lib/retell-sms-api"
 import {
     addNode,
     blankDefinition,
@@ -46,7 +47,7 @@ import StepConfigPanel from "@/components/workflow/StepConfigPanel"
 import WorkflowValidationPanel from "@/components/workflow/WorkflowValidationPanel"
 import WorkflowPublishControls from "@/components/workflow/WorkflowPublishControls"
 import TestRunDialog from "@/components/workflow/TestRunDialog"
-import type { AutomationWorkflow } from "@/types"
+import type { AutomationWorkflow, RetellSmsChatProfile } from "@/types"
 import type { OutboundVoiceProfile } from "@/types"
 import type {
     NodeType,
@@ -81,6 +82,7 @@ export default function WorkflowBuilder() {
     const [testOpen, setTestOpen] = useState(false)
     const [backendIssues, setBackendIssues] = useState<ValidationIssue[]>([])
     const [voiceProfiles, setVoiceProfiles] = useState<OutboundVoiceProfile[]>([])
+    const [retellSmsProfiles, setRetellSmsProfiles] = useState<RetellSmsChatProfile[]>([])
     const serverDef = useRef<WorkflowDefinition | null>(null)
 
     const readOnly = workflow?.status === "archived"
@@ -128,10 +130,12 @@ export default function WorkflowBuilder() {
     useEffect(() => {
         if (!locationId) {
             setVoiceProfiles([])
+            setRetellSmsProfiles([])
             return
         }
         let cancelled = false
         setVoiceProfiles([])
+        setRetellSmsProfiles([])
 
         void listOutboundVoiceProfiles({ locationId, isActive: true })
             .then((profiles) => {
@@ -139,6 +143,13 @@ export default function WorkflowBuilder() {
             })
             .catch(() => {
                 if (!cancelled) setVoiceProfiles([])
+            })
+        void listRetellSmsChatProfiles({ locationId, isActive: true })
+            .then((profiles) => {
+                if (!cancelled) setRetellSmsProfiles(Array.isArray(profiles) ? profiles : [])
+            })
+            .catch(() => {
+                if (!cancelled) setRetellSmsProfiles([])
             })
         return () => {
             cancelled = true
@@ -446,6 +457,7 @@ export default function WorkflowBuilder() {
                 onSetEntry={onSetEntry}
                 locationId={locationId}
                 voiceProfiles={voiceProfiles}
+                retellSmsProfiles={retellSmsProfiles}
                 readOnly={readOnly}
             />
             <TestRunDialog open={testOpen} onOpenChange={setTestOpen} def={def} />

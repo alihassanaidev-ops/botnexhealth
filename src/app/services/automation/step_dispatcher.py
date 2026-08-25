@@ -37,6 +37,7 @@ from src.app.services.automation.definition_schema import (
     ExitNode,
     JsonMapperNode,
     LlmNode,
+    RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -57,6 +58,11 @@ from src.app.services.automation.voice_node_executor import (
     _CALL_PLACED_AWAITING,
     VoiceCooldownDeferred,
     VoiceParked,
+)
+from src.app.services.automation.retell_sms_conversation_service import (
+    RetellSmsConversationBusyError,
+    RetellSmsConversationConfigurationError,
+    RetellSmsConversationService,
 )
 
 logger = logging.getLogger(__name__)
@@ -240,6 +246,90 @@ class WorkflowStepDispatcher:
                     timezone_name=location_timezone,
                 )
                 await self.runtime.wait_run(run, step)
+                return DispatchResult(
+                    status="waiting",
+                    timer_id=timer.id,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
+            elif isinstance(node, RetellSmsConversationNode):
+                conversation_service = RetellSmsConversationService(self.session)
+                try:
+                    parked = await conversation_service.enter(
+                        run=run,
+                        node=node,
+                        runtime=self.runtime,
+                        now=now,
+                    )
+                except (
+                    RetellSmsConversationBusyError,
+                    RetellSmsConversationConfigurationError,
+                ) as exc:
+                    logger.warning(
+                        "retell SMS node could not start run=%s node=%s reason=%s",
+                        run.id,
+                        node.id,
+                        type(exc).__name__,
+                    )
+                    step = await self.runtime.begin_step(
+                        run, step_id=node.id, step_type=node.type
+                    )
+                    await self.runtime.fail_step(
+                        step,
+                        result_code="retell_sms_start_failed",
+                        error_message=type(exc).__name__,
+                    )
+                    if node.failure_behavior == "fail":
+                        await self.runtime.fail_run(run, reason="retell_sms_start_failed")
+                        return DispatchResult(
+                            status="failed",
+                            steps_advanced=steps_advanced,
+                            patient_status_event_ids=patient_status_event_ids,
+                        )
+                    if (
+                        node.failure_behavior == "handoff"
+                        and run.location_id
+                        and run.contact_id
+                    ):
+                        from src.app.models.campaign_response import CampaignStaffHandoff
+                        from src.app.services.automation.campaign_conversation_service import (
+                            CampaignConversationService,
+                        )
+
+                        thread = await CampaignConversationService(
+                            self.session
+                        ).open_sms_thread(run)
+                        thread.status = "handoff"
+                        self.session.add(
+                            CampaignStaffHandoff(
+                                institution_id=str(run.institution_id),
+                                location_id=str(run.location_id),
+                                workflow_id=str(run.workflow_id),
+                                workflow_run_id=str(run.id),
+                                conversation_thread_id=str(thread.id),
+                                contact_id=str(run.contact_id),
+                                reason="automation_failed",
+                                status="open",
+                                summary=(
+                                    "The Retell SMS conversation could not start "
+                                    "and needs staff follow-up."
+                                ),
+                            )
+                        )
+                        await self.session.flush()
+                    current_node_id = node.next_node_id
+                    continue
+
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=parked.step.id,
+                    due_at=parked.due_at,
+                    timezone_name=location_timezone,
+                )
+                await self.runtime.wait_run(run, parked.step)
                 return DispatchResult(
                     status="waiting",
                     timer_id=timer.id,
@@ -523,12 +613,13 @@ class WorkflowStepDispatcher:
         )
         is_sms_reply_wait = sms_reply_wait_spec(current_node) is not None
         is_drip = isinstance(current_node, DripNode)
+        is_retell_sms = isinstance(current_node, RetellSmsConversationNode)
         is_held_send = isinstance(current_node, (SendSmsNode, SendVoiceNode, SendEmailNode))
-        if not (is_wait or is_sms_reply_wait or is_drip or is_held_send):
+        if not (is_wait or is_sms_reply_wait or is_drip or is_retell_sms or is_held_send):
             await self.runtime.fail_run(
                 run,
                 reason=(
-                    "expected wait, SMS reply wait, drip, or held send node at "
+                    "expected wait, SMS reply wait, drip, Retell SMS, or held send node at "
                     f"'{run.current_step_id}'"
                 ),
             )
@@ -551,6 +642,68 @@ class WorkflowStepDispatcher:
             )
             return DispatchResult(status="failed")
 
+        if is_retell_sms:
+            from src.app.models.retell_sms import (
+                ACTIVE_RETELL_SMS_SESSION_STATUSES,
+                RetellSmsSession,
+                RetellSmsSessionStatus,
+            )
+
+            retell_session = (
+                await self.session.execute(
+                    select(RetellSmsSession)
+                    .where(
+                        RetellSmsSession.workflow_run_id == str(run.id),
+                        RetellSmsSession.step_id == current_node.id,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if retell_session is None:
+                await self.runtime.fail_run(run, reason="active Retell SMS session not found")
+                return DispatchResult(status="failed")
+            effective_now = now or datetime.now(tz=timezone.utc)
+            is_active_retell_session = (
+                retell_session.status in ACTIVE_RETELL_SMS_SESSION_STATUSES
+            )
+            if is_active_retell_session and retell_session.expires_at > effective_now:
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=waiting_step.id,
+                    due_at=retell_session.expires_at,
+                    timezone_name=location_timezone,
+                )
+                return DispatchResult(status="waiting", timer_id=timer.id)
+
+            conversation_service = RetellSmsConversationService(self.session)
+            if is_active_retell_session:
+                conversation_service.mark_terminal(
+                    retell_session,
+                    status=RetellSmsSessionStatus.TIMED_OUT.value,
+                    outcome="timeout",
+                    now=effective_now,
+                )
+            result_context = conversation_service.result_context(retell_session)
+            if is_active_retell_session and current_node.timeout_behavior == "handoff":
+                handoff = await conversation_service.create_handoff(
+                    retell_session,
+                    reason="automation_failed",
+                    summary="Retell SMS conversation expired after patient inactivity.",
+                )
+                result_context["retell_sms_handoff_id"] = str(handoff.id)
+            metadata = dict(run.trigger_metadata or {})
+            metadata.update(result_context)
+            run.trigger_metadata = metadata
+            context = {**context, **result_context}
+            waiting_step.result_code = (
+                "retell_sms_timeout"
+                if is_active_retell_session
+                else f"retell_sms_{retell_session.terminal_outcome or retell_session.status}"
+            )
+            waiting_step.result_metadata = result_context
+
         await self.runtime.resume_run(run, waiting_step)
         if is_drip:
             waiting_step.result_code = "drip_released"
@@ -562,7 +715,7 @@ class WorkflowStepDispatcher:
                 else "sms_reply_timeout"
             )
         is_parked_voice = is_held_send and waiting_step.result_code == _CALL_PLACED_AWAITING
-        if is_wait or is_sms_reply_wait or is_drip or is_parked_voice:
+        if is_wait or is_sms_reply_wait or is_drip or is_retell_sms or is_parked_voice:
             # WaitNode/DripNode: move past the gate. Parked voice: the call already
             # went out, so advance PAST the send node (never re-dial) into whatever
             # follows — typically a ConditionNode that branches on `call_outcome`.

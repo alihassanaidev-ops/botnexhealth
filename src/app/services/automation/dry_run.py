@@ -16,6 +16,7 @@ from src.app.services.automation.definition_schema import (
     ExitNode,
     JsonMapperNode,
     LlmNode,
+    RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -127,6 +128,19 @@ def simulate_run(
         elif isinstance(node, SendSmsNode):
             body = render_sms_body(node.body_template, None, None, ctx)
             result.steps.append(DryRunStep(node.id, "send_sms", "Send SMS", body))
+            current = node.next_node_id
+        elif isinstance(node, RetellSmsConversationNode):
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    node.type,
+                    "Wait for Retell-powered SMS conversation",
+                    (
+                        f"{node.inactivity_timeout_seconds}s inactivity timeout; "
+                        f"{node.max_patient_turns} patient turns maximum"
+                    ),
+                )
+            )
             current = node.next_node_id
         elif isinstance(node, SendEmailNode):
             subject = render_sms_body(node.subject_template, None, None, ctx)

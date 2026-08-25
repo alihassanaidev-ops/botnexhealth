@@ -568,3 +568,56 @@ def test_patient_status_changed_rejects_blank_statuses() -> None:
     defn["trigger"] = {"type": "patient_status_changed", "statuses": ["  "]}
     with pytest.raises(ValidationError):
         WorkflowDefinition.model_validate(defn)
+
+
+def test_retell_sms_conversation_defaults_and_dynamic_variables() -> None:
+    definition = WorkflowDefinition.model_validate(
+        {
+            "schema_version": "1.0",
+            "trigger": {"type": "sms_reply"},
+            "entry_node_id": "chat-1",
+            "nodes": [
+                {
+                    "type": "retell_sms_conversation",
+                    "id": "chat-1",
+                    "chat_profile_id": "profile-1",
+                    "next_node_id": "exit-1",
+                    "dynamic_variable_mappings": [
+                        {
+                            "name": "appointment_reason",
+                            "source_field": "appointment.reason",
+                        }
+                    ],
+                },
+                {"type": "exit", "id": "exit-1", "outcome": "done"},
+            ],
+        }
+    )
+
+    node = definition.nodes[0]
+    assert node.type == "retell_sms_conversation"
+    assert node.inactivity_timeout_seconds == 3600
+    assert node.max_duration_seconds == 259200
+    assert node.human_handoff_tokens == ["HUMAN", "AGENT", "CALL ME"]
+
+
+def test_retell_sms_conversation_rejects_ttl_above_hard_max() -> None:
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(
+            {
+                "schema_version": "1.0",
+                "trigger": {"type": "manual"},
+                "entry_node_id": "chat-1",
+                "nodes": [
+                    {
+                        "type": "retell_sms_conversation",
+                        "id": "chat-1",
+                        "chat_profile_id": "profile-1",
+                        "next_node_id": "exit-1",
+                        "inactivity_timeout_seconds": 7200,
+                        "max_duration_seconds": 3600,
+                    },
+                    {"type": "exit", "id": "exit-1"},
+                ],
+            }
+        )

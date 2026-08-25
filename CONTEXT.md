@@ -63,3 +63,7 @@ _Avoid_: Global SMS listener without tenant/location scoping
 **Campaign Conversation Thread**:
 The patient conversation scoped to one workflow run, carrying that run's outbound messages and patient replies for staff review or automation decisions.
 _Avoid_: Global patient conversation when discussing run-specific campaign replies
+
+**Retell-backed SMS Conversation**:
+A run-scoped patient SMS conversation in which Retell generates reply text while BotNexHealth owns Twilio transport, compliance, correlation, local expiry, and workflow advancement.
+_Avoid_: Retell-managed SMS, Retell SMS transport, using `chat_id` as the local conversation identity

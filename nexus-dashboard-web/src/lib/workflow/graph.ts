@@ -126,6 +126,7 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
         case "wait":
         case "drip":
         case "send_sms":
+        case "retell_sms_conversation":
         case "send_voice":
         case "send_email":
         case "update_patient_status":
@@ -147,6 +148,7 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
 /** Delivery channel a send-node type targets (undefined for non-send nodes). */
 const CHANNEL_BY_NODE_TYPE: Partial<Record<NodeType, ChannelKey>> = {
     send_sms: "sms",
+    retell_sms_conversation: "sms",
     send_email: "email",
     send_voice: "voice",
 }
@@ -174,6 +176,7 @@ function singleNext(node: WorkflowNode): string | undefined {
         node.type === "wait" ||
         node.type === "drip" ||
         node.type === "send_sms" ||
+        node.type === "retell_sms_conversation" ||
         node.type === "send_voice" ||
         node.type === "send_email" ||
         node.type === "update_patient_status" ||
@@ -449,6 +452,22 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 response_window_seconds: 259200,
                 response_mappings: [],
             }
+        case "retell_sms_conversation":
+            return {
+                type,
+                id,
+                chat_profile_id: "",
+                next_node_id: "",
+                inactivity_timeout_seconds: 3600,
+                max_duration_seconds: 259200,
+                max_patient_turns: 12,
+                dynamic_variable_mappings: [],
+                human_handoff_tokens: ["HUMAN", "AGENT", "CALL ME"],
+                timeout_behavior: "handoff",
+                failure_behavior: "handoff",
+                respect_quiet_hours: true,
+                max_response_segments: 3,
+            }
         case "send_voice":
             return {
                 type,
@@ -680,6 +699,7 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
                 case "wait":
                 case "drip":
                 case "send_sms":
+                case "retell_sms_conversation":
                 case "send_voice":
                 case "send_email":
                 case "update_patient_status":
@@ -731,6 +751,7 @@ export function connectNodes(
         case "wait":
         case "drip":
         case "send_sms":
+        case "retell_sms_conversation":
         case "send_voice":
         case "send_email":
         case "update_patient_status":

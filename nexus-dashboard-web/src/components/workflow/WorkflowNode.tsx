@@ -36,6 +36,10 @@ function stepSummary(node: WfNode): string {
             return `${node.batch_size} every ${humanizeSeconds(node.interval_seconds)}`
         case "send_sms":
             return truncate(node.body_template) || "No message yet"
+        case "retell_sms_conversation":
+            return node.chat_profile_id
+                ? `${humanizeSeconds(node.inactivity_timeout_seconds ?? 3600)} inactivity TTL`
+                : "No chat profile selected"
         case "send_email":
             return truncate(node.subject_template) || "No subject yet"
         case "send_voice":

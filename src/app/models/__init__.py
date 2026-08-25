@@ -134,6 +134,13 @@ from src.app.models.outbound_voice import (
     VoiceAttemptStatus,
     WorkflowVoiceAttempt,
 )
+from src.app.models.retell_sms import (  # noqa: F401 — model registration
+    RetellSmsChatProfile,
+    RetellSmsSession,
+    RetellSmsSessionStatus,
+    RetellSmsTurn,
+    RetellSmsTurnStatus,
+)
 
 __all__ = [
     "Institution",
@@ -209,6 +216,11 @@ __all__ = [
     "OutboundEmergencyHalt",
     "AppointmentWorkingSet",
     "InboundSmsMessage",
+    "RetellSmsChatProfile",
+    "RetellSmsSession",
+    "RetellSmsSessionStatus",
+    "RetellSmsTurn",
+    "RetellSmsTurnStatus",
     "NexHealthWebhookEvent",
     "NexHealthWebhookStatus",
     "GoTrackerWebhookEvent",

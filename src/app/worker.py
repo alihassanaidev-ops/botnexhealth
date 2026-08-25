@@ -26,6 +26,7 @@ def _build_celery_app() -> Celery:
             "src.app.tasks.recordings",
             "src.app.tasks.webhooks",
             "src.app.tasks.automation_workflow",
+            "src.app.tasks.retell_sms",
         ],
     )
 
@@ -57,6 +58,7 @@ def _build_celery_app() -> Celery:
         task_routes={
             "webhooks.*": {"queue": "webhooks"},
             "src.app.tasks.automation_workflow.*": {"queue": "workflow"},
+            "src.app.tasks.retell_sms.*": {"queue": "workflow"},
         },
         beat_schedule={
             "poll-workflow-timers": {

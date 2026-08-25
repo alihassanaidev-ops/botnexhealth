@@ -165,6 +165,12 @@ describe("workflow graph — factories", () => {
             body_template: "",
             include_opt_out_footer: true,
         })
+        expect(createNode("retell_sms_conversation", "chat")).toMatchObject({
+            chat_profile_id: "",
+            inactivity_timeout_seconds: 3600,
+            max_patient_turns: 12,
+            timeout_behavior: "handoff",
+        })
         expect(createNode("send_voice", "v")).toMatchObject({
             wait_for_outcome: false,
             max_attempts: 1,

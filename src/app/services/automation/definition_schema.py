@@ -3,9 +3,9 @@
 Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, appointment_state_changed, recall_scan, manual,
             bulk_import, callback_requested, patient_status_changed, sms_reply
-  Nodes:    wait, drip, send_sms, send_voice, send_email, update_patient_status,
-            update_appointment, update_gotracker_appointment, json_mapper, llm,
-            condition, exit
+  Nodes:    wait, drip, send_sms, retell_sms_conversation, send_voice, send_email,
+            update_patient_status, update_appointment,
+            update_gotracker_appointment, json_mapper, llm, condition, exit
 
 ``update_appointment`` is the PMS-neutral appointment write-back and should be
 preferred; ``update_gotracker_appointment`` only runs on GoTracker locations and
@@ -425,6 +425,68 @@ class SendSmsNode(BaseModel):
         return cleaned
 
 
+class RetellSmsDynamicVariableMapping(BaseModel):
+    """Allow-listed workflow context value exposed to the Retell chat agent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    source_field: str = Field(min_length=1, max_length=160)
+    default_value: str | None = Field(default=None, max_length=500)
+
+
+class RetellSmsConversationNode(BaseModel):
+    """Park a run while Retell generates replies for a Twilio SMS conversation.
+
+    BotNexHealth remains the transport and lifecycle owner. A Retell ``chat_id``
+    is created lazily on the first patient reply and is never used as the local
+    conversation identity.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["retell_sms_conversation"] = "retell_sms_conversation"
+    chat_profile_id: str = Field(min_length=1)
+    next_node_id: str
+    inactivity_timeout_seconds: int = Field(default=3600, ge=120, le=259200)
+    max_duration_seconds: int = Field(default=259200, ge=120, le=259200)
+    max_patient_turns: int = Field(default=12, ge=1, le=50)
+    dynamic_variable_mappings: list[RetellSmsDynamicVariableMapping] = Field(
+        default_factory=list, max_length=30
+    )
+    human_handoff_tokens: list[str] = Field(
+        default_factory=lambda: ["HUMAN", "AGENT", "CALL ME"], max_length=20
+    )
+    timeout_behavior: Literal["handoff", "continue"] = "handoff"
+    failure_behavior: Literal["handoff", "fail", "continue"] = "handoff"
+    respect_quiet_hours: bool = True
+    max_response_segments: int = Field(default=3, ge=1, le=5)
+
+    @field_validator("human_handoff_tokens")
+    @classmethod
+    def normalize_handoff_tokens(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            token = value.strip().upper()
+            if token and token not in seen:
+                normalized.append(token)
+                seen.add(token)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_lifecycle(self) -> "RetellSmsConversationNode":
+        if self.inactivity_timeout_seconds > self.max_duration_seconds:
+            raise ValueError(
+                "inactivity_timeout_seconds must not exceed max_duration_seconds"
+            )
+        names = [mapping.name for mapping in self.dynamic_variable_mappings]
+        if len(names) != len(set(names)):
+            raise ValueError("dynamic variable names must be unique")
+        return self
+
+
 class SendVoiceNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -687,6 +749,7 @@ WorkflowNode = Annotated[
         WaitForSmsReplyNode,
         DripNode,
         SendSmsNode,
+        RetellSmsConversationNode,
         SendVoiceNode,
         SendEmailNode,
         UpdatePatientStatusNode,
@@ -764,6 +827,7 @@ class WorkflowDefinition(BaseModel):
                     WaitForSmsReplyNode,
                     DripNode,
                     SendSmsNode,
+                    RetellSmsConversationNode,
                     SendVoiceNode,
                     SendEmailNode,
                     UpdatePatientStatusNode,

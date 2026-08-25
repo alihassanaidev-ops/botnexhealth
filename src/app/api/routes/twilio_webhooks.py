@@ -120,10 +120,27 @@ async def inbound_sms(request: Request) -> Response:
             CampaignConversationService,
         )
         from src.app.services.automation.sms_intent_parser import SmsIntentResult
+        from src.app.services.automation.retell_sms_conversation_service import (
+            RetellSmsConversationService,
+        )
+
+        retell_sms_service = RetellSmsConversationService(session)
+        retell_sms_session = (
+            await retell_sms_service.find_active_for_inbound(_inbound_msg)
+            if intent not in {"START", "HELP"}
+            else None
+        )
 
         mapping_match = None
         parsed_for_record = parsed_reply
-        if _inbound_msg.workflow_run_id and intent not in {"STOP", "START", "HELP"}:
+        if retell_sms_session is not None and intent not in {"STOP", "START", "HELP"}:
+            # Retell owns free-text interpretation for this parked node. Persist a
+            # neutral event here so the generic parser does not create a premature
+            # staff handoff before the chat worker processes the turn.
+            parsed_for_record = SmsIntentResult(
+                "retell_chat_turn", outcome="retell_chat_processing"
+            )
+        elif _inbound_msg.workflow_run_id and intent not in {"STOP", "START", "HELP"}:
             mapping_match = await CampaignConversationService(session).match_sms_response_mapping(
                 workflow_run_id=_inbound_msg.workflow_run_id,
                 body=body,
@@ -150,6 +167,14 @@ async def inbound_sms(request: Request) -> Response:
         )
 
         if intent == "STOP":
+            if retell_sms_session is not None:
+                from src.app.models.retell_sms import RetellSmsSessionStatus
+
+                retell_sms_service.mark_terminal(
+                    retell_sms_session,
+                    status=RetellSmsSessionStatus.OPTED_OUT.value,
+                    outcome="opted_out",
+                )
             await compliance.suppress(
                 institution_id=location.institution_id,
                 location_id=str(location.id),
@@ -169,6 +194,14 @@ async def inbound_sms(request: Request) -> Response:
                 location, from_number, AuditAction.SMS_SUPPRESSION_CREATE, keyword
             )
             await session.commit()
+            if retell_sms_session is not None:
+                from src.app.tasks.retell_sms import end_retell_sms_chat
+
+                end_retell_sms_chat.delay(
+                    institution_id=str(location.institution_id),
+                    location_id=str(location.id),
+                    session_id=str(retell_sms_session.id),
+                )
             return _twiml(
                 f"You have been opted out of SMS from {location.name}. Reply START to opt back in."
             )
@@ -192,6 +225,18 @@ async def inbound_sms(request: Request) -> Response:
         if intent == "HELP":
             await session.commit()
             return _twiml(_help_text(location))
+
+        if retell_sms_session is not None:
+            from src.app.tasks.retell_sms import process_retell_sms_turn
+
+            await session.commit()
+            process_retell_sms_turn.delay(
+                institution_id=str(location.institution_id),
+                location_id=str(location.id),
+                session_id=str(retell_sms_session.id),
+                inbound_sms_message_id=str(_inbound_msg.id),
+            )
+            return _twiml("")
 
         scheduled_sms_reply_triggers = 0
         if (

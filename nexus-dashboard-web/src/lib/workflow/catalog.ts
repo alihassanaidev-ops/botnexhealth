@@ -42,6 +42,13 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         group: "channel",
         accent: "bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300",
     },
+    retell_sms_conversation: {
+        label: "Retell SMS Conversation",
+        description: "Generate patient replies with Retell while Twilio remains the transport.",
+        icon: MessageSquareReply,
+        group: "channel",
+        accent: "bg-cyan-100 text-cyan-700 dark:bg-cyan-950/50 dark:text-cyan-300",
+    },
     send_voice: {
         label: "AI Voice Call",
         description: "Place an outbound AI call.",
@@ -172,7 +179,7 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
 
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
-    { title: "Channels", group: "channel", types: ["send_sms", "send_voice"] },
+    { title: "Channels", group: "channel", types: ["send_sms", "retell_sms_conversation", "send_voice"] },
     { title: "Actions", group: "action", types: ["drip", "llm", "update_appointment", "update_gotracker_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },

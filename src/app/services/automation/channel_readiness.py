@@ -23,8 +23,10 @@ from src.app.config import settings
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_voice import OutboundVoiceProfile
+from src.app.models.retell_sms import RetellSmsChatProfile
 from src.app.services.automation.definition_schema import (
     SendEmailNode,
+    RetellSmsConversationNode,
     SendSmsNode,
     SendVoiceNode,
     WorkflowDefinition,
@@ -87,7 +89,11 @@ class ChannelReadinessService:
         if location_id is None:
             return []
 
-        sms_nodes = [n for n in definition.nodes if isinstance(n, SendSmsNode)]
+        sms_nodes = [
+            n
+            for n in definition.nodes
+            if isinstance(n, (SendSmsNode, RetellSmsConversationNode))
+        ]
         email_nodes = [n for n in definition.nodes if isinstance(n, SendEmailNode)]
         voice_nodes = [n for n in definition.nodes if isinstance(n, SendVoiceNode)]
         if not (sms_nodes or email_nodes or voice_nodes):
@@ -138,6 +144,30 @@ class ChannelReadinessService:
 
         for node in voice_nodes:
             issues += await self._voice_node_issues(node, location)
+
+        for node in sms_nodes:
+            if isinstance(node, RetellSmsConversationNode) and self.session is not None:
+                profile = await self.session.get(
+                    RetellSmsChatProfile, node.chat_profile_id
+                )
+                if (
+                    profile is None
+                    or not profile.is_active
+                    or str(profile.institution_id) != institution_id
+                    or str(profile.location_id) != location_id
+                    or not _has_real_value(profile.retell_agent_id)
+                ):
+                    issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            code=_READINESS_CODE,
+                            node_id=node.id,
+                            message=(
+                                "Selected Retell SMS profile is missing, inactive, "
+                                "or not attached to this location."
+                            ),
+                        )
+                    )
 
         return issues
 

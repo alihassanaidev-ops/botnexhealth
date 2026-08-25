@@ -100,6 +100,21 @@ export interface OutboundVoiceProfile {
     updated_at: string;
 }
 
+export interface RetellSmsChatProfile {
+    id: string;
+    institution_id: string;
+    location_id: string;
+    retell_agent_id: string | null;
+    agent_version: number | null;
+    display_name: string;
+    purpose: string | null;
+    allowed_tools: string[];
+    is_active: boolean;
+    config: Record<string, unknown> | null;
+    created_at: string;
+    updated_at: string;
+}
+
 export interface SyncResult {
     location: string;
     success: boolean;

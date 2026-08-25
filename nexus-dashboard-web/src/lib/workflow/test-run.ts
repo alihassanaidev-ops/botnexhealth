@@ -102,6 +102,16 @@ function describe(
                 },
                 next: node.next_node_id,
             }
+        case "retell_sms_conversation":
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "retell_sms_conversation",
+                    summary: "Wait for Retell-powered SMS conversation",
+                    detail: `${humanizeSeconds(node.inactivity_timeout_seconds ?? 3600)} inactivity timeout · ${node.max_patient_turns ?? 12} patient turns max`,
+                },
+                next: node.next_node_id,
+            }
         case "send_email":
             return {
                 step: {
