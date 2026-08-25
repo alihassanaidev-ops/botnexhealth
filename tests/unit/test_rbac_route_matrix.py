@@ -27,6 +27,7 @@ MFA_TICKET = "mfa_ticket"
 SUPER_ADMIN = "get_current_admin"
 SUPER_ADMIN_STRICT = "get_current_super_admin"
 INSTITUTION_ADMIN = "get_current_institution_admin"
+INSTITUTION_OR_SUPER_ADMIN = "get_current_institution_or_super_admin"
 INSTITUTION_USER = "get_current_institution_user"
 LOCATION_ADMIN = "get_current_location_admin"
 INSTITUTION_OR_LOCATION_ADMIN = "get_current_institution_or_location_admin"
@@ -81,6 +82,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # is enforced in InboxService, not per-handler, so a new endpoint cannot
         # forget a scope check. Group admins are refused the conversation
         # endpoints there and get /activity, which carries no patient content.
+        "GET /api/inbox/scopes",
         "GET /api/inbox/threads",
         "GET /api/inbox/threads/{thread_id}",
         "POST /api/inbox/threads/{thread_id}/assign",
@@ -239,22 +241,6 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/email-templates/{template_type}/reset",
         "GET /api/institution/email-templates/{template_type}/preview",
         "GET /api/institution/email-templates/{template_type}/variables",
-        # Clinic-authored campaign email templates — same boundary as the system
-        # notification templates above: institution-scoped content, admin-only.
-        "GET /api/institution/campaign-email-templates",
-        "POST /api/institution/campaign-email-templates",
-        "GET /api/institution/campaign-email-templates/merge-fields",
-        "POST /api/institution/campaign-email-templates/preview/live",
-        "GET /api/institution/campaign-email-templates/{key}",
-        "PUT /api/institution/campaign-email-templates/{key}",
-        "DELETE /api/institution/campaign-email-templates/{key}",
-        "GET /api/institution/campaign-email-templates/{key}/preview",
-        # Sending identities: a clinic admin reads status, edits display fields
-        # and re-checks verification. Provisioning and deletion are super-admin
-        # only (below) because they create and destroy real AWS resources.
-        "GET /api/institution/email-sending-identities",
-        "PUT /api/institution/email-sending-identities/{identity_id}",
-        "POST /api/institution/email-sending-identities/{identity_id}/verify",
         "GET /api/institution/sms-templates",
         "POST /api/institution/sms-templates/preview/live",
         "POST /api/institution/sms-templates/validate",
@@ -399,6 +385,25 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/email-sending-identities/provision",
         "DELETE /api/institution/email-sending-identities/{identity_id}",
     ),
+    INSTITUTION_OR_SUPER_ADMIN: (
+        # Clinic-authored campaign email templates. Institution-scoped content
+        # a clinic admin owns for their own institution, and a platform admin
+        # administers for any institution they name explicitly.
+        "GET /api/institution/campaign-email-templates",
+        "POST /api/institution/campaign-email-templates",
+        "GET /api/institution/campaign-email-templates/merge-fields",
+        "POST /api/institution/campaign-email-templates/preview/live",
+        "GET /api/institution/campaign-email-templates/{key}",
+        "PUT /api/institution/campaign-email-templates/{key}",
+        "DELETE /api/institution/campaign-email-templates/{key}",
+        "GET /api/institution/campaign-email-templates/{key}/preview",
+        # Sending identities: a clinic admin reads status, edits display fields
+        # and re-checks verification. Provisioning and deletion stay super-admin
+        # only (above) because they create and destroy real AWS resources.
+        "GET /api/institution/email-sending-identities",
+        "PUT /api/institution/email-sending-identities/{identity_id}",
+        "POST /api/institution/email-sending-identities/{identity_id}/verify",
+    ),
 }
 
 
@@ -406,6 +411,7 @@ AUTH_BOUNDARIES = {
     SUPER_ADMIN,
     SUPER_ADMIN_STRICT,
     INSTITUTION_ADMIN,
+    INSTITUTION_OR_SUPER_ADMIN,
     INSTITUTION_USER,
     LOCATION_ADMIN,
     INSTITUTION_OR_LOCATION_ADMIN,
@@ -419,6 +425,7 @@ BOUNDARY_PRECEDENCE = (
     SUPER_ADMIN,
     SUPER_ADMIN_STRICT,
     INSTITUTION_ADMIN,
+    INSTITUTION_OR_SUPER_ADMIN,
     INSTITUTION_USER,
     LOCATION_ADMIN,
     INSTITUTION_OR_LOCATION_ADMIN,
@@ -432,6 +439,10 @@ ALLOWED_ROLES_BY_BOUNDARY: dict[str, set[UserRole]] = {
     SUPER_ADMIN: {UserRole.SUPER_ADMIN},
     SUPER_ADMIN_STRICT: {UserRole.SUPER_ADMIN},
     INSTITUTION_ADMIN: {UserRole.INSTITUTION_ADMIN},
+    # The per-institution email surfaces. A super admin administers any tenant
+    # and must name it explicitly; resolve_target_institution refuses a tenant
+    # admin who names an institution other than their own.
+    INSTITUTION_OR_SUPER_ADMIN: {UserRole.INSTITUTION_ADMIN, UserRole.SUPER_ADMIN},
     INSTITUTION_USER: {UserRole.INSTITUTION_ADMIN},
     LOCATION_ADMIN: {UserRole.LOCATION_ADMIN},
     INSTITUTION_OR_LOCATION_ADMIN: {
@@ -645,3 +656,47 @@ def test_staff_cannot_cross_mutation_boundaries_at_dependency_layer():
         if boundary not in mutation_boundaries:
             continue
         assert UserRole.STAFF not in ALLOWED_ROLES_BY_BOUNDARY[boundary], route_key
+
+
+# ---------------------------------------------------------------------------
+# Which institution a request acts on
+# ---------------------------------------------------------------------------
+#
+# The INSTITUTION_OR_SUPER_ADMIN boundary lets two very different callers reach
+# the same handler, so the target institution can no longer be read off the
+# user. These cover the resolution itself: a tenant admin cannot be widened by
+# a query parameter, and a platform admin cannot act without naming a tenant.
+
+
+def test_institution_admin_is_pinned_to_their_own_institution():
+    user = _user(UserRole.INSTITUTION_ADMIN)
+    assert auth_deps.resolve_target_institution(user, None) == str(user.institution_id)
+
+
+def test_institution_admin_may_name_their_own_institution():
+    user = _user(UserRole.INSTITUTION_ADMIN)
+    resolved = auth_deps.resolve_target_institution(user, str(user.institution_id))
+    assert resolved == str(user.institution_id)
+
+
+def test_institution_admin_cannot_name_another_institution():
+    user = _user(UserRole.INSTITUTION_ADMIN)
+    with pytest.raises(HTTPException) as exc:
+        auth_deps.resolve_target_institution(user, "cccccccc-cccc-cccc-cccc-cccccccccccc")
+    assert exc.value.status_code == 403
+
+
+def test_super_admin_must_name_an_institution():
+    """A platform admin has none of their own; acting on an unnamed tenant is a
+    bug, not a default."""
+    with pytest.raises(HTTPException) as exc:
+        auth_deps.resolve_target_institution(_user(UserRole.SUPER_ADMIN), None)
+    assert exc.value.status_code == 400
+
+
+def test_super_admin_acts_on_the_institution_they_name():
+    target = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    assert (
+        auth_deps.resolve_target_institution(_user(UserRole.SUPER_ADMIN), target)
+        == target
+    )

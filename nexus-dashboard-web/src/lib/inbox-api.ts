@@ -10,6 +10,8 @@ export interface InboxThread {
     status: string
     institution_id: string
     location_id: string | null
+    institution_name: string | null
+    location_name: string | null
     contact_id: string | null
     contact_name: string | null
     contact_masked_email: string | null
@@ -67,6 +69,39 @@ export interface InboxActivity {
     threads: number
     open_threads: number
     unresolved_handoffs: number
+}
+
+export interface InboxScopeLocation {
+    id: string
+    name: string
+}
+
+export interface InboxScopeInstitution {
+    id: string
+    name: string
+    locations: InboxScopeLocation[]
+}
+
+/**
+ * What this caller may filter by, and what they may do.
+ *
+ * The capability flags come from the server rather than being re-derived from
+ * the role here — one authority for the permission model, so the UI cannot
+ * drift from what the API actually enforces.
+ */
+export interface InboxScopes {
+    role: string
+    institutions: InboxScopeInstitution[]
+    can_filter_institution: boolean
+    can_filter_location: boolean
+    can_read_content: boolean
+    can_write: boolean
+    can_assign: boolean
+}
+
+export async function getInboxScopes(): Promise<InboxScopes> {
+    const { data } = await api.get<InboxScopes>(`${BASE}/scopes`)
+    return data
 }
 
 export async function listInboxThreads(

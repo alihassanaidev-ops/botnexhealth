@@ -45,20 +45,24 @@ STAFF = _scope(UserRole.STAFF.value, location_id="loc-1")
 
 
 @pytest.mark.parametrize(
-    "scope,content,reply,assign,location_bound",
+    "scope,content,write,location_bound",
     [
-        (SUPER, True, True, True, False),
-        (GROUP, False, False, False, False),
-        (INST, True, True, True, False),
-        (LOC_ADMIN, True, True, True, True),
-        (STAFF, True, True, False, True),
+        (SUPER, True, True, False),
+        (GROUP, False, False, False),
+        (INST, True, True, False),
+        (LOC_ADMIN, True, True, True),
+        (STAFF, True, False, True),
     ],
 )
-def test_capability_matrix(scope, content, reply, assign, location_bound):
+def test_capability_matrix(scope, content, write, location_bound):
     assert scope.may_read_content is content
-    assert scope.may_reply is reply
-    assert scope.may_assign is assign
+    assert scope.may_write is write
     assert scope.is_location_bound is location_bound
+    # Every write-shaped capability is the one boundary, not three that can
+    # drift apart.
+    assert scope.may_assign is write
+    assert scope.may_resolve is write
+    assert scope.may_reply is write
 
 
 def test_only_super_admin_is_platform_wide():
@@ -67,11 +71,18 @@ def test_only_super_admin_is_platform_wide():
         assert scope.is_platform_wide is False
 
 
-def test_staff_cannot_assign_but_can_reply():
-    """Staff answer patients; deciding who owns a conversation is an admin
-    action."""
-    assert STAFF.may_reply is True
+def test_staff_are_read_only():
+    """Staff work the queue and read it; assigning and closing a patient
+    conversation are supervisory acts."""
+    assert STAFF.may_read_content is True
+    assert STAFF.may_write is False
     assert STAFF.may_assign is False
+    assert STAFF.may_resolve is False
+
+
+def test_the_three_admin_roles_hold_write():
+    for scope in (SUPER, INST, LOC_ADMIN):
+        assert scope.may_write is True
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +118,12 @@ def test_staff_cannot_assign_through_the_service():
     """The capability flag is not advisory — the service enforces it."""
     with pytest.raises(InboxAccessError):
         asyncio.run(_service().assign(STAFF, "t-1", "u-2"))
+
+
+def test_staff_cannot_resolve_through_the_service():
+    """Read-only means read-only at the service, not just a hidden button."""
+    with pytest.raises(InboxAccessError):
+        asyncio.run(_service().resolve(STAFF, "t-1"))
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +175,112 @@ def test_user_without_an_institution_sees_nothing():
 def test_location_user_without_a_location_sees_nothing():
     sql = _compiled(_scope(UserRole.STAFF.value, location_id=None))
     assert "false" in sql.lower()
+
+
+# ---------------------------------------------------------------------------
+# Filter options — the clinic/location list the UI narrows by
+# ---------------------------------------------------------------------------
+
+
+class _Row:
+    def __init__(self, **kw) -> None:
+        self.__dict__.update(kw)
+
+
+class _Result:
+    """Enough of a SQLAlchemy result for the two shapes filter_options reads."""
+
+    def __init__(self, rows) -> None:
+        self._rows = list(rows)
+
+    def all(self):
+        return self._rows
+
+    def scalars(self):
+        return self
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _FakeSession:
+    """Replays canned results in call order and records the statements."""
+
+    def __init__(self, results) -> None:
+        self._results = list(results)
+        self.statements = []
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        return _Result(self._results.pop(0) if self._results else [])
+
+    def sql(self, index: int) -> str:
+        return str(
+            self.statements[index].compile(compile_kwargs={"literal_binds": True})
+        )
+
+
+def _options(scope, results):
+    session = _FakeSession(results)
+    return asyncio.run(InboxService(session).filter_options(scope)), session
+
+
+def test_filter_options_nest_locations_under_their_institution():
+    options, _ = _options(
+        SUPER,
+        [
+            [_Row(id="inst-1", name="Bright Smiles"), _Row(id="inst-2", name="Northside")],
+            [
+                _Row(id="loc-1", name="Downtown", institution_id="inst-1"),
+                _Row(id="loc-2", name="Uptown", institution_id="inst-1"),
+                _Row(id="loc-3", name="Main", institution_id="inst-2"),
+            ],
+        ],
+    )
+
+    assert [o["name"] for o in options] == ["Bright Smiles", "Northside"]
+    assert [loc["name"] for loc in options[0]["locations"]] == ["Downtown", "Uptown"]
+    assert [loc["name"] for loc in options[1]["locations"]] == ["Main"]
+
+
+def test_super_admin_filter_options_are_not_restricted_to_one_institution():
+    _, session = _options(
+        SUPER, [[_Row(id="inst-1", name="Bright Smiles")], []]
+    )
+    assert "institutions.id IN" not in session.sql(0)
+
+
+def test_institution_admin_filter_options_cover_only_their_institution():
+    _, session = _options(INST, [[_Row(id="inst-1", name="Bright Smiles")], []])
+    assert "institutions.id IN" in session.sql(0)
+
+
+def test_location_bound_filter_options_offer_only_their_own_location():
+    """The filter list must not advertise a location the thread query refuses."""
+    options, session = _options(
+        STAFF,
+        [
+            [_Row(id="inst-1", name="Bright Smiles")],
+            [_Row(id="loc-1", name="Downtown", institution_id="inst-1")],
+        ],
+    )
+    assert [loc["id"] for loc in options[0]["locations"]] == ["loc-1"]
+    # The predicate itself is the point; the literal is rendered as a UUID.
+    assert "institution_locations.id =" in session.sql(1)
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        _scope(UserRole.INSTITUTION_ADMIN.value, institution_id=None),
+        _scope(UserRole.GROUP_ADMIN.value, institution_id=None, group_id=None),
+        _scope(UserRole.STAFF.value, location_id=None),
+    ],
+)
+def test_misconfigured_users_get_no_filter_options(scope):
+    """Fail closed, exactly as the thread query does."""
+    options, _ = _options(scope, [])
+    assert options == []
 
 
 # ---------------------------------------------------------------------------

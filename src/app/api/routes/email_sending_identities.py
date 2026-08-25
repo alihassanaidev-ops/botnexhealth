@@ -3,7 +3,9 @@
 Split by who should be able to do what:
 
 * **Institution admins** see their own identities, edit the display name and
-  reply-to, and re-check verification. That is the day-to-day surface.
+  reply-to, and re-check verification. That is the day-to-day surface. A
+  **super admin** reaches the same surface for any institution by naming it in
+  ``institution_id``.
 * **Super admins** provision and remove them. Provisioning creates real AWS
   resources — an SES identity, a tenant, a configuration set, and DNS records —
   against capped quotas, so it belongs to onboarding rather than to a
@@ -18,7 +20,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from src.app.api.deps import get_current_institution_admin, get_current_super_admin
+from src.app.api.deps import (
+    get_current_institution_or_super_admin,
+    get_current_super_admin,
+    resolve_target_institution,
+)
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
 from src.app.models.email_sending_identity import EmailIdentityStatus
@@ -82,14 +88,6 @@ class IdentityUpdateRequest(BaseModel):
     reply_to_address: str | None = Field(default=None, max_length=320)
 
 
-def _require_institution(user: User) -> str:
-    if not user.institution_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution"
-        )
-    return user.institution_id
-
-
 def _to_response(identity: Any) -> EmailSendingIdentityResponse:
     records = [DnsRecordResponse(**r) for r in (identity.dns_records or [])]
     return EmailSendingIdentityResponse(
@@ -124,9 +122,10 @@ def _to_response(identity: Any) -> EmailSendingIdentityResponse:
 @limiter.limit(RATE_READ)
 async def list_email_sending_identities(
     request: Request,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> EmailSendingIdentityListResponse:
-    institution_id = _require_institution(current_user)
+    institution_id = resolve_target_institution(current_user, institution_id)
     async with get_db_session() as session:
         identities = await EmailIdentityService(session).list_for_institution(
             institution_id
@@ -141,10 +140,11 @@ async def list_email_sending_identities(
 async def recheck_email_sending_identity(
     request: Request,
     identity_id: str,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> EmailSendingIdentityResponse:
     """Re-check verification now instead of waiting for the hourly sweep."""
-    institution_id = _require_institution(current_user)
+    institution_id = resolve_target_institution(current_user, institution_id)
     async with get_db_session() as session:
         service = EmailIdentityService(session)
         identity = await _load_scoped(session, identity_id, institution_id)
@@ -163,9 +163,10 @@ async def update_email_sending_identity(
     request: Request,
     identity_id: str,
     body: IdentityUpdateRequest,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> EmailSendingIdentityResponse:
-    institution_id = _require_institution(current_user)
+    institution_id = resolve_target_institution(current_user, institution_id)
     async with get_db_session() as session:
         identity = await _load_scoped(session, identity_id, institution_id)
         if body.from_name is not None:

@@ -25,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { CardsSkeleton } from "@/components/ui/skeletons"
+import { useInstitutionScope } from "@/hooks/useInstitutionScope"
 import {
     listEmailSendingIdentities,
     updateEmailSendingIdentity,
@@ -99,10 +100,19 @@ export default function EmailSendingIdentityPage() {
     >({})
     const [copied, setCopied] = useState<string | null>(null)
 
+    // A platform admin administers any practice and picks which; a clinic
+    // admin has no choice to make and never sees the picker.
+    const { institutionId, ready, picker } = useInstitutionScope()
+
     const load = useCallback(async () => {
+        if (!ready) {
+            setIdentities([])
+            setLoading(false)
+            return
+        }
         setLoading(true)
         try {
-            const list = await listEmailSendingIdentities()
+            const list = await listEmailSendingIdentities(institutionId)
             setIdentities(list)
             setDrafts(
                 Object.fromEntries(
@@ -120,7 +130,7 @@ export default function EmailSendingIdentityPage() {
         } finally {
             setLoading(false)
         }
-    }, [])
+    }, [ready, institutionId])
 
     useEffect(() => {
         void load()
@@ -132,7 +142,7 @@ export default function EmailSendingIdentityPage() {
     const recheck = async (identity: Identity) => {
         setBusyId(identity.id)
         try {
-            const updated = await verifyEmailSendingIdentity(identity.id)
+            const updated = await verifyEmailSendingIdentity(identity.id, institutionId)
             replaceIdentity(updated)
             toast[updated.is_sendable ? "success" : "message"](
                 STATUS_META[updated.status].label,
@@ -149,10 +159,14 @@ export default function EmailSendingIdentityPage() {
         const draft = drafts[identity.id]
         setBusyId(identity.id)
         try {
-            const updated = await updateEmailSendingIdentity(identity.id, {
-                from_name: draft.from_name.trim() || null,
-                reply_to_address: draft.reply_to_address.trim() || null,
-            })
+            const updated = await updateEmailSendingIdentity(
+                identity.id,
+                {
+                    from_name: draft.from_name.trim() || null,
+                    reply_to_address: draft.reply_to_address.trim() || null,
+                },
+                institutionId,
+            )
             replaceIdentity(updated)
             toast.success("Saved")
         } catch (err) {
@@ -182,7 +196,17 @@ export default function EmailSendingIdentityPage() {
                 description="The address patients see when your clinic emails them."
             />
 
-            {identities.length === 0 && (
+            {picker}
+
+            {!ready && (
+                <Card>
+                    <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                        Choose a practice to see its sending address.
+                    </CardContent>
+                </Card>
+            )}
+
+            {ready && identities.length === 0 && (
                 <Card>
                     <CardContent className="space-y-2 py-10 text-center">
                         <p className="text-sm text-muted-foreground">

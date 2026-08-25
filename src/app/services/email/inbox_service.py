@@ -30,6 +30,7 @@ from src.app.models.contact import Contact
 from src.app.models.inbound_email_message import InboundEmailMessage
 from src.app.models.inbound_sms_message import InboundSmsMessage
 from src.app.models.institution import Institution
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_history_log import SmsHistoryLog
 from src.app.models.user import User, UserRole
 
@@ -72,17 +73,33 @@ class InboxScope:
         return not self.is_group_oversight
 
     @property
-    def may_reply(self) -> bool:
-        return self.may_read_content
+    def may_write(self) -> bool:
+        """Who may change a conversation, as opposed to reading one.
 
-    @property
-    def may_assign(self) -> bool:
-        """Staff can read and reply; assignment is an admin action."""
+        Staff are read-only by design: they work the queue and escalate, but
+        assigning and closing a patient conversation are supervisory acts. The
+        three admin roles each hold write on their own span — a location admin
+        over their location, an institution admin over every location in their
+        institution, a super admin over every institution.
+        """
         return self.role in (
             UserRole.SUPER_ADMIN.value,
             UserRole.INSTITUTION_ADMIN.value,
             UserRole.LOCATION_ADMIN.value,
         )
+
+    @property
+    def may_reply(self) -> bool:
+        """Reserved for in-app reply; the same boundary as any other write."""
+        return self.may_write
+
+    @property
+    def may_assign(self) -> bool:
+        return self.may_write
+
+    @property
+    def may_resolve(self) -> bool:
+        return self.may_write
 
 
 def scope_for_user(user: User) -> InboxScope:
@@ -102,6 +119,11 @@ class ThreadSummary:
     status: str
     institution_id: str
     location_id: str | None
+    #: Resolved for display. A caller who spans more than one clinic or location
+    #: needs to see which one a conversation belongs to; an ID does not tell
+    #: them, and the inbox is the one place several tenants appear side by side.
+    institution_name: str | None
+    location_name: str | None
     contact_id: str | None
     contact_name: str | None
     contact_masked_email: str | None
@@ -130,6 +152,31 @@ class ThreadMessage:
 class InboxService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+        # Name lookups for one request. A platform-wide list can hold threads
+        # from many clinics, and re-reading the same institution row per thread
+        # would turn one page of the inbox into dozens of queries.
+        self._institution_names: dict[str, str | None] = {}
+        self._location_names: dict[str, str | None] = {}
+
+    async def _institution_name(self, institution_id: str | None) -> str | None:
+        if not institution_id:
+            return None
+        if institution_id not in self._institution_names:
+            row = await self.session.get(Institution, institution_id)
+            self._institution_names[institution_id] = (
+                getattr(row, "name", None) if row is not None else None
+            )
+        return self._institution_names[institution_id]
+
+    async def _location_name(self, location_id: str | None) -> str | None:
+        if not location_id:
+            return None
+        if location_id not in self._location_names:
+            row = await self.session.get(InstitutionLocation, location_id)
+            self._location_names[location_id] = (
+                getattr(row, "name", None) if row is not None else None
+            )
+        return self._location_names[location_id]
 
     # ------------------------------------------------------------------
     # Scoping
@@ -278,6 +325,10 @@ class InboxService:
             status=thread.status,
             institution_id=str(thread.institution_id),
             location_id=str(thread.location_id) if thread.location_id else None,
+            institution_name=await self._institution_name(str(thread.institution_id)),
+            location_name=await self._location_name(
+                str(thread.location_id) if thread.location_id else None
+            ),
             contact_id=str(thread.contact_id) if thread.contact_id else None,
             contact_name=_contact_name(contact),
             contact_masked_email=_mask(getattr(contact, "email", None)),
@@ -371,6 +422,83 @@ class InboxService:
         return await self._summarize(thread), messages
 
     # ------------------------------------------------------------------
+    # Filter options
+    # ------------------------------------------------------------------
+
+    async def filter_options(self, scope: InboxScope) -> list[dict[str, Any]]:
+        """The clinics and locations this caller may narrow the inbox to.
+
+        Deliberately derived from the same scope rules as the thread query, so
+        the filter list can never offer a clinic the caller's threads query
+        would refuse. It carries names only — a clinic and location directory,
+        no patient information — which is why group oversight gets it too: it
+        turns their activity figures from bare IDs into practice names without
+        crossing the line that role is kept behind.
+        """
+        institution_ids: list[str] | None = None
+
+        if scope.is_platform_wide:
+            institution_ids = None  # every institution
+        elif scope.is_group_oversight:
+            if not scope.group_id:
+                return []
+            rows = await self.session.execute(
+                select(Institution.id).where(Institution.group_id == scope.group_id)
+            )
+            institution_ids = [str(r) for r in rows.scalars().all()]
+            if not institution_ids:
+                return []
+        else:
+            if not scope.institution_id:
+                return []
+            institution_ids = [scope.institution_id]
+
+        query = select(Institution.id, Institution.name).order_by(Institution.name)
+        if institution_ids is not None:
+            query = query.where(Institution.id.in_(institution_ids))
+        institutions = (await self.session.execute(query)).all()
+        if not institutions:
+            return []
+
+        location_query = (
+            select(
+                InstitutionLocation.id,
+                InstitutionLocation.name,
+                InstitutionLocation.institution_id,
+            )
+            .where(
+                InstitutionLocation.institution_id.in_(
+                    [str(row.id) for row in institutions]
+                )
+            )
+            .order_by(InstitutionLocation.name)
+        )
+        if scope.is_location_bound:
+            # A location user is offered their own location and nothing else,
+            # matching what the thread query will actually return.
+            if not scope.location_id:
+                return []
+            location_query = location_query.where(
+                InstitutionLocation.id == scope.location_id
+            )
+        locations = (await self.session.execute(location_query)).all()
+
+        by_institution: dict[str, list[dict[str, str]]] = {}
+        for row in locations:
+            by_institution.setdefault(str(row.institution_id), []).append(
+                {"id": str(row.id), "name": row.name}
+            )
+
+        return [
+            {
+                "id": str(row.id),
+                "name": row.name,
+                "locations": by_institution.get(str(row.id), []),
+            }
+            for row in institutions
+        ]
+
+    # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
 
@@ -398,7 +526,7 @@ class InboxService:
         self, scope: InboxScope, thread_id: str, *, outcome: str | None = None
     ) -> int:
         """Close the conversation and any open handoffs on it."""
-        if not scope.may_reply:
+        if not scope.may_resolve:
             raise InboxAccessError("This role cannot resolve conversations")
         thread = await self._load_thread(scope, thread_id)
         now = datetime.now(timezone.utc)

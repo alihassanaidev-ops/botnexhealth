@@ -131,9 +131,12 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
+                        // A super admin administers any practice's templates and
+                        // sending address; the page asks which practice, and the
+                        // API refuses the request if one is not named.
                         path: "institution-admin/campaign-email-templates",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "SUPER_ADMIN"]}>
                                 <S><CampaignEmailTemplates /></S>
                             </RoleGuard>
                         ),
@@ -141,7 +144,7 @@ export const router = createBrowserRouter([
                     {
                         path: "institution-admin/email-sending-address",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "SUPER_ADMIN"]}>
                                 <S><EmailSendingIdentity /></S>
                             </RoleGuard>
                         ),

@@ -40,6 +40,8 @@ class ThreadSummaryResponse(BaseModel):
     status: str
     institution_id: str
     location_id: str | None
+    institution_name: str | None
+    location_name: str | None
     contact_id: str | None
     contact_name: str | None
     contact_masked_email: str | None
@@ -74,6 +76,36 @@ class ThreadDetailResponse(BaseModel):
     messages: list[ThreadMessageResponse]
 
 
+class FilterLocationResponse(BaseModel):
+    id: str
+    name: str
+
+
+class FilterInstitutionResponse(BaseModel):
+    id: str
+    name: str
+    locations: list[FilterLocationResponse]
+
+
+class InboxScopesResponse(BaseModel):
+    """What this caller may filter by, and what they may do.
+
+    The capability flags are served rather than inferred so the UI reads one
+    authority for the permission model instead of restating the role table and
+    drifting from it.
+    """
+
+    role: str
+    institutions: list[FilterInstitutionResponse]
+    #: True when the caller spans more than one location, so the UI knows
+    #: whether a location filter is worth showing at all.
+    can_filter_location: bool
+    can_filter_institution: bool
+    can_read_content: bool
+    can_write: bool
+    can_assign: bool
+
+
 class AssignRequest(BaseModel):
     #: None clears the assignment and returns the conversation to the queue.
     assignee_user_id: str | None = None
@@ -87,6 +119,31 @@ def _forbidden(exc: InboxAccessError) -> HTTPException:
     # 404 rather than 403 for a thread outside the caller's scope: confirming
     # that a conversation exists in another clinic is itself a disclosure.
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+
+
+@router.get("/scopes", response_model=InboxScopesResponse)
+@limiter.limit(RATE_READ)
+async def inbox_scopes(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> InboxScopesResponse:
+    """The clinic/location filter list for this caller, plus their capabilities.
+
+    Names of practices only — no patient information — so every role including
+    group oversight can call it.
+    """
+    scope = scope_for_user(current_user)
+    async with get_db_session() as session:
+        institutions = await InboxService(session).filter_options(scope)
+    return InboxScopesResponse(
+        role=scope.role,
+        institutions=[FilterInstitutionResponse(**row) for row in institutions],
+        can_filter_institution=scope.is_platform_wide or scope.is_group_oversight,
+        can_filter_location=not scope.is_location_bound,
+        can_read_content=scope.may_read_content,
+        can_write=scope.may_write,
+        can_assign=scope.may_assign,
+    )
 
 
 @router.get("/threads", response_model=ThreadListResponse)

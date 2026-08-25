@@ -37,6 +37,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog"
+import { useInstitutionScope } from "@/hooks/useInstitutionScope"
 import {
     createCampaignEmailTemplate,
     deleteCampaignEmailTemplate,
@@ -79,12 +80,20 @@ export default function CampaignEmailTemplates() {
     const [deleteTarget, setDeleteTarget] = useState<CampaignEmailTemplate | null>(null)
     const [copiedField, setCopiedField] = useState<string | null>(null)
 
+    // A platform admin administers any practice and picks which; a clinic
+    // admin has no choice to make and never sees the picker.
+    const { institutionId, ready, picker } = useInstitutionScope()
+
     const load = useCallback(async () => {
+        if (!ready) {
+            setLoading(false)
+            return
+        }
         setLoading(true)
         try {
             const [list, fields] = await Promise.all([
-                listCampaignEmailTemplates(),
-                listCampaignMergeFields(),
+                listCampaignEmailTemplates(false, institutionId),
+                listCampaignMergeFields(institutionId),
             ])
             setTemplates(list)
             setMergeFields(fields)
@@ -93,11 +102,19 @@ export default function CampaignEmailTemplates() {
         } finally {
             setLoading(false)
         }
-    }, [])
+    }, [ready, institutionId])
 
     useEffect(() => {
         void load()
     }, [load])
+
+    // Switching practice must not leave another practice's template open in
+    // the editor.
+    useEffect(() => {
+        setSelectedKey(null)
+        setCreating(false)
+        setPreview(null)
+    }, [institutionId])
 
     const selected = useMemo(
         () => templates.find((t) => t.key === selectedKey) ?? null,
@@ -134,19 +151,26 @@ export default function CampaignEmailTemplates() {
         setSaving(true)
         try {
             if (creating) {
-                const created = await createCampaignEmailTemplate({
-                    name: draft.name,
-                    subject_template: draft.subject_template,
-                    html_body: draft.html_body,
-                    text_body: draft.text_body,
-                    is_active: draft.is_active,
-                })
+                const created = await createCampaignEmailTemplate(
+                    {
+                        name: draft.name,
+                        subject_template: draft.subject_template,
+                        html_body: draft.html_body,
+                        text_body: draft.text_body,
+                        is_active: draft.is_active,
+                    },
+                    institutionId,
+                )
                 toast.success(`Created “${created.name}”`)
                 setTemplates((prev) => [...prev, created])
                 setCreating(false)
                 setSelectedKey(created.key)
             } else if (selected) {
-                const updated = await updateCampaignEmailTemplate(selected.key, draft)
+                const updated = await updateCampaignEmailTemplate(
+                    selected.key,
+                    draft,
+                    institutionId,
+                )
                 toast.success("Template saved")
                 setTemplates((prev) =>
                     prev.map((t) => (t.key === updated.key ? updated : t)),
@@ -163,11 +187,14 @@ export default function CampaignEmailTemplates() {
         setPreviewing(true)
         try {
             setPreview(
-                await previewCampaignEmailTemplate({
-                    subject_template: draft.subject_template,
-                    html_body: draft.html_body,
-                    text_body: draft.text_body,
-                }),
+                await previewCampaignEmailTemplate(
+                    {
+                        subject_template: draft.subject_template,
+                        html_body: draft.html_body,
+                        text_body: draft.text_body,
+                    },
+                    institutionId,
+                ),
             )
         } catch (err) {
             toast.error(errorMessage(err, "Failed to render preview"))
@@ -179,7 +206,7 @@ export default function CampaignEmailTemplates() {
     const confirmDelete = async () => {
         if (!deleteTarget) return
         try {
-            await deleteCampaignEmailTemplate(deleteTarget.key)
+            await deleteCampaignEmailTemplate(deleteTarget.key, institutionId)
             toast.success(`Deleted “${deleteTarget.name}”`)
             setTemplates((prev) => prev.filter((t) => t.key !== deleteTarget.key))
             if (selectedKey === deleteTarget.key) closeEditor()
@@ -216,7 +243,7 @@ export default function CampaignEmailTemplates() {
                 title="Campaign Email Templates"
                 description="Reusable emails you can select from any Send Email step in a campaign."
                 actions={
-                    !editing ? (
+                    !editing && ready ? (
                         <Button onClick={startCreate}>
                             <Plus className="mr-2 h-4 w-4" />
                             New template
@@ -225,7 +252,17 @@ export default function CampaignEmailTemplates() {
                 }
             />
 
-            {!editing && (
+            {picker}
+
+            {!ready && (
+                <Card>
+                    <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                        Choose a practice to see and edit its templates.
+                    </CardContent>
+                </Card>
+            )}
+
+            {ready && !editing && (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                     {templates.length === 0 && (
                         <Card className="sm:col-span-2 lg:col-span-3">
@@ -262,7 +299,7 @@ export default function CampaignEmailTemplates() {
                 </div>
             )}
 
-            {editing && (
+            {ready && editing && (
                 <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
                     <Card>
                         <CardHeader>

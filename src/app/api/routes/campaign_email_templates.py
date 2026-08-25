@@ -1,8 +1,10 @@
 """Campaign email template routes — clinic-authored, reusable across campaigns.
 
-Accessible to INSTITUTION_ADMIN users; templates are scoped per institution and
-isolated by RLS. Separate from ``/institution/email-templates``, which manages
-the five fixed system notification templates.
+Accessible to INSTITUTION_ADMIN users for their own institution, and to
+SUPER_ADMIN for any institution named by ``institution_id``. Templates are
+scoped per institution and isolated by RLS. Separate from
+``/institution/email-templates``, which manages the five fixed system
+notification templates.
 """
 
 from __future__ import annotations
@@ -13,7 +15,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from src.app.api.deps import get_current_institution_admin
+from src.app.api.deps import (
+    get_current_institution_or_super_admin,
+    resolve_target_institution,
+)
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
 from src.app.models.user import User
@@ -81,14 +86,6 @@ class CampaignEmailTemplatePreviewResponse(BaseModel):
     text: str
 
 
-def _require_institution(user: User) -> str:
-    if not user.institution_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution"
-        )
-    return user.institution_id
-
-
 def _to_response(t) -> CampaignEmailTemplateResponse:  # noqa: ANN001
     return CampaignEmailTemplateResponse(
         id=str(t.id),
@@ -116,10 +113,11 @@ def _bad_request(exc: CampaignEmailTemplateError) -> HTTPException:
 @limiter.limit(RATE_READ)
 async def list_campaign_email_templates(
     request: Request,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
     active_only: bool = False,
 ) -> CampaignEmailTemplateListResponse:
-    institution_id = _require_institution(current_user)
+    institution_id = resolve_target_institution(current_user, institution_id)
     async with get_db_session() as session:
         templates = await CampaignEmailTemplateService(session).list_templates(
             institution_id, active_only=active_only
@@ -138,9 +136,10 @@ async def list_campaign_email_templates(
 async def create_campaign_email_template(
     request: Request,
     body: CampaignEmailTemplateCreateRequest,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> CampaignEmailTemplateResponse:
-    institution_id = _require_institution(current_user)
+    institution_id = resolve_target_institution(current_user, institution_id)
     async with get_db_session() as session:
         try:
             template = await CampaignEmailTemplateService(session).create(
@@ -161,10 +160,11 @@ async def create_campaign_email_template(
 @limiter.limit(RATE_READ)
 async def get_campaign_template_merge_fields(
     request: Request,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Merge fields an email template may use, for the editor's picker."""
-    _require_institution(current_user)
+    resolve_target_institution(current_user, institution_id)
     return {"fields": available_merge_fields()}
 
 
@@ -173,10 +173,11 @@ async def get_campaign_template_merge_fields(
 async def live_preview_campaign_email_template(
     request: Request,
     body: CampaignEmailTemplatePreviewRequest,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> CampaignEmailTemplatePreviewResponse:
     """Render unsaved content against sample merge values."""
-    _require_institution(current_user)
+    resolve_target_institution(current_user, institution_id)
     try:
         CampaignEmailTemplateService._validate_bodies(
             body.subject_template, body.html_body, body.text_body
@@ -201,9 +202,10 @@ async def live_preview_campaign_email_template(
 async def get_campaign_email_template(
     request: Request,
     key: str,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> CampaignEmailTemplateResponse:
-    institution_id = _require_institution(current_user)
+    institution_id = resolve_target_institution(current_user, institution_id)
     async with get_db_session() as session:
         template = await CampaignEmailTemplateService(session).get_by_key(
             institution_id, key
@@ -221,9 +223,10 @@ async def update_campaign_email_template(
     request: Request,
     key: str,
     body: CampaignEmailTemplateUpdateRequest,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> CampaignEmailTemplateResponse:
-    institution_id = _require_institution(current_user)
+    institution_id = resolve_target_institution(current_user, institution_id)
     async with get_db_session() as session:
         try:
             template = await CampaignEmailTemplateService(session).update(
@@ -249,9 +252,10 @@ async def update_campaign_email_template(
 async def delete_campaign_email_template(
     request: Request,
     key: str,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> None:
-    institution_id = _require_institution(current_user)
+    institution_id = resolve_target_institution(current_user, institution_id)
     async with get_db_session() as session:
         deleted = await CampaignEmailTemplateService(session).delete(
             institution_id, key
@@ -267,9 +271,10 @@ async def delete_campaign_email_template(
 async def preview_campaign_email_template(
     request: Request,
     key: str,
-    current_user: Annotated[User, Depends(get_current_institution_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    institution_id: str | None = None,
 ) -> CampaignEmailTemplatePreviewResponse:
-    institution_id = _require_institution(current_user)
+    institution_id = resolve_target_institution(current_user, institution_id)
     async with get_db_session() as session:
         preview = await CampaignEmailTemplateService(session).render_preview(
             institution_id, key

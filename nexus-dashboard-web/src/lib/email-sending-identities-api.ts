@@ -35,24 +35,48 @@ export interface EmailSendingIdentity {
     failure_reason: string | null
 }
 
-export async function listEmailSendingIdentities(): Promise<EmailSendingIdentity[]> {
-    const { data } = await api.get<{ identities: EmailSendingIdentity[] }>(BASE)
+/**
+ * `institutionId` is for platform administrators, who have no institution of
+ * their own and must name the one they are administering. A clinic admin omits
+ * it — the API pins them to their own institution and refuses any other.
+ */
+function scoped(institutionId?: string) {
+    return institutionId ? { params: { institution_id: institutionId } } : undefined
+}
+
+export async function listEmailSendingIdentities(
+    institutionId?: string,
+): Promise<EmailSendingIdentity[]> {
+    const { data } = await api.get<{ identities: EmailSendingIdentity[] }>(
+        BASE,
+        scoped(institutionId),
+    )
     return data.identities
 }
 
 export async function updateEmailSendingIdentity(
     id: string,
     body: { from_name?: string | null; reply_to_address?: string | null },
+    institutionId?: string,
 ): Promise<EmailSendingIdentity> {
-    const { data } = await api.put<EmailSendingIdentity>(`${BASE}/${id}`, body)
+    const { data } = await api.put<EmailSendingIdentity>(
+        `${BASE}/${id}`,
+        body,
+        scoped(institutionId),
+    )
     return data
 }
 
 /** Re-check verification now rather than waiting for the hourly sweep. */
 export async function verifyEmailSendingIdentity(
     id: string,
+    institutionId?: string,
 ): Promise<EmailSendingIdentity> {
-    const { data } = await api.post<EmailSendingIdentity>(`${BASE}/${id}/verify`)
+    const { data } = await api.post<EmailSendingIdentity>(
+        `${BASE}/${id}/verify`,
+        undefined,
+        scoped(institutionId),
+    )
     return data
 }
 

@@ -64,6 +64,24 @@ const adminNav: NavItemDef[] = [
         icon: UserCog,
     },
     {
+        // Platform-wide patient conversations. The page filters by practice
+        // and location; the API is what actually enforces the span.
+        title: "Inbox",
+        url: "/inbox",
+        icon: InboxIcon,
+    },
+    {
+        // Both email admin surfaces ask which practice first.
+        title: "Campaign Emails",
+        url: "/institution-admin/campaign-email-templates",
+        icon: Mail,
+    },
+    {
+        title: "Sending Addresses",
+        url: "/institution-admin/email-sending-address",
+        icon: MailCheck,
+    },
+    {
         title: "Phone Numbers",
         url: "/admin/twilio",
         icon: MessageSquare,
@@ -183,6 +201,13 @@ const groupNav: NavItemDef[] = [
         url: "/group",
         icon: Layers,
         exact: true,
+    },
+    {
+        // Activity figures only — the API refuses this role conversation
+        // content, so the page renders volumes and response times.
+        title: "Conversations",
+        url: "/inbox",
+        icon: InboxIcon,
     },
 ]
 
