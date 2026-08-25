@@ -148,7 +148,7 @@ def test_contact_thread_resolves_when_response_window_is_open():
         CampaignConversationService(session).resolve_sms_thread(
             institution_id="inst-1",
             location_id="loc-1",
-            contact_id="contact-1",
+            contact_ids=["contact-1"],
         )
     )
 
@@ -172,7 +172,7 @@ def test_expired_response_window_does_not_resolve_thread():
         CampaignConversationService(session).resolve_sms_thread(
             institution_id="inst-1",
             location_id="loc-1",
-            contact_id="contact-1",
+            contact_ids=["contact-1"],
         )
     )
 
@@ -220,7 +220,7 @@ def test_terminal_handoff_thread_does_not_make_waiting_run_ambiguous():
         CampaignConversationService(session).resolve_sms_thread(
             institution_id="inst-1",
             location_id="loc-1",
-            contact_id="contact-1",
+            contact_ids=["contact-1"],
         )
     )
 

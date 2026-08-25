@@ -79,19 +79,19 @@ class CampaignConversationService:
         *,
         institution_id: str,
         location_id: str | None,
-        contact_id: str | None,
+        contact_ids: list[str],
     ) -> CampaignConversationThread | None:
-        """Resolve an inbound SMS reply to exactly one reply-eligible thread."""
+        """Resolve candidate contacts to exactly one reply-eligible SMS thread."""
         if not location_id:
             return None
 
-        if not contact_id:
+        if not contact_ids:
             return None
         result = await self.session.execute(
             select(CampaignConversationThread).where(
                 CampaignConversationThread.institution_id == institution_id,
                 CampaignConversationThread.location_id == location_id,
-                CampaignConversationThread.contact_id == contact_id,
+                CampaignConversationThread.contact_id.in_(contact_ids),
                 CampaignConversationThread.channel == "sms",
                 CampaignConversationThread.status.in_(_ACTIVE_THREAD_STATUSES),
             )

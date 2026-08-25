@@ -58,6 +58,7 @@ def _run():
 
 def test_sms_cancel_request_creates_response_event_and_handoff():
     run = _run()
+    original_trigger_metadata = dict(run.trigger_metadata)
     session = _session(run=run)
 
     event, handoff = asyncio.run(
@@ -77,13 +78,13 @@ def test_sms_cancel_request_creates_response_event_and_handoff():
     assert handoff is not None
     assert handoff.reason == "cancel_requested"
     assert handoff.status == "open"
-    assert run.trigger_metadata["patient_response_intent"] == "cancel_requested"
-    assert run.trigger_metadata["last_campaign_response_event_id"] == event.id
+    assert run.trigger_metadata == original_trigger_metadata
     assert session.add.call_count == 2
 
 
-def test_sms_confirmation_records_event_without_handoff():
+def test_sms_confirmation_records_event_without_mutating_workflow_run():
     run = _run()
+    original_trigger_metadata = dict(run.trigger_metadata)
     session = _session(run=run)
 
     event, handoff = asyncio.run(
@@ -96,8 +97,10 @@ def test_sms_confirmation_records_event_without_handoff():
 
     assert event.normalized_intent == "confirm"
     assert event.normalized_outcome == "confirmed_by_reply"
+    assert event.workflow_id == "wf-1"
+    assert event.workflow_run_id == "run-1"
     assert handoff is None
-    assert run.trigger_metadata["patient_response_outcome"] == "confirmed_by_reply"
+    assert run.trigger_metadata == original_trigger_metadata
     assert session.add.call_count == 1
 
 

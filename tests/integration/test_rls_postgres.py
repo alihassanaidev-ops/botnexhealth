@@ -1019,7 +1019,7 @@ async def test_twilio_context_resolves_tenant_scoped_sms_workflow_thread(
         resolved = await CampaignConversationService(session).resolve_sms_thread(
             institution_id=INST_A,
             location_id=LOC_A1,
-            contact_id=CONTACT_A1,
+            contact_ids=[CONTACT_A1],
         )
 
         assert resolved is not None

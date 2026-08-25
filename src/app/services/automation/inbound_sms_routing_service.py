@@ -43,15 +43,17 @@ class InboundSmsRoutingService:
         """Persist one inbound reply, best-effort correlating contact + open run.
 
         The row is added + flushed on the caller's session (the caller owns the
-        commit). Correlation is best-effort: `workflow_run_id` is set only when
-        exactly one active conversation thread matches (never guess the run).
+        commit). Correlation is best-effort: all contacts sharing the inbound
+        phone are considered, but `workflow_run_id` is set only when exactly
+        one reply-eligible conversation thread matches (never guess the run).
         """
         from_hash = hash_phone(from_number)
-        contact_id = await self._resolve_contact_id(institution_id, from_hash)
+        contact_ids = await self._resolve_contact_ids(institution_id, from_hash)
+        contact_id = str(contact_ids[0]) if len(contact_ids) == 1 else None
         conversation = await CampaignConversationService(self.session).resolve_sms_thread(
             institution_id=institution_id,
             location_id=location_id,
-            contact_id=contact_id,
+            contact_ids=contact_ids,
         )
         if conversation is not None:
             contact_id = str(conversation.contact_id)
@@ -79,17 +81,15 @@ class InboundSmsRoutingService:
         await self.session.flush()
         return msg
 
-    async def _resolve_contact_id(
+    async def _resolve_contact_ids(
         self, institution_id: str, from_hash: str | None
-    ) -> str | None:
+    ) -> list[str]:
         if not from_hash:
-            return None
+            return []
         result = await self.session.execute(
             select(Contact.id).where(
                 Contact.institution_id == institution_id,
                 Contact.phone_hash == from_hash,
             )
         )
-        ids = result.scalars().all()
-        # Exactly one contact → correlate; a shared-phone ambiguity stays uncorrelated.
-        return str(ids[0]) if len(ids) == 1 else None
+        return [str(contact_id) for contact_id in result.scalars().all()]

@@ -311,10 +311,16 @@ waiting run:
   belonging to a running or waiting workflow run matches the patient/contact
   and location; threads retained for staff handoff after a run becomes terminal
   are excluded from automated correlation;
+- when a phone number belongs to multiple contacts (for example, family members
+  sharing one number), all matching contacts are considered and the reply is
+  correlated only if exactly one reply-eligible thread exists across them;
 - deterministic `response_mappings` on the SMS-reply-mode `wait` use whole-token,
   case-insensitive matching to update workflow context and resume the normal
   dispatcher; mappings that request staff handoff create a handoff and do not
   resume;
+- the Twilio webhook persists the inbound message and campaign response event but
+  treats the correlated workflow run as read-only. The Celery resume task owns
+  workflow-run metadata updates and advancement under its worker database context;
 - PMS writes never happen inside the SMS node or mapping handler. A following
   workflow action such as `update_gotracker_appointment` must perform any PMS
   update.

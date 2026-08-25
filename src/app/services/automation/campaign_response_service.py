@@ -64,16 +64,6 @@ class CampaignResponseService:
         self.session.add(event)
         await self.session.flush()
 
-        if run is not None:
-            self._merge_run_response_context(
-                run,
-                channel="sms",
-                intent=parsed.intent,
-                outcome=parsed.outcome,
-                response_event_id=str(event.id),
-                source_event_id=source_event_id,
-            )
-
         handoff = None
         handoff_reason = parsed.handoff_reason
         if parsed.intent == "confirm" and run is None:
