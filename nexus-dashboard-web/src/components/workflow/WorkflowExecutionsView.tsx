@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { formatDistanceToNow } from "date-fns"
-import { AlertCircle, CheckCircle2, Clock3, Loader2, RefreshCw, XCircle } from "lucide-react"
+import { AlertCircle, CheckCircle2, ChevronDown, Clock3, Copy, Loader2, RefreshCw, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
 import { getRunTimeline, listCampaignRuns } from "@/lib/automation-api"
@@ -34,7 +34,12 @@ const STATUS_COLOR: Record<string, string> = {
 }
 
 type RunFilter = "all" | "failed" | "waiting" | "completed"
-type DetailTab = "input" | "output" | "attempts"
+type TechnicalTab = "input" | "output"
+
+interface SummaryField {
+    label: string
+    value: string
+}
 
 function statusIcon(status: string) {
     return STATUS_ICON[status as keyof typeof STATUS_ICON] ?? Clock3
@@ -44,20 +49,79 @@ function formatJson(value: unknown): string {
     return JSON.stringify(value ?? {}, null, 2)
 }
 
+function humanize(value: string): string {
+    return value
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (character: string) => character.toUpperCase())
+        .replace(/\b(Sms|Api|Ai|Llm|Json)\b/g, (term) => term.toUpperCase())
+}
+
+function humanizeSummary(value: string): string {
+    return value.replace(/\b[a-z0-9]+(?:_[a-z0-9]+)+\b/gi, (match) => match.replace(/_/g, " "))
+}
+
+function formatDuration(milliseconds: number | null): string {
+    if (milliseconds === null) return "Not recorded"
+    if (milliseconds < 1000) return `${milliseconds} ms`
+    const seconds = milliseconds / 1000
+    return seconds < 60 ? `${seconds.toFixed(seconds >= 10 ? 0 : 1)} sec` : `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} sec`
+}
+
+function isInternalField(key: string): boolean {
+    return /(^|_)(id|ids|sid|token|tokens|ref)(_|$)/i.test(key)
+        || ["source", "current_step_id", "trigger_ref_type", "trigger_type"].includes(key)
+}
+
+function collectSummaryFields(
+    value: Record<string, unknown>,
+    fields: SummaryField[],
+    depth = 0,
+): void {
+    if (depth > 2 || fields.length >= 6) return
+    for (const [key, fieldValue] of Object.entries(value)) {
+        if (fields.length >= 6 || fieldValue === null || fieldValue === undefined || isInternalField(key)) continue
+        if (fieldValue === "[redacted]") continue
+        if (typeof fieldValue === "string" || typeof fieldValue === "number" || typeof fieldValue === "boolean") {
+            fields.push({
+                label: humanize(key),
+                value: typeof fieldValue === "string" ? humanizeSummary(fieldValue) : fieldValue === true ? "Yes" : fieldValue === false ? "No" : String(fieldValue),
+            })
+        } else if (Array.isArray(fieldValue)) {
+            const visibleValues = fieldValue.filter((item) => ["string", "number", "boolean"].includes(typeof item) && item !== "[redacted]")
+            if (visibleValues.length > 0 && visibleValues.length <= 3) {
+                fields.push({ label: humanize(key), value: visibleValues.map(String).join(", ") })
+            }
+        } else if (typeof fieldValue === "object") {
+            collectSummaryFields(fieldValue as Record<string, unknown>, fields, depth + 1)
+        }
+    }
+}
+
 function stepItems(timeline: RunTimeline | null): RunTimelineItem[] {
     return timeline?.items.filter((item) => item.kind === "step_execution" && item.step_id) ?? []
 }
 
-export default function WorkflowExecutionsView({ workflowId }: { workflowId: string }) {
+interface WorkflowExecutionsViewProps {
+    workflowId: string
+    initialRunId?: string | null
+    onRunSelect?: (runId: string) => void
+}
+
+export default function WorkflowExecutionsView({
+    workflowId,
+    initialRunId,
+    onRunSelect,
+}: WorkflowExecutionsViewProps) {
     const [runs, setRuns] = useState<CampaignRunListItem[]>([])
-    const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+    const [selectedRunId, setSelectedRunId] = useState<string | null>(initialRunId ?? null)
     const [timeline, setTimeline] = useState<RunTimeline | null>(null)
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null)
     const [filter, setFilter] = useState<RunFilter>("all")
-    const [detailTab, setDetailTab] = useState<DetailTab>("input")
+    const [technicalOpen, setTechnicalOpen] = useState(false)
+    const [technicalTab, setTechnicalTab] = useState<TechnicalTab>("output")
     const [loadingRuns, setLoadingRuns] = useState(true)
-    const [loadingTimeline, setLoadingTimeline] = useState(false)
+    const [loadingTimeline, setLoadingTimeline] = useState(!!initialRunId)
     const [refreshKey, setRefreshKey] = useState(0)
 
     useEffect(() => {
@@ -160,18 +224,34 @@ export default function WorkflowExecutionsView({ workflowId }: { workflowId: str
     const selectedAttempt = selectedAttempts.find((item) => item.id === selectedAttemptId)
         ?? selectedAttempts[selectedAttempts.length - 1]
         ?? null
+    const summaryFields = useMemo(() => {
+        if (!selectedAttempt) return []
+        const fields: SummaryField[] = []
+        collectSummaryFields(selectedAttempt.output, fields)
+        collectSummaryFields(selectedAttempt.input, fields)
+        const summary = humanizeSummary(selectedAttempt.summary ?? "").toLowerCase()
+        return fields.filter(
+            (field, index) =>
+                !summary.includes(field.value.toLowerCase())
+                && fields.findIndex((candidate) => candidate.label === field.label && candidate.value === field.value) === index,
+        )
+    }, [selectedAttempt])
 
     function selectNode(nodeId: string | null) {
         if (!nodeId || nodeId === TRIGGER_NODE_ID) return
         setSelectedNodeId(nodeId)
         setSelectedAttemptId(null)
-        setDetailTab("input")
+        setTechnicalOpen(false)
+        setTechnicalTab("output")
     }
 
     function selectRun(runId: string) {
         setLoadingTimeline(true)
         setTimeline(null)
         setSelectedRunId(runId)
+        setTechnicalOpen(false)
+        setTechnicalTab("output")
+        onRunSelect?.(runId)
     }
 
     function refresh() {
@@ -227,7 +307,13 @@ export default function WorkflowExecutionsView({ workflowId }: { workflowId: str
 
             <div className="relative min-h-0 flex-1">
                 {loadingTimeline ? (
-                    <Loader2 className="absolute left-1/2 top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2 animate-spin text-muted-foreground" />
+                    <div
+                        role="status"
+                        aria-label="Loading execution"
+                        className="absolute inset-0 grid place-items-center"
+                    >
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
                 ) : timeline ? (
                     <WorkflowCanvas
                         nodes={executionFlow.nodes}
@@ -248,37 +334,144 @@ export default function WorkflowExecutionsView({ workflowId }: { workflowId: str
 
             <aside className="w-80 shrink-0 overflow-y-auto border-l border-border bg-background">
                 {selectedAttempt ? (
-                    <>
+                    <div className="flex min-h-full flex-col">
                         <div className="border-b p-4">
                             <div className="flex items-center justify-between gap-2">
                                 <h3 className="truncate text-sm font-semibold">{selectedAttempt.title}</h3>
                                 <span className={cn("text-xs font-medium capitalize", STATUS_COLOR[selectedAttempt.status || "pending"])}>{selectedAttempt.status}</span>
                             </div>
-                            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                                <span>Attempt {String(selectedAttempt.metadata.attempt_number ?? 1)}</span>
-                                <span className="text-right">{selectedAttempt.duration_ms === null ? "--" : `${selectedAttempt.duration_ms} ms`}</span>
-                                {selectedAttempt.summary && <span className="col-span-2 text-foreground">{selectedAttempt.summary}</span>}
-                                {selectedAttempt.error_message && <span className="col-span-2 text-red-600">{selectedAttempt.error_message}</span>}
+                            <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                                <span>Attempt {String(selectedAttempt.metadata.attempt_number ?? 1)}{selectedAttempts.length > 1 ? ` of ${selectedAttempts.length}` : ""}</span>
+                                <span>{formatDuration(selectedAttempt.duration_ms)}</span>
                             </div>
                         </div>
-                        <div className="flex border-b p-2">
-                            {(["input", "output", "attempts"] as DetailTab[]).map((tab) => (
-                                <button key={tab} type="button" onClick={() => setDetailTab(tab)} className={cn("flex-1 rounded px-2 py-1.5 text-xs font-medium capitalize", detailTab === tab ? "bg-muted text-foreground" : "text-muted-foreground")}>{tab}</button>
-                            ))}
+
+                        <div className="space-y-5 p-4">
+                            <section>
+                                <h4 className="text-xs font-semibold uppercase text-muted-foreground">Summary</h4>
+                                {selectedAttempt.summary ? (
+                                    <p className="mt-2 text-sm leading-5 text-foreground">{humanizeSummary(selectedAttempt.summary)}</p>
+                                ) : (
+                                    <p className="mt-2 text-sm text-muted-foreground">This step did not record a result summary.</p>
+                                )}
+                                <dl className="mt-3 divide-y divide-border border-y text-xs">
+                                    <div className="flex items-center justify-between gap-3 py-2">
+                                        <dt className="text-muted-foreground">Action</dt>
+                                        <dd className="text-right font-medium">{humanize(String(selectedAttempt.node.type ?? selectedAttempt.step_id ?? "Workflow step"))}</dd>
+                                    </div>
+                                    {selectedAttempt.channel && (
+                                        <div className="flex items-center justify-between gap-3 py-2">
+                                            <dt className="text-muted-foreground">Channel</dt>
+                                            <dd className="text-right font-medium">{humanize(selectedAttempt.channel)}</dd>
+                                        </div>
+                                    )}
+                                    <div className="flex items-center justify-between gap-3 py-2">
+                                        <dt className="text-muted-foreground">Started</dt>
+                                        <dd className="text-right font-medium">{new Date(selectedAttempt.occurred_at).toLocaleString()}</dd>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-3 py-2">
+                                        <dt className="text-muted-foreground">Duration</dt>
+                                        <dd className="text-right font-medium">{formatDuration(selectedAttempt.duration_ms)}</dd>
+                                    </div>
+                                </dl>
+                            </section>
+
+                            {selectedAttempt.error_message && (
+                                <section className="rounded-md border border-red-500/30 bg-red-500/5 p-3">
+                                    <div className="flex items-start gap-2">
+                                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+                                        <div>
+                                            <h4 className="text-xs font-semibold text-red-700 dark:text-red-400">Why it failed</h4>
+                                            <p className="mt-1 text-xs leading-5 text-foreground">{selectedAttempt.error_message}</p>
+                                            <p className="mt-2 text-xs leading-5 text-muted-foreground">Review this step&apos;s configuration and provider response before retrying.</p>
+                                        </div>
+                                    </div>
+                                </section>
+                            )}
+
+                            {summaryFields.length > 0 && (
+                                <section>
+                                    <h4 className="text-xs font-semibold uppercase text-muted-foreground">Execution details</h4>
+                                    <dl className="mt-2 divide-y divide-border border-y text-xs">
+                                        {summaryFields.map((field) => (
+                                            <div key={`${field.label}:${field.value}`} className="flex items-start justify-between gap-3 py-2">
+                                                <dt className="text-muted-foreground">{field.label}</dt>
+                                                <dd className="max-w-[55%] break-words text-right font-medium">{field.value}</dd>
+                                            </div>
+                                        ))}
+                                    </dl>
+                                </section>
+                            )}
+
+                            {selectedAttempts.length > 1 && (
+                                <section>
+                                    <h4 className="text-xs font-semibold uppercase text-muted-foreground">Attempts ({selectedAttempts.length})</h4>
+                                    <div className="mt-2 divide-y divide-border border-y">
+                                        {selectedAttempts.map((attempt, index) => (
+                                            <button
+                                                key={attempt.id}
+                                                type="button"
+                                                className={cn("w-full px-1 py-2.5 text-left text-xs hover:bg-muted/60", selectedAttempt.id === attempt.id && "bg-muted")}
+                                                onClick={() => {
+                                                    setSelectedAttemptId(attempt.id)
+                                                    setTechnicalOpen(false)
+                                                    setTechnicalTab("output")
+                                                }}
+                                            >
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className="font-medium">Attempt {index + 1}</span>
+                                                    <span className={cn("font-medium capitalize", STATUS_COLOR[attempt.status || "pending"])}>{attempt.status}</span>
+                                                </div>
+                                                <div className="mt-1 flex items-center justify-between gap-2 text-muted-foreground">
+                                                    <span>{new Date(attempt.occurred_at).toLocaleString()}</span>
+                                                    <span>{formatDuration(attempt.duration_ms)}</span>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </section>
+                            )}
                         </div>
-                        {detailTab === "attempts" ? (
-                            <div>
-                                {selectedAttempts.map((attempt) => (
-                                    <button key={attempt.id} type="button" className={cn("w-full border-b p-3 text-left text-xs hover:bg-muted/60", selectedAttempt.id === attempt.id && "bg-muted")} onClick={() => { setSelectedAttemptId(attempt.id); setDetailTab("output") }}>
-                                        <div className="flex justify-between"><span>Attempt {String(attempt.metadata.attempt_number ?? 1)}</span><span className={cn("capitalize", STATUS_COLOR[attempt.status || "pending"])}>{attempt.status}</span></div>
-                                        <div className="mt-1 text-muted-foreground">{new Date(attempt.occurred_at).toLocaleString()}</div>
-                                    </button>
-                                ))}
-                            </div>
-                        ) : (
-                            <pre className="overflow-x-auto whitespace-pre-wrap break-words p-4 text-[11px] leading-5 text-foreground">{formatJson(detailTab === "input" ? selectedAttempt.input : selectedAttempt.output)}</pre>
-                        )}
-                    </>
+
+                        <div className="mt-auto border-t border-border">
+                            <button
+                                type="button"
+                                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-xs font-medium hover:bg-muted/60"
+                                aria-expanded={technicalOpen}
+                                onClick={() => setTechnicalOpen((open) => !open)}
+                            >
+                                Technical details
+                                <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", technicalOpen && "rotate-180")} />
+                            </button>
+                            {technicalOpen && (
+                                <div className="border-t border-border">
+                                    <div className="flex items-center gap-1 p-2">
+                                        {(["output", "input"] as TechnicalTab[]).map((tab) => (
+                                            <button
+                                                key={tab}
+                                                type="button"
+                                                onClick={() => setTechnicalTab(tab)}
+                                                className={cn("rounded px-2.5 py-1.5 text-xs font-medium capitalize", technicalTab === tab ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60")}
+                                            >
+                                                {tab}
+                                            </button>
+                                        ))}
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="ml-auto h-7 w-7"
+                                            aria-label="Copy technical JSON"
+                                            title="Copy technical JSON"
+                                            onClick={() => void navigator.clipboard?.writeText(formatJson(technicalTab === "input" ? selectedAttempt.input : selectedAttempt.output))}
+                                        >
+                                            <Copy className="h-3.5 w-3.5" />
+                                        </Button>
+                                    </div>
+                                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words border-t border-border p-4 text-[11px] leading-5 text-muted-foreground">{formatJson(technicalTab === "input" ? selectedAttempt.input : selectedAttempt.output)}</pre>
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 ) : (
                     <p className="p-4 text-sm text-muted-foreground">Select an executed node.</p>
                 )}

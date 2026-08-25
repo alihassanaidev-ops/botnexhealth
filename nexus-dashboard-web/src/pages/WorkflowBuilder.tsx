@@ -8,7 +8,7 @@
  * publishing snapshots a new active version.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Link, useNavigate, useParams } from "react-router-dom"
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Activity, ArrowLeft, History, Loader2, Pencil } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,9 +18,11 @@ import { cn } from "@/lib/utils"
 import {
     deleteWorkflow,
     getWorkflow,
+    listNodeCapabilities,
     pauseWorkflow,
     publishWorkflow,
     resumeWorkflow,
+    validateDefinition as validateWorkflowDefinition,
 } from "@/lib/workflow-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import { listRetellSmsChatProfiles } from "@/lib/retell-sms-api"
@@ -40,7 +42,7 @@ import {
     updateNode,
     type FlowNode,
 } from "@/lib/workflow/graph"
-import { validateDefinition } from "@/lib/workflow/validation"
+import { validateDefinition as validateDefinitionLocally } from "@/lib/workflow/validation"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
 import WorkflowPalette from "@/components/workflow/WorkflowPalette"
 import StepConfigPanel from "@/components/workflow/StepConfigPanel"
@@ -70,6 +72,7 @@ const draftKey = (id: string) => `nex.workflow-draft.${id}`
 export default function WorkflowBuilder() {
     const { id } = useParams<{ id: string }>()
     const navigate = useNavigate()
+    const [searchParams, setSearchParams] = useSearchParams()
 
     const [workflow, setWorkflow] = useState<AutomationWorkflow | null>(null)
     const [def, setDef] = useState<WorkflowDefinition | null>(null)
@@ -81,20 +84,52 @@ export default function WorkflowBuilder() {
     const [selectedId, setSelectedId] = useState<string | null>(null)
     const [panelOpen, setPanelOpen] = useState(false)
     const [testOpen, setTestOpen] = useState(false)
-    const [view, setView] = useState<"build" | "executions">("build")
     const [backendIssues, setBackendIssues] = useState<ValidationIssue[]>([])
+    const [backendValidating, setBackendValidating] = useState(false)
+    const [supportedNodeTypes, setSupportedNodeTypes] = useState<Set<string> | undefined>()
     const [voiceProfiles, setVoiceProfiles] = useState<OutboundVoiceProfile[]>([])
     const [retellSmsProfiles, setRetellSmsProfiles] = useState<RetellSmsChatProfile[]>([])
     const serverDef = useRef<WorkflowDefinition | null>(null)
+    const validationRequest = useRef(0)
 
     const readOnly = workflow?.status === "archived"
+    const view = searchParams.get("view") === "executions" ? "executions" : "build"
+    const selectedExecutionRunId = searchParams.get("run")
+
+    const changeView = useCallback((nextView: "build" | "executions") => {
+        const nextParams = new URLSearchParams(searchParams)
+        if (nextView === "executions") {
+            nextParams.set("view", "executions")
+        } else {
+            nextParams.delete("view")
+            nextParams.delete("run")
+        }
+        setSearchParams(nextParams, { replace: true })
+    }, [searchParams, setSearchParams])
+
+    const selectExecutionRun = useCallback((runId: string) => {
+        const nextParams = new URLSearchParams(searchParams)
+        nextParams.set("view", "executions")
+        nextParams.set("run", runId)
+        setSearchParams(nextParams, { replace: true })
+    }, [searchParams, setSearchParams])
 
     const load = useCallback(async () => {
         if (!id) return
         setLoading(true)
         try {
-            const wf = await getWorkflow(id)
+            const [wf, capabilities] = await Promise.all([
+                getWorkflow(id),
+                listNodeCapabilities().catch(() => null),
+            ])
             setWorkflow(wf)
+            if (capabilities) {
+                setSupportedNodeTypes(new Set(
+                    capabilities.nodes
+                        .filter((node) => node.authorable && node.runtime_supported && node.dry_run_supported)
+                        .map((node) => node.node_type),
+                ))
+            }
             setName(wf.name)
             const base = wf.definition
                 ? normalizeDefinition(wf.definition as unknown as WorkflowDefinition)
@@ -164,20 +199,48 @@ export default function WorkflowBuilder() {
             setDef(next)
             setDirty(true)
             // Stale server issues no longer describe the edited definition.
+            validationRequest.current += 1
             setBackendIssues([])
             if (id) localStorage.setItem(draftKey(id), JSON.stringify(next))
         },
         [id],
     )
 
-    const issues = useMemo(() => (def ? validateDefinition(def) : []), [def])
-    const errorCount = issues.filter((i) => i.severity === "error").length
+    const issues = useMemo(() => (def ? validateDefinitionLocally(def) : []), [def])
+    const errorCount = [...issues, ...backendIssues].filter((i) => i.severity === "error").length
+
+    useEffect(() => {
+        if (!def) return
+        const requestId = ++validationRequest.current
+        const timer = window.setTimeout(() => {
+            setBackendValidating(true)
+            void validateWorkflowDefinition(serializeDefinition(def))
+                .then((result) => {
+                    if (requestId === validationRequest.current) setBackendIssues(result.issues)
+                })
+                .catch(() => {
+                    if (requestId === validationRequest.current) {
+                        setBackendIssues([{
+                            node_id: null,
+                            severity: "warning",
+                            message: "Server validation is temporarily unavailable.",
+                            code: "server_validation_unavailable",
+                            fix: "Try validation again before publishing.",
+                        }])
+                    }
+                })
+                .finally(() => {
+                    if (requestId === validationRequest.current) setBackendValidating(false)
+                })
+        }, 350)
+        return () => window.clearTimeout(timer)
+    }, [def])
 
     const flow = useMemo(() => {
         if (!def) return { nodes: [] as FlowNode[], edges: [] }
         const f = definitionToFlow(def)
         const level = new Map<string, "error" | "warning">()
-        for (const iss of issues) {
+        for (const iss of [...issues, ...backendIssues]) {
             if (!iss.node_id) continue
             if (iss.severity === "error" || level.get(iss.node_id) !== "error") {
                 level.set(iss.node_id, iss.severity === "error" ? "error" : level.get(iss.node_id) ?? "warning")
@@ -188,7 +251,7 @@ export default function WorkflowBuilder() {
             data: { ...n.data, issueLevel: level.get(n.id) ?? null },
         }))
         return { nodes, edges: f.edges }
-    }, [def, issues])
+    }, [def, issues, backendIssues])
 
     const onSelect = useCallback((sel: string | null) => {
         setSelectedId(sel)
@@ -313,6 +376,13 @@ export default function WorkflowBuilder() {
         const payload = serializeDefinition(def)
         setBusy(true)
         try {
+            const validation = await validateWorkflowDefinition(payload)
+            setBackendIssues(validation.issues)
+            if (!validation.valid) {
+                const validationErrors = validation.issues.filter((issue) => issue.severity === "error")
+                toast.error(`Resolve ${validationErrors.length} server validation error${validationErrors.length === 1 ? "" : "s"} before publishing`)
+                return
+            }
             // Publish through the explicit command endpoint. The backend validates
             // and snapshots this definition as one atomic operation.
             const updated = await publishWorkflow(id, {
@@ -391,10 +461,10 @@ export default function WorkflowBuilder() {
                 {dirty && <span className="text-xs text-amber-600 dark:text-amber-400">● Unsaved</span>}
 
                 <div className="ml-3 flex rounded-md border border-border bg-muted/40 p-0.5">
-                    <button type="button" onClick={() => setView("build")} className={cn("inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-xs font-medium", view === "build" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>
+                    <button type="button" onClick={() => changeView("build")} className={cn("inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-xs font-medium", view === "build" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>
                         <Pencil className="h-3.5 w-3.5" /> Build
                     </button>
-                    <button type="button" onClick={() => setView("executions")} className={cn("inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-xs font-medium", view === "executions" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>
+                    <button type="button" onClick={() => changeView("executions")} className={cn("inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-xs font-medium", view === "executions" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>
                         <Activity className="h-3.5 w-3.5" /> Executions
                     </button>
                 </div>
@@ -422,13 +492,19 @@ export default function WorkflowBuilder() {
 
             {/* Body: palette | canvas | validation rail */}
             {view === "executions" ? (
-                <WorkflowExecutionsView workflowId={id as string} />
+                <WorkflowExecutionsView
+                    key={selectedExecutionRunId ?? "latest"}
+                    workflowId={id as string}
+                    initialRunId={selectedExecutionRunId}
+                    onRunSelect={selectExecutionRun}
+                />
             ) : <div className="flex min-h-0 flex-1">
                 <aside className="w-56 shrink-0 border-r border-border">
                     <WorkflowPalette
                         trigger={def.trigger}
                         onEditTrigger={() => onSelect(TRIGGER_NODE_ID)}
                         disabled={readOnly}
+                        supportedNodeTypes={supportedNodeTypes}
                     />
                 </aside>
 
@@ -454,7 +530,7 @@ export default function WorkflowBuilder() {
                         backendIssues={backendIssues}
                         onSelectNode={onSelect}
                     />
-                    {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                    {(busy || backendValidating) && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </aside>
             </div>}
 

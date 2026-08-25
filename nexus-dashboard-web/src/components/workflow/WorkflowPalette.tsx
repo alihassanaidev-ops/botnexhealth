@@ -10,9 +10,10 @@ export interface WorkflowPaletteProps {
     trigger: WorkflowTrigger
     onEditTrigger: () => void
     disabled?: boolean
+    supportedNodeTypes?: ReadonlySet<string>
 }
 
-export default function WorkflowPalette({ trigger, onEditTrigger, disabled }: WorkflowPaletteProps) {
+export default function WorkflowPalette({ trigger, onEditTrigger, disabled, supportedNodeTypes }: WorkflowPaletteProps) {
     const triggerMeta = TRIGGER_META[trigger.type]
     return (
         <div className="flex h-full flex-col gap-4 overflow-y-auto p-3">
@@ -41,7 +42,7 @@ export default function WorkflowPalette({ trigger, onEditTrigger, disabled }: Wo
                         {group.title}
                     </h3>
                     <div className="space-y-1.5">
-                        {group.types.map((type) => (
+                        {group.types.filter((type) => !supportedNodeTypes || supportedNodeTypes.has(type)).map((type) => (
                             <PaletteItem key={type} type={type} disabled={disabled} />
                         ))}
                     </div>

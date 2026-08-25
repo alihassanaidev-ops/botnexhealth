@@ -22,6 +22,18 @@ vi.mock("@/components/workflow/WorkflowCanvas", () => ({
 }))
 
 describe("WorkflowExecutionsView", () => {
+    it("centers the execution loader without applying translation to the spinning icon", () => {
+        vi.mocked(listCampaignRuns).mockReturnValue(new Promise(() => undefined))
+        vi.mocked(getRunTimeline).mockReturnValue(new Promise(() => undefined))
+
+        render(<WorkflowExecutionsView workflowId="wf-1" initialRunId="run-1" />)
+
+        const loader = screen.getByRole("status", { name: "Loading execution" })
+        expect(loader).toHaveClass("absolute", "inset-0", "grid", "place-items-center")
+        expect(loader.querySelector("svg")).toHaveClass("animate-spin")
+        expect(loader.querySelector("svg")).not.toHaveClass("-translate-x-1/2", "-translate-y-1/2")
+    })
+
     it("renders the published run version and recorded step snapshots", async () => {
         vi.mocked(listCampaignRuns).mockResolvedValue({
             items: [{
@@ -79,14 +91,22 @@ describe("WorkflowExecutionsView", () => {
             }],
         })
 
-        render(<WorkflowExecutionsView workflowId="wf-1" />)
+        render(<WorkflowExecutionsView workflowId="wf-1" initialRunId="run-archived" />)
 
         expect(await screen.findByText("Version 3")).toBeInTheDocument()
+        expect(getRunTimeline).toHaveBeenCalledWith("wf-1", "run-archived")
         expect(screen.getByRole("button", { name: "sms-1:failed" })).toBeInTheDocument()
+        expect(screen.getByRole("heading", { name: "Summary" })).toBeInTheDocument()
+        expect(screen.getByText("Result: vendor error")).toBeInTheDocument()
         expect(screen.getByText("Vendor rejected request")).toBeInTheDocument()
-        expect(screen.getByText(/"appointment_id": "appt-1"/)).toBeInTheDocument()
+        expect(screen.getByText("Review this step's configuration and provider response before retrying.")).toBeInTheDocument()
+        expect(screen.queryByText(/"appointment_id": "appt-1"/)).not.toBeInTheDocument()
+        expect(screen.queryByRole("heading", { name: /Attempts/ })).not.toBeInTheDocument()
 
-        await userEvent.click(screen.getByRole("button", { name: /Output/i }))
+        await userEvent.click(screen.getByRole("button", { name: "Technical details" }))
         expect(screen.getByText(/"result_code": "vendor_error"/)).toBeInTheDocument()
+
+        await userEvent.click(screen.getByRole("button", { name: /input/i }))
+        expect(screen.getByText(/"appointment_id": "appt-1"/)).toBeInTheDocument()
     })
 })

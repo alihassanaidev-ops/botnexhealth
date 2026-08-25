@@ -80,7 +80,9 @@ class AutomationWorkflowEnrollmentService:
             if conflicting is not None:
                 logger.info(
                     "enroll: contact %s already has active run %s for workflow %s",
-                    contact_id, conflicting.id, workflow_id,
+                    contact_id,
+                    conflicting.id,
+                    workflow_id,
                 )
                 return conflicting, False
 
@@ -113,7 +115,8 @@ class AutomationWorkflowEnrollmentService:
                 if existing is not None:
                     logger.info(
                         "enroll: idempotency race resolved institution=%s key=%s",
-                        institution_id, idempotency_key,
+                        institution_id,
+                        idempotency_key,
                     )
                     return existing, False
             raise
@@ -193,12 +196,26 @@ class AutomationWorkflowEnrollmentService:
         if reason:
             run.blocked_reason = reason
         await self.session.flush()
+
+        # A Retell SMS session has a stricter patient/location uniqueness guard
+        # than workflow enrollment. Leaving it active after its owning run is
+        # cancelled permanently blocks the patient's next AI SMS conversation.
+        from src.app.services.automation.retell_sms_conversation_service import (
+            RetellSmsConversationService,
+        )
+
+        await RetellSmsConversationService(self.session).cancel_active_for_run(
+            str(run.id),
+            now=run.cancelled_at,
+        )
         try:
             from src.app.services.automation.campaign_conversation_service import (
                 CampaignConversationService,
             )
 
-            await CampaignConversationService(self.session).close_terminal_threads_for_run(
+            await CampaignConversationService(
+                self.session
+            ).close_terminal_threads_for_run(
                 run,
                 completion_reason=sms_completion_reason,
                 preserve_unresolved_handoffs=preserve_unresolved_sms_handoffs,

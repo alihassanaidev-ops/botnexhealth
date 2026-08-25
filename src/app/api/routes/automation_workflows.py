@@ -51,6 +51,10 @@ from src.app.services.automation.campaign_analytics_service import (
     resolve_window,
 )
 from src.app.services.automation.merge_field_catalog import fields_for
+from src.app.services.automation.node_registry import (
+    NODE_REGISTRY_VERSION,
+    public_capabilities,
+)
 from src.app.services.automation.validation_service import WorkflowValidationService
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.step_dispatcher import build_dispatcher
@@ -236,11 +240,26 @@ class ValidationIssueResponse(BaseModel):
     field_path: list[Any] = Field(default_factory=list)
     message: str
     code: str | None = None
+    fix: str | None = None
 
 
 class ValidateDefinitionResponse(BaseModel):
     valid: bool
     issues: list[ValidationIssueResponse] = Field(default_factory=list)
+
+
+class NodeCapabilityResponse(BaseModel):
+    node_type: str
+    outgoing_fields: list[str] = Field(default_factory=list)
+    authorable: bool
+    runtime_supported: bool
+    dry_run_supported: bool
+    legacy: bool
+
+
+class NodeCapabilitiesResponse(BaseModel):
+    registry_version: str
+    nodes: list[NodeCapabilityResponse] = Field(default_factory=list)
 
 
 class PhoneCountryRegionResponse(BaseModel):
@@ -734,11 +753,24 @@ async def validate_definition(
             field_path=list(i.field_path),
             message=i.message,
             code=i.code,
+            fix=i.fix,
         )
         for i in issues
     ]
     valid = not any(i.severity == "error" for i in issues)
     return ValidateDefinitionResponse(valid=valid, issues=responses)
+
+
+@router.get("/node-capabilities", response_model=NodeCapabilitiesResponse)
+async def list_node_capabilities(
+    current_user: _InstitutionAdmin,
+) -> NodeCapabilitiesResponse:
+    """Return the engine's authoritative authoring/runtime support contract."""
+    _institution_id(current_user)
+    return NodeCapabilitiesResponse(
+        registry_version=NODE_REGISTRY_VERSION,
+        nodes=[NodeCapabilityResponse(**item) for item in public_capabilities()],
+    )
 
 
 @router.get("/phone-country-regions", response_model=list[PhoneCountryRegionResponse])

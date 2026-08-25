@@ -9,6 +9,7 @@ import {
     getWorkflow,
     listPhoneCountryRegions,
     listMergeFields,
+    listNodeCapabilities,
     listTemplates,
     listVersions,
     listWorkflows,
@@ -139,6 +140,15 @@ describe("workflow-api", () => {
         const res = await validateDefinition(DEF)
         expect(post).toHaveBeenCalledWith("/automation/workflows/validate", { definition: DEF })
         expect(res).toEqual({ valid: true, issues: [] })
+    })
+
+    it("listNodeCapabilities GETs the engine support contract", async () => {
+        get.mockResolvedValue({ data: { registry_version: "1.0", nodes: [] } })
+
+        const result = await listNodeCapabilities()
+
+        expect(get).toHaveBeenCalledWith("/automation/workflows/node-capabilities")
+        expect(result.registry_version).toBe("1.0")
     })
 
     it("listPhoneCountryRegions GETs supported dialing regions", async () => {

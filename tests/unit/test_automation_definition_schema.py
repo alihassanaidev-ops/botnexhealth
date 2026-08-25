@@ -427,6 +427,25 @@ def test_next_node_id_references_missing_node() -> None:
         WorkflowDefinition.model_validate(defn)
 
 
+def test_update_appointment_next_node_is_validated_by_registry() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "update-1",
+        "nodes": [
+            {
+                "type": "update_appointment",
+                "id": "update-1",
+                "operation": "confirm",
+                "next_node_id": "ghost-node",
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "done"},
+        ],
+    }
+
+    with pytest.raises(ValidationError, match="update-1.*next_node_id.*ghost-node"):
+        WorkflowDefinition.model_validate(definition)
+
+
 def test_condition_true_branch_references_missing_node() -> None:
     defn = _with_condition()
     defn["nodes"][1]["true_next_node_id"] = "ghost-node"

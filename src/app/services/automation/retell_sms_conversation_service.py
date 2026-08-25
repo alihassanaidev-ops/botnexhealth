@@ -90,7 +90,9 @@ class RetellSmsConversationService:
                 step is not None
                 and existing.status in ACTIVE_RETELL_SMS_SESSION_STATUSES
             ):
-                return RetellSmsParked(step=step, session=existing, due_at=existing.expires_at)
+                return RetellSmsParked(
+                    step=step, session=existing, due_at=existing.expires_at
+                )
             raise RetellSmsConversationConfigurationError(
                 "retell_sms_conversation step already has a terminal session"
             )
@@ -138,7 +140,9 @@ class RetellSmsConversationService:
             chat_profile_id=str(profile.id),
             step_id=node.id,
             retell_agent_id=profile.retell_agent_id,
-            agent_version=profile.agent_version,
+            # Omit agent_version from Create Chat so Retell selects the latest
+            # version. Legacy profile pins are intentionally ignored.
+            agent_version=None,
             status=RetellSmsSessionStatus.AWAITING_USER.value,
             expires_at=expires_at,
             max_expires_at=max_expires_at,
@@ -165,6 +169,77 @@ class RetellSmsConversationService:
                 "Retell SMS chat profile is missing, inactive, or belongs to another location"
             )
         return profile
+
+    async def cancel_active_for_run(
+        self,
+        workflow_run_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Terminalize active local Retell sessions owned by a cancelled run.
+
+        Local session state is authoritative. Retell may still report a lazily
+        created vendor chat as ongoing, but it cannot receive another turn once
+        this session is terminal and it no longer blocks a later workflow run.
+        """
+        sessions = list(
+            (
+                await self.session.execute(
+                    select(RetellSmsSession)
+                    .where(
+                        RetellSmsSession.workflow_run_id == workflow_run_id,
+                        RetellSmsSession.status.in_(ACTIVE_RETELL_SMS_SESSION_STATUSES),
+                    )
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not sessions:
+            return 0
+
+        ended_at = now or datetime.now(timezone.utc)
+        for retell_session in sessions:
+            self.mark_terminal(
+                retell_session,
+                status=RetellSmsSessionStatus.CANCELLED.value,
+                outcome="workflow_cancelled",
+                now=ended_at,
+            )
+        await self.session.flush()
+        return len(sessions)
+
+    async def lock_delivery_state(
+        self,
+        *,
+        workflow_run_id: str,
+        session_id: str,
+    ) -> tuple[AutomationWorkflowRun | None, RetellSmsSession | None]:
+        """Lock and refresh the run/session before an outbound reply is sent.
+
+        The worker releases its initial claim transaction while Retell generates
+        a response. A cancellation can commit during that network call, so both
+        rows must be refreshed under locks before Twilio delivery. Locking the
+        run first matches ``cancel_run``'s ordering and avoids a lock inversion.
+        """
+        run = (
+            await self.session.execute(
+                select(AutomationWorkflowRun)
+                .where(AutomationWorkflowRun.id == workflow_run_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        retell_session = (
+            await self.session.execute(
+                select(RetellSmsSession)
+                .where(RetellSmsSession.id == session_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        return run, retell_session
 
     async def find_active_for_inbound(
         self, inbound: InboundSmsMessage
@@ -204,7 +279,9 @@ class RetellSmsConversationService:
             )
         ).scalar_one_or_none()
         if retell_session is None:
-            raise RetellSmsConversationConfigurationError("Retell SMS session not found")
+            raise RetellSmsConversationConfigurationError(
+                "Retell SMS session not found"
+            )
 
         existing = (
             await self.session.execute(
@@ -249,7 +326,9 @@ class RetellSmsConversationService:
         context: dict[str, Any],
     ) -> dict[str, str]:
         contact = await self.session.get(Contact, retell_session.contact_id)
-        location = await self.session.get(InstitutionLocation, retell_session.location_id)
+        location = await self.session.get(
+            InstitutionLocation, retell_session.location_id
+        )
         merge = MergeContextBuilder.build(
             contact=contact,
             location=location,
@@ -278,7 +357,9 @@ class RetellSmsConversationService:
                 .limit(1)
             )
         ).scalar_one_or_none()
-        values["previous_sms_message"] = previous.body if previous and previous.body else ""
+        values["previous_sms_message"] = (
+            previous.body if previous and previous.body else ""
+        )
         return {key: value[:1000] for key, value in values.items() if value != ""}
 
     async def finish_turn(
@@ -396,7 +477,10 @@ class RetellSmsConversationService:
             "retell_sms_chat_id": retell_session.retell_chat_id,
         }
 
-def agent_response_text(messages: tuple[Any, ...], *, max_segments: int) -> tuple[str, list[str]]:
+
+def agent_response_text(
+    messages: tuple[Any, ...], *, max_segments: int
+) -> tuple[str, list[str]]:
     """Return bounded agent text and message ids; never forward tool/user messages."""
     agent_messages = [
         message
@@ -404,7 +488,9 @@ def agent_response_text(messages: tuple[Any, ...], *, max_segments: int) -> tupl
         if str(getattr(message, "role", "")).lower() in {"agent", "assistant"}
         and str(getattr(message, "content", "")).strip()
     ]
-    content = "\n".join(str(message.content).strip() for message in agent_messages).strip()
+    content = "\n".join(
+        str(message.content).strip() for message in agent_messages
+    ).strip()
     max_chars = 160 * max_segments
     if len(content) > max_chars:
         content = content[: max_chars - 1].rstrip() + "…"

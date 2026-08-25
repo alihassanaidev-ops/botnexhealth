@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.app.models.automation_workflow import AutomationRunStatus, AutomationWorkflowRun
-from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+from src.app.models.automation_workflow import (
+    AutomationRunStatus,
+    AutomationWorkflowRun,
+)
+from src.app.services.automation.enrollment_service import (
+    AutomationWorkflowEnrollmentService,
+)
+from src.app.services.automation.retell_sms_conversation_service import (
+    RetellSmsConversationService,
+)
 
 
 class _NestedCM:
@@ -142,7 +151,9 @@ def test_enroll_idempotency_race_returns_winner() -> None:
     second = MagicMock()
     second.scalar_one_or_none.return_value = winner  # post-conflict lookup: winner
     session.execute = AsyncMock(side_effect=[first, second])
-    session.flush = AsyncMock(side_effect=IntegrityError("INSERT", {}, Exception("dup")))
+    session.flush = AsyncMock(
+        side_effect=IntegrityError("INSERT", {}, Exception("dup"))
+    )
 
     svc = AutomationWorkflowEnrollmentService(session)
     run, created = asyncio.run(
@@ -165,6 +176,61 @@ def test_cancel_run_transitions_to_cancelled() -> None:
     assert result.status == AutomationRunStatus.CANCELLED.value
     assert result.blocked_reason == "test-cancel"
     assert result.cancelled_at is not None
+
+
+def test_cancel_run_terminalizes_active_retell_sms_session() -> None:
+    session = _make_session()
+    active_retell_session = SimpleNamespace(
+        status="awaiting_user",
+        terminal_outcome=None,
+        failure_code=None,
+        ended_at=None,
+    )
+    retell_result = MagicMock()
+    retell_result.scalars.return_value.all.return_value = [active_retell_session]
+    session.execute.return_value = retell_result
+    conversation = AsyncMock()
+    run = _make_run(AutomationRunStatus.WAITING.value)
+
+    with patch(
+        "src.app.services.automation.campaign_conversation_service."
+        "CampaignConversationService",
+        return_value=conversation,
+    ):
+        asyncio.run(
+            AutomationWorkflowEnrollmentService(session).cancel_run(
+                run,
+                reason="manual_cancel",
+            )
+        )
+
+    assert active_retell_session.status == "cancelled"
+    assert active_retell_session.terminal_outcome == "workflow_cancelled"
+    assert active_retell_session.ended_at is not None
+
+
+def test_retell_delivery_lock_refreshes_cancelled_state() -> None:
+    cancelled_run = SimpleNamespace(status=AutomationRunStatus.CANCELLED.value)
+    cancelled_retell_session = SimpleNamespace(status="cancelled")
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = cancelled_run
+    retell_result = MagicMock()
+    retell_result.scalar_one_or_none.return_value = cancelled_retell_session
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[run_result, retell_result])
+
+    run, retell_session = asyncio.run(
+        RetellSmsConversationService(session).lock_delivery_state(
+            workflow_run_id="run-1",
+            session_id="session-1",
+        )
+    )
+
+    assert run is cancelled_run
+    assert retell_session is cancelled_retell_session
+    assert run.status == AutomationRunStatus.CANCELLED.value
+    assert retell_session.status == "cancelled"
+    assert session.execute.await_count == 2
 
 
 def test_sms_opt_out_cancellation_force_closes_sms_thread_with_opt_out_reason() -> None:
@@ -197,7 +263,9 @@ def test_sms_opt_out_cancellation_force_closes_sms_thread_with_opt_out_reason() 
 def test_sms_opt_out_cancellation_propagates_thread_close_failure() -> None:
     session = _make_session()
     conversation = AsyncMock()
-    conversation.close_terminal_threads_for_run.side_effect = RuntimeError("close failed")
+    conversation.close_terminal_threads_for_run.side_effect = RuntimeError(
+        "close failed"
+    )
     run = _make_run(AutomationRunStatus.WAITING.value)
 
     with patch(

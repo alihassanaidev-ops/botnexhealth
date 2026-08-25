@@ -14,6 +14,7 @@ import type {
     ValidateDefinitionResponse,
     WorkflowDefinition,
     WorkflowLlmModelsResponse,
+    WorkflowNodeCapabilitiesResponse,
     WorkflowVersion,
 } from "@/types/workflow"
 
@@ -191,6 +192,13 @@ export async function validateDefinition(
     const { data } = await api.post<ValidateDefinitionResponse>(
         "/automation/workflows/validate",
         { definition },
+    )
+    return data
+}
+
+export async function listNodeCapabilities(): Promise<WorkflowNodeCapabilitiesResponse> {
+    const { data } = await api.get<WorkflowNodeCapabilitiesResponse>(
+        "/automation/workflows/node-capabilities",
     )
     return data
 }

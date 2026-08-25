@@ -139,6 +139,69 @@ def test_unreachable_node_is_warned() -> None:
     )
 
 
+def test_duplicate_node_ids_block_publish_with_a_node_linked_fix() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "same",
+        "nodes": [
+            {"type": "send_sms", "id": "same", "body_template": "hi", "next_node_id": "same"},
+            {"type": "exit", "id": "same", "outcome": "done"},
+        ],
+    }
+
+    issues = _validate(definition)
+
+    issue = next(item for item in issues if item.code == "duplicate_node_id")
+    assert issue.node_id == "same"
+    assert issue.fix == "Give every step a unique id."
+    assert WorkflowValidationService.is_publishable(issues) is False
+
+
+def test_reachable_execution_cycle_blocks_publish() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "loop",
+        "nodes": [
+            {
+                "type": "wait",
+                "id": "loop",
+                "wait_for": {
+                    "type": "time",
+                    "delay": {"delay_type": "duration", "duration_seconds": 60},
+                },
+                "next_node_id": "loop",
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "done"},
+        ],
+    }
+
+    issues = _validate(definition)
+
+    assert any(item.code == "graph_cycle" and item.node_id == "loop" for item in issues)
+    assert WorkflowValidationService.is_publishable(issues) is False
+
+
+def test_update_appointment_participates_in_reachability() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "update-1",
+        "nodes": [
+            {
+                "type": "update_appointment",
+                "id": "update-1",
+                "operation": "confirm",
+                "next_node_id": "exit-1",
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "confirmed"},
+        ],
+    }
+
+    issues = _validate(definition)
+
+    assert not any(item.code == "unreachable" for item in issues)
+    assert WorkflowValidationService.is_publishable(issues) is True
+
+
 def test_missing_exit_is_structural_error_node_linked() -> None:
     definition = {
         "trigger": {"type": "manual"},

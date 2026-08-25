@@ -19,6 +19,8 @@ from typing import Annotated, Any, Literal, Union
 import phonenumbers
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.app.services.automation.node_registry import outgoing_references
+
 PHONE_COUNTRY_REGIONS = frozenset(phonenumbers.SUPPORTED_REGIONS)
 
 # ---------------------------------------------------------------------------
@@ -800,35 +802,11 @@ class WorkflowDefinition(BaseModel):
             )
 
         for node in self.nodes:
-            if isinstance(
-                node,
-                (
-                    WaitNode,
-                    WaitForSmsReplyNode,
-                    DripNode,
-                    SendSmsNode,
-                    RetellSmsConversationNode,
-                    SendVoiceNode,
-                    SendEmailNode,
-                    UpdatePatientStatusNode,
-                    UpdateGoTrackerAppointmentNode,
-                    JsonMapperNode,
-                    LlmNode,
-                ),
-            ):
-                if node.next_node_id not in node_ids:
+            for ref_name, ref_id in outgoing_references(node):
+                if ref_id not in node_ids:
                     raise ValueError(
-                        f"node '{node.id}' next_node_id '{node.next_node_id}' not found in nodes"
+                        f"node '{node.id}' {ref_name} '{ref_id}' not found in nodes"
                     )
-            elif isinstance(node, ConditionNode):
-                for ref_name, ref_id in (
-                    ("true_next_node_id", node.true_next_node_id),
-                    ("false_next_node_id", node.false_next_node_id),
-                ):
-                    if ref_id not in node_ids:
-                        raise ValueError(
-                            f"condition node '{node.id}' {ref_name} '{ref_id}' not found in nodes"
-                        )
 
         if not any(isinstance(n, ExitNode) for n in self.nodes):
             raise ValueError("workflow definition must contain at least one exit node")

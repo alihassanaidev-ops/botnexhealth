@@ -1,13 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { CheckCircle2, Loader2, Pencil, Plus, Power, Trash2, X, XCircle } from "lucide-react"
+import {
+    Check,
+    CheckCircle2,
+    ChevronsUpDown,
+    Loader2,
+    Pencil,
+    Plus,
+    Power,
+    Search,
+    Trash2,
+    X,
+    XCircle,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
-import { listRetellAgents, verifyRetellAgent } from "@/lib/admin-api"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { listRetellChatAgents, verifyRetellChatAgent } from "@/lib/admin-api"
 import {
     createRetellSmsChatProfile,
     deleteRetellSmsChatProfile,
@@ -19,16 +32,12 @@ import type { RetellAgent, RetellSmsChatProfile } from "@/types"
 type FormState = {
     displayName: string
     retellAgentId: string
-    agentVersion: string
-    purpose: string
     isActive: boolean
 }
 
 const EMPTY_FORM: FormState = {
     displayName: "",
     retellAgentId: "",
-    agentVersion: "",
-    purpose: "",
     isActive: true,
 }
 
@@ -41,8 +50,6 @@ function formFromProfile(profile: RetellSmsChatProfile): FormState {
     return {
         displayName: profile.display_name,
         retellAgentId: profile.retell_agent_id ?? "",
-        agentVersion: profile.agent_version === null ? "" : String(profile.agent_version),
-        purpose: profile.purpose ?? "",
         isActive: profile.is_active,
     }
 }
@@ -53,16 +60,14 @@ function apiErrorMessage(error: unknown, fallback: string): string {
 }
 
 function agentLabel(agent: RetellAgent): string {
-    const details = [agent.channel, agent.is_published === true ? "published" : null]
-        .filter(Boolean)
-        .join(" · ")
-    return `${agent.agent_name || agent.agent_id}${details ? ` — ${details}` : ""}`
+    return agent.agent_name ? `${agent.agent_name} (${agent.agent_id})` : agent.agent_id
 }
 
 export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
     const [profiles, setProfiles] = useState<RetellSmsChatProfile[]>([])
     const [agents, setAgents] = useState<RetellAgent[]>([])
     const [loading, setLoading] = useState(true)
+    const [loadingAgents, setLoadingAgents] = useState(false)
     const [showForm, setShowForm] = useState(false)
     const [editingProfile, setEditingProfile] = useState<RetellSmsChatProfile | null>(null)
     const [form, setForm] = useState<FormState>(EMPTY_FORM)
@@ -70,11 +75,53 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
     const [workingId, setWorkingId] = useState<string | null>(null)
     const [isVerifyingAgent, setIsVerifyingAgent] = useState(false)
     const [agentVerificationStatus, setAgentVerificationStatus] = useState<"idle" | "success" | "error">("idle")
+    const [agentPickerOpen, setAgentPickerOpen] = useState(false)
+    const [agentSearch, setAgentSearch] = useState("")
 
     const activeCount = useMemo(
         () => profiles.filter((profile) => profile.is_active).length,
         [profiles],
     )
+
+    const agentOptions = useMemo(() => {
+        const selected = fieldValue(form.retellAgentId)
+        const hasSelected = selected
+            ? agents.some((agent) => agent.agent_id === selected)
+            : true
+        return selected && !hasSelected
+            ? [
+                {
+                    agent_id: selected,
+                    agent_name: "Current saved Chat Agent",
+                    channel: "chat",
+                    version: null,
+                    is_published: null,
+                },
+                ...agents,
+            ]
+            : agents
+    }, [agents, form.retellAgentId])
+    const selectedAgentLabel = useMemo(() => {
+        const selected = fieldValue(form.retellAgentId)
+        if (!selected) return null
+        const agent = agentOptions.find((item) => item.agent_id === selected)
+        return agent ? agentLabel(agent) : selected
+    }, [agentOptions, form.retellAgentId])
+    const filteredAgents = useMemo(() => {
+        const query = agentSearch.trim().toLowerCase()
+        if (!query) return agentOptions
+        return agentOptions.filter((agent) =>
+            [agent.agent_id, agent.agent_name, agent.is_published ? "published" : "draft"]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase()
+                .includes(query),
+        )
+    }, [agentOptions, agentSearch])
+    const canUseTypedAgentId = useMemo(() => {
+        const typed = fieldValue(agentSearch)
+        return Boolean(typed && !agentOptions.some((agent) => agent.agent_id === typed))
+    }, [agentOptions, agentSearch])
 
     const loadProfiles = useCallback(async () => {
         setLoading(true)
@@ -89,11 +136,13 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
 
     useEffect(() => {
         void loadProfiles()
-        void listRetellAgents()
+        setLoadingAgents(true)
+        void listRetellChatAgents()
             .then(setAgents)
             .catch((error: unknown) => {
-                toast.error(apiErrorMessage(error, "Failed to load Retell agents"))
+                toast.error(apiErrorMessage(error, "Failed to load Retell Chat Agents"))
             })
+            .finally(() => setLoadingAgents(false))
     }, [loadProfiles])
 
     function updateForm(patch: Partial<FormState>) {
@@ -104,6 +153,8 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
         setEditingProfile(null)
         setForm(EMPTY_FORM)
         setAgentVerificationStatus("idle")
+        setAgentSearch("")
+        setAgentPickerOpen(false)
         setShowForm(true)
     }
 
@@ -111,6 +162,8 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
         setEditingProfile(profile)
         setForm(formFromProfile(profile))
         setAgentVerificationStatus("idle")
+        setAgentSearch("")
+        setAgentPickerOpen(false)
         setShowForm(true)
     }
 
@@ -118,6 +171,8 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
         setEditingProfile(null)
         setForm(EMPTY_FORM)
         setAgentVerificationStatus("idle")
+        setAgentSearch("")
+        setAgentPickerOpen(false)
         setShowForm(false)
     }
 
@@ -127,7 +182,7 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
         setIsVerifyingAgent(true)
         setAgentVerificationStatus("idle")
         try {
-            await verifyRetellAgent(agentId)
+            await verifyRetellChatAgent(agentId)
             setAgentVerificationStatus("success")
         } catch {
             setAgentVerificationStatus("error")
@@ -148,18 +203,10 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
             return
         }
 
-        const agentVersion = fieldValue(form.agentVersion)
-        if (agentVersion !== null && (!/^\d+$/.test(agentVersion) || Number(agentVersion) < 0)) {
-            toast.error("Agent version must be a non-negative whole number")
-            return
-        }
-
         setSaving(true)
         const payload = {
             retell_agent_id: retellAgentId,
-            agent_version: agentVersion === null ? null : Number(agentVersion),
             display_name: displayName,
-            purpose: fieldValue(form.purpose),
             is_active: form.isActive,
         }
         try {
@@ -243,34 +290,96 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
                         </div>
 
                         <div className="space-y-2">
-                            <Label htmlFor="retell-sms-purpose">Purpose</Label>
-                            <Input
-                                id="retell-sms-purpose"
-                                value={form.purpose}
-                                placeholder="appointment_followup"
-                                onChange={(event) => updateForm({ purpose: event.target.value })}
-                            />
-                            <p className="text-xs text-muted-foreground">Optional stable label; only one active profile per purpose.</p>
-                        </div>
-
-                        <div className="space-y-2 md:col-span-2">
-                            <Label htmlFor="retell-sms-agent-id">Retell agent ID</Label>
+                            <Label>Retell Chat Agent</Label>
                             <div className="flex items-center gap-2">
-                                <Input
-                                    id="retell-sms-agent-id"
-                                    list={`retell-sms-agent-options-${locationId}`}
-                                    value={form.retellAgentId}
-                                    placeholder="agent_..."
-                                    onChange={(event) => {
-                                        updateForm({ retellAgentId: event.target.value })
-                                        setAgentVerificationStatus("idle")
-                                    }}
-                                />
-                                <datalist id={`retell-sms-agent-options-${locationId}`}>
-                                    {agents.map((agent) => (
-                                        <option key={agent.agent_id} value={agent.agent_id}>{agentLabel(agent)}</option>
-                                    ))}
-                                </datalist>
+                                <Popover open={agentPickerOpen} onOpenChange={setAgentPickerOpen}>
+                                    <PopoverTrigger asChild>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            aria-label="Retell Chat Agent"
+                                            className={
+                                                agentVerificationStatus === "success"
+                                                    ? "h-11 min-w-0 flex-1 justify-between border-green-500/50 px-4 text-left font-normal ring-2 ring-green-500/50"
+                                                    : agentVerificationStatus === "error"
+                                                        ? "h-11 min-w-0 flex-1 justify-between border-destructive/50 px-4 text-left font-normal ring-2 ring-destructive/50"
+                                                        : "h-11 min-w-0 flex-1 justify-between px-4 text-left font-normal"
+                                            }
+                                            disabled={loadingAgents || isVerifyingAgent}
+                                        >
+                                            <span className="min-w-0 truncate">
+                                                {loadingAgents
+                                                    ? "Loading Retell Chat Agents..."
+                                                    : selectedAgentLabel || "Select Retell Chat Agent"}
+                                            </span>
+                                            <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-0">
+                                        <div className="border-b border-border p-2">
+                                            <div className="relative">
+                                                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                                <Input
+                                                    value={agentSearch}
+                                                    onChange={(event) => setAgentSearch(event.target.value)}
+                                                    placeholder="Search or paste Chat Agent ID"
+                                                    className="h-9 pl-8"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="max-h-64 overflow-y-auto p-1">
+                                            {filteredAgents.map((agent) => (
+                                                <button
+                                                    type="button"
+                                                    key={agent.agent_id}
+                                                    className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-2 text-left text-sm hover:bg-accent"
+                                                    onClick={() => {
+                                                        updateForm({ retellAgentId: agent.agent_id })
+                                                        setAgentVerificationStatus("idle")
+                                                        setAgentSearch("")
+                                                        setAgentPickerOpen(false)
+                                                    }}
+                                                >
+                                                    <span className="min-w-0">
+                                                        <span className="block truncate">{agentLabel(agent)}</span>
+                                                        <span className="block truncate font-mono text-xs text-muted-foreground">
+                                                            Chat Agent
+                                                            {agent.is_published === true ? " - published" : ""}
+                                                            {agent.is_published === false ? " - draft" : ""}
+                                                        </span>
+                                                    </span>
+                                                    {form.retellAgentId === agent.agent_id && <Check className="h-4 w-4 shrink-0" />}
+                                                </button>
+                                            ))}
+                                            {canUseTypedAgentId && (
+                                                <button
+                                                    type="button"
+                                                    className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-2 text-left text-sm hover:bg-accent"
+                                                    onClick={() => {
+                                                        const agentId = fieldValue(agentSearch)
+                                                        if (!agentId) return
+                                                        updateForm({ retellAgentId: agentId })
+                                                        setAgentVerificationStatus("idle")
+                                                        setAgentSearch("")
+                                                        setAgentPickerOpen(false)
+                                                    }}
+                                                >
+                                                    <span className="min-w-0">
+                                                        <span className="block truncate">Use typed Chat Agent ID</span>
+                                                        <span className="block truncate font-mono text-xs text-muted-foreground">
+                                                            {agentSearch.trim()}
+                                                        </span>
+                                                    </span>
+                                                </button>
+                                            )}
+                                            {filteredAgents.length === 0 && !canUseTypedAgentId && (
+                                                <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                                                    No Retell Chat Agents match your search.
+                                                </div>
+                                            )}
+                                        </div>
+                                    </PopoverContent>
+                                </Popover>
                                 <Button
                                     type="button"
                                     variant="secondary"
@@ -283,43 +392,36 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
                                     Verify
                                 </Button>
                             </div>
+                            {agentOptions.length === 0 && !loadingAgents && (
+                                <p className="text-xs text-muted-foreground">
+                                    No Retell Chat Agents found. Create and publish one in Retell, then refresh this page.
+                                </p>
+                            )}
                             {agentVerificationStatus === "success" && (
                                 <p className="flex items-center gap-1.5 text-sm font-medium text-green-600">
-                                    <CheckCircle2 className="h-4 w-4" /> Agent verified in Retell
+                                    <CheckCircle2 className="h-4 w-4" /> Chat Agent verified in Retell
                                 </p>
                             )}
                             {agentVerificationStatus === "error" && (
                                 <p className="flex items-center gap-1.5 text-sm font-medium text-destructive">
-                                    <XCircle className="h-4 w-4" /> Agent not found; check the ID
+                                    <XCircle className="h-4 w-4" /> Chat Agent not found; check the ID
                                 </p>
                             )}
+                            <p className="text-xs text-muted-foreground">
+                                New conversations automatically use Retell&apos;s latest agent version.
+                            </p>
                         </div>
 
-                        <div className="space-y-2">
-                            <Label htmlFor="retell-sms-agent-version">Pinned agent version</Label>
-                            <Input
-                                id="retell-sms-agent-version"
-                                type="number"
-                                min="0"
-                                step="1"
-                                value={form.agentVersion}
-                                placeholder="Use Retell default"
-                                onChange={(event) => updateForm({ agentVersion: event.target.value })}
-                            />
-                            <p className="text-xs text-muted-foreground">Leave blank to use the agent&apos;s current/default version.</p>
-                        </div>
-
-                        <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
-                            <div>
-                                <Label htmlFor="retell-sms-active">Active</Label>
-                                <p className="text-xs text-muted-foreground">Available for new workflow conversations.</p>
-                            </div>
-                            <Switch
-                                id="retell-sms-active"
+                        <label className="flex items-center gap-2 text-sm font-medium md:col-span-2">
+                            <Checkbox
                                 checked={form.isActive}
-                                onCheckedChange={(checked) => updateForm({ isActive: checked })}
+                                onCheckedChange={(checked) => updateForm({ isActive: checked === true })}
                             />
-                        </div>
+                            Active
+                            <span className="font-normal text-muted-foreground">
+                                — available for new workflow conversations
+                            </span>
+                        </label>
 
                         <div className="flex gap-2 md:col-span-2">
                             <Button type="button" onClick={() => void handleSubmit()} disabled={saving}>
@@ -350,9 +452,7 @@ export function RetellSmsProfilesAdmin({ locationId }: { locationId: string }) {
                                     </div>
                                     <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
                                         {profile.retell_agent_id || "Agent ID unavailable"}
-                                        {profile.agent_version === null ? "" : ` · version ${profile.agent_version}`}
                                     </p>
-                                    {profile.purpose && <p className="mt-1 text-xs text-muted-foreground">Purpose: {profile.purpose}</p>}
                                 </div>
                                 <div className="flex gap-2">
                                     <Button

@@ -25,9 +25,7 @@ _Reader = Annotated[User, Depends(get_current_active_user)]
 class RetellSmsChatProfileCreate(BaseModel):
     location_id: str
     retell_agent_id: str = Field(min_length=1, max_length=255)
-    agent_version: int | None = Field(default=None, ge=0)
     display_name: str = Field(min_length=1, max_length=120)
-    purpose: str | None = Field(default=None, max_length=80)
     allowed_tools: list[str] = Field(default_factory=list, max_length=30)
     is_active: bool = True
     config: dict[str, Any] | None = None
@@ -35,9 +33,7 @@ class RetellSmsChatProfileCreate(BaseModel):
 
 class RetellSmsChatProfileUpdate(BaseModel):
     retell_agent_id: str | None = Field(default=None, min_length=1, max_length=255)
-    agent_version: int | None = Field(default=None, ge=0)
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
-    purpose: str | None = Field(default=None, max_length=80)
     allowed_tools: list[str] | None = Field(default=None, max_length=30)
     is_active: bool | None = None
     config: dict[str, Any] | None = None
@@ -90,15 +86,10 @@ def _institution_id(user: User) -> str:
     return str(user.institution_id)
 
 
-def _purpose(value: str | None) -> str | None:
-    normalized = (value or "").strip().lower().replace(" ", "_").replace("-", "_")
-    return normalized or None
-
-
 def _profile_conflict() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail="An active profile already uses this purpose or Retell agent",
+        detail="An active profile already uses this Retell Chat Agent",
     )
 
 
@@ -118,9 +109,9 @@ async def create_profile(
             institution_id=str(location.institution_id),
             location_id=str(location.id),
             retell_agent_id=data.retell_agent_id.strip(),
-            agent_version=data.agent_version,
+            agent_version=None,
             display_name=data.display_name.strip(),
-            purpose=_purpose(data.purpose),
+            purpose=None,
             allowed_tools=sorted(set(data.allowed_tools)),
             is_active=data.is_active,
             config=data.config,
@@ -203,15 +194,17 @@ async def update_profile(
         if profile is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
         for field, value in data.model_dump(exclude_unset=True).items():
-            if field == "purpose":
-                value = _purpose(value)
-            elif field == "retell_agent_id" and value is not None:
+            if field == "retell_agent_id" and value is not None:
                 value = value.strip()
             elif field == "display_name" and value is not None:
                 value = value.strip()
             elif field == "allowed_tools" and value is not None:
                 value = sorted(set(value))
             setattr(profile, field, value)
+        # Purpose and version pinning are legacy profile fields. SMS profiles
+        # always follow the Chat Agent's latest Retell version.
+        profile.purpose = None
+        profile.agent_version = None
         try:
             await session.flush()
         except IntegrityError:

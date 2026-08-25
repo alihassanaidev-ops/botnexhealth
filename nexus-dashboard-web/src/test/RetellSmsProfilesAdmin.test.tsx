@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { RetellSmsProfilesAdmin } from "@/components/tenants/RetellSmsProfilesAdmin"
-import { listRetellAgents, verifyRetellAgent } from "@/lib/admin-api"
+import { listRetellChatAgents, verifyRetellChatAgent } from "@/lib/admin-api"
 import {
     createRetellSmsChatProfile,
     deleteRetellSmsChatProfile,
@@ -11,8 +11,8 @@ import {
 } from "@/lib/retell-sms-api"
 
 vi.mock("@/lib/admin-api", () => ({
-    listRetellAgents: vi.fn(),
-    verifyRetellAgent: vi.fn(),
+    listRetellChatAgents: vi.fn(),
+    verifyRetellChatAgent: vi.fn(),
 }))
 
 vi.mock("@/lib/retell-sms-api", () => ({
@@ -30,8 +30,8 @@ const listProfiles = listRetellSmsChatProfiles as ReturnType<typeof vi.fn>
 const createProfile = createRetellSmsChatProfile as ReturnType<typeof vi.fn>
 const updateProfile = updateRetellSmsChatProfile as ReturnType<typeof vi.fn>
 const deleteProfile = deleteRetellSmsChatProfile as ReturnType<typeof vi.fn>
-const listAgents = listRetellAgents as ReturnType<typeof vi.fn>
-const verifyAgent = verifyRetellAgent as ReturnType<typeof vi.fn>
+const listAgents = listRetellChatAgents as ReturnType<typeof vi.fn>
+const verifyAgent = verifyRetellChatAgent as ReturnType<typeof vi.fn>
 
 const profile = {
     id: "profile-1",
@@ -86,7 +86,7 @@ describe("RetellSmsProfilesAdmin", () => {
         })
     })
 
-    it("creates a profile with an optional pinned version", async () => {
+    it("creates a profile from a Retell Chat Agent selection", async () => {
         listProfiles.mockResolvedValue([])
         render(<RetellSmsProfilesAdmin locationId="location-1" />)
 
@@ -96,15 +96,8 @@ describe("RetellSmsProfilesAdmin", () => {
         fireEvent.change(screen.getByLabelText("Display name"), {
             target: { value: "Recall assistant" },
         })
-        fireEvent.change(screen.getByLabelText("Purpose"), {
-            target: { value: "recall" },
-        })
-        fireEvent.change(screen.getByLabelText("Retell agent ID"), {
-            target: { value: "agent_chat" },
-        })
-        fireEvent.change(screen.getByLabelText("Pinned agent version"), {
-            target: { value: "4" },
-        })
+        fireEvent.click(screen.getByRole("button", { name: "Retell Chat Agent" }))
+        fireEvent.click(await screen.findByRole("button", { name: /SMS response generator/ }))
 
         fireEvent.click(screen.getByRole("button", { name: "Verify" }))
         await waitFor(() => expect(verifyAgent).toHaveBeenCalledWith("agent_chat"))
@@ -115,9 +108,7 @@ describe("RetellSmsProfilesAdmin", () => {
             expect(createProfile).toHaveBeenCalledWith({
                 location_id: "location-1",
                 retell_agent_id: "agent_chat",
-                agent_version: 4,
                 display_name: "Recall assistant",
-                purpose: "recall",
                 is_active: true,
             })
         })

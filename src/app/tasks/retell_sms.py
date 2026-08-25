@@ -9,7 +9,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from src.app.config import settings
-from src.app.database import get_system_db_session, init_database, is_database_initialized
+from src.app.database import (
+    get_system_db_session,
+    init_database,
+    is_database_initialized,
+)
 from src.app.models.automation_workflow import (
     AutomationRunStatus,
     AutomationWorkflowRun,
@@ -49,7 +53,9 @@ from src.app.services.automation.retell_sms_policy import (
     RETELL_SMS_POLICY,
 )
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
-from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
+from src.app.services.automation.scheduler_service import (
+    AutomationWorkflowSchedulerService,
+)
 from src.app.services.automation.step_dispatcher import build_dispatcher
 from src.app.services.sms_service import SmsService
 from src.app.worker import celery_app
@@ -155,7 +161,9 @@ async def _process_turn_async(
                 "send_sms",
                 now=now,
                 content_class=(
-                    definition.compliance.content_class if definition.compliance else None
+                    definition.compliance.content_class
+                    if definition.compliance
+                    else None
                 ),
             )
             if gate.action == "hold":
@@ -253,10 +261,40 @@ async def _process_turn_async(
             if not response_text:
                 raise RetellChatPermanentError("retell_completion_empty_agent_response")
 
+            # Retell generation happens outside a database transaction. Refresh
+            # and lock the workflow/session before delivery so a cancellation
+            # committed during that network call cannot be overwritten by
+            # finish_turn() or receive a reply after it became authoritative.
+            run, retell_session = await service.lock_delivery_state(
+                workflow_run_id=str(run.id),
+                session_id=session_id,
+            )
+            if (
+                run is None
+                or retell_session is None
+                or run.status == AutomationRunStatus.CANCELLED.value
+                or retell_session.status not in ACTIVE_RETELL_SMS_SESSION_STATUSES
+            ):
+                turn.status = RetellSmsTurnStatus.FAILED.value
+                turn.failure_code = "workflow_cancelled"
+                turn.error_message = "workflow_cancelled"
+                turn.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                if retell_session is not None:
+                    await _best_effort_end_chat(retell_session)
+                return {"processed": False, "reason": "workflow_cancelled"}
+
             contact = await db.get(Contact, retell_session.contact_id)
             location = await db.get(InstitutionLocation, retell_session.location_id)
-            if contact is None or not contact.phone or location is None or not location.twilio_from_number:
-                raise RetellSmsConversationConfigurationError("SMS endpoint unavailable")
+            if (
+                contact is None
+                or not contact.phone
+                or location is None
+                or not location.twilio_from_number
+            ):
+                raise RetellSmsConversationConfigurationError(
+                    "SMS endpoint unavailable"
+                )
 
             has_prior_outbound = (
                 await db.execute(
@@ -356,7 +394,11 @@ async def _process_turn_async(
             await db.rollback()
             retell_session = await db.get(RetellSmsSession, session_id)
             turn = await db.get(type(turn), turn.id)
-            run = await db.get(AutomationWorkflowRun, retell_session.workflow_run_id) if retell_session else None
+            run = (
+                await db.get(AutomationWorkflowRun, retell_session.workflow_run_id)
+                if retell_session
+                else None
+            )
             if retell_session is None or turn is None or run is None:
                 raise
             service = RetellSmsConversationService(db)
@@ -412,7 +454,9 @@ async def _resume_terminal(
     """Advance past a terminal conversation without re-entering the parked node."""
     if run.status != AutomationRunStatus.WAITING.value:
         return
-    step = await db.get(AutomationWorkflowStepExecution, retell_session.step_execution_id)
+    step = await db.get(
+        AutomationWorkflowStepExecution, retell_session.step_execution_id
+    )
     if step is None:
         return
     scheduler = AutomationWorkflowSchedulerService(db)
@@ -422,7 +466,9 @@ async def _resume_terminal(
     metadata = dict(run.trigger_metadata or {})
     metadata.update(context)
     run.trigger_metadata = metadata
-    step.result_code = f"retell_sms_{retell_session.terminal_outcome or retell_session.status}"
+    step.result_code = (
+        f"retell_sms_{retell_session.terminal_outcome or retell_session.status}"
+    )
     step.result_metadata = context
     runtime = AutomationWorkflowRuntimeService(db)
     runtime.set_trace_context(metadata)

@@ -21,12 +21,15 @@ from src.app.services.automation.definition_schema import (
     SendSmsNode,
     SendVoiceNode,
     TimeWaitConfig,
+    UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
+    UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
     sms_reply_wait_spec,
 )
 from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG
+from src.app.services.automation.node_registry import capability_for
 from src.app.services.automation.step_dispatcher import (
     _assign_context_value,
     _classify_with_label_rules,
@@ -106,6 +109,17 @@ def simulate_run(
             )
             result.outcome = "error"
             break
+        capability = capability_for(node)
+        if capability is None or not capability.dry_run_supported:
+            result.steps.append(
+                DryRunStep(
+                    node_id=node.id,
+                    node_type=node.type,
+                    summary=f"Step type '{node.type}' is not supported by dry-run",
+                )
+            )
+            result.outcome = "error"
+            break
         steps += 1
 
         reply_wait = sms_reply_wait_spec(node)
@@ -151,6 +165,26 @@ def simulate_run(
                 DryRunStep(node.id, "send_voice", "Place AI voice call", f"agent {node.retell_agent_id}")
             )
             current = node.next_node_id
+        elif isinstance(node, UpdatePatientStatusNode):
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    node.type,
+                    f"Set internal patient status to {node.status}",
+                )
+            )
+            current = node.next_node_id
+        elif isinstance(node, UpdateAppointmentNode):
+            detail = node.start_time if node.operation == "reschedule" else None
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    node.type,
+                    f"{node.operation.title()} appointment",
+                    detail,
+                )
+            )
+            current = node.next_node_id
         elif isinstance(node, JsonMapperNode):
             mapped: dict[str, object] = {}
             for mapping in node.mappings:
@@ -186,7 +220,15 @@ def simulate_run(
             result.steps.append(DryRunStep(node.id, "exit", f"Exit — {node.outcome or 'done'}"))
             result.outcome = node.outcome or "exit"
             current = None
-        else:  # pragma: no cover - discriminated union is exhaustive
-            current = None
+        else:  # pragma: no cover - registry contract tests keep this exhaustive
+            result.steps.append(
+                DryRunStep(
+                    node_id=node.id,
+                    node_type=node.type,
+                    summary=f"Step type '{node.type}' has no dry-run handler",
+                )
+            )
+            result.outcome = "error"
+            break
 
     return result

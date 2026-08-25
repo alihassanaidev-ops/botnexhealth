@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import WorkflowBuilder from "@/pages/WorkflowBuilder"
-import { getWorkflow } from "@/lib/workflow-api"
+import { getWorkflow, validateDefinition } from "@/lib/workflow-api"
 import type { AutomationWorkflow } from "@/types"
 
 vi.mock("@/lib/workflow-api", () => ({
@@ -11,7 +11,8 @@ vi.mock("@/lib/workflow-api", () => ({
     pauseWorkflow: vi.fn(),
     resumeWorkflow: vi.fn(),
     deleteWorkflow: vi.fn(),
-    validateDefinition: vi.fn(),
+    validateDefinition: vi.fn().mockResolvedValue({ valid: true, issues: [] }),
+    listNodeCapabilities: vi.fn().mockResolvedValue({ registry_version: "1.0", nodes: [] }),
     listPhoneCountryRegions: vi.fn().mockResolvedValue([]),
     listMergeFields: vi.fn().mockResolvedValue([]),
 }))
@@ -21,6 +22,7 @@ vi.mock("@/lib/outbound-voice-api", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
 
 const get = getWorkflow as ReturnType<typeof vi.fn>
+const validate = validateDefinition as ReturnType<typeof vi.fn>
 
 const WORKFLOW: AutomationWorkflow = {
     id: "wf-1",
@@ -58,6 +60,8 @@ function renderBuilder() {
 
 beforeEach(() => {
     get.mockReset()
+    validate.mockReset()
+    validate.mockResolvedValue({ valid: true, issues: [] })
     localStorage.clear()
 })
 
@@ -98,5 +102,25 @@ describe("WorkflowBuilder page (smoke)", () => {
 
         expect(await screen.findByDisplayValue("My Reminder Campaign")).toBeInTheDocument()
         expect(screen.queryByText("Launch checklist")).not.toBeInTheDocument()
+    })
+
+    it("shows authoritative server issues against the affected node", async () => {
+        get.mockResolvedValue(WORKFLOW)
+        validate.mockResolvedValue({
+            valid: false,
+            issues: [{
+                node_id: "sms-1",
+                severity: "error",
+                message: "This step is part of an execution loop.",
+                code: "graph_cycle",
+                fix: "Route the branch to an Exit step.",
+            }],
+        })
+
+        renderBuilder()
+
+        expect(await screen.findByText("This step is part of an execution loop.")).toBeInTheDocument()
+        expect(screen.getByText("Route the branch to an Exit step.")).toBeInTheDocument()
+        expect(screen.getByText("graph_cycle")).toBeInTheDocument()
     })
 })

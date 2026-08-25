@@ -174,6 +174,10 @@ uses Retell's create-chat/completion/get/end endpoints for the
 - `GET /api/.../retell/agents` → Retell `list-agents` (`admin_institutions.py`)
 - `GET /api/.../retell/agents/{id}` → Retell `get-agent/{id}` — *"verify a manually
   entered Retell Agent ID."*
+- `GET /api/.../retell/chat-agents` → Retell `list-chat-agents` — populate the
+  SMS-profile Chat Agent selector.
+- `GET /api/.../retell/chat-agents/{id}` → Retell `get-chat-agent/{id}` — verify
+  a selected or manually entered Chat Agent ID.
 
 **Per-location onboarding, end to end:**
 
@@ -283,8 +287,32 @@ stored on `automation_workflow_step_executions`; unknown context keys are redact
 before persistence. The run timeline also returns the immutable workflow version
 used by that run. The builder's **Executions** view uses that version and the
 attempt ledger to render the traversed path, per-node status, retries, duration,
-result, error, and recorded input/output. Older step rows without snapshots retain
-the legacy timeline projection as a compatibility fallback.
+result, error, and recorded input/output. Its node inspector defaults to a
+client-readable summary, omits internal/redacted fields, explains failures, and
+only shows retry history when multiple attempts exist. Raw input/output remains
+available under collapsed **Technical details** for administrators. Older step
+rows without snapshots retain the legacy timeline projection as a compatibility
+fallback.
+
+Campaign detail intentionally keeps execution monitoring compact: its
+**Executions** tab lists and filters runs, then links each run to the builder at
+`?view=executions&run=<run-id>`. The builder is the single visual inspection
+surface for the graph, node attempts, inputs, outputs, errors, and timing. The
+former campaign-level **Operations** tab and duplicate timeline drawer were
+removed; operational exceptions should become actionable, owner-aware issues
+rather than a second read-only execution log.
+
+Workflow node support is declared once in
+`src/app/services/automation/node_registry.py`. The registry owns each node
+type's outgoing-edge fields and whether it is authorable, executable, and
+dry-run capable. Schema graph checks, publish validation, dry-run, runtime
+guards, and the builder capability list all consume that contract. The builder
+also runs the authoritative backend validator after edits and again immediately
+before publish. Publish fails closed on duplicate node IDs, missing edge targets,
+unsupported capabilities, reachable execution cycles, and reachable paths that
+cannot terminate; unreachable orphan steps remain a warning. Validation issues
+include stable codes, node/field attribution, and a recommended fix where one is
+available.
 
 Current schema version `1.0` supports triggers such as `appointment_offset`,
 `appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
@@ -317,9 +345,12 @@ to a 24-hour maximum-duration cap, 12 patient turns, and three SMS segments per
 generated reply. These are not workflow-author settings. Inactivity ends the
 session and advances to the next step without creating a handoff; provider or
 delivery failure creates a staff handoff. Retell-ended chats and STOP also end
-the local session. A later unmatched patient SMS can start a new `sms_reply` workflow,
-which creates a new local session and a new Retell `chat_id`; terminal chat IDs
-are never reused. When that new run parks directly on a Retell SMS node, the
+the local session. Cancelling the owning workflow run marks its active Retell
+session `cancelled` in the same transaction, releasing the patient/location
+guard; a migration repairs sessions stranded by cancellations from older code.
+A later unmatched patient SMS can start a new `sms_reply` workflow, which
+creates a new local session and a new Retell `chat_id`; terminal chat IDs are
+never reused. When that new run parks directly on a Retell SMS node, the
 triggering inbound message becomes its first turn—the patient does not need to
 text twice. See [ADR 0002](adr/0002-retell-chat-generation-with-platform-sms-transport.md).
 
@@ -336,9 +367,10 @@ it as `retell_sms_agent_outcome` for a downstream Condition node.
 Retell SMS chat profiles are provisioned by a platform operator from
 **Superadmin → Institutions → Location → Edit → Retell SMS Profiles**. The
 location editor can create, verify, edit, activate/deactivate, or delete an
-unused profile and records its display name, Retell agent ID, optional pinned
-agent version, and optional purpose. Workflow authors only select active
-profiles for their current location. `GET /api/retell-sms/profiles` returns
+unused profile and records its display name, selected Retell Chat Agent, and
+active state. New sessions always use the agent's latest Retell version;
+legacy purpose/version storage is not authorable. Workflow authors only select
+active profiles for their current location. `GET /api/retell-sms/profiles` returns
 sanitized location-scoped choices to institution users; a superadmin must pass
 `location_id` and receives the technical fields needed by the editor. Retell
 agent creation and prompt configuration still happen manually in Retell's own

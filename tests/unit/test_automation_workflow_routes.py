@@ -33,6 +33,7 @@ from src.app.api.routes.automation_workflows import (
     get_workflow,
     list_llm_models,
     list_merge_fields,
+    list_node_capabilities,
     list_runs,
     list_workflow_versions,
     list_workflows,
@@ -1047,6 +1048,16 @@ def test_validate_accepts_valid_definition():
     # A structurally-valid sending workflow with no content class is publishable
     # but surfaces a (non-blocking) content-class warning, never an error.
     assert not any(issue.severity == "error" for issue in result.issues)
+
+
+def test_node_capabilities_expose_authoritative_engine_support():
+    result = asyncio.run(list_node_capabilities(_make_user()))
+
+    by_type = {node.node_type: node for node in result.nodes}
+    assert result.registry_version == "1.0"
+    assert by_type["update_appointment"].runtime_supported is True
+    assert by_type["update_appointment"].dry_run_supported is True
+    assert by_type["wait_for_sms_reply"].authorable is False
 
 
 def test_validate_reports_missing_exit_node():

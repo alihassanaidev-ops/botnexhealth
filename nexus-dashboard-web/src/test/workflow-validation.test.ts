@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
     isPublishable,
+    reachableCycleNodes,
     unreachableNodes,
     validateDefinition,
 } from "@/lib/workflow/validation"
@@ -216,6 +217,20 @@ describe("workflow validation", () => {
         expect(unreachableNodes(def)).toContain("orphan")
         const issues = validateDefinition(def)
         expect(issues.some((i) => i.node_id === "orphan" && i.severity === "warning")).toBe(true)
+    })
+
+    it("blocks reachable execution loops", () => {
+        const def = base()
+        ;(def.nodes[0] as { next_node_id: string }).next_node_id = "sms-1"
+
+        expect(reachableCycleNodes(def)).toEqual(["sms-1"])
+        const issues = validateDefinition(def)
+        expect(issues).toContainEqual(expect.objectContaining({
+            node_id: "sms-1",
+            severity: "error",
+            code: "graph_cycle",
+        }))
+        expect(isPublishable(issues)).toBe(false)
     })
 
     it("flags a recall interval below 1", () => {

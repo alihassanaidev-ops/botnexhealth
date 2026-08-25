@@ -18,6 +18,20 @@ def _user(role: str, *, institution_id: str | None = None, location_id: str | No
     )
 
 
+def test_profile_authoring_schema_excludes_purpose_and_version_pin() -> None:
+    create_fields = retell_sms.RetellSmsChatProfileCreate.model_json_schema()[
+        "properties"
+    ]
+    update_fields = retell_sms.RetellSmsChatProfileUpdate.model_json_schema()[
+        "properties"
+    ]
+
+    assert "purpose" not in create_fields
+    assert "agent_version" not in create_fields
+    assert "purpose" not in update_fields
+    assert "agent_version" not in update_fields
+
+
 @pytest.mark.asyncio
 async def test_superadmin_profile_list_requires_location_scope() -> None:
     with pytest.raises(HTTPException) as exc_info:

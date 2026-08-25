@@ -28,6 +28,7 @@ class RetellSmsSessionStatus(str, Enum):
     AWAITING_USER = "awaiting_user"
     GENERATING = "generating"
     COMPLETED = "completed"
+    CANCELLED = "cancelled"
     HANDOFF = "handoff"
     TIMED_OUT = "timed_out"
     FAILED = "failed"
@@ -65,7 +66,9 @@ class RetellSmsChatProfile(Base):
             unique=True,
             postgresql_where=text("is_active = true"),
         ),
-        Index("ix_retell_sms_profiles_institution_active", "institution_id", "is_active"),
+        Index(
+            "ix_retell_sms_profiles_institution_active", "institution_id", "is_active"
+        ),
         Index("ix_retell_sms_profiles_location_active", "location_id", "is_active"),
     )
 
@@ -120,8 +123,8 @@ class RetellSmsSession(Base):
     __tablename__ = "retell_sms_sessions"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('awaiting_user', 'generating', 'completed', 'handoff', "
-            "'timed_out', 'failed', 'opted_out')",
+            "status IN ('awaiting_user', 'generating', 'completed', 'cancelled', "
+            "'handoff', 'timed_out', 'failed', 'opted_out')",
             name="ck_retell_sms_sessions_status",
         ),
         Index(
@@ -152,7 +155,9 @@ class RetellSmsSession(Base):
         UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
     )
     institution_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("institutions.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
     )
     location_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -160,7 +165,9 @@ class RetellSmsSession(Base):
         nullable=False,
     )
     contact_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False),
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        nullable=False,
     )
     workflow_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -205,14 +212,20 @@ class RetellSmsSession(Base):
     turn_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    max_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    max_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     last_activity_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     terminal_outcome: Mapped[str | None] = mapped_column(String(80), nullable=True)
     failure_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -247,7 +260,9 @@ class RetellSmsTurn(Base):
         UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
     )
     institution_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("institutions.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
     )
     location_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
@@ -255,10 +270,14 @@ class RetellSmsTurn(Base):
         nullable=False,
     )
     session_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("retell_sms_sessions.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False),
+        ForeignKey("retell_sms_sessions.id", ondelete="CASCADE"),
+        nullable=False,
     )
     inbound_sms_message_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("inbound_sms_messages.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False),
+        ForeignKey("inbound_sms_messages.id", ondelete="CASCADE"),
+        nullable=False,
     )
     message_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(
@@ -271,12 +290,15 @@ class RetellSmsTurn(Base):
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
     outbound_sms_history_id: Mapped[str | None] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("sms_history_logs.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=False),
+        ForeignKey("sms_history_logs.id", ondelete="SET NULL"),
+        nullable=True,
     )
     failure_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

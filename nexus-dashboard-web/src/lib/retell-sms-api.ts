@@ -4,12 +4,8 @@ import type { RetellSmsChatProfile } from "@/types"
 export type RetellSmsChatProfilePayload = {
     location_id?: string
     retell_agent_id: string
-    agent_version?: number | null
     display_name: string
-    purpose?: string | null
-    allowed_tools?: string[]
     is_active?: boolean
-    config?: Record<string, unknown> | null
 }
 
 export async function listRetellSmsChatProfiles(opts?: {

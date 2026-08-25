@@ -53,6 +53,7 @@ from src.app.services.automation.action_registry import get_action_executor
 from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
 from src.app.services.automation.revalidation import NoOpRevalidator, RunRevalidator
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+from src.app.services.automation.node_registry import capability_for
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.voice_node_executor import (
     _CALL_PLACED_AWAITING,
@@ -145,6 +146,23 @@ class WorkflowStepDispatcher:
                     run.institution_id, run.id, current_node_id,
                 )
                 await self.runtime.fail_run(run, reason=f"node '{current_node_id}' not found")
+                return DispatchResult(
+                    status="failed",
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
+            capability = capability_for(node)
+            if capability is None or not capability.runtime_supported:
+                reason = f"node type '{node.type}' is not supported by this engine"
+                logger.error(
+                    "dispatch: unsupported node institution=%s run=%s node=%s type=%s",
+                    run.institution_id,
+                    run.id,
+                    node.id,
+                    node.type,
+                )
+                await self.runtime.fail_run(run, reason=reason)
                 return DispatchResult(
                     status="failed",
                     steps_advanced=steps_advanced,
@@ -548,6 +566,22 @@ class WorkflowStepDispatcher:
                 return DispatchResult(
                     status="completed",
                     outcome=node.outcome,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
+            else:  # pragma: no cover - registry tests keep dispatch exhaustive
+                reason = f"node type '{node.type}' has no runtime handler"
+                logger.critical(
+                    "dispatch: registry mismatch institution=%s run=%s node=%s type=%s",
+                    run.institution_id,
+                    run.id,
+                    node.id,
+                    node.type,
+                )
+                await self.runtime.fail_run(run, reason=reason)
+                return DispatchResult(
+                    status="failed",
                     steps_advanced=steps_advanced,
                     patient_status_event_ids=patient_status_event_ids,
                 )

@@ -73,6 +73,33 @@ class RetellAgentResponse(BaseModel):
     is_published: bool | None = None
 
 
+def _retell_agent_responses(
+    raw_items: list[Any], *, default_channel: str | None = None
+) -> list[RetellAgentResponse]:
+    results: list[RetellAgentResponse] = []
+    seen_agent_ids: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        agent_id = item.get("agent_id") or item.get("id")
+        if not agent_id:
+            continue
+        agent_id = str(agent_id)
+        if agent_id in seen_agent_ids:
+            continue
+        seen_agent_ids.add(agent_id)
+        results.append(
+            RetellAgentResponse(
+                agent_id=agent_id,
+                agent_name=item.get("agent_name") or item.get("name"),
+                channel=item.get("channel") or default_channel,
+                version=item.get("version"),
+                is_published=item.get("is_published"),
+            )
+        )
+    return results
+
+
 # =============================================================================
 # Retell Agents API
 # =============================================================================
@@ -144,28 +171,99 @@ async def list_retell_agents(
             detail="Failed to communicate with Retell API",
         )
 
-    results: list[RetellAgentResponse] = []
-    seen_agent_ids: set[str] = set()
-    for item in raw_items:
-        if not isinstance(item, dict):
-            continue
-        agent_id = item.get("agent_id") or item.get("id")
-        if not agent_id:
-            continue
-        agent_id = str(agent_id)
-        if agent_id in seen_agent_ids:
-            continue
-        seen_agent_ids.add(agent_id)
-        results.append(
-            RetellAgentResponse(
-                agent_id=agent_id,
-                agent_name=item.get("agent_name") or item.get("name"),
-                channel=item.get("channel"),
-                version=item.get("version"),
-                is_published=item.get("is_published"),
-            )
+    return _retell_agent_responses(raw_items, default_channel="voice")
+
+
+@router.get("/retell/chat-agents", response_model=list[RetellAgentResponse])
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda *args, **kwargs: "retell:chat-agents",
+    actor=AuditActor.ADMIN,
+)
+async def list_retell_chat_agents(
+    _: User = Depends(get_current_admin),
+) -> list[RetellAgentResponse]:
+    """List the latest version of each Retell Chat Agent for SMS profiles."""
+    import httpx
+
+    if not settings.retell_api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retell API secret not configured",
         )
-    return results
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.retellai.com/list-chat-agents",
+                params={"is_latest": "true", "limit": "1000"},
+                headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            raw = response.json()
+    except httpx.HTTPError as exc:
+        logger.error("Failed to fetch Retell chat agents: %s", safe_error_summary(exc))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to communicate with Retell API",
+        )
+
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, dict) and isinstance(raw.get("items"), list):
+        items = raw["items"]
+    else:
+        items = []
+    return _retell_agent_responses(items, default_channel="chat")
+
+
+@router.get("/retell/chat-agents/{agent_id}")
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda *args, **kwargs: f"retell:chat-agent:{kwargs.get('agent_id')}",
+    actor=AuditActor.ADMIN,
+)
+async def verify_retell_chat_agent(
+    agent_id: str,
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Verify that an ID resolves through Retell's Chat Agent API."""
+    import httpx
+
+    if not settings.retell_api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retell API secret not configured",
+        )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://api.retellai.com/get-chat-agent/{agent_id}",
+                headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
+                timeout=10.0,
+            )
+            if response.status_code == 404:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Chat Agent not found",
+                )
+            response.raise_for_status()
+            body = response.json()
+            return body if isinstance(body, dict) else {}
+    except HTTPException:
+        raise
+    except httpx.HTTPError as exc:
+        logger.error(
+            "Failed to fetch Retell chat agent %s: %s",
+            agent_id,
+            safe_error_summary(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to communicate with Retell API",
+        )
 
 
 @router.get("/retell/agents/{agent_id}")

@@ -333,7 +333,7 @@ export interface WorkflowDefinition {
 }
 
 /** Node types that carry exactly one forward pointer (`next_node_id`). */
-export type LinearNode = WaitNode | DripNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode | UpdateAppointmentNode | UpdateGoTrackerAppointmentNode | JsonMapperNode | LlmNode
+export type LinearNode = WaitNode | DripNode | SendSmsNode | RetellSmsConversationNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode | UpdateAppointmentNode | UpdateGoTrackerAppointmentNode | JsonMapperNode | LlmNode
 /** Node types that place a message/call on a channel. */
 export type SendNode = SendSmsNode | SendVoiceNode | SendEmailNode
 
@@ -361,6 +361,20 @@ export interface ValidationIssue {
 export interface ValidateDefinitionResponse {
     valid: boolean
     issues: ValidationIssue[]
+}
+
+export interface WorkflowNodeCapability {
+    node_type: string
+    outgoing_fields: string[]
+    authorable: boolean
+    runtime_supported: boolean
+    dry_run_supported: boolean
+    legacy: boolean
+}
+
+export interface WorkflowNodeCapabilitiesResponse {
+    registry_version: string
+    nodes: WorkflowNodeCapability[]
 }
 
 // ---------------------------------------------------------------------------

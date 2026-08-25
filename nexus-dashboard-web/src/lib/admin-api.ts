@@ -28,6 +28,16 @@ export async function listRetellAgents(): Promise<RetellAgent[]> {
     return data
 }
 
+export async function verifyRetellChatAgent(agentId: string): Promise<unknown> {
+    const { data } = await api.get(`/admin/institutions/retell/chat-agents/${agentId}`)
+    return data
+}
+
+export async function listRetellChatAgents(): Promise<RetellAgent[]> {
+    const { data } = await api.get<RetellAgent[]>("/admin/institutions/retell/chat-agents")
+    return data
+}
+
 export async function listTwilioPhoneNumbers(): Promise<TwilioPhoneNumber[]> {
     const { data } = await api.get<TwilioPhoneNumber[]>("/admin/twilio/phone-numbers")
     return data

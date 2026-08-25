@@ -121,15 +121,6 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
         if (!node.id) {
             issues.push({ node_id: null, severity: "error", message: "A step is missing an id." })
         }
-        // Self-loop warning.
-        if (referencedIds(node).includes(node.id)) {
-            issues.push({
-                node_id: node.id,
-                severity: "warning",
-                message: "This step points back to itself, which can loop indefinitely.",
-            })
-        }
-
         switch (node.type) {
             case "wait": {
                 refError(node, node.next_node_id, "Wait step")
@@ -473,6 +464,16 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
         })
     }
 
+    for (const node of reachableCycleNodes(def)) {
+        issues.push({
+            node_id: node,
+            severity: "error",
+            message: "This step is part of an execution loop.",
+            fix: "Remove the loop or route the branch to an Exit step.",
+            code: "graph_cycle",
+        })
+    }
+
     // Errors first, then warnings — stable within group.
     return issues.sort((a, b) => severityRank(a.severity) - severityRank(b.severity))
 }
@@ -543,6 +544,33 @@ export function unreachableNodes(def: WorkflowDefinition): string[] {
         }
     }
     return def.nodes.map((n) => n.id).filter((id) => !reached.has(id))
+}
+
+/** Node ids participating in a cycle reachable from the trigger. */
+export function reachableCycleNodes(def: WorkflowDefinition): string[] {
+    const byId = new Map(def.nodes.map((node) => [node.id, node]))
+    const colors = new Map<string, number>()
+    const active: string[] = []
+    const cycles = new Set<string>()
+
+    const visit = (id: string) => {
+        colors.set(id, 1)
+        active.push(id)
+        const node = byId.get(id)
+        for (const target of node ? referencedIds(node) : []) {
+            if (!byId.has(target)) continue
+            if (!colors.has(target)) {
+                visit(target)
+            } else if (colors.get(target) === 1) {
+                active.slice(active.indexOf(target)).forEach((cycleId) => cycles.add(cycleId))
+            }
+        }
+        active.pop()
+        colors.set(id, 2)
+    }
+
+    if (byId.has(def.entry_node_id)) visit(def.entry_node_id)
+    return [...cycles].sort()
 }
 
 /** Convenience: true if there are no error-severity issues. */
