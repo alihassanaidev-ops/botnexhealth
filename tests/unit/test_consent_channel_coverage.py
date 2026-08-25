@@ -44,3 +44,22 @@ def test_sms_suppression_channel_constraint_includes_all_channels() -> None:
     assert "'email'" in expr or "email" in expr
     assert "'voice'" in expr or "voice" in expr
     assert "'sms'" in expr or "sms" in expr
+
+
+def test_sms_suppression_active_uniqueness_is_location_scoped() -> None:
+    from sqlalchemy import Index
+    from src.app.models.sms_consent import SmsSuppression
+
+    indexes = {
+        index.name: index
+        for index in SmsSuppression.__table_args__
+        if isinstance(index, Index)
+    }
+    index = indexes["uq_sms_suppressions_active_location_channel_phone"]
+
+    assert [column.name for column in index.columns] == [
+        "institution_id",
+        "location_id",
+        "channel",
+        "phone_hash",
+    ]

@@ -92,8 +92,18 @@ def test_minimal_sms_to_exit() -> None:
     assert d.entry_node_id == "sms-1"
     assert len(d.nodes) == 2
     assert d.nodes[0].expect_response is False
+    assert d.nodes[0].include_opt_out_footer is True
     assert d.nodes[0].response_window_seconds == 72 * 60 * 60
     assert d.nodes[0].response_mappings == []
+
+
+def test_sms_node_can_disable_automatic_opt_out_footer() -> None:
+    definition = _sms_to_exit()
+    definition["nodes"][0]["include_opt_out_footer"] = False
+
+    parsed = WorkflowDefinition.model_validate(definition)
+
+    assert parsed.nodes[0].include_opt_out_footer is False
 
 
 def test_legacy_sms_reply_key_is_ignored() -> None:

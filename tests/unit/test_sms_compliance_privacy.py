@@ -55,6 +55,38 @@ class _FakeSession:
         return None
 
 
+class _LocationAwareSession(_FakeSession):
+    """Minimal database adapter that enforces location predicates in queries."""
+
+    def __init__(self, *, suppression=None, consent=None):
+        super().__init__()
+        self.suppression = suppression
+        self.consent = consent
+        self.statements = []
+
+    async def execute(self, statement, *_args, **_kwargs):
+        self.statements.append(statement)
+        sql = str(statement)
+        where_sql = str(statement.whereclause)
+        params = statement.compile().params
+
+        if "do_not_contact" in sql:
+            return _ExecuteResult([])
+        if "sms_suppressions" in sql:
+            if "sms_suppressions.location_id" not in where_sql:
+                return _ExecuteResult([self.suppression] if self.suppression else [])
+            location = next((value for value in params.values() if value in {"loc-a", "loc-b"}), None)
+            matches = self.suppression is not None and self.suppression.location_id == location
+            return _ExecuteResult([self.suppression] if matches else [])
+        if "consent_records" in sql:
+            if "consent_records.location_id" not in where_sql:
+                return _ExecuteResult(self.consent)
+            location = next((value for value in params.values() if value in {"loc-a", "loc-b"}), None)
+            matches = self.consent is not None and self.consent.location_id == location
+            return _ExecuteResult(self.consent if matches else None)
+        return _ExecuteResult(None)
+
+
 def test_sms_phone_mask_and_hash_are_phi_safe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
 
@@ -108,6 +140,25 @@ def test_prepare_outbound_sms_body_adds_identity_and_casl_footer() -> None:
     assert CASL_FOOTER in prepared
 
 
+def test_prepare_outbound_sms_body_detects_stop_copy_case_insensitively() -> None:
+    prepared = prepare_outbound_sms_body(
+        body="Your appointment is confirmed. RePlY sToP to opt out.",
+        clinic_identity="Downtown Clinic",
+    )
+
+    assert prepared.lower().count("reply stop") == 1
+
+
+def test_prepare_outbound_sms_body_can_omit_stop_footer() -> None:
+    prepared = prepare_outbound_sms_body(
+        body="Your appointment is confirmed.",
+        clinic_identity="Downtown Clinic",
+        include_opt_out_footer=False,
+    )
+
+    assert prepared == "Downtown Clinic: Your appointment is confirmed."
+
+
 @pytest.mark.asyncio
 async def test_sms_compliance_allows_when_no_records(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
@@ -127,6 +178,7 @@ async def test_sms_compliance_blocks_active_suppression(monkeypatch: pytest.Monk
     monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
     suppression = SmsSuppression(
         institution_id="inst",
+        location_id="loc",
         channel=ConsentChannel.SMS.value,
         phone_hash=hash_phone("+12125551234") or "",
         phone_masked="+*******1234",
@@ -144,10 +196,36 @@ async def test_sms_compliance_blocks_active_suppression(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
+async def test_sms_compliance_allows_send_at_another_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
+    suppression = SmsSuppression(
+        institution_id="inst",
+        location_id="loc-a",
+        channel=ConsentChannel.SMS.value,
+        phone_hash=hash_phone("+12125551234") or "",
+        phone_masked="+*******1234",
+        is_active=True,
+        source="manual",
+    )
+    service = SmsComplianceService(_LocationAwareSession(suppression=suppression))
+
+    identity = await service.assert_can_send(
+        institution_id="inst",
+        location_id="loc-b",
+        to_number="+12125551234",
+    )
+
+    assert identity.phone_masked == "+*******1234"
+
+
+@pytest.mark.asyncio
 async def test_sms_compliance_blocks_latest_revoked_consent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
     consent = ConsentRecord(
         institution_id="inst",
+        location_id="loc",
         channel=ConsentChannel.SMS.value,
         phone_hash=hash_phone("+12125551234") or "",
         phone_masked="+*******1234",
@@ -162,6 +240,57 @@ async def test_sms_compliance_blocks_latest_revoked_consent(monkeypatch: pytest.
             location_id="loc",
             to_number="+12125551234",
         )
+
+
+@pytest.mark.asyncio
+async def test_sms_compliance_ignores_revoked_consent_at_another_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
+    consent = ConsentRecord(
+        institution_id="inst",
+        location_id="loc-a",
+        channel=ConsentChannel.SMS.value,
+        phone_hash=hash_phone("+12125551234") or "",
+        phone_masked="+*******1234",
+        status=ConsentStatus.REVOKED.value,
+        source="manual",
+    )
+    service = SmsComplianceService(_LocationAwareSession(consent=consent))
+
+    identity = await service.assert_can_send(
+        institution_id="inst",
+        location_id="loc-b",
+        to_number="+12125551234",
+    )
+
+    assert identity.phone_masked == "+*******1234"
+
+
+@pytest.mark.asyncio
+async def test_release_suppression_only_releases_requested_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "encryption_key", "legacy-secret-value-1234567890")
+    suppression = SmsSuppression(
+        institution_id="inst",
+        location_id="loc-a",
+        channel=ConsentChannel.SMS.value,
+        phone_hash=hash_phone("+12125551234") or "",
+        phone_masked="+*******1234",
+        is_active=True,
+        source="manual",
+    )
+    session = _LocationAwareSession(suppression=suppression)
+
+    released = await SmsComplianceService(session).release_suppression(
+        institution_id="inst",
+        location_id="loc-b",
+        phone="+12125551234",
+    )
+
+    assert released == 0
+    assert suppression.is_active is True
 
 
 @pytest.mark.asyncio

@@ -522,6 +522,22 @@ function SmsFields({
                 channel="sms"
                 readOnly={readOnly}
             />
+            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
+                <div>
+                    <Label className="text-sm">Include STOP opt-out footer</Label>
+                    <p className="text-xs text-muted-foreground">
+                        Append “Reply STOP to opt out.” unless the message already contains it.
+                    </p>
+                </div>
+                <Switch
+                    aria-label="Include STOP opt-out footer"
+                    checked={node.include_opt_out_footer ?? true}
+                    disabled={readOnly}
+                    onCheckedChange={(checked) =>
+                        onChange({ ...node, include_opt_out_footer: checked })
+                    }
+                />
+            </div>
             <div className="space-y-1.5">
                 <Label className="text-sm">Preview</Label>
                 <SmsPreview node={node} />

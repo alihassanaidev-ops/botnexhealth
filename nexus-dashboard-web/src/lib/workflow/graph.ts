@@ -442,6 +442,7 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 id,
                 body_template: "",
                 next_node_id: "",
+                include_opt_out_footer: true,
                 respect_quiet_hours: true,
                 max_attempts: 1,
                 expect_response: false,
@@ -796,12 +797,14 @@ export function normalizeDefinition(def: WorkflowDefinition): WorkflowDefinition
         if (node.type === "wait" && typeof node.wait_for === "object" && node.wait_for !== null) {
             const waitFor = node.wait_for as Record<string, unknown>
             if (waitFor.type === "sms_reply") {
-                const { include_reply_key: _deprecatedReplyKey, ...cleanWaitFor } = waitFor
+                const cleanWaitFor = { ...waitFor }
+                delete cleanWaitFor.include_reply_key
                 return { ...node, wait_for: cleanWaitFor } as unknown as WorkflowNode
             }
         }
         if (node.type === "send_sms") {
-            const { include_reply_key: _deprecatedReplyKey, ...cleanNode } = node
+            const cleanNode = { ...node }
+            delete cleanNode.include_reply_key
             return cleanNode as unknown as WorkflowNode
         }
         if (node.type === "wait" && !("wait_for" in node) && node.delay) {

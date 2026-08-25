@@ -407,6 +407,7 @@ class SendSmsNode(BaseModel):
     type: Literal["send_sms"] = "send_sms"
     body_template: str = Field(min_length=1)
     next_node_id: str
+    include_opt_out_footer: bool = True
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
     expect_response: bool = False

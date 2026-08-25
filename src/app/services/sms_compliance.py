@@ -76,7 +76,7 @@ class SmsComplianceService:
         to_number: str,
         contact_id: str | None = None,
     ) -> SmsRecipientIdentity:
-        """Block only explicit suppressions, DNC records, and latest revoked consent."""
+        """Block explicit location suppressions, DNC records, and revoked consent."""
         identity = self.identify(to_number)
 
         if await self.is_do_not_contact(
@@ -91,6 +91,7 @@ class SmsComplianceService:
             await self.session.execute(
                 select(SmsSuppression).where(
                     SmsSuppression.institution_id == institution_id,
+                    SmsSuppression.location_id == location_id,
                     SmsSuppression.channel == ConsentChannel.SMS.value,
                     SmsSuppression.phone_hash == identity.phone_hash,
                     SmsSuppression.is_active.is_(True),
@@ -105,6 +106,7 @@ class SmsComplianceService:
                 select(ConsentRecord)
                 .where(
                     ConsentRecord.institution_id == institution_id,
+                    ConsentRecord.location_id == location_id,
                     ConsentRecord.channel == ConsentChannel.SMS.value,
                     ConsentRecord.phone_hash == identity.phone_hash,
                 )
@@ -264,10 +266,13 @@ class SmsComplianceService:
         reason: str | None = None,
         created_by_user_id: str | None = None,
     ) -> SmsSuppression:
-        """Create an active suppression if one does not already exist."""
+        """Create an active location-scoped suppression if one does not exist."""
+        if not location_id:
+            raise ValueError("location_id is required for SMS suppression")
         identity = self.identify(phone)
         active = await self._active_suppression(
             institution_id=institution_id,
+            location_id=location_id,
             phone_hash=identity.phone_hash,
         )
         if active:
@@ -295,6 +300,7 @@ class SmsComplianceService:
                 self.session.expunge(row)
             active = await self._active_suppression(
                 institution_id=institution_id,
+                location_id=location_id,
                 phone_hash=identity.phone_hash,
             )
             if active:
@@ -325,12 +331,15 @@ class SmsComplianceService:
         location_id: str | None = None,
         contact_id: str | None = None,
     ) -> int:
-        """Release all active suppressions for a phone within an institution."""
+        """Release active suppressions for a phone at one location."""
+        if not location_id:
+            raise ValueError("location_id is required to release SMS suppression")
         identity = self.identify(phone)
         rows = (
             await self.session.execute(
                 select(SmsSuppression).where(
                     SmsSuppression.institution_id == institution_id,
+                    SmsSuppression.location_id == location_id,
                     SmsSuppression.channel == ConsentChannel.SMS.value,
                     SmsSuppression.phone_hash == identity.phone_hash,
                     SmsSuppression.is_active.is_(True),
@@ -412,11 +421,18 @@ class SmsComplianceService:
         ).first()
         return row is not None
 
-    async def _active_suppression(self, *, institution_id: str, phone_hash: str) -> SmsSuppression | None:
+    async def _active_suppression(
+        self,
+        *,
+        institution_id: str,
+        location_id: str,
+        phone_hash: str,
+    ) -> SmsSuppression | None:
         return (
             await self.session.execute(
                 select(SmsSuppression).where(
                     SmsSuppression.institution_id == institution_id,
+                    SmsSuppression.location_id == location_id,
                     SmsSuppression.channel == ConsentChannel.SMS.value,
                     SmsSuppression.phone_hash == phone_hash,
                     SmsSuppression.is_active.is_(True),

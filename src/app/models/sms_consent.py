@@ -99,14 +99,21 @@ class ConsentRecord(Base):
 
 
 class SmsSuppression(Base):
-    """Active SMS opt-out/suppression state for an institution-scoped phone."""
+    """Active SMS opt-out/suppression state for a location-scoped phone."""
 
     __tablename__ = "sms_suppressions"
     __table_args__ = (
-        Index("ix_sms_suppressions_institution_phone_active", "institution_id", "phone_hash", "is_active"),
         Index(
-            "uq_sms_suppressions_active_institution_channel_phone",
+            "ix_sms_suppressions_institution_location_phone_active",
             "institution_id",
+            "location_id",
+            "phone_hash",
+            "is_active",
+        ),
+        Index(
+            "uq_sms_suppressions_active_location_channel_phone",
+            "institution_id",
+            "location_id",
             "channel",
             "phone_hash",
             unique=True,

@@ -72,6 +72,7 @@ class SmsService:
         workflow_run_id: str | None = None,
         workflow_id: str | None = None,
         conversation_thread_id: str | None = None,
+        include_opt_out_footer: bool = True,
     ) -> SmsHistoryLog:
         """
         Send an SMS via Twilio and log the history in the database.
@@ -87,6 +88,7 @@ class SmsService:
                 attribution — carried to the delivery webhook's usage event).
             workflow_id: Optional campaign/workflow id for per-campaign spend.
             conversation_thread_id: Optional run-scoped campaign conversation thread.
+            include_opt_out_footer: Append the standard STOP copy when absent.
 
         Returns:
             The SmsHistoryLog database record.
@@ -140,6 +142,7 @@ class SmsService:
             prepared_body = prepare_outbound_sms_body(
                 body=body,
                 clinic_identity=location.name,
+                include_opt_out_footer=include_opt_out_footer,
             )
         except SmsSendBlockedError as blocked:
             # Use the structured reason code only — never the stringified

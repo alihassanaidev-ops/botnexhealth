@@ -156,6 +156,7 @@ export interface SendSmsNode {
     id: string
     body_template: string
     next_node_id: string
+    include_opt_out_footer?: boolean
     respect_quiet_hours?: boolean
     max_attempts?: number
     expect_response?: boolean

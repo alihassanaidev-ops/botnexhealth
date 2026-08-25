@@ -96,6 +96,7 @@ class SmsNodeExecutor:
                 workflow_run_id=str(run.id),
                 workflow_id=str(run.workflow_id),
                 conversation_thread_id=str(thread.id),
+                include_opt_out_footer=node.include_opt_out_footer,
             )
             await CampaignConversationService(self.session).mark_message_seen(thread)
         except Exception as exc:

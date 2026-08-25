@@ -160,7 +160,11 @@ describe("workflow graph — factories", () => {
             },
         })
         expect(createNode("drip", "d")).toMatchObject({ batch_size: 25, interval_seconds: 3600 })
-        expect(createNode("send_sms", "s")).toMatchObject({ max_attempts: 1, body_template: "" })
+        expect(createNode("send_sms", "s")).toMatchObject({
+            max_attempts: 1,
+            body_template: "",
+            include_opt_out_footer: true,
+        })
         expect(createNode("send_voice", "v")).toMatchObject({
             wait_for_outcome: false,
             max_attempts: 1,

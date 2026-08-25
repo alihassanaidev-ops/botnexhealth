@@ -531,7 +531,13 @@ class CampaignAudienceService:
         ):
             reasons.append("do_not_contact")
 
-        if exclusions.suppressed and await self._is_suppressed(contact, institution_id=institution_id):
+        workflow_location_id = str(workflow.location_id) if workflow.location_id else None
+
+        if exclusions.suppressed and await self._is_suppressed(
+            contact,
+            institution_id=institution_id,
+            location_id=workflow_location_id,
+        ):
             reasons.append("suppressed")
 
         if exclusions.no_consent and channels:
@@ -540,6 +546,7 @@ class CampaignAudienceService:
                 if _has_channel_identifier(contact, channel) and await self._has_usable_consent(
                     contact,
                     institution_id=institution_id,
+                    location_id=workflow_location_id,
                     channel=channel,
                     content_class=content_class,
                 ):
@@ -656,7 +663,13 @@ class CampaignAudienceService:
             contact_id=str(contact.id),
         )
 
-    async def _is_suppressed(self, contact: Contact, *, institution_id: str) -> bool:
+    async def _is_suppressed(
+        self,
+        contact: Contact,
+        *,
+        institution_id: str,
+        location_id: str | None,
+    ) -> bool:
         phone_hash = hash_phone(contact.phone) if contact.phone else None
         conditions = [SmsSuppression.contact_id == str(contact.id)]
         if phone_hash:
@@ -664,6 +677,7 @@ class CampaignAudienceService:
         result = await self.session.execute(
             select(SmsSuppression.id).where(
                 SmsSuppression.institution_id == institution_id,
+                SmsSuppression.location_id == location_id,
                 SmsSuppression.channel == ConsentChannel.SMS.value,
                 SmsSuppression.is_active.is_(True),
                 or_(*conditions),
@@ -676,15 +690,24 @@ class CampaignAudienceService:
         contact: Contact,
         *,
         institution_id: str,
+        location_id: str | None,
         channel: str,
         content_class: str | None,
     ) -> bool:
         if content_class in (None, "transactional_care") and channel == "sms":
             return await self._latest_consent_allows(
-                contact, institution_id=institution_id, channel=channel, content_class=content_class
+                contact,
+                institution_id=institution_id,
+                location_id=location_id,
+                channel=channel,
+                content_class=content_class,
             )
         return await self._latest_consent_allows(
-            contact, institution_id=institution_id, channel=channel, content_class=content_class
+            contact,
+            institution_id=institution_id,
+            location_id=location_id,
+            channel=channel,
+            content_class=content_class,
         )
 
     async def _latest_consent_allows(
@@ -692,6 +715,7 @@ class CampaignAudienceService:
         contact: Contact,
         *,
         institution_id: str,
+        location_id: str | None,
         channel: str,
         content_class: str | None,
     ) -> bool:
@@ -702,6 +726,8 @@ class CampaignAudienceService:
             ConsentRecord.institution_id == institution_id,
             ConsentRecord.channel == channel,
         )
+        if channel == ConsentChannel.SMS.value:
+            stmt = stmt.where(ConsentRecord.location_id == location_id)
         if channel == "email":
             stmt = stmt.where(ConsentRecord.email_hash == identity_hash)
         else:

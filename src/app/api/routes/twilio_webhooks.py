@@ -246,7 +246,7 @@ async def inbound_sms(request: Request) -> Response:
                     conversation_thread_id=_inbound_msg.conversation_thread_id,
                 )
                 await session.commit()
-                return _twiml("Thanks, we received your reply.")
+                return _twiml("")
             logger.info(
                 "Inbound SMS reply not resumed: from_hash=%s location_hash=%s persisted=%s",
                 hash_for_logging(from_number),

@@ -321,6 +321,9 @@ waiting run:
 - the Twilio webhook persists the inbound message and campaign response event but
   treats the correlated workflow run as read-only. The Celery resume task owns
   workflow-run metadata updates and advancement under its worker database context;
+- ordinary and mapped replies return empty TwiML. Reply acknowledgments are not
+  hardcoded; authors must add another Send SMS node when a workflow should send
+  a follow-up message;
 - PMS writes never happen inside the SMS node or mapping handler. A following
   workflow action such as `update_gotracker_appointment` must perform any PMS
   update.
@@ -412,9 +415,12 @@ operations, but it is not used by the location picker.
 
 ### 6.2 Webhooks (`src/app/api/routes/twilio_webhooks.py`, prefix `/twilio/webhooks`)
 
-- `POST /inbound-sms` — keyword opt-out/in (STOP/UNSUBSCRIBE/… → suppress;
-  START/UNSTOP → release; HELP/INFO → help text). Routes `To` number → location
-  via `twilio_from_number`. Replies with TwiML.
+- `POST /inbound-sms` — case-insensitive keyword opt-out/in
+  (STOP/UNSUBSCRIBE/… → suppress; START/UNSTOP → release; HELP/INFO → help
+  text). Suppression is scoped to the location resolved from the receiving `To`
+  number, so the same phone may still receive SMS from another location. Every
+  contact sharing that phone is suppressed at the receiving location. Routes
+  `To` via `twilio_from_number` and replies with TwiML.
 - `POST /sms-status` — delivery-status callback; updates the `SmsHistoryLog`.
 
 Both **require Twilio signature validation** (`RequestValidator` against the raw
@@ -434,6 +440,11 @@ row (encrypted body, masked/hashed number), calls Twilio (offloaded via
 task (`tasks/sms.py`, 5 retries, exp backoff, dead-letters on exhaustion).
 Call-triggered auto-SMS is enqueued from the post-call pipeline only if a body +
 patient phone + `twilio_from_number` are all present.
+Outbound bodies are normalized with the location name. Send SMS nodes default to
+appending `Reply STOP to opt out.` when equivalent case-insensitive copy is not
+already present; workflow authors may disable that footer per node. Manual/admin
+SMS entry points retain the enabled default. STOP suppression itself remains
+centralized and cannot be disabled by a workflow.
 
 Every outbound Twilio message gets a delivery callback URL. By default it is
 derived as `<PUBLIC_API_URL>/api/v1/twilio/webhooks/sms-status`; the legacy
