@@ -81,6 +81,16 @@ class RetentionConfig:
 
 
 @dataclass(frozen=True)
+class EmailConfig:
+    patient_email_provider: str = "resend"
+    ses_region: str = "ca-central-1"
+    ses_configuration_set_prefix: str = "scalenexus"
+    ses_inbound_prefix: str = "inbound/"
+    inbound_email_max_body_bytes: int = 256_000
+    inbound_email_sender_hourly_limit: int = 60
+
+
+@dataclass(frozen=True)
 class EnvironmentConfig:
     app_name: str
     environment_name: str
@@ -114,6 +124,7 @@ class EnvironmentConfig:
     worker: ServiceConfig
     frontend: FrontendConfig
     retention: RetentionConfig
+    email: EmailConfig
     external_secrets: dict[str, str]
     optional_secrets: dict[str, str]
     # Optional email for CloudWatch alarm notifications (RDS metrics, audit
@@ -154,6 +165,7 @@ def load_config(path: str | Path) -> EnvironmentConfig:
     worker = raw["worker"]
     frontend = raw.get("frontend", {})
     retention = raw.get("retention", {})
+    email = raw.get("email", {})
 
     return EnvironmentConfig(
         app_name=raw["appName"],
@@ -243,6 +255,20 @@ def load_config(path: str | Path) -> EnvironmentConfig:
             notification_days=int(retention.get("notificationDays", 180)),
             dead_letter_raw_days=int(retention.get("deadLetterRawDays", 30)),
             idempotency_days=int(retention.get("idempotencyDays", 7)),
+        ),
+        email=EmailConfig(
+            patient_email_provider=email.get("patientEmailProvider", "resend"),
+            ses_region=email.get("sesRegion", "ca-central-1"),
+            ses_configuration_set_prefix=email.get(
+                "sesConfigurationSetPrefix", "scalenexus"
+            ),
+            ses_inbound_prefix=email.get("sesInboundPrefix", "inbound/"),
+            inbound_email_max_body_bytes=int(
+                email.get("inboundEmailMaxBodyBytes", 256_000)
+            ),
+            inbound_email_sender_hourly_limit=int(
+                email.get("inboundEmailSenderHourlyLimit", 60)
+            ),
         ),
         external_secrets=dict(raw.get("externalSecrets", {})),
         optional_secrets=dict(raw.get("optionalSecrets", {})),

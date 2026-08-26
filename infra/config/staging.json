@@ -22,6 +22,14 @@
     "192.168.0.0/16"
   ],
   "recordingsBucketName": "nex-health-staging-recordings",
+  "email": {
+    "patientEmailProvider": "resend",
+    "sesRegion": "ca-central-1",
+    "sesConfigurationSetPrefix": "scalenexus",
+    "sesInboundPrefix": "inbound/",
+    "inboundEmailMaxBodyBytes": 256000,
+    "inboundEmailSenderHourlyLimit": 60
+  },
   "retention": {
     "clinicalRecordDays": 3650,
     "minorRecordAgeYears": 28,

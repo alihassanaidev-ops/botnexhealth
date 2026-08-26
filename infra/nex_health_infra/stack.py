@@ -995,6 +995,16 @@ class NexHealthPlatformStack(Stack):
             "RETENTION_IDEMPOTENCY_DAYS": str(
                 self.config.retention.idempotency_days
             ),
+            "PATIENT_EMAIL_PROVIDER": self.config.email.patient_email_provider,
+            "SES_REGION": self.config.email.ses_region,
+            "SES_CONFIGURATION_SET_PREFIX": self.config.email.ses_configuration_set_prefix,
+            "SES_INBOUND_PREFIX": self.config.email.ses_inbound_prefix,
+            "INBOUND_EMAIL_MAX_BODY_BYTES": str(
+                self.config.email.inbound_email_max_body_bytes
+            ),
+            "INBOUND_EMAIL_SENDER_HOURLY_LIMIT": str(
+                self.config.email.inbound_email_sender_hourly_limit
+            ),
         }
         if self.config.api.web_concurrency:
             environment["WEB_CONCURRENCY"] = str(self.config.api.web_concurrency)
