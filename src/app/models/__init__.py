@@ -33,6 +33,11 @@ from src.app.models.campaign_audience import (  # noqa: F401 — model registrat
     CampaignAudienceDefinition,
     CampaignAudiencePreview,
 )
+from src.app.models.inbound_email_message import (  # noqa: F401 — model registration
+    InboundEmailIntent,
+    InboundEmailMessage,
+    InboundEmailStatus,
+)
 from src.app.models.inbound_sms_message import (  # noqa: F401 — model registration
     InboundSmsMessage,
 )
@@ -97,6 +102,11 @@ from src.app.models.institution_location_transfer_number import InstitutionLocat
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
+from src.app.models.campaign_email_template import CampaignEmailTemplate
+from src.app.models.email_sending_identity import (  # noqa: F401 — model registration
+    EmailIdentityStatus,
+    EmailSendingIdentity,
+)
 from src.app.models.email_template import EmailTemplate, EmailTemplateType
 from src.app.models.sms_template import SmsTemplate, SmsTemplateType
 from src.app.models.external_notification_recipient import ExternalNotificationRecipient
@@ -193,6 +203,9 @@ __all__ = [
     "RetellWebhookStatus",
     "RetellFunctionInvocation",
     "RetellFunctionStatus",
+    "CampaignEmailTemplate",
+    "EmailIdentityStatus",
+    "EmailSendingIdentity",
     "EmailTemplate",
     "EmailTemplateType",
     "SmsTemplate",
@@ -215,6 +228,9 @@ __all__ = [
     "DeadLetterStatus",
     "OutboundEmergencyHalt",
     "AppointmentWorkingSet",
+    "InboundEmailIntent",
+    "InboundEmailMessage",
+    "InboundEmailStatus",
     "InboundSmsMessage",
     "RetellSmsChatProfile",
     "RetellSmsSession",

@@ -154,6 +154,9 @@ class WorkflowValidationService:
         # them in this workflow builder validation path.
         # issues += self._consent_and_content(definition)
         issues += self._merge_field_issues(definition)
+        issues += await self._email_template_issues(
+            definition, institution_id=institution_id
+        )
         # issues += await self.content_validator.validate(
         #     definition, institution_id=institution_id, location_id=location_id
         # )
@@ -165,6 +168,53 @@ class WorkflowValidationService:
     @staticmethod
     def is_publishable(issues: list[ValidationIssue]) -> bool:
         return not any(i.severity == "error" for i in issues)
+
+    async def _email_template_issues(
+        self, definition: WorkflowDefinition, *, institution_id: str
+    ) -> list[ValidationIssue]:
+        """Reject a definition pointing at a missing or inactive email template.
+
+        Without this the failure surfaces at send time, mid-campaign, on a live
+        patient run — the most expensive place to discover it.
+        """
+        from src.app.services.automation.definition_schema import SendEmailNode
+        from src.app.services.campaign_email_template_service import (
+            CampaignEmailTemplateService,
+        )
+
+        referencing = [
+            node
+            for node in definition.nodes
+            if isinstance(node, SendEmailNode) and node.template_key
+        ]
+        if not referencing:
+            return []
+
+        service = CampaignEmailTemplateService(self.session)
+        issues: list[ValidationIssue] = []
+        for node in referencing:
+            template = await service.get_by_key(institution_id, node.template_key)
+            if template is None:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=f"Email template '{node.template_key}' does not exist",
+                        node_id=node.id,
+                        field_path=["template_key"],
+                        code="email_template_missing",
+                    )
+                )
+            elif not template.is_active:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=f"Email template '{node.template_key}' is inactive",
+                        node_id=node.id,
+                        field_path=["template_key"],
+                        code="email_template_inactive",
+                    )
+                )
+        return issues
 
     # ------------------------------------------------------------------
 

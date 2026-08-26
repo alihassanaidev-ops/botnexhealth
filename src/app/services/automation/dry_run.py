@@ -154,11 +154,24 @@ def simulate_run(
             )
             current = node.next_node_id
         elif isinstance(node, SendEmailNode):
-            subject = render_sms_body(node.subject_template, None, None, ctx)
-            body = render_sms_body(node.body_template, None, None, ctx)
-            result.steps.append(
-                DryRunStep(node.id, "send_email", f"Send email — {subject}", body)
-            )
+            if node.template_key:
+                # The dry run is synchronous and has no session, so a saved
+                # template's content isn't loaded here — name it instead of
+                # rendering an empty body.
+                result.steps.append(
+                    DryRunStep(
+                        node.id,
+                        "send_email",
+                        f"Send email — saved template '{node.template_key}'",
+                        "",
+                    )
+                )
+            else:
+                subject = render_sms_body(node.subject_template, None, None, ctx)
+                body = render_sms_body(node.body_template, None, None, ctx)
+                result.steps.append(
+                    DryRunStep(node.id, "send_email", f"Send email — {subject}", body)
+                )
             current = node.next_node_id
         elif isinstance(node, SendVoiceNode):
             result.steps.append(

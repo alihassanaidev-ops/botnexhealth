@@ -4,6 +4,7 @@ import ipaddress
 import logging
 import os
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 import structlog
@@ -127,6 +128,47 @@ class Settings(BaseSettings):
     resend_webhook_secret: str | None = None
     # Public base URL used to build one-click links in outbound emails (unsubscribe).
     public_base_url: str = "https://app.scalenexus.ai"
+
+    # ── Patient-facing email provider ────────────────────────────────────
+    # Auth emails and staff call alerts always go through Resend. This selects
+    # the provider for patient-facing campaign email only, which is the traffic
+    # that carries health information and therefore has to sit under an
+    # agreement covering it (see docs/compliance/04-gap-register.md G-013/G-017).
+    #
+    # "resend" keeps today's behaviour. "ses" routes patient mail through
+    # Amazon SES in ``ses_region`` — same AWS account and region as the rest of
+    # the platform, so the content stays inside our own infrastructure.
+    patient_email_provider: Literal["resend", "ses"] = "resend"
+
+    ses_region: str = "ca-central-1"
+    # Parent domain that per-clinic sending subdomains are created under, e.g.
+    # "brightsmile.mail.scalenexus.ai". Must be a Route 53 hosted zone this
+    # account controls, so DKIM records can be published without the clinic
+    # touching DNS.
+    ses_sending_domain: str | None = None
+    ses_sending_hosted_zone_id: str | None = None
+    # Prefix for the per-clinic configuration set that carries event
+    # destinations (bounce/complaint) and reputation options.
+    ses_configuration_set_prefix: str = "scalenexus"
+    # ── Inbound email (patient replies) ──────────────────────────────────
+    # One shared receiving domain for the whole platform, not one per clinic:
+    # SES caps receipt rules at 200 per rule set with no increase path, so a
+    # rule-per-clinic design would wall at ~200 clinics. The clinic a reply
+    # belongs to is carried in the signed Reply-To instead.
+    ses_inbound_domain: str | None = None
+    #: Bucket the receipt rule writes the full MIME into.
+    ses_inbound_bucket: str | None = None
+    ses_inbound_prefix: str = "inbound/"
+    #: SQS queue subscribed to the receipt rule's SNS topic. A queue rather than
+    #: a public HTTPS endpoint: no signature-verification surface to get wrong,
+    #: and mail survives a deploy or an outage instead of being retried at us.
+    ses_inbound_queue_url: str | None = None
+    #: Messages larger than this are recorded with their metadata but the body is
+    #: left in object storage rather than pulled into the database.
+    inbound_email_max_body_bytes: int = 256_000
+    #: Per-sender cap over an hour, so a loop or a flood on the catch-all cannot
+    #: fill the inbox.
+    inbound_email_sender_hourly_limit: int = 60
 
     # Celery
     celery_broker_url: str | None = None

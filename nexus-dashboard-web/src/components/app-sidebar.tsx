@@ -28,6 +28,7 @@ import {
     MessageSquare,
     Mail,
     MailCheck,
+    Inbox as InboxIcon,
     Settings,
     ClipboardList,
     Layers,
@@ -61,6 +62,24 @@ const adminNav: NavItemDef[] = [
         title: "Users",
         url: "/admin/users",
         icon: UserCog,
+    },
+    {
+        // Platform-wide patient conversations. The page filters by practice
+        // and location; the API is what actually enforces the span.
+        title: "Inbox",
+        url: "/inbox",
+        icon: InboxIcon,
+    },
+    {
+        // Both email admin surfaces ask which practice first.
+        title: "Campaign Emails",
+        url: "/institution-admin/campaign-email-templates",
+        icon: Mail,
+    },
+    {
+        title: "Sending Addresses",
+        url: "/institution-admin/email-sending-address",
+        icon: MailCheck,
     },
     {
         title: "Phone Numbers",
@@ -182,6 +201,13 @@ const groupNav: NavItemDef[] = [
         url: "/group",
         icon: Layers,
         exact: true,
+    },
+    {
+        // Activity figures only — the API refuses this role conversation
+        // content, so the page renders volumes and response times.
+        title: "Conversations",
+        url: "/inbox",
+        icon: InboxIcon,
     },
 ]
 
@@ -347,7 +373,38 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                             url: "/institution-admin/email-templates",
                                             icon: Mail,
                                         }}
-                                        isActive={location.pathname === "/institution-admin/email-templates" || location.pathname.startsWith("/institution-admin/email-templates")}
+                                        isActive={location.pathname === "/institution-admin/email-templates"}
+                                    />
+                                )}
+                                {/* Every role reaches the inbox; the API narrows what each
+                                    one sees, and gives group admins figures rather than
+                                    patient conversations. */}
+                                <NavItem
+                                    item={{
+                                        title: "Inbox",
+                                        url: "/inbox",
+                                        icon: InboxIcon,
+                                    }}
+                                    isActive={location.pathname.startsWith("/inbox")}
+                                />
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Campaign Emails",
+                                            url: "/institution-admin/campaign-email-templates",
+                                            icon: Mail,
+                                        }}
+                                        isActive={location.pathname.startsWith("/institution-admin/campaign-email-templates")}
+                                    />
+                                )}
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Sending Address",
+                                            url: "/institution-admin/email-sending-address",
+                                            icon: Mail,
+                                        }}
+                                        isActive={location.pathname.startsWith("/institution-admin/email-sending-address")}
                                     />
                                 )}
                                 <NavItem

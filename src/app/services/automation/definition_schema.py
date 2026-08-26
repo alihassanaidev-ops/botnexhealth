@@ -14,6 +14,7 @@ is retained for already-published definitions.
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal, Union
 
 import phonenumbers
@@ -182,6 +183,30 @@ class SmsReplyTrigger(BaseModel):
         return normalized or None
 
 
+class EmailReplyTrigger(BaseModel):
+    """Enroll when an inbound patient email matches optional whole-token filters.
+
+    The email counterpart to ``SmsReplyTrigger``. Only replies that routed to a
+    known clinic reach this — unattributable mail is held, never enrolled.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["email_reply"] = "email_reply"
+    tokens: list[str] = Field(default_factory=list)
+    campaign_goal: str | None = None
+
+    @field_validator("tokens")
+    @classmethod
+    def normalize_tokens(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            token = value.strip()
+            if token and token.casefold() not in {item.casefold() for item in normalized}:
+                normalized.append(token)
+        return normalized
+
+
 WorkflowTrigger = Annotated[
     Union[
         AppointmentOffsetTrigger,
@@ -192,6 +217,7 @@ WorkflowTrigger = Annotated[
         CallbackRequestedTrigger,
         PatientStatusChangedTrigger,
         SmsReplyTrigger,
+        EmailReplyTrigger,
     ],
     Field(discriminator="type"),
 ]
@@ -310,8 +336,27 @@ class SmsReplyWaitConfig(BaseModel):
         return cleaned
 
 
+class EmailReplyWaitConfig(BaseModel):
+    """Park the run until the patient replies to the email, or the window closes.
+
+    The default window is a week rather than SMS's three days: people answer
+    email on a slower rhythm, and a campaign that gives up after 72 hours would
+    treat an ordinary weekend as a non-response.
+
+    ``response_mappings`` reuses ``SmsResponseMapping`` — it is a token-to-context
+    mapping, not anything SMS-specific — so a workflow author configures replies
+    the same way on both channels.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["email_reply"] = "email_reply"
+    response_window_seconds: int = Field(default=604800, ge=60, le=2592000)
+    response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+
 WaitForConfig = Annotated[
-    Union[TimeWaitConfig, SmsReplyWaitConfig],
+    Union[TimeWaitConfig, SmsReplyWaitConfig, EmailReplyWaitConfig],
     Field(discriminator="type"),
 ]
 
@@ -389,6 +434,26 @@ def sms_reply_wait_spec(
         node_id=node.id,
         response_window_seconds=config.response_window_seconds,
         response_mappings=config.response_mappings,
+    )
+
+
+class EmailReplyWaitSpec(BaseModel):
+    """Internal interface shared by email correlation and dispatch."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    response_window_seconds: int
+    response_mappings: list[SmsResponseMapping]
+
+
+def email_reply_wait_spec(node: object) -> EmailReplyWaitSpec | None:
+    if not isinstance(node, WaitNode) or not isinstance(node.wait_for, EmailReplyWaitConfig):
+        return None
+    return EmailReplyWaitSpec(
+        node_id=node.id,
+        response_window_seconds=node.wait_for.response_window_seconds,
+        response_mappings=node.wait_for.response_mappings,
     )
 
 
@@ -521,16 +586,120 @@ class SendVoiceNode(BaseModel):
         return self
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
+
+
+class ContactRecipient(BaseModel):
+    """Send to the enrolled patient. The behaviour of every definition
+    published before ``recipient`` existed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["contact"] = "contact"
+
+
+class StaffRecipient(BaseModel):
+    """Send to the clinic's own staff — institution admins plus the run
+    location's admins and staff. Used for internal alerts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["staff"] = "staff"
+    # When set, users who opted out of this notification type are excluded and
+    # matching external recipients are included.
+    notification_type: str | None = Field(default=None, max_length=50)
+    include_external: bool = True
+
+
+class StaticRecipient(BaseModel):
+    """Send to fixed addresses — an ops mailbox, a monitoring alias."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["static"] = "static"
+    addresses: list[str] = Field(min_length=1, max_length=10)
+
+    @field_validator("addresses")
+    @classmethod
+    def validate_addresses(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for raw in value:
+            address = (raw or "").strip()
+            if not _EMAIL_RE.match(address):
+                raise ValueError(f"'{raw}' is not a valid email address")
+            cleaned.append(address)
+        return cleaned
+
+
+class MergeFieldRecipient(BaseModel):
+    """Send to an address resolved from a merge field at send time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["merge_field"] = "merge_field"
+    field: str = Field(min_length=1, max_length=80)
+
+
+EmailRecipient = Annotated[
+    ContactRecipient | StaffRecipient | StaticRecipient | MergeFieldRecipient,
+    Field(discriminator="kind"),
+]
+
+
 class SendEmailNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
     type: Literal["send_email"] = "send_email"
-    subject_template: str = Field(min_length=1)
-    body_template: str = Field(min_length=1)
+    # Inline content. Required unless ``template_key`` names a saved template.
+    subject_template: str = Field(default="", max_length=500)
+    body_template: str = Field(default="")
+    # Optional HTML part sent alongside the text one. Inline mode only; a saved
+    # template carries its own HTML.
+    html_template: str | None = None
+    # Reference to a CampaignEmailTemplate owned by this institution. When set,
+    # the saved template supplies subject, text and HTML, so editing it once
+    # updates every campaign that uses it.
+    template_key: str | None = Field(default=None, max_length=80)
     next_node_id: str
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
+    # Who receives this email. Defaults to the enrolled patient so definitions
+    # published before this field existed keep their original behaviour.
+    recipient: EmailRecipient = Field(default_factory=ContactRecipient)
+    # A courtesy email failing should not necessarily kill the whole run.
+    # Defaults to the historical behaviour (fail the run).
+    on_failure: Literal["fail_run", "continue"] = "fail_run"
+
+    @model_validator(mode="after")
+    def require_content(self) -> "SendEmailNode":
+        """Exactly one content source: a saved template, or inline text.
+
+        Inline subject/body stayed required-by-default so every definition
+        published before ``template_key`` existed still validates unchanged.
+        """
+        if self.template_key:
+            if self.subject_template or self.body_template or self.html_template:
+                raise ValueError(
+                    "send_email: use either template_key or inline content, not both"
+                )
+            return self
+        if not self.subject_template.strip():
+            raise ValueError("send_email: subject_template is required")
+        if not self.body_template.strip():
+            raise ValueError("send_email: body_template is required")
+        return self
+
+    @property
+    def is_patient_directed(self) -> bool:
+        """True when this email goes to the patient.
+
+        ``merge_field`` counts as patient-directed: it usually resolves to the
+        contact, and where it does not, keeping the consent check is the
+        conservative outcome — a send that is wrongly blocked is recoverable,
+        one that wrongly bypasses consent is not.
+        """
+        return self.recipient.kind in ("contact", "merge_field")
 
 
 class UpdatePatientStatusNode(BaseModel):
