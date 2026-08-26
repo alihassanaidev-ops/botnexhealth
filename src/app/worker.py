@@ -27,6 +27,8 @@ def _build_celery_app() -> Celery:
             "src.app.tasks.webhooks",
             "src.app.tasks.automation_workflow",
             "src.app.tasks.retell_sms",
+            "src.app.tasks.email_identity_verification",
+            "src.app.tasks.inbound_email",
         ],
     )
 
@@ -51,6 +53,10 @@ def _build_celery_app() -> Celery:
             Queue("webhooks"),
             # Workflow engine scheduler and dispatch tasks.
             Queue("workflow"),
+            # Low-frequency housekeeping that talks to third parties (e.g. the
+            # sending-domain verification sweep). Kept off `workflow` so a slow
+            # provider call cannot delay campaign dispatch.
+            Queue("maintenance"),
         ),
         # Per-task names use dotted prefixes (``webhooks.*``,
         # ``notifications.*``) so Celery routes them to the right
@@ -68,6 +74,20 @@ def _build_celery_app() -> Celery:
             "scan-recall-workflows": {
                 "task": "src.app.tasks.automation_workflow.scan_recall_workflows",
                 "schedule": 3600.0,  # hourly — patient visit history changes slowly
+            },
+            "poll-inbound-email": {
+                "task": "src.app.tasks.inbound_email.poll_inbound_email",
+                # Frequent: a patient waiting on an answer should not sit behind
+                # a long poll interval. No-ops immediately when the queue is
+                # empty or inbound is not configured.
+                "schedule": 60.0,
+            },
+            "sweep-email-identities": {
+                "task": "src.app.tasks.email_identity_verification.sweep_email_identities",
+                # Hourly. Polls newly provisioned domains until DKIM propagates,
+                # and re-checks verified ones so DNS removed later is caught as
+                # an alert rather than as a slow deliverability collapse.
+                "schedule": 3600.0,
             },
             "ensure-nexhealth-webhook-subscriptions": {
                 "task": "src.app.tasks.automation_workflow.ensure_nexhealth_webhook_subscriptions",

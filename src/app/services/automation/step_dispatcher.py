@@ -47,10 +47,15 @@ from src.app.services.automation.definition_schema import (
     UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
+    email_reply_wait_spec,
     sms_reply_wait_spec,
 )
 from src.app.services.automation.action_registry import get_action_executor
-from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
+from src.app.services.automation.compliance_gate import (
+    ComplianceGate,
+    GateResult,
+    NoOpComplianceGate,
+)
 from src.app.services.automation.revalidation import NoOpRevalidator, RunRevalidator
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.node_registry import capability_for
@@ -73,6 +78,18 @@ _MAX_STEPS = 50
 # "9 AM reminder" batch doesn't hit the vendor in one burst. Full budget-aware
 # pacing across NexHealth/Retell/Twilio is coordinated with Plans 09/11.
 _DEFAULT_CALENDAR_JITTER_SECONDS = 300
+
+
+def _is_patient_directed(node: object) -> bool:
+    """Whether a send node contacts the patient.
+
+    SMS and voice always do. Email can also be addressed to the clinic's own
+    staff or to a fixed address, and those are not patient contact — see
+    ``SendEmailNode.is_patient_directed``.
+    """
+    if isinstance(node, SendEmailNode):
+        return node.is_patient_directed
+    return True
 
 
 class WorkflowGoTrackerWritebackError(RuntimeError):
@@ -228,6 +245,35 @@ class WorkflowStepDispatcher:
                     patient_status_event_ids=patient_status_event_ids,
                 )
 
+            elif (email_wait := email_reply_wait_spec(node)) is not None:
+                # Same shape as the SMS wait: park the run with a timer bounding
+                # the window, and let the inbound router resume it early if the
+                # patient answers. The timer is the floor, not the expectation.
+                due_at = now + timedelta(seconds=email_wait.response_window_seconds)
+                step = await self.runtime.begin_step(
+                    run,
+                    step_id=email_wait.node_id,
+                    step_type="wait",
+                    scheduled_at=due_at,
+                    scheduled_timezone=location_timezone,
+                )
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=step.id,
+                    due_at=due_at,
+                    timezone_name=location_timezone,
+                )
+                step.result_code = "awaiting_email_reply"
+                await self.runtime.wait_run(run, step)
+                return DispatchResult(
+                    status="waiting",
+                    timer_id=timer.id,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
             elif isinstance(node, DripNode):
                 due_at, batch_number, batch_position = await self._allocate_drip_slot(
                     run, node, now
@@ -370,7 +416,18 @@ class WorkflowStepDispatcher:
                 content_class = (
                     definition.compliance.content_class if definition.compliance else None
                 )
-                gate_result = await self.gate.check(run, node.type, content_class=content_class)
+                # The gate models *patient* protection — consent, do-not-contact
+                # and the quiet-hours hold. An email addressed to the clinic's own
+                # staff or to a fixed ops mailbox is not patient contact, so
+                # running it through the gate would let a patient's marketing
+                # opt-out silently drop an internal alert, and would hold an
+                # urgent one until the next permitted window.
+                if _is_patient_directed(node):
+                    gate_result = await self.gate.check(
+                        run, node.type, content_class=content_class
+                    )
+                else:
+                    gate_result = GateResult(action="allow", reason="non_patient_recipient")
                 if gate_result.action == "block":
                     step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
                     await self.runtime.fail_step(step, result_code="compliance_blocked")
@@ -636,14 +693,22 @@ class WorkflowStepDispatcher:
             current_node.wait_for, TimeWaitConfig
         )
         is_sms_reply_wait = sms_reply_wait_spec(current_node) is not None
+        is_email_reply_wait = email_reply_wait_spec(current_node) is not None
         is_drip = isinstance(current_node, DripNode)
         is_retell_sms = isinstance(current_node, RetellSmsConversationNode)
         is_held_send = isinstance(current_node, (SendSmsNode, SendVoiceNode, SendEmailNode))
-        if not (is_wait or is_sms_reply_wait or is_drip or is_retell_sms or is_held_send):
+        if not (
+            is_wait
+            or is_sms_reply_wait
+            or is_email_reply_wait
+            or is_drip
+            or is_retell_sms
+            or is_held_send
+        ):
             await self.runtime.fail_run(
                 run,
                 reason=(
-                    "expected wait, SMS reply wait, drip, Retell SMS, or held send node at "
+                    "expected wait, reply wait, drip, Retell SMS, or held send node at "
                     f"'{run.current_step_id}'"
                 ),
             )
@@ -732,8 +797,23 @@ class WorkflowStepDispatcher:
                 or context.get("sms_confirmation_message_sid")
                 else "sms_reply_timeout"
             )
+        if is_email_reply_wait and waiting_step.result_code == "awaiting_email_reply":
+            # The timer is the window's floor. Reaching it without a reply is a
+            # legitimate outcome a downstream branch can act on, not a failure.
+            waiting_step.result_code = (
+                "email_reply_received"
+                if context.get("email_reply_message_id")
+                else "email_reply_timeout"
+            )
         is_parked_voice = is_held_send and waiting_step.result_code == _CALL_PLACED_AWAITING
-        if is_wait or is_sms_reply_wait or is_drip or is_retell_sms or is_parked_voice:
+        if (
+            is_wait
+            or is_sms_reply_wait
+            or is_email_reply_wait
+            or is_drip
+            or is_retell_sms
+            or is_parked_voice
+        ):
             # WaitNode/DripNode: move past the gate. Parked voice: the call already
             # went out, so advance PAST the send node (never re-dial) into whatever
             # follows — typically a ConditionNode that branches on `call_outcome`.
