@@ -232,6 +232,15 @@ binding is strictly **1 Retell agent ↔ 1 InstitutionLocation**.
   date of birth, and an exact full phone number or email match before any patient
   ID is returned. Failed, missing, and ambiguous matches return the same neutral
   no-data response.
+- **GoTracker full lookup:** after that identity gate passes,
+  `lookup_patient(detail_level="full")` queries the Synchronizer's appointment
+  list for the verified `contactId` from the clinic-local current day onward,
+  with `exclude_cancelled=true`, and returns a normalized
+  `upcoming_appointments` list. Its appointment IDs retain the `gt-` prefix and
+  are the only IDs a voice agent may pass to cancellation or rescheduling.
+  GoTracker new-patient creation uses the Synchronizer's
+  `POST /api/patients/` consumer write-back endpoint through the same shared
+  `create_patient` handler; there is no GoTracker-specific Retell tool name.
 
 After the call, Retell posts a `call_analyzed` webhook → the request thread only
 verifies the signature, claims an idempotency row, and enqueues a Celery task

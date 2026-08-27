@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
@@ -19,6 +20,7 @@ from src.app.pms.base import (
 )
 from src.app.pms.gotracker import mappers
 from src.app.pms.gotracker.client import GoTrackerAPIError, GoTrackerClient
+from src.app.pms.gotracker.statuses import is_non_attending_status
 from src.app.pms.models import (
     BookingRequest,
     BookingResult,
@@ -124,14 +126,75 @@ class GoTrackerAdapter(
         )
 
     async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]:
-        return {
-            "success": False,
-            "patient_id": None,
-            "message": (
-                "GoTracker patient creation is handled by the on-site synchronizer "
-                "agent; API patient upsert is not available through the product key."
-            ),
+        """Create a patient through the Synchronizer's consumer write-back API."""
+        body = {
+            "first_name": req.first_name,
+            "last_name": req.last_name,
+            "email": req.email,
+            "phone_number": req.phone,
+            "date_of_birth": req.date_of_birth,
+            "provider_id": mappers.strip(req.provider_id),
+            "gender": req.gender,
         }
+        try:
+            raw = await self._client.request("POST", "/api/patients/", json=body)
+        except GoTrackerAPIError as exc:
+            return {
+                "success": False,
+                "patient_id": None,
+                "message": str(exc),
+            }
+
+        data = _data_object(raw)
+        contact_id = _first(data, "ContactId", "contact_id", "id", "patient_id")
+        if contact_id is None:
+            return {
+                "success": False,
+                "patient_id": None,
+                "message": "GoTracker did not return a created patient ID.",
+            }
+        first_name = str(_first(data, "FirstName", "first_name") or req.first_name)
+        return {
+            "success": True,
+            "patient_id": mappers.pid(contact_id),
+            "message": f"Patient {first_name} created successfully.",
+        }
+
+    async def get_patient(
+        self,
+        patient_id: str,
+        include: list[str] | None = None,
+    ) -> UniversalPatient | None:
+        """Return only a verified patient's future appointment context.
+
+        Retell performs identity verification from ``search_patients`` before
+        this method is called.  The follow-up read deliberately avoids fetching
+        patient demographics again and asks the Synchronizer only for this
+        contact's appointments from the clinic's current day onward.
+        """
+        del include
+        raw_patient_id = mappers.strip(patient_id)
+        if not raw_patient_id:
+            return None
+
+        appointments = await self.list_appointments(
+            contact_id=raw_patient_id,
+            from_date=self._local_today(),
+            exclude_cancelled=True,
+            max_items=100,
+        )
+        upcoming = [
+            mappers.to_upcoming_appointment(appointment)
+            for appointment in appointments
+            if not _is_non_attending_appointment(appointment)
+        ]
+        return UniversalPatient(
+            id=mappers.pid(raw_patient_id),
+            source=self.source,
+            first_name="",
+            last_name="",
+            extra={"upcoming_appointments": upcoming},
+        )
 
     # ── Appointment Types ────────────────────────────────────────────────
 
@@ -310,14 +373,28 @@ class GoTrackerAdapter(
     async def list_appointments(
         self,
         *,
-        start_date: str,
-        end_date: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        contact_id: str | None = None,
+        from_date: str | None = None,
+        exclude_cancelled: bool = False,
         max_items: int = 1000,
     ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {}
+        if start_date:
+            params["start"] = start_date
+        if end_date:
+            params["end"] = end_date
+        if contact_id:
+            params["contactId"] = mappers.strip(contact_id)
+        if from_date:
+            params["from"] = from_date
+        if exclude_cancelled:
+            params["exclude_cancelled"] = "true"
         return await self._fetch_all(
             "GET",
             "/api/appointments/getAllAppointments",
-            params={"start": start_date, "end": end_date},
+            params=params,
             max_items=max_items,
         )
 
@@ -631,11 +708,38 @@ class GoTrackerAdapter(
             hours=None,
         )
 
+    def _local_today(self) -> str:
+        timezone_name = getattr(self._location, "timezone", None) or "UTC"
+        try:
+            return datetime.now(ZoneInfo(timezone_name)).date().isoformat()
+        except ZoneInfoNotFoundError:
+            return datetime.now(ZoneInfo("UTC")).date().isoformat()
+
+
+def _is_non_attending_appointment(appointment: dict[str, Any]) -> bool:
+    if bool(
+        _first(appointment, "Cancelled", "cancelled", "IsCancelled", "is_cancelled")
+    ):
+        return True
+    status_id = _first(appointment, "StatusId", "status_id")
+    try:
+        return is_non_attending_status(int(status_id))
+    except (TypeError, ValueError):
+        return False
+
 
 def _strip_ids(values: list[str] | None) -> list[str]:
     if not values:
         return []
     return [stripped for value in values if (stripped := mappers.strip(value))]
+
+
+def _first(raw: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = raw.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 def _data_object(raw: dict[str, Any], *, fallback_id: str | None = None) -> dict[str, Any]:

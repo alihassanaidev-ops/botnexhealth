@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -8,7 +10,7 @@ import pytest
 from src.app.pms.gotracker.adapter import GoTrackerAdapter
 from src.app.pms.gotracker.client import GoTrackerAPIError, GoTrackerClient
 from src.app.pms.gotracker import mappers
-from src.app.pms.models import BookingRequest
+from src.app.pms.models import BookingRequest, PatientCreateRequest
 
 
 class FakeGoTrackerClient:
@@ -273,6 +275,109 @@ async def test_list_providers_reads_nested_provider_payload() -> None:
     assert len(providers) == 1
     assert providers[0].id == "gt-3"
     assert providers[0].name == "Lisa"
+
+
+@pytest.mark.asyncio
+async def test_create_patient_uses_consumer_writeback_endpoint() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": {
+                "ContactId": 415,
+                "FirstName": "Ada",
+            },
+        }
+    )
+    adapter = _adapter(client)
+
+    result = await adapter.create_patient(
+        PatientCreateRequest(
+            first_name="Ada",
+            last_name="Lovelace",
+            email="ada@example.com",
+            phone="+14165551212",
+            date_of_birth="1990-12-10",
+            provider_id="gt-2",
+            gender="Female",
+        )
+    )
+
+    assert result == {
+        "success": True,
+        "patient_id": "gt-415",
+        "message": "Patient Ada created successfully.",
+    }
+    assert client.calls[0] == {
+        "method": "POST",
+        "path": "/api/patients/",
+        "params": {},
+        "json": {
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "email": "ada@example.com",
+            "phone_number": "+14165551212",
+            "date_of_birth": "1990-12-10",
+            "provider_id": "2",
+            "gender": "Female",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_patient_returns_only_upcoming_appointment_context() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {
+                    "AppointmentId": 900000001,
+                    "AppointmentDate": "2099-07-20T00:00:00.000Z",
+                    "AppointmentTime": "09:00:00",
+                    "ProviderId": 2,
+                    "ProviderName": "Dr. M. Smith",
+                    "ScheduleColumnId": 4,
+                    "IsConfirmed": True,
+                },
+                {
+                    "AppointmentId": 900000002,
+                    "AppointmentDate": "2099-07-21T00:00:00.000Z",
+                    "AppointmentTime": "10:00:00",
+                    "ProviderId": 2,
+                    "StatusId": 3,
+                }
+            ],
+        }
+    )
+    adapter = _adapter(client)
+
+    patient = await adapter.get_patient("gt-415", include=["upcoming_appts"])
+
+    assert patient is not None
+    assert patient.id == "gt-415"
+    assert patient.first_name == ""
+    assert patient.extra == {
+        "upcoming_appointments": [
+            {
+                "id": "gt-900000001",
+                "provider_id": "gt-2",
+                "provider_name": "Dr. M. Smith",
+                "start_time": "2099-07-20T09:00:00",
+                "end_time": None,
+                "location_id": None,
+                "confirmed": True,
+            }
+        ]
+    }
+    assert client.calls[0]["method"] == "GET"
+    assert client.calls[0]["path"] == "/api/appointments/getAllAppointments"
+    assert client.calls[0]["params"] == {
+        "contactId": "415",
+        "from": datetime.now(ZoneInfo("America/Toronto")).date().isoformat(),
+        "exclude_cancelled": "true",
+        "page": 1,
+    }
 
 
 @pytest.mark.asyncio
