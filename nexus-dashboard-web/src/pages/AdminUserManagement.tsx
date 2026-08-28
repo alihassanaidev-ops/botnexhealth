@@ -24,22 +24,29 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { RefreshCw, ChevronLeft, ChevronRight, Trash2, MailPlus, UserCog } from "lucide-react";
+import { RefreshCw, ChevronLeft, ChevronRight, Trash2, MailPlus, UserCog, Loader2, Pencil, Plus } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { TableSkeleton } from "@/components/ui/skeletons";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 
 import {
+    inviteAdminUser,
+    listAdminInstitutionLocations,
+    listInstitutionsDetailed,
     listAdminUsers,
     removeAdminUser,
     reinviteAdminUser,
+    updateAdminUser,
+    type AdminManagedRole,
     type AdminUserRow,
     type AdminUserStatus,
 } from "@/lib/admin-api";
 import { useCooldownMap } from "@/hooks/use-cooldown";
 import { formatRoleLabel } from "@/lib/utils";
+import type { InstitutionDetail, Location } from "@/types";
 
 const ROLE_OPTIONS = ["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"] as const;
 const REINVITE_COOLDOWN_SECONDS = 30;
@@ -70,6 +77,17 @@ export default function AdminUserManagement() {
 
     const [removeTarget, setRemoveTarget] = useState<AdminUserRow | null>(null);
     const [isRemoving, setIsRemoving] = useState(false);
+    const [editorOpen, setEditorOpen] = useState(false);
+    const [editTarget, setEditTarget] = useState<AdminUserRow | null>(null);
+    const [editorEmail, setEditorEmail] = useState("");
+    const [editorRole, setEditorRole] = useState<AdminManagedRole>("INSTITUTION_ADMIN");
+    const [editorInstitutionId, setEditorInstitutionId] = useState("");
+    const [editorLocationId, setEditorLocationId] = useState("");
+    const [institutions, setInstitutions] = useState<InstitutionDetail[]>([]);
+    const [locations, setLocations] = useState<Location[]>([]);
+    const [loadingInstitutions, setLoadingInstitutions] = useState(true);
+    const [loadingLocations, setLoadingLocations] = useState(false);
+    const [savingUser, setSavingUser] = useState(false);
     const reinviteCooldowns = useCooldownMap(REINVITE_COOLDOWN_SECONDS);
 
     const fetchUsers = useCallback(
@@ -104,6 +122,113 @@ export default function AdminUserManagement() {
         }, 300);
         return () => clearTimeout(timer);
     }, [search, roleFilter, statusFilter, fetchUsers]);
+
+    useEffect(() => {
+        let cancelled = false;
+        async function fetchInstitutions() {
+            setLoadingInstitutions(true);
+            try {
+                const rows = await listInstitutionsDetailed();
+                if (!cancelled) setInstitutions(rows);
+            } catch (err: unknown) {
+                const error = err as { response?: { data?: { detail?: string } } };
+                toast.error(error?.response?.data?.detail || "Failed to load institutions");
+            } finally {
+                if (!cancelled) setLoadingInstitutions(false);
+            }
+        }
+        void fetchInstitutions();
+        return () => { cancelled = true; };
+    }, []);
+
+    useEffect(() => {
+        if (!editorOpen || !editorInstitutionId) {
+            setLocations([]);
+            return;
+        }
+        const institution = institutions.find((row) => row.id === editorInstitutionId);
+        if (!institution) return;
+
+        let cancelled = false;
+        async function fetchLocations() {
+            setLoadingLocations(true);
+            try {
+                const rows = await listAdminInstitutionLocations(institution!.slug);
+                if (!cancelled) setLocations(rows);
+            } catch (err: unknown) {
+                const error = err as { response?: { data?: { detail?: string } } };
+                if (!cancelled) {
+                    setLocations([]);
+                    toast.error(error?.response?.data?.detail || "Failed to load locations");
+                }
+            } finally {
+                if (!cancelled) setLoadingLocations(false);
+            }
+        }
+        void fetchLocations();
+        return () => { cancelled = true; };
+    }, [editorOpen, editorInstitutionId, institutions]);
+
+    function openCreateEditor() {
+        setEditTarget(null);
+        setEditorEmail("");
+        setEditorRole("INSTITUTION_ADMIN");
+        setEditorInstitutionId(institutions[0]?.id || "");
+        setEditorLocationId("");
+        setEditorOpen(true);
+    }
+
+    function openEditEditor(user: AdminUserRow) {
+        setEditTarget(user);
+        setEditorEmail(user.email);
+        setEditorRole(user.role as AdminManagedRole);
+        setEditorInstitutionId(user.institution_id || "");
+        setEditorLocationId(user.location_id || "");
+        setEditorOpen(true);
+    }
+
+    async function handleSaveUser() {
+        const email = editorEmail.trim();
+        if (!email || !email.includes("@")) {
+            toast.error("Enter a valid email address");
+            return;
+        }
+        if (!editorInstitutionId) {
+            toast.error("Select an institution");
+            return;
+        }
+        if (editorRole === "LOCATION_ADMIN" && !editorLocationId) {
+            toast.error("Select a location for the location admin");
+            return;
+        }
+
+        const payload = {
+            email,
+            role: editorRole,
+            institution_id: editorInstitutionId,
+            location_id: editorRole === "LOCATION_ADMIN" ? editorLocationId : undefined,
+        };
+        setSavingUser(true);
+        try {
+            if (editTarget) {
+                await updateAdminUser(editTarget.id, payload);
+                toast.success(`Updated ${email}`);
+                setEditorOpen(false);
+                await fetchUsers(page, search, roleFilter, statusFilter);
+            } else {
+                await inviteAdminUser(payload);
+                toast.success(`Invite sent to ${email}`);
+                setEditorOpen(false);
+                setStatusFilter("pending");
+                await fetchUsers(1, search, roleFilter, "pending");
+            }
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || (editTarget ? "Failed to update user" : "Failed to add user"));
+        } finally {
+            setSavingUser(false);
+        }
+    }
 
     async function handleRemove() {
         if (!removeTarget) return;
@@ -143,14 +268,20 @@ export default function AdminUserManagement() {
                 title="Users"
                 description="Manage users across all institutions. Removing a user frees their email for re-invite."
                 actions={
-                    <Button
-                        variant="outline"
-                        onClick={() => fetchUsers(page, search, roleFilter, statusFilter)}
-                        disabled={loading}
-                    >
-                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        <Button onClick={openCreateEditor} disabled={loadingInstitutions || institutions.length === 0}>
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add User
+                        </Button>
+                        <Button
+                            variant="outline"
+                            onClick={() => fetchUsers(page, search, roleFilter, statusFilter)}
+                            disabled={loading}
+                        >
+                            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </div>
                 }
             />
 
@@ -244,6 +375,17 @@ export default function AdminUserManagement() {
                                                                     <MailPlus className="h-4 w-4" />
                                                                 </Button>
                                                             )}
+                                                            {!isRemoved && (user.role === "INSTITUTION_ADMIN" || user.role === "LOCATION_ADMIN") && (
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="icon"
+                                                                    onClick={() => openEditEditor(user)}
+                                                                    title="Edit user"
+                                                                    aria-label={`Edit ${user.email}`}
+                                                                >
+                                                                    <Pencil className="h-4 w-4" />
+                                                                </Button>
+                                                            )}
                                                             {!isRemoved && !isSuperAdmin && (
                                                                 <Button
                                                                     variant="ghost"
@@ -297,6 +439,113 @@ export default function AdminUserManagement() {
                     )}
                 </CardContent>
             </Card>
+
+            <Dialog open={editorOpen} onOpenChange={(open) => !savingUser && setEditorOpen(open)}>
+                <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>{editTarget ? "Edit User" : "Add User"}</DialogTitle>
+                        <DialogDescription>
+                            {editTarget
+                                ? "Update the admin's email, role, and tenant assignment."
+                                : "Invite an institution admin or a location admin."}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="grid gap-4 py-2">
+                        <div className="grid gap-2">
+                            <Label htmlFor="admin-user-email">Email</Label>
+                            <Input
+                                id="admin-user-email"
+                                type="email"
+                                autoComplete="off"
+                                placeholder="admin@institution.com"
+                                value={editorEmail}
+                                onChange={(event) => setEditorEmail(event.target.value)}
+                            />
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label>Role</Label>
+                            <Select
+                                value={editorRole}
+                                onValueChange={(value) => {
+                                    const role = value as AdminManagedRole;
+                                    setEditorRole(role);
+                                    if (role === "INSTITUTION_ADMIN") setEditorLocationId("");
+                                }}
+                            >
+                                <SelectTrigger aria-label="Role">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="INSTITUTION_ADMIN">Institution Admin</SelectItem>
+                                    <SelectItem value="LOCATION_ADMIN">Location Admin</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="grid gap-2">
+                            <Label>Institution</Label>
+                            <Select
+                                value={editorInstitutionId || undefined}
+                                onValueChange={(value) => {
+                                    setEditorInstitutionId(value);
+                                    setEditorLocationId("");
+                                }}
+                            >
+                                <SelectTrigger aria-label="Institution">
+                                    <SelectValue placeholder="Select an institution" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {institutions.map((institution) => (
+                                        <SelectItem key={institution.id} value={institution.id}>
+                                            {institution.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {editorRole === "LOCATION_ADMIN" && (
+                            <div className="grid gap-2">
+                                <Label>Location</Label>
+                                <Select
+                                    value={editorLocationId || undefined}
+                                    onValueChange={setEditorLocationId}
+                                    disabled={!editorInstitutionId || loadingLocations}
+                                >
+                                    <SelectTrigger aria-label="Location">
+                                        <SelectValue placeholder={loadingLocations ? "Loading locations…" : "Select a location"} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {locations.map((location) => (
+                                            <SelectItem key={location.id} value={location.id}>
+                                                {location.name}{!location.is_active ? " (inactive)" : ""}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                                {!loadingLocations && editorInstitutionId && locations.length === 0 && (
+                                    <p className="text-sm text-muted-foreground">This institution has no locations.</p>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setEditorOpen(false)} disabled={savingUser}>
+                            Cancel
+                        </Button>
+                        <Button
+                            onClick={handleSaveUser}
+                            disabled={savingUser || loadingInstitutions || (editorRole === "LOCATION_ADMIN" && loadingLocations)}
+                        >
+                            {savingUser && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            {savingUser ? "Saving…" : editTarget ? "Save Changes" : "Send Invite"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* Remove Confirmation Dialog */}
             <Dialog open={!!removeTarget} onOpenChange={(open) => !open && setRemoveTarget(null)}>

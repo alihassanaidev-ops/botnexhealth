@@ -13,7 +13,7 @@ The integration suite has no live DB, so we mock ``get_db_session`` per test
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -76,6 +76,24 @@ def _stub_db_returning(target: User | None):
         result = AsyncMock()
         result.scalar_one_or_none = lambda: target
         session.execute = AsyncMock(return_value=result)
+        yield session
+
+    return patch.object(admin_users_routes, "get_db_session", _ctx)
+
+
+def _stub_db_sequence(*values):
+    """Patch get_db_session with ordered scalar results for multi-query routes."""
+
+    @asynccontextmanager
+    async def _ctx(*_args, **_kwargs):
+        session = AsyncMock()
+        results = []
+        for value in values:
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = value
+            results.append(result)
+        session.execute = AsyncMock(side_effect=results)
+        session.flush = AsyncMock()
         yield session
 
     return patch.object(admin_users_routes, "get_db_session", _ctx)
@@ -192,6 +210,119 @@ async def test_reinvite_user_blocks_super_admin(async_client: AsyncClient, overr
         resp = await async_client.post(f"/api/admin/users/{other_super.id}/reinvite")
     assert resp.status_code == 403
     reinvite_call.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# update_institution_admin
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_institution_admin_can_assign_location_admin_scope(
+    async_client: AsyncClient, override_admin, audit_log_entries
+):
+    target = _make_user(
+        role=UserRole.INSTITUTION_ADMIN.value,
+        location_id=None,
+        invite_status=InviteStatus.ACCEPTED.value,
+    )
+    institution = MagicMock(id=INSTITUTION_ID)
+    location_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    location = MagicMock(id=location_id, institution_id=INSTITUTION_ID)
+
+    with _stub_db_sequence(target, institution, None, location):
+        resp = await async_client.patch(
+            f"/api/admin/users/{target.id}",
+            json={
+                "email": "Updated.Admin@Clinic.test ",
+                "role": "LOCATION_ADMIN",
+                "institution_id": INSTITUTION_ID,
+                "location_id": location_id,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["email"] == "updated.admin@clinic.test"
+    assert target.email == "updated.admin@clinic.test"
+    assert target.role == UserRole.LOCATION_ADMIN.value
+    assert target.institution_id == INSTITUTION_ID
+    assert target.location_id == location_id
+
+    entries = await audit_log_entries()
+    matches = [e for e in entries if e.action == AuditAction.USER_UPDATE]
+    assert len(matches) == 1
+    assert matches[0].metadata["previous"]["role"] == UserRole.INSTITUTION_ADMIN.value
+    assert matches[0].metadata["target_role"] == UserRole.LOCATION_ADMIN.value
+
+
+@pytest.mark.asyncio
+async def test_update_location_admin_to_institution_admin_clears_location(
+    async_client: AsyncClient, override_admin
+):
+    target = _make_user(invite_status=InviteStatus.ACCEPTED.value)
+    institution = MagicMock(id=INSTITUTION_ID)
+
+    with _stub_db_sequence(target, institution, None):
+        resp = await async_client.patch(
+            f"/api/admin/users/{target.id}",
+            json={
+                "email": target.email,
+                "role": "INSTITUTION_ADMIN",
+                "institution_id": INSTITUTION_ID,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert target.role == UserRole.INSTITUTION_ADMIN.value
+    assert target.location_id is None
+
+
+@pytest.mark.asyncio
+async def test_update_location_admin_rejects_location_from_other_institution(
+    async_client: AsyncClient, override_admin
+):
+    target = _make_user(invite_status=InviteStatus.ACCEPTED.value)
+    institution = MagicMock(id=INSTITUTION_ID)
+
+    with _stub_db_sequence(target, institution, None, None):
+        resp = await async_client.patch(
+            f"/api/admin/users/{target.id}",
+            json={
+                "email": target.email,
+                "role": "LOCATION_ADMIN",
+                "institution_id": INSTITUTION_ID,
+                "location_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+            },
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "location_id does not belong to this institution"
+
+
+@pytest.mark.asyncio
+async def test_update_pending_user_email_rotates_invite(
+    async_client: AsyncClient, override_admin
+):
+    target = _make_user(location_id=None)
+    target.role = UserRole.INSTITUTION_ADMIN.value
+    institution = MagicMock(id=INSTITUTION_ID)
+
+    with _stub_db_sequence(target, institution, None), patch.object(
+        admin_users_routes.UserInviteService,
+        "reinvite_user",
+        new=AsyncMock(return_value=target),
+    ) as reinvite_call:
+        resp = await async_client.patch(
+            f"/api/admin/users/{target.id}",
+            json={
+                "email": "new-address@clinic.test",
+                "role": "INSTITUTION_ADMIN",
+                "institution_id": INSTITUTION_ID,
+            },
+        )
+
+    assert resp.status_code == 200
+    reinvite_call.assert_awaited_once_with(target)
 
 
 # ---------------------------------------------------------------------------
