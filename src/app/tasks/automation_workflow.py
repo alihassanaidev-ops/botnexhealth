@@ -43,6 +43,7 @@ from src.app.services.automation.definition_schema import (
     WaitNode,
     WorkflowDefinition,
 )
+from src.app.services.automation.trigger_filter import trigger_filter_matches
 from src.app.services.automation.enrollment_service import (
     AutomationWorkflowEnrollmentService,
 )
@@ -1302,6 +1303,7 @@ async def _trigger_appointment_async(
     scheduled = 0
     skipped = 0
     skipped_type = 0
+    skipped_filter = 0
     enriched_metadata = {
         **trigger_metadata,
         **{k: v for k, v in appointment_context.items() if v is not None},
@@ -1325,6 +1327,14 @@ async def _trigger_appointment_async(
                 appointment_id,
                 wf.id,
                 enriched_metadata.get("appointment_type_id"),
+            )
+            continue
+        if not trigger_filter_matches(wf, enriched_metadata):
+            skipped_filter += 1
+            logger.info(
+                "trigger_appointment: filtered out appt=%s workflow=%s",
+                appointment_id,
+                wf.id,
             )
             continue
         eta = compute_enrollment_eta(wf, appointment_at)
@@ -1359,18 +1369,23 @@ async def _trigger_appointment_async(
         scheduled += 1
 
     logger.info(
-        "trigger_appointment: institution=%s appt=%s scheduled=%d skipped=%d skipped_type=%d",
+        "trigger_appointment: institution=%s appt=%s scheduled=%d skipped=%d "
+        "skipped_type=%d skipped_filter=%d",
         institution_id,
         appointment_id,
         scheduled,
         skipped,
         skipped_type,
+        skipped_filter,
     )
     return {
         "appointment_id": appointment_id,
         "scheduled": scheduled,
         "skipped": skipped,
         "skipped_type": skipped_type,
+        # Counted separately so the enrollment reduction from moving eligibility
+        # out of the graph is measurable rather than inferred.
+        "skipped_filter": skipped_filter,
     }
 
 
@@ -1480,6 +1495,14 @@ async def _trigger_appointment_state_async(
             flow_state=flow_state,
         ):
             skipped += 1
+            continue
+        if not trigger_filter_matches(wf, enriched_metadata):
+            skipped += 1
+            logger.info(
+                "trigger_appointment_state: filtered out appt=%s workflow=%s",
+                appointment_id,
+                wf.id,
+            )
             continue
         idempotency_key = make_appointment_state_idempotency_key(
             str(wf.current_version_id),

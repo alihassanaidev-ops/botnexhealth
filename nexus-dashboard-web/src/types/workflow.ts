@@ -26,12 +26,16 @@ export type TriggerType =
 
 export interface AppointmentOffsetTrigger {
     type: "appointment_offset"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
     /** Hours relative to the appointment (negative = before, e.g. -24). */
     offset_hours: number
     appointment_type_ids?: string[] | null
 }
 export interface AppointmentStateChangedTrigger {
     type: "appointment_state_changed"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
     status_ids: number[]
     confirmed?: boolean | null
     preconfirmed?: boolean | null
@@ -43,25 +47,37 @@ export interface AppointmentStateChangedTrigger {
 }
 export interface RecallScanTrigger {
     type: "recall_scan"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
     /** Inactivity/recall interval in months (>= 1). */
     recall_interval_months: number
 }
 export interface ManualTrigger {
     type: "manual"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
 }
 export interface BulkImportTrigger {
     type: "bulk_import"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
 }
 export interface CallbackRequestedTrigger {
     type: "callback_requested"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
 }
 export interface PatientStatusChangedTrigger {
     type: "patient_status_changed"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
     statuses: string[]
     campaign_goal?: string | null
 }
 export interface SmsReplyTrigger {
     type: "sms_reply"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
     /** Optional whole-token filters. Empty means any non-compliance inbound SMS. */
     tokens?: string[]
     campaign_goal?: string | null
@@ -72,6 +88,8 @@ export interface SmsReplyTrigger {
  */
 export interface EmailReplyTrigger {
     type: "email_reply"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
     /** Optional whole-token filters. Empty means any routed inbound email. */
     tokens?: string[]
     campaign_goal?: string | null
@@ -114,6 +132,12 @@ export type WaitDelay = DurationDelay | CalendarDelay | AppointmentRelativeDelay
 // ---------------------------------------------------------------------------
 // Condition rule
 // ---------------------------------------------------------------------------
+/**
+ * Legacy condition operators. Kept because published definitions use them and
+ * the backend deliberately does NOT up-convert those rules — the legacy
+ * evaluator's equality is exact where the filter DSL coerces types, so
+ * rewriting them could change how a live campaign branches.
+ */
 export type ConditionOp = "eq" | "neq" | "in" | "in_case_insensitive" | "not_in" | "is_null" | "is_not_null" | "contains" | "not_contains"
 
 export interface ConditionRule {
@@ -121,6 +145,41 @@ export interface ConditionRule {
     op: ConditionOp
     value?: boolean | number | string | string[] | null
 }
+
+// ---------------------------------------------------------------------------
+// Filter expression — the shared DSL for trigger filters, condition nodes and
+// switch cases. Mirrors `src/app/services/automation/filter_expression.py`.
+// ---------------------------------------------------------------------------
+
+export type FilterOp =
+    | "eq" | "neq"
+    | "in" | "not_in" | "in_case_insensitive" | "not_in_case_insensitive"
+    | "contains" | "not_contains" | "starts_with" | "ends_with" | "matches"
+    | "gt" | "gte" | "lt" | "lte" | "between"
+    | "before" | "after" | "within" | "older_than"
+    | "is_null" | "is_not_null" | "is_empty" | "is_not_empty"
+    | "any_of" | "all_of"
+    | "field_eq" | "field_neq" | "field_gt" | "field_lt"
+
+export type FilterValue = boolean | number | string | Array<string | number | boolean> | null
+
+export interface FilterRule {
+    kind: "rule"
+    field: string
+    op: FilterOp
+    value?: FilterValue
+    /** Text comparison is case-insensitive unless this is set. */
+    case_sensitive?: boolean
+}
+
+export interface FilterGroup {
+    kind: "group"
+    /** `not` negates the conjunction of its children. */
+    op: "and" | "or" | "not"
+    children: FilterExpression[]
+}
+
+export type FilterExpression = FilterRule | FilterGroup
 
 // ---------------------------------------------------------------------------
 // Nodes (discriminated on `type`)
@@ -138,6 +197,7 @@ export type NodeType =
     | "json_mapper"
     | "llm"
     | "condition"
+    | "switch"
     | "exit"
 
 export interface TimeWaitConfig {
@@ -318,13 +378,39 @@ export interface LlmNode {
     fallback_label?: string | null
     next_node_id: string
 }
+/**
+ * Two-way branch. Exactly one authoring shape is set: `filter` (current) or
+ * `logic` + `rules` (legacy, still executed as authored).
+ */
 export interface ConditionNode {
     type: "condition"
     id: string
     logic?: "AND" | "OR"
-    rules: ConditionRule[]
+    rules?: ConditionRule[]
+    filter?: FilterExpression | null
     true_next_node_id: string
     false_next_node_id: string
+}
+
+export interface SwitchCase {
+    /** Port identity in the builder and in execution traces; unique per node. */
+    label: string
+    filter: FilterExpression
+    next_node_id: string
+}
+
+/**
+ * Multi-way branch: the first case whose filter matches wins, otherwise the
+ * default. Replaces the chain of binary conditions campaigns used to need to
+ * route a single value.
+ */
+export interface SwitchNode {
+    type: "switch"
+    id: string
+    /** Descriptive only — each case filter is self-contained. */
+    subject?: string | null
+    cases: SwitchCase[]
+    default_next_node_id: string
 }
 export interface ExitNode {
     type: "exit"
@@ -345,6 +431,7 @@ export type WorkflowNode =
     | JsonMapperNode
     | LlmNode
     | ConditionNode
+    | SwitchNode
     | ExitNode
 
 // ---------------------------------------------------------------------------

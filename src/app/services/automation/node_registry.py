@@ -17,15 +17,28 @@ NODE_REGISTRY_VERSION = "1.0"
 @dataclass(frozen=True)
 class NodeCapability:
     node_type: str
+    #: Fixed, singular forward pointers, e.g. ``("next_node_id",)``.
     outgoing_fields: tuple[str, ...]
+    #: Variable-count ports, as ``(list_field, item_field)`` pairs. A ``switch``
+    #: declares ``(("cases", "next_node_id"),)``: one port per authored case,
+    #: alongside its fixed ``default_next_node_id``.
+    outgoing_list_fields: tuple[tuple[str, str], ...] = ()
     authorable: bool = True
     runtime_supported: bool = True
     dry_run_supported: bool = True
     legacy: bool = False
 
+    @property
+    def has_variable_ports(self) -> bool:
+        return bool(self.outgoing_list_fields)
+
     def as_dict(self) -> dict[str, Any]:
         value = asdict(self)
         value["outgoing_fields"] = list(self.outgoing_fields)
+        value["outgoing_list_fields"] = [
+            list(pair) for pair in self.outgoing_list_fields
+        ]
+        value["has_variable_ports"] = self.has_variable_ports
         return value
 
 
@@ -53,6 +66,11 @@ NODE_CAPABILITIES: dict[str, NodeCapability] = {
     "condition": NodeCapability(
         "condition", ("true_next_node_id", "false_next_node_id")
     ),
+    "switch": NodeCapability(
+        "switch",
+        ("default_next_node_id",),
+        outgoing_list_fields=(("cases", "next_node_id"),),
+    ),
     "exit": NodeCapability("exit", ()),
 }
 
@@ -72,19 +90,38 @@ def capability_for(node: object) -> NodeCapability | None:
     return NODE_CAPABILITIES.get(kind) if kind else None
 
 
+def _read(node: object, field_name: str) -> Any:
+    return (
+        node.get(field_name)
+        if isinstance(node, Mapping)
+        else getattr(node, field_name, None)
+    )
+
+
 def outgoing_references(node: object) -> tuple[tuple[str, str], ...]:
-    """Return ``(field_name, target_node_id)`` for any registered node."""
+    """Return ``(field_path, target_node_id)`` for any registered node.
+
+    Variable ports are reported with an indexed path — ``cases[2].next_node_id``
+    — so a validation error points at the case the author actually mis-wired
+    rather than at the node as a whole.
+    """
     capability = capability_for(node)
     if capability is None:
         return ()
     refs: list[tuple[str, str]] = []
     for field_name in capability.outgoing_fields:
-        value = (
-            node.get(field_name)
-            if isinstance(node, Mapping)
-            else getattr(node, field_name, None)
-        )
+        value = _read(node, field_name)
         refs.append((field_name, str(value) if value is not None else ""))
+    for list_field, item_field in capability.outgoing_list_fields:
+        items = _read(node, list_field) or []
+        for index, item in enumerate(items):
+            value = _read(item, item_field)
+            refs.append(
+                (
+                    f"{list_field}[{index}].{item_field}",
+                    str(value) if value is not None else "",
+                )
+            )
     return tuple(refs)
 
 

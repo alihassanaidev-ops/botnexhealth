@@ -134,11 +134,22 @@ def _apply_required_setup_fields(
             reasons = _string_list(setup_options.get(field_id))
             if setup_field.get("required") and not reasons:
                 raise ValueError("appointment_reasons must contain at least one GoTracker reason")
-            node = _node_by_id(definition, "check-eligible-reason")
-            if reasons and node:
-                for rule in node.get("rules", []):
-                    if isinstance(rule, dict) and rule.get("field") == "appointment_reason":
-                        rule["value"] = reasons
+            if reasons:
+                _set_filter_rule_value(
+                    definition.get("trigger", {}).get("filter"),
+                    field="appointment_reason",
+                    value=reasons,
+                )
+                # Post-op still filters inside the graph: its eligibility depends
+                # on context the trigger does not carry at match time.
+                node = _node_by_id(definition, "check-post-op-eligible-reason")
+                if node:
+                    _set_filter_rule_value(
+                        node.get("filter"), field="appointment_reason", value=reasons
+                    )
+                    for rule in node.get("rules", []):
+                        if isinstance(rule, dict) and rule.get("field") == "appointment_reason":
+                            rule["value"] = reasons
             continue
         if field_id == "call_offset_hours_before":
             hours = _positive_number(
@@ -219,6 +230,27 @@ def _apply_required_setup_fields(
             raise ValueError(
                 "post_op_latest_call_hours must be at least post_op_delay_hours"
             )
+
+
+def _set_filter_rule_value(
+    expression: Any, *, field: str, value: Any
+) -> bool:
+    """Substitute a setup-time value into every rule on ``field``.
+
+    Walks the filter tree because a template's placeholder can sit at any depth
+    once an author has nested the expression.
+    """
+    if not isinstance(expression, dict):
+        return False
+    if expression.get("kind") == "group":
+        return any(
+            _set_filter_rule_value(child, field=field, value=value)
+            for child in expression.get("children", [])
+        )
+    if expression.get("field") == field:
+        expression["value"] = value
+        return True
+    return False
 
 
 def _node_by_id(definition: dict[str, Any], node_id: str) -> dict[str, Any] | None:
@@ -609,7 +641,12 @@ _UNSCHEDULED_TREATMENT_FOLLOWUP: dict[str, Any] = {
 }
 
 def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
-    """Build one explicit patient-contact attempt and its outcome router."""
+    """Build one explicit patient-contact attempt and its outcome router.
+
+    The router is a single ``switch`` on ``call_outcome``. It used to be six
+    chained condition nodes per attempt — thirty-six across three attempts —
+    which is exactly the shape a multi-way branch exists to remove.
+    """
     final_attempt = attempt == 3
     suffix = str(attempt)
     callback_target = (
@@ -626,69 +663,81 @@ def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
             # Vendor-placement retries are deliberately separate from the three
             # patient-contact attempts represented by these distinct nodes.
             "max_attempts": 1,
-            "next_node_id": f"attempt-{suffix}-confirmed",
+            "next_node_id": f"route-attempt-{suffix}",
         },
         {
-            "type": "condition",
-            "id": f"attempt-{suffix}-confirmed",
-            "rules": [{"field": "call_outcome", "op": "eq", "value": "confirmed"}],
-            "true_next_node_id": "write-appointment-confirmed",
-            "false_next_node_id": f"attempt-{suffix}-cancelled",
-        },
-        {
-            "type": "condition",
-            "id": f"attempt-{suffix}-cancelled",
-            "rules": [
+            "type": "switch",
+            "id": f"route-attempt-{suffix}",
+            "subject": "call_outcome",
+            "cases": [
                 {
-                    "field": "call_outcome",
-                    "op": "in",
-                    "value": ["cancelled", "appointment_cancelled"],
-                }
-            ],
-            "true_next_node_id": "write-appointment-cancelled",
-            "false_next_node_id": f"attempt-{suffix}-reschedule",
-        },
-        {
-            "type": "condition",
-            "id": f"attempt-{suffix}-reschedule",
-            "rules": [
+                    "label": "Confirmed",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "eq",
+                        "value": "confirmed",
+                    },
+                    "next_node_id": "write-appointment-confirmed",
+                },
                 {
-                    "field": "call_outcome",
-                    "op": "in",
-                    "value": ["reschedule_requested", "reschedule", "appointment_requested"],
-                }
-            ],
-            "true_next_node_id": "check-reschedule-time",
-            "false_next_node_id": f"attempt-{suffix}-callback",
-        },
-        {
-            "type": "condition",
-            "id": f"attempt-{suffix}-callback",
-            "rules": [
-                {"field": "call_outcome", "op": "eq", "value": "callback_requested"}
-            ],
-            "true_next_node_id": callback_target,
-            "false_next_node_id": f"attempt-{suffix}-dnc",
-        },
-        {
-            "type": "condition",
-            "id": f"attempt-{suffix}-dnc",
-            "rules": [{"field": "call_outcome", "op": "eq", "value": "do_not_call"}],
-            "true_next_node_id": "mark-dnc",
-            "false_next_node_id": f"attempt-{suffix}-unreachable",
-        },
-        {
-            "type": "condition",
-            "id": f"attempt-{suffix}-unreachable",
-            "rules": [
+                    "label": "Cancelled",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "in_case_insensitive",
+                        "value": ["cancelled", "appointment_cancelled"],
+                    },
+                    "next_node_id": "write-appointment-cancelled",
+                },
                 {
-                    "field": "call_outcome",
-                    "op": "in",
-                    "value": ["no_answer", "voicemail", "busy", "timeout", "declined"],
-                }
+                    "label": "Reschedule requested",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "in_case_insensitive",
+                        "value": [
+                            "reschedule_requested",
+                            "reschedule",
+                            "appointment_requested",
+                        ],
+                    },
+                    "next_node_id": "check-reschedule-time",
+                },
+                {
+                    "label": "Callback requested",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "eq",
+                        "value": "callback_requested",
+                    },
+                    "next_node_id": callback_target,
+                },
+                {
+                    "label": "Do not call",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "eq",
+                        "value": "do_not_call",
+                    },
+                    "next_node_id": "mark-dnc",
+                },
+                {
+                    "label": "Unreachable",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "in_case_insensitive",
+                        "value": ["no_answer", "voicemail", "busy", "timeout", "declined"],
+                    },
+                    "next_node_id": unreachable_target,
+                },
             ],
-            "true_next_node_id": unreachable_target,
-            "false_next_node_id": "mark-followup",
+            # Anything the agent reports that we have not modelled goes to a
+            # human rather than being silently treated as unreachable.
+            "default_next_node_id": "mark-followup",
         },
     ]
     if not final_attempt:
@@ -697,11 +746,14 @@ def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
                 {
                     "type": "condition",
                     "id": f"check-callback-time-{suffix}",
-                    "logic": "AND",
-                    "rules": [
-                        {"field": "callback_at", "op": "is_not_null", "value": None},
-                        {"field": "callback_at", "op": "neq", "value": ""},
-                    ],
+                    # One `is_not_empty` replaces the old is_not_null + neq ""
+                    # pair, which existed only because the original operator set
+                    # could not express "set and non-blank".
+                    "filter": {
+                        "kind": "rule",
+                        "field": "callback_at",
+                        "op": "is_not_empty",
+                    },
                     "true_next_node_id": f"wait-callback-{suffix}",
                     "false_next_node_id": "mark-callback-time-missing",
                 },
@@ -728,42 +780,48 @@ def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
 
 _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
     "schema_version": "1.0",
-    "trigger": {"type": "appointment_offset", "offset_hours": -24},
-    "entry_node_id": "check-eligible-reason",
-    "nodes": [
-        {
-            "type": "condition",
-            "id": "check-eligible-reason",
-            "logic": "AND",
-            "rules": [
+    "trigger": {
+        "type": "appointment_offset",
+        "offset_hours": -24,
+        # Eligibility is decided before enrollment. It used to be the first
+        # condition node, whose false branch exited immediately — so every
+        # appointment in the clinic wrote a run, a step execution and analytics
+        # rows just to be discarded.
+        "filter": {
+            "kind": "group",
+            "op": "and",
+            "children": [
                 {
                     # Normalized status label, supplied by both webhook paths.
                     # GoTracker maps status id 1 to "booked", so this matches
                     # exactly what `appointment_status_id in ["1"]` used to.
+                    "kind": "rule",
                     "field": "appointment_status",
                     "op": "in_case_insensitive",
                     "value": ["booked"],
                 },
                 {
+                    "kind": "rule",
                     "field": "appointment_reason",
                     "op": "in_case_insensitive",
                     "value": [APPOINTMENT_REASONS_PLACEHOLDER],
-                }
+                },
             ],
-            "true_next_node_id": "voice-preop-attempt-1",
-            "false_next_node_id": "exit-ineligible-reason",
         },
+    },
+    "entry_node_id": "voice-preop-attempt-1",
+    "nodes": [
         *_preappointment_attempt_nodes(1),
         *_preappointment_attempt_nodes(2),
         *_preappointment_attempt_nodes(3),
         {
             "type": "condition",
             "id": "check-reschedule-time",
-            "logic": "AND",
-            "rules": [
-                {"field": "reschedule_start_time", "op": "is_not_null", "value": None},
-                {"field": "reschedule_start_time", "op": "neq", "value": ""},
-            ],
+            "filter": {
+                "kind": "rule",
+                "field": "reschedule_start_time",
+                "op": "is_not_empty",
+            },
             "true_next_node_id": "write-appointment-rescheduled",
             "false_next_node_id": "mark-reschedule-time-missing",
         },
@@ -828,7 +886,6 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
             "note_template": "Pre-appointment call needs review. Outcome: {{call_outcome}}",
             "next_node_id": "exit-handoff",
         },
-        {"type": "exit", "id": "exit-ineligible-reason", "outcome": "ineligible_reason"},
         {"type": "exit", "id": "exit-confirmed", "outcome": "appointment_confirmed"},
         {"type": "exit", "id": "exit-cancelled", "outcome": "appointment_cancelled"},
         {"type": "exit", "id": "exit-rescheduled", "outcome": "appointment_rescheduled"},

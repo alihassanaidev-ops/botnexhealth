@@ -320,6 +320,9 @@ class DryRunRequest(BaseModel):
     definition: dict[str, Any]
     context: dict[str, Any] | None = None
     condition_choices: dict[str, bool] | None = None
+    # node_id -> case label. Names the switch branch a preview should walk;
+    # an unset or unknown label previews the default branch.
+    switch_case_choices: dict[str, str] | None = None
 
 
 class DryRunStepResponse(BaseModel):
@@ -854,7 +857,10 @@ async def dry_run_definition(
         ) from exc
 
     result = simulate_run(
-        definition, context=data.context, condition_choices=data.condition_choices
+        definition,
+        context=data.context,
+        condition_choices=data.condition_choices,
+        switch_case_choices=data.switch_case_choices,
     )
     return DryRunResultResponse(
         steps=[

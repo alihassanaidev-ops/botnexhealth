@@ -96,18 +96,26 @@ def test_surgery_confirmation_template_configures_reasons_and_retry_timing() -> 
     assert "appointment_type_ids" not in definition["trigger"]
     assert definition["trigger"]["offset_hours"] == -36
     nodes = {node["id"]: node for node in definition["nodes"]}
-    assert nodes["check-eligible-reason"]["rules"] == [
-        {
-            "field": "appointment_status",
-            "op": "in_case_insensitive",
-            "value": ["booked"],
-        },
-        {
-            "field": "appointment_reason",
-            "op": "in_case_insensitive",
-            "value": ["Bridge Prep", "Implant Surgery"],
-        },
-    ]
+    # Eligibility lives on the trigger, so an ineligible appointment never
+    # creates a run at all.
+    assert definition["trigger"]["filter"] == {
+        "kind": "group",
+        "op": "and",
+        "children": [
+            {
+                "kind": "rule",
+                "field": "appointment_status",
+                "op": "in_case_insensitive",
+                "value": ["booked"],
+            },
+            {
+                "kind": "rule",
+                "field": "appointment_reason",
+                "op": "in_case_insensitive",
+                "value": ["Bridge Prep", "Implant Surgery"],
+            },
+        ],
+    }
     assert nodes["wait-retry-1"]["delay"]["duration_seconds"] == 4 * 60 * 60
     assert nodes["wait-retry-2"]["delay"]["duration_seconds"] == int(7.5 * 60 * 60)
     for node_id in ("voice-preop-attempt-1", "voice-preop-attempt-2", "voice-preop-attempt-3"):
@@ -148,7 +156,7 @@ def test_surgery_confirmation_template_has_three_business_attempts_and_dynamic_c
     )
     nodes = {node["id"]: node for node in definition["nodes"]}
 
-    assert nodes["check-eligible-reason"]["true_next_node_id"] == "voice-preop-attempt-1"
+    assert definition["entry_node_id"] == "voice-preop-attempt-1"
     assert nodes["wait-retry-1"]["next_node_id"] == "voice-preop-attempt-2"
     assert nodes["wait-retry-2"]["next_node_id"] == "voice-preop-attempt-3"
     assert nodes["wait-callback-1"]["delay"] == {
@@ -172,18 +180,29 @@ def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() ->
     )
     nodes = {node["id"]: node for node in definition["nodes"]}
 
-    confirmed_rule = nodes["attempt-1-confirmed"]["rules"][0]
-    assert confirmed_rule == {
+    # One switch replaces the six chained conditions this attempt used to need.
+    router = nodes["route-attempt-1"]
+    assert router["type"] == "switch"
+    assert router["subject"] == "call_outcome"
+    cases = {case["label"]: case for case in router["cases"]}
+
+    assert cases["Confirmed"]["filter"] == {
+        "kind": "rule",
         "field": "call_outcome",
         "op": "eq",
         "value": "confirmed",
     }
-    assert "answered" not in str(nodes["attempt-1-confirmed"]["rules"])
-    assert nodes["attempt-1-cancelled"]["true_next_node_id"] == "write-appointment-cancelled"
+    # "answered" is not confirmation — a patient picking up says nothing about
+    # whether they intend to attend.
+    assert "answered" not in str(router["cases"])
+
+    assert cases["Cancelled"]["next_node_id"] == "write-appointment-cancelled"
     assert nodes["write-appointment-cancelled"]["type"] == "update_appointment"
     assert nodes["write-appointment-cancelled"]["operation"] == "cancel"
-    assert nodes["attempt-1-reschedule"]["true_next_node_id"] == "check-reschedule-time"
-    assert nodes["attempt-1-unreachable"]["true_next_node_id"] == "wait-retry-1"
+    assert cases["Reschedule requested"]["next_node_id"] == "check-reschedule-time"
+    assert cases["Unreachable"]["next_node_id"] == "wait-retry-1"
+    # An unmodelled outcome reaches a human rather than being read as a failure.
+    assert router["default_next_node_id"] == "mark-followup"
 
 
 def test_post_op_template_starts_from_completed_flow_state_and_waits_one_day() -> None:
@@ -429,7 +448,7 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
     assert published_nodes["voice-preop-attempt-1"]["retell_agent_id"] == ""
     reason_rule = next(
         rule
-        for rule in published_nodes["check-eligible-reason"]["rules"]
+        for rule in published_def["trigger"]["filter"]["children"]
         if rule["field"] == "appointment_reason"
     )
     assert reason_rule["value"] == ["bridge prep"]

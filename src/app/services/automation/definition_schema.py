@@ -21,6 +21,7 @@ import phonenumbers
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.app.pms.gotracker.statuses import MAX_STATUS_ID, MIN_STATUS_ID
+from src.app.services.automation.filter_expression import FilterExpression
 from src.app.services.automation.node_registry import outgoing_references
 
 PHONE_COUNTRY_REGIONS = frozenset(phonenumbers.SUPPORTED_REGIONS)
@@ -34,6 +35,11 @@ class AppointmentOffsetTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["appointment_offset"] = "appointment_offset"
+    # Optional eligibility filter, evaluated against the trigger event's
+    # context BEFORE a run is created. Filtering here rather than in an
+    # opening condition node is what keeps ineligible subjects from writing
+    # a run, a step execution and analytics rows only to exit at node one.
+    filter: FilterExpression | None = None
     offset_hours: int
     # Legacy authoring field. Kept for backward compatibility with published
     # definitions, but appointment-type filtering no longer happens at trigger
@@ -47,6 +53,11 @@ class AppointmentStateChangedTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["appointment_state_changed"] = "appointment_state_changed"
+    # Optional eligibility filter, evaluated against the trigger event's
+    # context BEFORE a run is created. Filtering here rather than in an
+    # opening condition node is what keeps ineligible subjects from writing
+    # a run, a step execution and analytics rows only to exit at node one.
+    filter: FilterExpression | None = None
     status_ids: list[int] = Field(default_factory=list)
     confirmed: bool | None = None
     preconfirmed: bool | None = None
@@ -105,6 +116,11 @@ class RecallScanTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["recall_scan"] = "recall_scan"
+    # Optional eligibility filter, evaluated against the trigger event's
+    # context BEFORE a run is created. Filtering here rather than in an
+    # opening condition node is what keeps ineligible subjects from writing
+    # a run, a step execution and analytics rows only to exit at node one.
+    filter: FilterExpression | None = None
     recall_interval_months: int = Field(ge=1)
 
 
@@ -112,12 +128,22 @@ class ManualTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["manual"] = "manual"
+    # Optional eligibility filter, evaluated against the trigger event's
+    # context BEFORE a run is created. Filtering here rather than in an
+    # opening condition node is what keeps ineligible subjects from writing
+    # a run, a step execution and analytics rows only to exit at node one.
+    filter: FilterExpression | None = None
 
 
 class BulkImportTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["bulk_import"] = "bulk_import"
+    # Optional eligibility filter, evaluated against the trigger event's
+    # context BEFORE a run is created. Filtering here rather than in an
+    # opening condition node is what keeps ineligible subjects from writing
+    # a run, a step execution and analytics rows only to exit at node one.
+    filter: FilterExpression | None = None
 
 
 class CallbackRequestedTrigger(BaseModel):
@@ -130,6 +156,11 @@ class CallbackRequestedTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["callback_requested"] = "callback_requested"
+    # Optional eligibility filter, evaluated against the trigger event's
+    # context BEFORE a run is created. Filtering here rather than in an
+    # opening condition node is what keeps ineligible subjects from writing
+    # a run, a step execution and analytics rows only to exit at node one.
+    filter: FilterExpression | None = None
 
 
 class PatientStatusChangedTrigger(BaseModel):
@@ -138,6 +169,11 @@ class PatientStatusChangedTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["patient_status_changed"] = "patient_status_changed"
+    # Optional eligibility filter, evaluated against the trigger event's
+    # context BEFORE a run is created. Filtering here rather than in an
+    # opening condition node is what keeps ineligible subjects from writing
+    # a run, a step execution and analytics rows only to exit at node one.
+    filter: FilterExpression | None = None
     statuses: list[str] = Field(min_length=1)
     campaign_goal: str | None = None
 
@@ -164,6 +200,11 @@ class SmsReplyTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["sms_reply"] = "sms_reply"
+    # Optional eligibility filter, evaluated against the trigger event's
+    # context BEFORE a run is created. Filtering here rather than in an
+    # opening condition node is what keeps ineligible subjects from writing
+    # a run, a step execution and analytics rows only to exit at node one.
+    filter: FilterExpression | None = None
     tokens: list[str] = Field(default_factory=list)
     campaign_goal: str | None = None
 
@@ -196,6 +237,11 @@ class EmailReplyTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["email_reply"] = "email_reply"
+    # Optional eligibility filter, evaluated against the trigger event's
+    # context BEFORE a run is created. Filtering here rather than in an
+    # opening condition node is what keeps ineligible subjects from writing
+    # a run, a step execution and analytics rows only to exit at node one.
+    filter: FilterExpression | None = None
     tokens: list[str] = Field(default_factory=list)
     campaign_goal: str | None = None
 
@@ -879,14 +925,90 @@ class LlmNode(BaseModel):
 
 
 class ConditionNode(BaseModel):
+    """Two-way branch.
+
+    Two authoring shapes are accepted. ``filter`` is the current one: a nested
+    :class:`FilterExpression` with the full operator set. ``logic`` + ``rules``
+    is the original flat shape, kept because published definitions use it.
+
+    The legacy shape is deliberately **not** up-converted. Its equality is exact
+    (``"1" != 1``) while the filter DSL coerces types, so rewriting old rules
+    into the new form could silently change how a live campaign branches. Old
+    definitions keep the old evaluator; new ones get the new language. See
+    ``step_dispatcher.evaluate_condition_node``.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
     type: Literal["condition"] = "condition"
     logic: Literal["AND", "OR"] = "AND"
-    rules: list[ConditionRule] = Field(min_length=1)
+    rules: list[ConditionRule] = Field(default_factory=list)
+    filter: FilterExpression | None = None
     true_next_node_id: str
     false_next_node_id: str
+
+    @model_validator(mode="after")
+    def require_exactly_one_shape(self) -> "ConditionNode":
+        if self.filter is not None and self.rules:
+            raise ValueError("condition: use either filter or rules, not both")
+        if self.filter is None and not self.rules:
+            raise ValueError("condition: filter or rules is required")
+        return self
+
+
+class SwitchCase(BaseModel):
+    """One labelled branch of a :class:`SwitchNode`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # The label is the port identity in the builder and in execution traces, so
+    # it has to be unique within the node and stable across edits.
+    label: str = Field(min_length=1, max_length=60)
+    filter: FilterExpression
+    next_node_id: str = Field(min_length=1)
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("case label must not be blank")
+        return normalized
+
+
+class SwitchNode(BaseModel):
+    """Multi-way branch: the first case whose filter matches wins.
+
+    Replaces the chain of binary conditions that campaigns previously used to
+    route a single value — the pre-appointment template spent six condition
+    nodes per call attempt emulating exactly this.
+
+    Cases are ordered and evaluated top to bottom, so an author can put the
+    specific case above the general one. ``default_next_node_id`` is required
+    rather than optional: an unrouted run would otherwise strand mid-graph, and
+    forcing the author to name the fallback makes the dead-end visible.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["switch"] = "switch"
+    # The field being routed on, recorded for the builder and traces. Purely
+    # descriptive: each case's filter is self-contained.
+    subject: str | None = Field(default=None, max_length=200)
+    cases: list[SwitchCase] = Field(min_length=1, max_length=20)
+    default_next_node_id: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique_case_labels(self) -> "SwitchNode":
+        seen: set[str] = set()
+        for case in self.cases:
+            key = case.label.casefold()
+            if key in seen:
+                raise ValueError(f"duplicate switch case label '{case.label}'")
+            seen.add(key)
+        return self
 
 
 class ExitNode(BaseModel):
@@ -912,6 +1034,7 @@ WorkflowNode = Annotated[
         JsonMapperNode,
         LlmNode,
         ConditionNode,
+        SwitchNode,
         ExitNode,
     ],
     Field(discriminator="type"),

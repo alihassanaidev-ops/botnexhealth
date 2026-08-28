@@ -9,6 +9,7 @@ import {
     Clock,
     Flag,
     GitBranch,
+    Split,
     Mail,
     MessageSquare,
     MessageSquareReply,
@@ -114,10 +115,17 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
     },
     condition: {
         label: "Condition",
-        description: "Branch on contact / appointment / response.",
+        description: "Branch two ways on contact / appointment / response.",
         icon: GitBranch,
         group: "control",
         accent: "bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300",
+    },
+    switch: {
+        label: "Switch",
+        description: "Route down one of many branches on the first match.",
+        icon: Split,
+        group: "control",
+        accent: "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300",
     },
     exit: {
         label: "Exit",
@@ -213,7 +221,7 @@ export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; ty
     // schema for already-published definitions, but binds a new workflow to one
     // PMS. `update_appointment` is the PMS-neutral replacement.
     { title: "Actions", group: "action", types: ["drip", "llm", "update_appointment"] },
-    { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
+    { title: "Control flow", group: "control", types: ["wait", "condition", "switch", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },
 ]
 
