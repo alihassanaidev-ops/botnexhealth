@@ -173,6 +173,8 @@ export interface SetupOverview {
     pms_source: string | null;
     can_create_appointment_types: boolean;
     can_link_availability: boolean;
+    can_create_work_windows: boolean;
+    can_clear_working_window_override: boolean;
     counts: Record<string, number>;
     has_pms?: boolean;
 }
@@ -248,6 +250,8 @@ export interface CachedAvailability {
     label_name: string | null;
     /** False for PMS notes and breaks — they describe the schedule, not bookable time. */
     is_bookable_window: boolean;
+    /** GoTracker only: true when this window has a cloud type override. */
+    types_overridden: boolean;
     source_metadata: Record<string, unknown> | null;
     synced_at: string | null;
 }

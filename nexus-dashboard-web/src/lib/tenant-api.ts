@@ -263,6 +263,16 @@ export async function updateAvailability(
     return data;
 }
 
+export async function clearAvailabilityOverride(
+    sourceId: string,
+    locationId?: string
+): Promise<CachedAvailability> {
+    const { data } = await api.delete<CachedAvailability>(
+        `${BASE}/availabilities/${sourceId}/override${qs(locationId)}`
+    );
+    return data;
+}
+
 // ── Sync ────────────────────────────────────────────────────────────────
 
 export async function triggerSync(locationId?: string): Promise<SyncResult> {

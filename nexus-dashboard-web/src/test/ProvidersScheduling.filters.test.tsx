@@ -73,6 +73,7 @@ function makeAvailability(overrides: Partial<CachedAvailability>): CachedAvailab
         synced: true,
         label_name: null,
         is_bookable_window: true,
+        types_overridden: false,
         source_metadata: null,
         synced_at: null,
         ...overrides,
@@ -128,7 +129,13 @@ function mountWith(availabilities: CachedAvailability[]) {
         // the "Work Windows" heading and the linking UI. Without it the page
         // renders in "Live Slots" mode and none of that exists.
         if (url.startsWith("/institution/setup/overview"))
-            return Promise.resolve({ data: { can_link_availability: true } })
+            return Promise.resolve({
+                data: {
+                    can_link_availability: true,
+                    can_create_work_windows: true,
+                    can_clear_working_window_override: false,
+                },
+            })
         if (url.startsWith("/institution/setup/availabilities")) return Promise.resolve({ data: availabilities })
         return Promise.resolve({ data: [] })
     })

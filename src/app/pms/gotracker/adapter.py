@@ -17,6 +17,7 @@ from src.app.pms.base import (
     PMSAdapter,
     SupportsAppointmentConfirmation,
     SupportsAppointmentTypeCreation,
+    SupportsWorkingWindowOverrides,
 )
 from src.app.pms.gotracker import mappers
 from src.app.pms.gotracker.client import GoTrackerAPIError, GoTrackerClient
@@ -40,6 +41,7 @@ class GoTrackerAdapter(
     PMSAdapter,
     SupportsAppointmentConfirmation,
     SupportsAppointmentTypeCreation,
+    SupportsWorkingWindowOverrides,
 ):
     source = "gotracker"
 
@@ -275,6 +277,71 @@ class GoTrackerAdapter(
         raw = await self._client.request("GET", "/api/scheduling/operatories")
         data = raw.get("data") if isinstance(raw.get("data"), list) else []
         return [mappers.to_operatory(item) for item in data]
+
+    # ── Working windows ─────────────────────────────────────────────────
+
+    async def list_availabilities(self, **kwargs: Any) -> list[dict]:
+        """List synced Tracker working windows, including their cloud override.
+
+        A working window is not a derived bookable slot.  ``working_window_id``
+        is stable across synchronizer refreshes and is the only ID accepted by
+        the override mutation endpoints.
+        """
+        provider_id = kwargs.pop("provider_id", None)
+        operatory_ids = kwargs.pop("operatory_ids", None)
+        kwargs.pop("ignore_past_dates", None)
+        start_date = kwargs.pop("start_date", None) or self._local_today()
+        days = int(kwargs.pop("days", 7))
+        if not 1 <= days <= 60:
+            raise ValueError("GoTracker working-window days must be between 1 and 60.")
+
+        params: dict[str, Any] = {"start_date": start_date, "days": days}
+        if provider_id:
+            params["provider_ids"] = str(mappers.strip(provider_id))
+        if operatory_ids:
+            raw_ids = [mappers.strip(value) for value in operatory_ids]
+            params["operatory_ids"] = ",".join(
+                str(value) for value in raw_ids if value
+            )
+
+        raw = await self._client.request(
+            "GET", "/api/scheduling/working_hours", params=params
+        )
+        rows = raw.get("data") if isinstance(raw.get("data"), list) else []
+        return [_to_working_window(row) for row in rows if isinstance(row, dict)]
+
+    async def update_availability(
+        self,
+        availability_id: str,
+        appointment_type_ids: list[str] | None = None,
+        days: list[str] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        operatory_id: str | None = None,
+        active: bool | None = None,
+    ) -> dict:
+        """Set a GoTracker window's cloud-only appointment-type override."""
+        if any(value is not None for value in (days, start_time, end_time, operatory_id, active)):
+            raise ValueError(
+                "GoTracker working windows are PMS-owned; only appointment-type overrides can be updated."
+            )
+        if appointment_type_ids is None:
+            raise ValueError("appointment_type_ids is required for a GoTracker override.")
+
+        raw = await self._client.request(
+            "PATCH",
+            f"/api/scheduling/working_hours/{mappers.strip(availability_id)}",
+            json={"appointment_type_ids": _strip_ids(appointment_type_ids)},
+        )
+        return _to_working_window(_data_object(raw, fallback_id=mappers.strip(availability_id)))
+
+    async def clear_availability_override(self, availability_id: str) -> dict:
+        """Remove a cloud override and expose Tracker's standing type links again."""
+        raw = await self._client.request(
+            "DELETE",
+            f"/api/scheduling/working_hours/{mappers.strip(availability_id)}/override",
+        )
+        return _to_working_window(_data_object(raw, fallback_id=mappers.strip(availability_id)))
 
     # ── Slots ────────────────────────────────────────────────────────────
 
@@ -766,3 +833,20 @@ def _list_data(raw: dict[str, Any], *, nested_key: str) -> list[dict[str, Any]]:
     if isinstance(raw.get(nested_key), list):
         return [item for item in raw[nested_key] if isinstance(item, dict)]
     return []
+
+
+def _to_working_window(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize the Synchronizer's working-window shape for setup routes."""
+    window_id = _first(raw, "working_window_id", "id")
+    return {
+        "id": window_id,
+        "provider_id": _first(raw, "ProviderId", "provider_id"),
+        "operatory_id": _first(raw, "OperatoryId", "operatory_id"),
+        "begin_time": _first(raw, "StartTime", "start_time"),
+        "end_time": _first(raw, "EndTime", "end_time"),
+        "specific_date": _first(raw, "WorkDate", "work_date"),
+        "appointment_type_ids": _first(raw, "appointment_type_ids") or [],
+        "active": True,
+        "synced": _first(raw, "Source", "source") == "synced",
+        "types_overridden": bool(_first(raw, "types_overridden")),
+    }

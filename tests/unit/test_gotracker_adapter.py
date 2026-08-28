@@ -10,6 +10,7 @@ import pytest
 from src.app.pms.gotracker.adapter import GoTrackerAdapter
 from src.app.pms.gotracker.client import GoTrackerAPIError, GoTrackerClient
 from src.app.pms.gotracker import mappers
+from src.app.pms.base import SupportsWorkingWindowOverrides
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 
 
@@ -43,6 +44,83 @@ def _adapter(client: FakeGoTrackerClient | None = None) -> GoTrackerAdapter:
             gotracker_product_key_encrypted="encrypted",
         ),
     )
+
+
+def test_gotracker_adapter_supports_working_window_overrides() -> None:
+    """Setup must read real work windows rather than derived bookable slots."""
+    assert isinstance(_adapter(), SupportsWorkingWindowOverrides)
+
+
+@pytest.mark.asyncio
+async def test_working_windows_use_stable_ids_and_override_endpoints() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.extend(
+        [
+            {
+                "code": True,
+                "data": [
+                    {
+                        "working_window_id": 519,
+                        "WorkDate": "2026-08-28",
+                        "ProviderId": 3,
+                        "OperatoryId": 3,
+                        "StartTime": "09:00:00",
+                        "EndTime": "17:30:00",
+                        "Source": "synced",
+                        "appointment_type_ids": [1, 2],
+                        "types_overridden": False,
+                    }
+                ],
+            },
+            {
+                "code": True,
+                "data": {
+                    "working_window_id": 519,
+                    "appointment_type_ids": [1],
+                    "types_overridden": True,
+                },
+            },
+            {
+                "code": True,
+                "data": {
+                    "working_window_id": 519,
+                    "appointment_type_ids": [1, 2],
+                    "types_overridden": False,
+                },
+            },
+        ]
+    )
+    adapter = _adapter(client)
+
+    windows = await adapter.list_availabilities(
+        provider_id="gt-3", start_date="2026-08-28", days=7
+    )
+    updated = await adapter.update_availability("gt-519", appointment_type_ids=["gt-1"])
+    cleared = await adapter.clear_availability_override("gt-519")
+
+    assert windows[0]["id"] == 519
+    assert windows[0]["appointment_type_ids"] == [1, 2]
+    assert windows[0]["types_overridden"] is False
+    assert client.calls[0] == {
+        "method": "GET",
+        "path": "/api/scheduling/working_hours",
+        "params": {"start_date": "2026-08-28", "days": 7, "provider_ids": "3"},
+        "json": None,
+    }
+    assert client.calls[1] == {
+        "method": "PATCH",
+        "path": "/api/scheduling/working_hours/519",
+        "params": {},
+        "json": {"appointment_type_ids": ["1"]},
+    }
+    assert updated["types_overridden"] is True
+    assert client.calls[2] == {
+        "method": "DELETE",
+        "path": "/api/scheduling/working_hours/519/override",
+        "params": {},
+        "json": None,
+    }
+    assert cleared["types_overridden"] is False
 
 
 def test_gotracker_mappers_prefix_ids_and_preserve_source() -> None:

@@ -23,6 +23,7 @@ import {
     listOperatories,
     createAvailability,
     updateAvailability,
+    clearAvailabilityOverride,
     previewBulkLinkRange,
     applyBulkLinkRange,
     updateProvider,
@@ -107,6 +108,8 @@ export default function ProvidersScheduling() {
     const [maxAge, setMaxAge] = useState<number | "">("")
     const [savingSettings, setSavingSettings] = useState(false)
     const [canLinkAvailability, setCanLinkAvailability] = useState(false)
+    const [canCreateWorkWindows, setCanCreateWorkWindows] = useState(false)
+    const [canClearWorkingWindowOverride, setCanClearWorkingWindowOverride] = useState(false)
     // NexHealth returns PMS notes and lunch breaks in the same collection as
     // real working windows. Only v3 labels them, so on v2 every row reports as
     // bookable and this toggle is inert. Shown by default: seeing "Lunch" on a
@@ -144,6 +147,8 @@ export default function ProvidersScheduling() {
                 listOperatories(locationId),
             ])
             setCanLinkAvailability(overview.can_link_availability)
+            setCanCreateWorkWindows(overview.can_create_work_windows)
+            setCanClearWorkingWindowOverride(overview.can_clear_working_window_override)
             setProviders(p)
             setAppointmentTypes(at)
             setOperatories(ops)
@@ -415,6 +420,7 @@ export default function ProvidersScheduling() {
                 ...editTarget,
                 appointment_type_ids: typeIds,
                 appointment_type_names: typeIds.map((id) => nameBySourceId.get(id) ?? id),
+                types_overridden: updated.types_overridden,
             }
             setAvailabilities((prev) =>
                 prev.map((a) => (a.source_id === merged.source_id ? merged : a))
@@ -423,6 +429,34 @@ export default function ProvidersScheduling() {
             setEditTarget(null)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to update"
+            toast.error(message)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const handleClearEditOverride = async () => {
+        if (!canManage || !editTarget) return
+        setSaving(true)
+        try {
+            const updated = await clearAvailabilityOverride(editTarget.source_id, locationId)
+            const nameBySourceId = new Map(appointmentTypes.map((at) => [at.source_id, at.name]))
+            const typeIds = updated.appointment_type_ids ?? []
+            const merged: CachedAvailability = {
+                ...editTarget,
+                appointment_type_ids: typeIds,
+                appointment_type_names: typeIds.map((id) => nameBySourceId.get(id) ?? id),
+                types_overridden: updated.types_overridden,
+            }
+            setAvailabilities((prev) =>
+                prev.map((availability) =>
+                    availability.source_id === merged.source_id ? merged : availability
+                )
+            )
+            toast.success("Restored the PMS appointment-type links")
+            setEditTarget(null)
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to restore PMS links"
             toast.error(message)
         } finally {
             setSaving(false)
@@ -627,6 +661,9 @@ export default function ProvidersScheduling() {
     // operatory_id), so resolve the display name from the operatories list by
     // source_id. Names can collide, so rows still show the ID alongside.
     const operatoryNameBySourceId = new Map(operatories.map((op) => [op.source_id, op.name]))
+    const appointmentTypeNameBySourceId = new Map(
+        appointmentTypes.map((appointmentType) => [appointmentType.source_id, appointmentType.name])
+    )
 
     const allBulkOperatoriesSelected =
         relevantOperatories.length > 0 &&
@@ -655,6 +692,9 @@ export default function ProvidersScheduling() {
     // dated list, so the two cannot drift apart visually.
     const renderWindow = (av: CachedAvailability) => {
         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
+        const appointmentTypeNames = (av.appointment_type_ids || []).map(
+            (id) => appointmentTypeNameBySourceId.get(id) ?? id
+        )
         const isPastDate = isAvailabilityExpired(av)
         const isWarning = canLinkAvailability && !hasTypes && !isPastDate
 
@@ -712,6 +752,11 @@ export default function ProvidersScheduling() {
                                     Manual
                                 </Badge>
                             )}
+                            {av.types_overridden && (
+                                <Badge variant="outline" className="text-xs border-violet-500/50 text-violet-700 dark:text-violet-300">
+                                    Type override
+                                </Badge>
+                            )}
                         </div>
                         {av.operatory_source_id && (
                             <div className={`flex items-center gap-1.5 text-sm ${mutedClass}`}>
@@ -736,7 +781,7 @@ export default function ProvidersScheduling() {
                             <div className={`text-sm ${normalClass}`}>
                                 <span className={mutedClass}>Appointment Types: </span>
                                 {hasTypes ? (
-                                    <span>{av.appointment_type_names?.join(", ")}</span>
+                                    <span>{appointmentTypeNames.join(", ")}</span>
                                 ) : (
                                     <span className="text-indigo-700 dark:text-indigo-300 font-medium">
                                         None linked
@@ -796,7 +841,7 @@ export default function ProvidersScheduling() {
                                         Link date range
                                     </Button>
                                 )}
-                                {canLinkAvailability && (
+                                {canCreateWorkWindows && (
                                     <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
                                         Create Work Window
                                     </Button>
@@ -1079,7 +1124,9 @@ export default function ProvidersScheduling() {
                                         ? selectedApptTypeId !== "all"
                                             ? "No work windows match this appointment type."
                                             : canManage
-                                                ? "No work windows found for this provider. Add one above."
+                                                ? canCreateWorkWindows
+                                                    ? "No work windows found for this provider. Add one above."
+                                                    : "No work windows found for this provider. Refresh from your PMS."
                                                 : "No work windows found for this provider."
                                         : "No live slots found for this provider in the next 7 days."}
                                 </p>
@@ -1361,6 +1408,11 @@ export default function ProvidersScheduling() {
                                 )}
                             </div>
                             <DialogFooter>
+                                {canClearWorkingWindowOverride && editTarget?.types_overridden && (
+                                    <Button variant="outline" onClick={handleClearEditOverride} disabled={saving}>
+                                        Use standing rules
+                                    </Button>
+                                )}
                                 <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
                                 <Button onClick={handleSaveEdit} disabled={saving}>
                                     {saving ? "Saving..." : "Save"}
@@ -1370,6 +1422,7 @@ export default function ProvidersScheduling() {
                     </Dialog>
 
                     {/* Create Work Window Dialog */}
+                    {canCreateWorkWindows && (
                     <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
                         <DialogContent className="max-w-md">
                             <DialogHeader>
@@ -1475,6 +1528,7 @@ export default function ProvidersScheduling() {
                             </DialogFooter>
                         </DialogContent>
                     </Dialog>
+                    )}
                 </>
             )}
         </div>

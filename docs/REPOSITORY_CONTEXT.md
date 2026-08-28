@@ -476,6 +476,13 @@ and stored-procedure implementation remain outside this repo**. This repo owns
 the PMS adapter contract, the cloud-facing GoTracker adapter/webhooks, and
 workflow behavior that must stay PMS-agnostic.
 
+For GoTracker-backed locations, Providers & Scheduling reads the Synchronizer's
+PMS-synced per-date working windows rather than synthesizing rows from available
+slots. Nexus can set a cloud-only appointment-type override for a stable working
+window ID and clear it to restore the provider/operatory standing rules. It must
+not create or alter the underlying window: Tracker remains the source of truth
+for its date, time, provider, and operatory.
+
 ---
 
 ## 6. Twilio & phone numbers
