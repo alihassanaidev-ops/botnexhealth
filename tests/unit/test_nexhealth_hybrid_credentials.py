@@ -16,6 +16,7 @@ def test_resolve_nexhealth_credential_prefers_institution_key(monkeypatch) -> No
     institution = SimpleNamespace(
         id="inst-1",
         nexhealth_api_key_encrypted="encrypted",
+        nexhealth_credential_mode="institution",
         nexhealth_api_key="clinic-key",
     )
 
@@ -26,11 +27,15 @@ def test_resolve_nexhealth_credential_prefers_institution_key(monkeypatch) -> No
     assert credential.api_key_hash == NexHealthRateLimiter.hash_api_key("clinic-key")
 
 
-def test_resolve_nexhealth_credential_falls_back_to_platform_key(monkeypatch) -> None:
+def test_resolve_nexhealth_credential_uses_platform_key_in_platform_mode(monkeypatch) -> None:
+    """Renamed: this is no longer a fallback. Platform mode is a declared choice,
+    and an institution set to use its own key now fails rather than falling back
+    — see test_nexhealth_credential_mode.py."""
     monkeypatch.setattr(dependencies.settings, "nexhealth_api_key", "platform-key")
     institution = SimpleNamespace(
         id="inst-1",
         nexhealth_api_key_encrypted=None,
+        nexhealth_credential_mode="platform",
         nexhealth_api_key=None,
     )
 
@@ -76,6 +81,7 @@ async def test_nexhealth_adapter_create_uses_institution_credential(monkeypatch)
         id="inst-1",
         slug="clinic",
         nexhealth_api_key_encrypted="encrypted",
+        nexhealth_credential_mode="institution",
         nexhealth_api_key="clinic-key",
     )
     location = SimpleNamespace(

@@ -96,7 +96,38 @@ class InstitutionService:
         return institution
 
     async def update(self, institution: Institution, **updates: Any) -> Institution:
-        """Update institution fields."""
+        """Update institution fields.
+
+        Enforces the NexHealth credential invariant here rather than in the route
+        so no caller can write a configuration the resolver will refuse: an
+        institution set to authenticate as itself must actually have a key.
+        Leaving that inconsistent used to be survivable because resolution fell
+        back to the platform key; it no longer does, by design.
+        """
+        from src.app.dependencies import (
+            INSTITUTION_CREDENTIAL_MODE,
+            VALID_CREDENTIAL_MODES,
+        )
+
+        mode = updates.get("nexhealth_credential_mode")
+        if mode is not None:
+            if mode not in VALID_CREDENTIAL_MODES:
+                raise ValueError(
+                    f"nexhealth_credential_mode must be one of "
+                    f"{sorted(VALID_CREDENTIAL_MODES)}, got {mode!r}"
+                )
+            if mode == INSTITUTION_CREDENTIAL_MODE:
+                # A key supplied in the same request counts; so does one already
+                # stored. Otherwise this would create a config that fails on the
+                # next NexHealth call rather than here.
+                incoming_key = updates.get("nexhealth_api_key")
+                if not incoming_key and not institution.nexhealth_api_key_encrypted:
+                    raise ValueError(
+                        "Cannot set nexhealth_credential_mode to "
+                        f"{INSTITUTION_CREDENTIAL_MODE!r} without a NexHealth API "
+                        "key: supply one in the same request, or leave the "
+                        "institution on the platform key."
+                    )
         # Fields that use encryption setters
         encrypted_fields = {
             "nexhealth_api_key",

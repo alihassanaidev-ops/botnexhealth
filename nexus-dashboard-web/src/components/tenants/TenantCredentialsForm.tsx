@@ -51,13 +51,17 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
         ok: boolean;
         message: string;
         credential_mode: string;
+        nexhealth_credential_mode?: "platform" | "institution";
         api_key_hash?: string | null;
     } | null>(null);
 
     const form = useForm<CredentialsFormValues>({
         resolver: zodResolver(credentialsSchema),
         defaultValues: {
-            credential_mode: institution.has_nexhealth_key ? "institution" : "platform",
+            // Read the stored choice, not "does a key exist". A clinic can be on the
+            // platform key with a stale key still on the row, and inferring would
+            // show the wrong mode.
+            credential_mode: institution.nexhealth_credential_mode ?? "platform",
             nexhealth_api_key: "",
         },
     });
@@ -67,7 +71,10 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
     // Reset form when institution data is refreshed (e.g. after save)
     useEffect(() => {
         form.reset({
-            credential_mode: institution.has_nexhealth_key ? "institution" : "platform",
+            // Read the stored choice, not "does a key exist". A clinic can be on the
+            // platform key with a stale key still on the row, and inferring would
+            // show the wrong mode.
+            credential_mode: institution.nexhealth_credential_mode ?? "platform",
             nexhealth_api_key: "",
         });
         setVerifiedKey(null);
@@ -91,6 +98,12 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                         payload[field] = val;
                     }
                 }
+            }
+            if (editingSection === "nexhealth") {
+                // Send the mode explicitly — the backend no longer infers it from
+                // whether a key is present, and refuses to fall back to the
+                // platform key for an institution set to use its own.
+                payload.nexhealth_credential_mode = values.credential_mode;
             }
             if (editingSection === "nexhealth" && values.credential_mode === "platform") {
                 payload.nexhealth_api_key = null;

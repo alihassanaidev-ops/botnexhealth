@@ -306,6 +306,9 @@ class InstitutionCreate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
+    # Which NexHealth account this institution authenticates as. Explicit:
+    # "platform" | "institution". Omitted means unchanged (or platform on create).
+    nexhealth_credential_mode: str | None = None
     location_limit: int = Field(
         1,
         ge=1,
@@ -332,6 +335,9 @@ class InstitutionUpdate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
+    # Which NexHealth account this institution authenticates as. Explicit:
+    # "platform" | "institution". Omitted means unchanged (or platform on create).
+    nexhealth_credential_mode: str | None = None
     location_limit: int | None = Field(None, ge=1, le=500)
 
     # Regulatory jurisdiction

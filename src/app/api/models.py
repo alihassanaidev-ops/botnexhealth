@@ -614,6 +614,10 @@ class InstitutionResponse(BaseModel):
 
     # Credential presence indicators
     has_nexhealth_key: bool
+    # Which NexHealth account this institution authenticates as: an explicit
+    # setting, so the UI can show the choice rather than inferring it from
+    # has_nexhealth_key.
+    nexhealth_credential_mode: str = "platform"
 
     has_system_nexhealth_key: bool
 
@@ -660,6 +664,9 @@ class InstitutionResponse(BaseModel):
             group_id=getattr(institution, "group_id", None),
             has_nexhealth_key=institution.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
+            nexhealth_credential_mode=getattr(
+                institution, "nexhealth_credential_mode", "platform"
+            ),
             has_gotracker_key=has_gotracker_key,
             has_retell_secret=has_retell_secret,
             user=user_resp

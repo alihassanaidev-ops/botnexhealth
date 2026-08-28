@@ -99,21 +99,76 @@ def _build_nexhealth_token_manager(
     return manager, redis_client
 
 
+# NexHealth credential modes. Stored on institutions.nexhealth_credential_mode
+# and chosen explicitly by a super admin — see resolve_nexhealth_credential for
+# why this is not inferred from whether a key is present.
+PLATFORM_CREDENTIAL_MODE = "platform"
+INSTITUTION_CREDENTIAL_MODE = "institution"
+VALID_CREDENTIAL_MODES = frozenset({PLATFORM_CREDENTIAL_MODE, INSTITUTION_CREDENTIAL_MODE})
+
+
+class NexHealthCredentialError(RuntimeError):
+    """An institution's NexHealth credential is unusable as configured.
+
+    Separate from a generic RuntimeError so callers can distinguish "this clinic
+    is misconfigured" from "the platform has no key at all".
+    """
+
+
 def resolve_nexhealth_credential(institution: Any | None = None) -> NexHealthCredentialContext:
-    """Resolve the NexHealth key for an institution with platform fallback."""
-    raw_key = None
+    """Resolve which NexHealth account an institution authenticates as.
+
+    The mode is an explicit super-admin choice stored on the institution, NOT
+    inferred from whether a key happens to be present. That distinction matters:
+    a silent fallback means a clinic configured for its own credential can run on
+    the shared platform account after a bad save, a failed decrypt, or a partial
+    admin update — and nothing breaks, so nobody notices. NexHealth's per-key
+    rate limit is then consumed by the wrong account, and because webhook
+    endpoints are owned by the authenticating key, a silent switch can orphan
+    that clinic's subscriptions.
+
+    So:
+      * ``institution``  — use the institution's stored key, and fail if it is
+        missing or undecryptable. Never borrow the platform key.
+      * ``platform`` — use the global key, and never read a stored institution
+        key even if one exists.
+    """
     institution_id = None
+    mode = PLATFORM_CREDENTIAL_MODE
+
     if institution is not None:
         institution_id = str(getattr(institution, "id", "")) or None
-        encrypted = getattr(institution, "nexhealth_api_key_encrypted", None)
-        if encrypted:
-            raw_key = institution.nexhealth_api_key
+        mode = getattr(institution, "nexhealth_credential_mode", None) or PLATFORM_CREDENTIAL_MODE
 
-    mode = "institution" if raw_key else "platform"
-    api_key = raw_key or settings.nexhealth_api_key
-    if not api_key:
-        source = "institution or platform" if institution is not None else "platform"
-        raise RuntimeError(f"NexHealth API key is not configured for {source}")
+    if mode not in VALID_CREDENTIAL_MODES:
+        raise NexHealthCredentialError(
+            f"Institution {institution_id or '<unknown>'} has an unrecognised "
+            f"NexHealth credential mode {mode!r}; expected one of "
+            f"{sorted(VALID_CREDENTIAL_MODES)}."
+        )
+
+    if mode == INSTITUTION_CREDENTIAL_MODE:
+        api_key = None
+        if institution is not None and getattr(institution, "nexhealth_api_key_encrypted", None):
+            # Decryption can fail on a rotated encryption key; treat that as
+            # missing rather than letting the exception surface as a 500.
+            try:
+                api_key = institution.nexhealth_api_key
+            except Exception:  # noqa: BLE001 - decrypt failure is a config problem
+                api_key = None
+        if not api_key:
+            raise NexHealthCredentialError(
+                f"Institution {institution_id or '<unknown>'} is set to use its own "
+                "NexHealth API key, but no usable key is stored. Refusing to fall "
+                "back to the platform key — set the key, or switch the "
+                "institution to platform mode."
+            )
+    else:
+        api_key = settings.nexhealth_api_key
+        if not api_key:
+            raise NexHealthCredentialError(
+                "NexHealth API key is not configured for the platform."
+            )
 
     api_key_hash = NexHealthRateLimiter.hash_api_key(api_key)
     return NexHealthCredentialContext(
