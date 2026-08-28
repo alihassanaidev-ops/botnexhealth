@@ -63,7 +63,7 @@ async def test_patient_search_pushes_identity_filters_to_synchronizer() -> None:
                     "ContactId": 603,
                     "FirstName": "Kiro",
                     "LastName": "Yt",
-                    "DateOfBirth": "1999-08-14",
+                    "BirthDate": "1999-08-14",
                     "Email": "kiro@gmail.com",
                     "Phone": "+12263500216",
                 }
@@ -80,6 +80,7 @@ async def test_patient_search_pushes_identity_filters_to_synchronizer() -> None:
     )
 
     assert [patient.id for patient in patients] == ["gt-603"]
+    assert patients[0].date_of_birth == "1999-08-14"
     assert client.calls == [
         {
             "method": "GET",
