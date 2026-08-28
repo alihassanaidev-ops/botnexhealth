@@ -238,6 +238,9 @@ binding is strictly **1 Retell agent ↔ 1 InstitutionLocation**.
   with `exclude_cancelled=true`, and returns a normalized
   `upcoming_appointments` list. Its appointment IDs retain the `gt-` prefix and
   are the only IDs a voice agent may pass to cancellation or rescheduling.
+  The initial GoTracker contact lookup likewise sends the caller's name, DOB,
+  email, and phone filters to the Synchronizer; Nexus must not search only a
+  locally fetched contacts page.
   GoTracker new-patient creation uses the Synchronizer's
   `POST /api/patients/` consumer write-back endpoint through the same shared
   `create_patient` handler; there is no GoTracker-specific Retell tool name.

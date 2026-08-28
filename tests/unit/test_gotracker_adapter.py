@@ -52,6 +52,51 @@ def test_gotracker_adapter_supports_working_window_overrides() -> None:
 
 
 @pytest.mark.asyncio
+async def test_patient_search_pushes_identity_filters_to_synchronizer() -> None:
+    """Patient lookup must search Tracker, not just Nexus's first contacts page."""
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {
+                    "ContactId": 603,
+                    "FirstName": "Kiro",
+                    "LastName": "Yt",
+                    "DateOfBirth": "1999-08-14",
+                    "Email": "kiro@gmail.com",
+                    "Phone": "+12263500216",
+                }
+            ],
+        }
+    )
+
+    patients = await _adapter(client).search_patients(
+        "kiro yt",
+        name="kiro yt",
+        email="kiro@gmail.com",
+        phone_number="2263500216",
+        date_of_birth="1999-08-14",
+    )
+
+    assert [patient.id for patient in patients] == ["gt-603"]
+    assert client.calls == [
+        {
+            "method": "GET",
+            "path": "/api/patients/getAllContacts",
+            "params": {
+                "name": "kiro yt",
+                "email": "kiro@gmail.com",
+                "phone_number": "2263500216",
+                "date_of_birth": "1999-08-14",
+                "page": 1,
+            },
+            "json": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_working_windows_use_stable_ids_and_override_endpoints() -> None:
     client = FakeGoTrackerClient()
     client.responses.extend(

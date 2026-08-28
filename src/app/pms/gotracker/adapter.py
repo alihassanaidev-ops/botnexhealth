@@ -84,45 +84,39 @@ class GoTrackerAdapter(
     # ── Patients ─────────────────────────────────────────────────────────
 
     async def search_patients(self, query: str, **kwargs: Any) -> list[UniversalPatient]:
-        patients = await self.list_patients(max_items=200)
-        needle_values = [
-            query,
-            kwargs.get("email"),
-            kwargs.get("phone_number"),
-            kwargs.get("name"),
-        ]
-        needles = [str(value).lower() for value in needle_values if value]
-        if not needles:
-            return [mappers.to_patient(row) for row in patients[:10]]
-
-        matches = []
-        for row in patients:
-            haystack = " ".join(
-                str(value).lower()
-                for value in (
-                    row.get("FirstName"),
-                    row.get("LastName"),
-                    row.get("Email"),
-                    row.get("Phone"),
-                    row.get("PhoneNumber"),
-                    row.get("CellPhone"),
-                    row.get("ContactId"),
-                )
-                if value
-            )
-            if any(needle in haystack for needle in needles):
-                matches.append(row)
-        return [mappers.to_patient(row) for row in matches[:10]]
+        # The Synchronizer indexes contact filters.  Searching a locally fetched
+        # first page misses newer patients when the clinic has more contacts
+        # than that page holds (the list is oldest-first).
+        patients = await self.list_patients(
+            name=kwargs.get("name") or query,
+            email=kwargs.get("email"),
+            phone_number=kwargs.get("phone_number"),
+            date_of_birth=kwargs.get("date_of_birth"),
+            max_items=10,
+        )
+        return [mappers.to_patient(row) for row in patients]
 
     async def list_patients(
         self,
         *,
         updated_since: str | None = None,
+        name: str | None = None,
+        email: str | None = None,
+        phone_number: str | None = None,
+        date_of_birth: str | None = None,
         max_items: int = 1000,
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {}
         if updated_since:
             params["since"] = updated_since
+        if name:
+            params["name"] = name
+        if email:
+            params["email"] = email
+        if phone_number:
+            params["phone_number"] = phone_number
+        if date_of_birth:
+            params["date_of_birth"] = date_of_birth
         return await self._fetch_all(
             "GET", "/api/patients/getAllContacts", params=params, max_items=max_items
         )
