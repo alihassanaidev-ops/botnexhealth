@@ -24,6 +24,7 @@ EXPECTED_NODE_TYPES = {
     "json_mapper",
     "llm",
     "condition",
+    "switch",
     "exit",
 }
 

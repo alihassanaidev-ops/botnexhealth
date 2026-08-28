@@ -9,8 +9,17 @@ import { CheckCircle2, CircleDashed, Clock3, XCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { NODE_META, TRIGGER_META } from "@/lib/workflow/catalog"
 import { humanizeSeconds } from "@/lib/workflow/test-run"
-import type { FlowNode } from "@/lib/workflow/graph"
-import type { WorkflowNode as WfNode, WorkflowTrigger } from "@/types/workflow"
+import {
+    SWITCH_DEFAULT_HANDLE,
+    switchCaseHandle,
+    type FlowNode,
+} from "@/lib/workflow/graph"
+import type {
+    FilterExpression,
+    WorkflowNode as WfNode,
+    WorkflowTrigger,
+} from "@/types/workflow"
+import { FILTER_OP_LABELS, OPS_WITHOUT_VALUE } from "@/lib/workflow/filter-ops"
 
 const HANDLE = "!h-2 !w-2 !border !border-background !bg-muted-foreground/70"
 
@@ -77,7 +86,11 @@ function stepSummary(node: WfNode): string {
         case "llm":
             return `${node.source_field} → ${node.output_field}`
         case "condition":
-            return `${node.rules.length} rule(s) · ${node.logic ?? "AND"}`
+            return node.filter
+                ? describeFilter(node.filter)
+                : `${(node.rules ?? []).length} rule(s) · ${node.logic ?? "AND"}`
+        case "switch":
+            return `${node.cases.length} case(s)${node.subject ? ` on ${node.subject}` : ""}`
         case "exit":
             return node.outcome ? `Outcome: ${node.outcome}` : "End of sequence"
     }
@@ -203,9 +216,53 @@ export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     <Handle id="true" type="source" position={Position.Bottom} style={{ left: "38%" }} className={HANDLE} />
                     <Handle id="false" type="source" position={Position.Bottom} style={{ left: "62%" }} className={HANDLE} />
                 </>
+            ) : node.type === "switch" ? (
+                <>
+                    {/* One port per case plus the fallback, spread evenly along the
+                        bottom edge so a many-case switch stays draggable. */}
+                    {node.cases.map((switchCase, index) => (
+                        <Handle
+                            key={switchCaseHandle(index)}
+                            id={switchCaseHandle(index)}
+                            type="source"
+                            position={Position.Bottom}
+                            title={switchCase.label}
+                            style={{ left: handleOffset(index, node.cases.length + 1) }}
+                            className={HANDLE}
+                        />
+                    ))}
+                    <Handle
+                        id={SWITCH_DEFAULT_HANDLE}
+                        type="source"
+                        position={Position.Bottom}
+                        title="Otherwise"
+                        style={{ left: handleOffset(node.cases.length, node.cases.length + 1) }}
+                        className={HANDLE}
+                    />
+                </>
             ) : node.type !== "exit" ? (
                 <Handle type="source" position={Position.Bottom} className={HANDLE} />
             ) : null}
         </div>
     )
+}
+
+/** Compact one-line gist of a filter for the node card. */
+function describeFilter(expression: FilterExpression): string {
+    if (expression.kind === "group") {
+        const joiner = expression.op === "or" ? "any" : expression.op === "not" ? "none" : "all"
+        return `${joiner} of ${expression.children.length} condition(s)`
+    }
+    const op = FILTER_OP_LABELS[expression.op]
+    const field = expression.field || "field"
+    if (OPS_WITHOUT_VALUE.has(expression.op)) return `${field} ${op}`
+    const value = Array.isArray(expression.value)
+        ? expression.value.join(", ")
+        : String(expression.value ?? "")
+    return `${field} ${op} ${value}`.trim()
+}
+
+/** Evenly spread `total` source handles across the node's bottom edge. */
+function handleOffset(index: number, total: number): string {
+    return `${((index + 1) / (total + 1)) * 100}%`
 }

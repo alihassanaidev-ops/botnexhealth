@@ -219,9 +219,26 @@ function describe(
                     node_id: node.id,
                     node_type: "condition",
                     summary: `Condition → ${branch}`,
-                    detail: `Simulated branch: ${branch} (${node.rules.length} rule(s), ${node.logic ?? "AND"}).`,
+                    detail: node.filter
+                        ? `Simulated branch: ${branch}.`
+                        : `Simulated branch: ${branch} (${(node.rules ?? []).length} rule(s), ${node.logic ?? "AND"}).`,
                 },
                 next: takeTrue ? node.true_next_node_id : node.false_next_node_id,
+            }
+        }
+        case "switch": {
+            // The preview walks the fallback branch: without live context there
+            // is nothing to match a case against, and guessing the first case
+            // would misrepresent what the run will do.
+            const subject = node.subject ? ` on ${node.subject}` : ""
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "switch",
+                    summary: `Switch${subject} → Otherwise`,
+                    detail: `${node.cases.length} case(s): ${node.cases.map((c) => c.label).join(", ")}.`,
+                },
+                next: node.default_next_node_id,
             }
         }
         case "exit":

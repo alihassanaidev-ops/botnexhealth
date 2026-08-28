@@ -58,10 +58,9 @@ def test_nexhealth_cancelled_appointment_reports_cancelled_status() -> None:
 
 
 def test_template_entry_condition_passes_on_nexhealth_metadata() -> None:
-    """End-to-end on the rule set: the live template must be eligible."""
+    """End-to-end on the trigger filter: the live template must be eligible."""
     template = TEMPLATES["surgery-pre-appointment-confirmation"]
-    nodes = {node["id"]: node for node in template.definition["nodes"]}
-    rules = nodes["check-eligible-reason"]["rules"]
+    rules = template.definition["trigger"]["filter"]["children"]
 
     metadata = _metadata()
     status_rule = next(r for r in rules if r["field"] == "appointment_status")
