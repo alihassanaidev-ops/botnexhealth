@@ -17,10 +17,20 @@ matrices are checked into
 (one JSON per PMS). Check there first when a clinic on a particular PMS reports
 a feature "not working".
 
+For the step-by-step clinic setup runbook, see
+[NEXHEALTH_CLINIC_ONBOARDING.md](NEXHEALTH_CLINIC_ONBOARDING.md).
+
 ## Account model
 
-One platform-level NexHealth account/API key for all clinics. Per-clinic
-isolation comes entirely from two values on each `InstitutionLocation`:
+NexHealth runs in hybrid credential mode:
+
+- **Platform key** — the default path. Clinics use the platform-level
+  NexHealth developer account/API key from `NEXHEALTH_API_KEY`.
+- **Institution key** — optional. If `institutions.nexhealth_api_key_encrypted`
+  is present, all NexHealth traffic for that institution uses the clinic/DSO
+  key instead of the platform key.
+
+Per-clinic routing still comes from two values on each `InstitutionLocation`:
 
 - `nexhealth_subdomain` — NexHealth's own tenant partition
 - `nexhealth_location_id` — the location within that subdomain
@@ -30,8 +40,11 @@ mandatory on every PMS-touching route — for a multi-location institution there
 is no "default" location, because guessing one would silently route bookings
 into the wrong clinic's PMS (`src/app/pms/factory.py:91-99`).
 
-`institutions.nexhealth_api_key_encrypted` exists for a future per-clinic
-credential model but is not currently used by the adapter path.
+The token cache and rate limiter are keyed by a non-secret SHA-256 fingerprint
+of the selected API key, so clinic-owned keys get separate bearer tokens and
+separate rate-limit buckets. Webhook subscription lifecycle rows also record
+the credential mode/hash that created the remote endpoint so credential changes
+can be handled as an explicit migration.
 
 ## Auth and token lifecycle
 

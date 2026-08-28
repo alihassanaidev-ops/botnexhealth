@@ -41,8 +41,11 @@ async def get_adapter_for_institution_location(
         )
 
     if pms_type == "nexhealth":
-        if not settings.nexhealth_api_key:
-            raise ValueError("NEXHEALTH_API_KEY is not configured")
+        if (
+            not getattr(institution, "nexhealth_api_key_encrypted", None)
+            and not settings.nexhealth_api_key
+        ):
+            raise ValueError("NexHealth API key is not configured")
 
         from src.app.pms.nexhealth.adapter import NexHealthAdapter
 

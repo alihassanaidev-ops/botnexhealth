@@ -48,7 +48,12 @@ from src.app.api.models import (
     InstitutionResponse,
 )
 from src.app.api.helpers import handle_nexhealth_request
-from src.app.dependencies import get_nexhealth_client_dependency
+from src.app.dependencies import (
+    NexHealthCredentialContext,
+    get_nexhealth_client_dependency,
+    get_nexhealth_client_for_credential,
+    resolve_nexhealth_credential,
+)
 from src.app.nexhealth.client import NexHealthClient
 
 logger = logging.getLogger(__name__)
@@ -409,6 +414,9 @@ class InstitutionCreate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
+    # Which NexHealth account this institution authenticates as. Explicit:
+    # "platform" | "institution". Omitted means unchanged (or platform on create).
+    nexhealth_credential_mode: str | None = None
     location_limit: int = Field(
         1,
         ge=1,
@@ -435,10 +443,31 @@ class InstitutionUpdate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
+    # Which NexHealth account this institution authenticates as. Explicit:
+    # "platform" | "institution". Omitted means unchanged (or platform on create).
+    nexhealth_credential_mode: str | None = None
     location_limit: int | None = Field(None, ge=1, le=500)
 
     # Regulatory jurisdiction
     jurisdiction: Jurisdiction | None = None
+
+
+class NexHealthCredentialVerifyRequest(BaseModel):
+    """Verify a platform or clinic-owned NexHealth credential."""
+
+    nexhealth_api_key: str | None = None
+    subdomain: str | None = None
+    location_id: str | None = None
+
+
+class NexHealthCredentialVerifyResponse(BaseModel):
+    ok: bool
+    credential_mode: Literal["platform", "institution", "provided"]
+    api_key_hash: str | None = None
+    subdomain: str | None = None
+    location_id: str | None = None
+    location_found: bool = False
+    message: str
 
 
 # =============================================================================
@@ -467,6 +496,129 @@ async def list_nexhealth_locations(
         params["subdomain"] = subdomain
 
     return await handle_nexhealth_request(client, "GET", "/locations", params=params)
+
+
+@router.get("/{slug}/nexhealth/locations", response_model=InstitutionBasicListResponse)
+async def list_institution_nexhealth_locations(
+    slug: str,
+    _: User = Depends(get_current_admin),
+    subdomain: str | None = None,
+) -> dict[str, Any]:
+    """List NexHealth locations using this institution's selected credential."""
+    async with get_db_session() as session:
+        institution = await InstitutionService(session).get_by_slug(
+            slug, include_inactive=True
+        )
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        credential = resolve_nexhealth_credential(institution)
+        client = await get_nexhealth_client_for_credential(credential)
+        params = {}
+        if subdomain:
+            params["subdomain"] = subdomain
+        return await handle_nexhealth_request(client, "GET", "/locations", params=params)
+
+
+def _nexhealth_location_response_contains_id(
+    payload: dict[str, Any],
+    location_id: str | None,
+) -> bool:
+    """Return true when a /locations response contains the configured location."""
+    if not location_id:
+        return False
+
+    expected = str(location_id)
+
+    def walk(value: Any) -> bool:
+        if isinstance(value, dict):
+            if str(value.get("id", "")) == expected and (
+                "locations" not in value or "subdomain" not in value
+            ):
+                return True
+            locations = value.get("locations")
+            if isinstance(locations, list) and any(walk(item) for item in locations):
+                return True
+            return any(walk(v) for k, v in value.items() if k != "locations")
+        if isinstance(value, list):
+            return any(walk(item) for item in value)
+        return False
+
+    return walk(payload.get("data", payload))
+
+
+@router.post("/{slug}/nexhealth/verify", response_model=NexHealthCredentialVerifyResponse)
+async def verify_institution_nexhealth_credentials(
+    slug: str,
+    data: NexHealthCredentialVerifyRequest,
+    _: User = Depends(get_current_admin),
+) -> NexHealthCredentialVerifyResponse:
+    """Verify that a NexHealth key can access the configured subdomain/location."""
+    from src.app.nexhealth.rate_limit import NexHealthRateLimiter
+
+    async with get_db_session() as session:
+        institution = await InstitutionService(session).get_by_slug(
+            slug, include_inactive=True
+        )
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        if data.nexhealth_api_key:
+            api_key_hash = NexHealthRateLimiter.hash_api_key(data.nexhealth_api_key)
+            credential = NexHealthCredentialContext(
+                mode="provided",
+                api_key=data.nexhealth_api_key,
+                api_key_hash=api_key_hash,
+                institution_id=str(institution.id),
+            )
+        else:
+            credential = resolve_nexhealth_credential(institution)
+
+        try:
+            client = await get_nexhealth_client_for_credential(credential)
+            params: dict[str, Any] = {}
+            if data.subdomain:
+                params["subdomain"] = data.subdomain
+            payload = await handle_nexhealth_request(
+                client,
+                "GET",
+                "/locations",
+                params=params,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return NexHealthCredentialVerifyResponse(
+                ok=False,
+                credential_mode=credential.mode,  # type: ignore[arg-type]
+                api_key_hash=credential.api_key_hash,
+                subdomain=data.subdomain,
+                location_id=data.location_id,
+                message=f"NexHealth verification failed: {type(exc).__name__}",
+            )
+
+        location_found = _nexhealth_location_response_contains_id(
+            payload, data.location_id
+        )
+        ok = data.location_id is None or location_found
+        message = (
+            "NexHealth credential verified"
+            if ok
+            else "Credential authenticated, but location_id was not found"
+        )
+        return NexHealthCredentialVerifyResponse(
+            ok=ok,
+            credential_mode=credential.mode,  # type: ignore[arg-type]
+            api_key_hash=credential.api_key_hash,
+            subdomain=data.subdomain,
+            location_id=data.location_id,
+            location_found=location_found,
+            message=message,
+        )
 
 
 @router.get("/audit-logs", response_model=AuditLogPaginatedResponse)

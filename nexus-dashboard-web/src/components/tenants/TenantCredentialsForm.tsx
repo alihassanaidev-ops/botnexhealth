@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { KeyRound, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, KeyRound, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Form,
@@ -16,6 +16,14 @@ import { Input } from "@/components/ui/input";
 import {
     Card,
 } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import {
@@ -26,6 +34,7 @@ import {
 import type { InstitutionDetail, InstitutionProvisioningStatus } from "@/types";
 
 const credentialsSchema = z.object({
+    credential_mode: z.enum(["platform", "institution"]),
     nexhealth_api_key: z.string().optional(),
 });
 
@@ -229,19 +238,40 @@ function TwilioCredentialsCard({ institutionSlug }: { institutionSlug: string })
 export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCredentialsFormProps) {
     const [editingSection, setEditingSection] = useState<SectionKey | null>(null);
     const [isSaving, setIsSaving] = useState(false);
+    const [isVerifying, setIsVerifying] = useState(false);
+    const [verifiedKey, setVerifiedKey] = useState<string | null>(null);
+    const [verification, setVerification] = useState<{
+        ok: boolean;
+        message: string;
+        credential_mode: string;
+        nexhealth_credential_mode?: "platform" | "institution";
+        api_key_hash?: string | null;
+    } | null>(null);
 
     const form = useForm<CredentialsFormValues>({
         resolver: zodResolver(credentialsSchema),
         defaultValues: {
+            // Read the stored choice, not "does a key exist". A clinic can be on the
+            // platform key with a stale key still on the row, and inferring would
+            // show the wrong mode.
+            credential_mode: institution.nexhealth_credential_mode ?? "platform",
             nexhealth_api_key: "",
         },
     });
+    const credentialMode = form.watch("credential_mode");
+    const clinicApiKey = form.watch("nexhealth_api_key")?.trim() || "";
 
     // Reset form when institution data is refreshed (e.g. after save)
     useEffect(() => {
         form.reset({
+            // Read the stored choice, not "does a key exist". A clinic can be on the
+            // platform key with a stale key still on the row, and inferring would
+            // show the wrong mode.
+            credential_mode: institution.nexhealth_credential_mode ?? "platform",
             nexhealth_api_key: "",
         });
+        setVerifiedKey(null);
+        setVerification(null);
     }, [institution, form]);
 
     async function onSubmit(values: CredentialsFormValues) {
@@ -262,6 +292,26 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                     }
                 }
             }
+            if (editingSection === "nexhealth") {
+                // Send the mode explicitly — the backend no longer infers it from
+                // whether a key is present, and refuses to fall back to the
+                // platform key for an institution set to use its own.
+                payload.nexhealth_credential_mode = values.credential_mode;
+            }
+            if (editingSection === "nexhealth" && values.credential_mode === "platform") {
+                payload.nexhealth_api_key = null;
+            }
+            if (editingSection === "nexhealth" && values.credential_mode === "institution") {
+                const key = values.nexhealth_api_key?.trim() || "";
+                if (!institution.has_nexhealth_key && !key) {
+                    toast.error("Enter and verify a clinic API key before saving");
+                    return;
+                }
+                if (key && verifiedKey !== key) {
+                    toast.error("Verify this clinic API key before saving");
+                    return;
+                }
+            }
 
             if (Object.keys(payload).length === 0) {
                 toast.info("No changes to save");
@@ -272,6 +322,8 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
             await api.patch(`/admin/institutions/${institution.slug}`, payload);
             toast.success("Credentials updated");
             setEditingSection(null);
+            setVerifiedKey(null);
+            setVerification(null);
             onUpdated();
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
@@ -302,6 +354,37 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
             </div>
         );
     };
+
+    async function handleVerify() {
+        const apiKey = form.getValues("nexhealth_api_key")?.trim();
+        if (credentialMode === "institution" && !institution.has_nexhealth_key && !apiKey) {
+            toast.error("Enter an API key before verifying");
+            return;
+        }
+
+        setIsVerifying(true);
+        setVerifiedKey(null);
+        setVerification(null);
+        try {
+            const { data } = await api.post(`/admin/institutions/${institution.slug}/nexhealth/verify`, {
+                nexhealth_api_key: apiKey || undefined,
+            });
+            setVerification(data);
+            if (data.ok) {
+                setVerifiedKey(apiKey || "__stored_or_platform__");
+                toast.success("NexHealth credentials verified");
+            } else {
+                toast.error(data.message || "NexHealth verification failed");
+            }
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            const message = error?.response?.data?.detail || "NexHealth verification failed";
+            setVerification({ ok: false, message, credential_mode: credentialMode });
+            toast.error(message);
+        } finally {
+            setIsVerifying(false);
+        }
+    }
 
     const CredentialCard = ({
         title,
@@ -379,29 +462,99 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                         hasSystemKey={institution.has_system_nexhealth_key}
                     >
                         <div className="grid gap-4">
+                            <div className="grid gap-2">
+                                <Label>Credential Mode</Label>
+                                <Select
+                                    value={credentialMode}
+                                    onValueChange={(value) => {
+                                        form.setValue("credential_mode", value as CredentialsFormValues["credential_mode"]);
+                                        setVerifiedKey(null);
+                                        setVerification(null);
+                                    }}
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="platform">
+                                            Platform key
+                                        </SelectItem>
+                                        <SelectItem value="institution">
+                                            Clinic-owned key
+                                        </SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            {credentialMode === "institution" && (
                             <FormField
                                 control={form.control}
                                 name="nexhealth_api_key"
                                 render={({ field }) => (
                                     <FormItem>
-                                        <FormLabel>API Key</FormLabel>
+                                        <FormLabel>Clinic API Key</FormLabel>
                                         <FormControl>
                                             <Input
                                                 type="password"
                                                 placeholder={institution.has_nexhealth_key ? "••••••••" : "Enter API key"}
-                                                {...field}
+                                                onChange={(event) => {
+                                                    field.onChange(event);
+                                                    setVerifiedKey(null);
+                                                    setVerification(null);
+                                                }}
+                                                value={field.value}
+                                                onBlur={field.onBlur}
+                                                name={field.name}
+                                                ref={field.ref}
                                             />
                                         </FormControl>
                                         <FormMessage />
                                     </FormItem>
                                 )}
                             />
+                            )}
+                            <div className="flex flex-wrap items-center gap-3">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleVerify}
+                                    disabled={isVerifying}
+                                >
+                                    {isVerifying ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : verification?.ok ? (
+                                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                                    ) : (
+                                        <AlertCircle className="mr-2 h-4 w-4" />
+                                    )}
+                                    {isVerifying ? "Verifying..." : "Verify Key"}
+                                </Button>
+                                {verification && (
+                                    <span className={`text-xs font-medium ${verification.ok ? "text-green-600" : "text-destructive"}`}>
+                                        {verification.message}
+                                    </span>
+                                )}
+                            </div>
                         </div>
                     </CredentialCard>
 
                     {editingSection && (
                         <div className="flex items-center justify-end pt-2">
-                            <Button type="submit" disabled={isSaving} size="sm">
+                            <Button
+                                type="submit"
+                                disabled={
+                                    isSaving ||
+                                    (
+                                        editingSection === "nexhealth" &&
+                                        credentialMode === "institution" &&
+                                        (
+                                            (!institution.has_nexhealth_key && !clinicApiKey) ||
+                                            (!!clinicApiKey && verifiedKey !== clinicApiKey)
+                                        )
+                                    )
+                                }
+                                size="sm"
+                            >
                                 {isSaving ? "Saving..." : "Save Changes"}
                             </Button>
                         </div>

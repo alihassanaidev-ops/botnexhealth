@@ -65,6 +65,8 @@ class NexHealthWebhookSubscription(Base):
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
     provider_subscription_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    credential_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    api_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(
         String(32),
         nullable=False,

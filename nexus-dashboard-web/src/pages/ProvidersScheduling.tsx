@@ -74,7 +74,6 @@ export default function ProvidersScheduling() {
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
     const [showExpired, setShowExpired] = useState(false)
-    const [showRecurring, setShowRecurring] = useState(false)
     // Opens on the coming week: that's what a front-desk operator is working on,
     // and it keeps the default view to a page or two instead of thousands of
     // pre-expanded rows. Wider presets are one click away in the picker.
@@ -551,7 +550,6 @@ export default function ProvidersScheduling() {
                 // real working windows; only v3 labels them, so on v2 this is
                 // a no-op.
                 .filter((av) => showNonBookable || isBookableWindow(av))
-                .filter((av) => showRecurring || !isRecurring(av))
                 .filter((av) => showExpired || matchesRange(av, dateRange))
                 .filter(
                     (av) =>
@@ -565,7 +563,7 @@ export default function ProvidersScheduling() {
                         av.operatory_source_id === selectedOperatoryId
                 ),
         [
-            availabilities, showExpired, showRecurring, dateRange, showNonBookable,
+            availabilities, showExpired, dateRange, showNonBookable,
             canLinkAvailability, selectedApptTypeId, selectedOperatoryId,
         ]
     )
@@ -614,11 +612,11 @@ export default function ProvidersScheduling() {
         setPage(0)
     }, [
         selectedProviderId, selectedApptTypeId, selectedOperatoryId,
-        dateRange, showNonBookable, showExpired, showRecurring,
+        dateRange, showNonBookable, showExpired,
     ])
 
-    // These toggles widen rather than narrow from their defaults, so they don't
-    // count toward the "(filtered)" label or the Clear button.
+    // `showExpired` and `showNonBookable` widen rather than narrow, so they
+    // don't count toward the "(filtered)" label or the Clear button.
     const hasNarrowingFilter =
         selectedApptTypeId !== "all" ||
         selectedOperatoryId !== "all" ||
@@ -1104,16 +1102,6 @@ export default function ProvidersScheduling() {
                                     />
                                     Show expired
                                 </label>
-
-                                {canLinkAvailability && (
-                                    <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                                        <Checkbox
-                                            checked={showRecurring}
-                                            onCheckedChange={(checked) => setShowRecurring(checked === true)}
-                                        />
-                                        Show recurring
-                                    </label>
-                                )}
 
                                 {canLinkAvailability && (
                                     <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">

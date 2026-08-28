@@ -165,6 +165,11 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "PATCH /api/retell-sms/profiles/{profile_id}",
         "DELETE /api/retell-sms/profiles/{profile_id}",
         "GET /api/admin/institutions/nexhealth/locations",
+        # Per-institution NexHealth credential management. Both guard on
+        # get_current_admin, so SUPER_ADMIN only — they read and verify a
+        # clinic's own API key.
+        "GET /api/admin/institutions/{slug}/nexhealth/locations",
+        "POST /api/admin/institutions/{slug}/nexhealth/verify",
         "GET /api/admin/institutions/audit-logs",
         "GET /api/admin/institutions",
         "POST /api/admin/institutions",

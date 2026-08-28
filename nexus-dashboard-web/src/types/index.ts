@@ -43,6 +43,9 @@ export interface InstitutionDetail {
     group_id?: string | null;
 
     has_nexhealth_key: boolean;
+    /** Which NexHealth account this institution authenticates as.
+     *  An explicit setting — do not infer it from has_nexhealth_key. */
+    nexhealth_credential_mode?: "platform" | "institution";
     has_system_nexhealth_key: boolean;
     has_gotracker_key: boolean;
     has_retell_secret: boolean;

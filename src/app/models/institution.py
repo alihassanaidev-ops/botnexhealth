@@ -220,6 +220,15 @@ class Institution(Base):
 
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Which NexHealth account this institution's traffic authenticates as.
+    # An explicit super-admin choice, NOT inferred from whether a key happens to
+    # be stored: "institution" with a missing or undecryptable key must fail loudly
+    # rather than quietly borrowing the shared platform account.
+    #   platform — use the global NEXHEALTH_API_KEY
+    #   institution — use this institution's stored key, and only that
+    nexhealth_credential_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="platform", default="platform"
+    )
 
     # Twilio sub-account credentials (encrypted) — per-institution outbound SMS
     twilio_account_sid_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)

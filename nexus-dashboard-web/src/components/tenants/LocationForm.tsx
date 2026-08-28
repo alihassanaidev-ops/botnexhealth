@@ -213,7 +213,9 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
         async function fetchNHLocations() {
             setIsLoadingNH(true);
             try {
-                const { data } = await api.get<InstitutionBasicListResponse>("/admin/institutions/nexhealth/locations");
+                const { data } = await api.get<InstitutionBasicListResponse>(
+                    `/admin/institutions/${institutionSlug}/nexhealth/locations`
+                );
                 setNexHealthInstitutions(data.data);
             } catch {
                 // Silently fail — NexHealth locations are optional hints
@@ -222,7 +224,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
             }
         }
         fetchNHLocations();
-    }, [isNexHealth]);
+    }, [isNexHealth, institutionSlug]);
 
     // Fetch Twilio phone numbers on mount
     useEffect(() => {
