@@ -49,10 +49,49 @@ describe("StepConfigPanel appointment-state trigger", () => {
 
         expect(screen.getByLabelText("Chair Flow states")).toHaveValue("Completed")
         expect(screen.getByLabelText("Latest follow-up window (hours after flow change)")).toHaveValue(72)
-        expect(screen.getByText("GoTracker status (optional AND filter)")).toBeInTheDocument()
-        expect(screen.getByText("Any status")).toBeInTheDocument()
         expect(screen.getAllByText("Do not restrict")).toHaveLength(2)
         expect(screen.getByText(/combined with it using AND/)).toBeInTheDocument()
+
+        // Statuses are a multi-select over the served catalog, so several can be
+        // matched at once. An empty selection means "any status".
+        const statuses = screen.getByRole("group", {
+            name: "GoTracker statuses (optional filter)",
+        })
+        expect(statuses).toBeInTheDocument()
+        expect(screen.getByText("Any status matches.")).toBeInTheDocument()
+        expect(screen.getByRole("checkbox", { name: "Booked" })).not.toBeChecked()
+        expect(screen.getByRole("checkbox", { name: "Cancelled" })).not.toBeChecked()
+    })
+
+    it("matches several statuses at once, which a single-select could not express", async () => {
+        const onTriggerChange = vi.fn()
+        const user = userEvent.setup()
+        render(<TriggerPanelHarness onTriggerChange={onTriggerChange} />)
+
+        await user.click(screen.getByRole("checkbox", { name: "Cancelled" }))
+        expect(onTriggerChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({ status_ids: [3] }),
+        )
+
+        await user.click(screen.getByRole("checkbox", { name: "No Show" }))
+        expect(onTriggerChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({ status_ids: [3, 5] }),
+        )
+
+        // Order follows the catalog, not the click order, so the same selection
+        // always serializes identically.
+        await user.click(screen.getByRole("checkbox", { name: "Booked" }))
+        expect(onTriggerChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({ status_ids: [1, 3, 5] }),
+        )
+
+        // Unchecking returns to "any status".
+        await user.click(screen.getByRole("checkbox", { name: "Booked" }))
+        await user.click(screen.getByRole("checkbox", { name: "Cancelled" }))
+        await user.click(screen.getByRole("checkbox", { name: "No Show" }))
+        expect(onTriggerChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({ status_ids: [] }),
+        )
     })
 
     it("writes edited Chair Flow states and deadline back to the trigger definition", async () => {

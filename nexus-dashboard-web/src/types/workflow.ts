@@ -22,6 +22,7 @@ export type TriggerType =
     | "callback_requested"
     | "patient_status_changed"
     | "sms_reply"
+    | "email_reply"
 
 export interface AppointmentOffsetTrigger {
     type: "appointment_offset"
@@ -65,6 +66,16 @@ export interface SmsReplyTrigger {
     tokens?: string[]
     campaign_goal?: string | null
 }
+/**
+ * The email counterpart to SmsReplyTrigger. Only replies routed to a known
+ * clinic reach it — unattributable mail is held, never enrolled.
+ */
+export interface EmailReplyTrigger {
+    type: "email_reply"
+    /** Optional whole-token filters. Empty means any routed inbound email. */
+    tokens?: string[]
+    campaign_goal?: string | null
+}
 
 export type WorkflowTrigger =
     | AppointmentOffsetTrigger
@@ -75,6 +86,7 @@ export type WorkflowTrigger =
     | CallbackRequestedTrigger
     | PatientStatusChangedTrigger
     | SmsReplyTrigger
+    | EmailReplyTrigger
 
 // ---------------------------------------------------------------------------
 // Wait delay (discriminated on `delay_type`)
@@ -138,7 +150,17 @@ export interface SmsReplyWaitConfig {
     response_window_seconds?: number
     response_mappings?: SmsResponseMapping[]
 }
-export type WaitForConfig = TimeWaitConfig | SmsReplyWaitConfig
+/**
+ * Park the run until the patient replies to the email, or the window closes.
+ * The default window is a week rather than SMS's three days — email is answered
+ * on a slower rhythm and a weekend must not read as a non-response.
+ */
+export interface EmailReplyWaitConfig {
+    type: "email_reply"
+    response_window_seconds?: number
+    response_mappings?: SmsResponseMapping[]
+}
+export type WaitForConfig = TimeWaitConfig | SmsReplyWaitConfig | EmailReplyWaitConfig
 export interface WaitNode {
     type: "wait"
     id: string
@@ -185,6 +207,15 @@ export interface SendVoiceNode {
     respect_quiet_hours?: boolean
     max_attempts?: number
     patient_voice_cooldown_hours?: number
+    /**
+     * What to do when the cross-run patient cooldown blocks this call.
+     * `skip` (default) abandons the attempt; `defer` waits for the cooldown to
+     * expire, optionally bounded by a deadline held in run context. The live
+     * post-op campaign uses `defer`.
+     */
+    patient_voice_cooldown_behavior?: "skip" | "defer"
+    /** Context field holding the deadline that bounds a `defer`. */
+    patient_voice_cooldown_deadline_field?: string | null
     phone_country_code_enabled?: boolean
     phone_country_region?: string | null
     wait_for_outcome?: boolean

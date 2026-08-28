@@ -50,6 +50,7 @@ from src.app.services.automation.campaign_analytics_service import (
     CampaignAnalyticsService,
     resolve_window,
 )
+from src.app.pms.gotracker.statuses import public_statuses
 from src.app.services.automation.merge_field_catalog import fields_for
 from src.app.services.automation.node_registry import (
     NODE_REGISTRY_VERSION,
@@ -265,6 +266,27 @@ class NodeCapabilitiesResponse(BaseModel):
 class PhoneCountryRegionResponse(BaseModel):
     region: str
     calling_code: str
+
+
+class PmsAppointmentStatusResponse(BaseModel):
+    """One PMS appointment disposition, for the builder's status pickers.
+
+    Served rather than hardcoded in the frontend so a label or a writability
+    change lands in one place. ``semantics`` is the PMS-neutral meaning.
+    """
+
+    id: int
+    key: str
+    label: str
+    semantics: str
+    readable: bool
+    writable: bool
+    description: str
+
+
+class PmsAppointmentStatusCatalogResponse(BaseModel):
+    pms: str
+    statuses: list[PmsAppointmentStatusResponse] = Field(default_factory=list)
 
 
 class MergeFieldResponse(BaseModel):
@@ -785,6 +807,33 @@ async def list_phone_country_regions(
         )
         for region in sorted(phonenumbers.SUPPORTED_REGIONS)
     ]
+
+
+@router.get(
+    "/pms-appointment-statuses",
+    response_model=PmsAppointmentStatusCatalogResponse,
+)
+async def list_pms_appointment_statuses(
+    current_user: _InstitutionAdmin,
+    pms: Annotated[str, Query()] = "gotracker",
+) -> PmsAppointmentStatusCatalogResponse:
+    """Return a PMS's appointment disposition catalog for the builder.
+
+    NOTE: declared before ``/{workflow_id}`` so this literal path is not captured
+    as a workflow id by the parameterised route.
+    """
+    _institution_id(current_user)
+    normalized = pms.strip().lower()
+    if normalized != "gotracker":
+        # NexHealth has no comparable fixed disposition vocabulary today; it is
+        # introduced with the canonical event model rather than faked here.
+        return PmsAppointmentStatusCatalogResponse(pms=normalized, statuses=[])
+    return PmsAppointmentStatusCatalogResponse(
+        pms="gotracker",
+        statuses=[
+            PmsAppointmentStatusResponse(**status) for status in public_statuses()
+        ],
+    )
 
 
 @router.post("/dry-run", response_model=DryRunResultResponse)

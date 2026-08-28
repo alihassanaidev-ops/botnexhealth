@@ -20,6 +20,7 @@ from typing import Annotated, Any, Literal, Union
 import phonenumbers
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.app.pms.gotracker.statuses import MAX_STATUS_ID, MIN_STATUS_ID
 from src.app.services.automation.node_registry import outgoing_references
 
 PHONE_COUNTRY_REGIONS = frozenset(phonenumbers.SUPPORTED_REGIONS)
@@ -60,8 +61,10 @@ class AppointmentStateChangedTrigger(BaseModel):
     def validate_status_ids(cls, values: list[int]) -> list[int]:
         unique: list[int] = []
         for value in values:
-            if value < 1 or value > 9:
-                raise ValueError("status_ids must be between 1 and 9")
+            if value < MIN_STATUS_ID or value > MAX_STATUS_ID:
+                raise ValueError(
+                    f"status_ids must be between {MIN_STATUS_ID} and {MAX_STATUS_ID}"
+                )
             if value not in unique:
                 unique.append(value)
         return unique
@@ -718,7 +721,7 @@ class UpdateGoTrackerAppointmentNode(BaseModel):
     id: str = Field(min_length=1)
     type: Literal["update_gotracker_appointment"] = "update_gotracker_appointment"
     next_node_id: str
-    status_id: int | None = Field(default=None, ge=1, le=9)
+    status_id: int | None = Field(default=None, ge=MIN_STATUS_ID, le=MAX_STATUS_ID)
     confirmed: bool | None = None
     preconfirmed: bool | None = None
     start_time: str | None = None

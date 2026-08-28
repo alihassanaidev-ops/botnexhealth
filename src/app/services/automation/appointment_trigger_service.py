@@ -13,13 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.appointment_working_set import AppointmentWorkingSet
-from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowStatus
+from src.app.models.automation_workflow import AutomationWorkflow
 from src.app.models.institution_appointment_type import InstitutionAppointmentType
 from src.app.services.automation.definition_schema import (
     AppointmentOffsetTrigger,
     AppointmentStateChangedTrigger,
     WorkflowDefinition,
 )
+from src.app.services.automation.trigger_lookup import find_active_workflows
 
 
 class AppointmentTriggerService:
@@ -27,20 +28,15 @@ class AppointmentTriggerService:
         self.session = session
 
     async def find_active_appointment_workflows(
-        self, institution_id: str
+        self, institution_id: str, *, location_id: str | None = None
     ) -> list[AutomationWorkflow]:
-        """Return active workflows whose definition trigger type is 'appointment_offset'."""
-        result = await self.session.execute(
-            select(AutomationWorkflow).where(
-                AutomationWorkflow.institution_id == institution_id,
-                AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,
-                AutomationWorkflow.current_version_id.is_not(None),
-            )
+        """Return in-scope active workflows triggered by 'appointment_offset'."""
+        return await find_active_workflows(
+            self.session,
+            institution_id=institution_id,
+            trigger_type="appointment_offset",
+            location_id=location_id,
         )
-        return [
-            wf for wf in result.scalars().all()
-            if wf.trigger_type == "appointment_offset"
-        ]
 
     async def get_appointment_context(
         self,
@@ -99,36 +95,26 @@ class AppointmentTriggerService:
         }
 
     async def find_active_recall_workflows(
-        self, institution_id: str
+        self, institution_id: str, *, location_id: str | None = None
     ) -> list[AutomationWorkflow]:
-        """Return active workflows whose definition trigger type is 'recall_scan'."""
-        result = await self.session.execute(
-            select(AutomationWorkflow).where(
-                AutomationWorkflow.institution_id == institution_id,
-                AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,
-                AutomationWorkflow.current_version_id.is_not(None),
-            )
+        """Return in-scope active workflows triggered by 'recall_scan'."""
+        return await find_active_workflows(
+            self.session,
+            institution_id=institution_id,
+            trigger_type="recall_scan",
+            location_id=location_id,
         )
-        return [
-            wf for wf in result.scalars().all()
-            if wf.trigger_type == "recall_scan"
-        ]
 
     async def find_active_appointment_state_workflows(
-        self, institution_id: str
+        self, institution_id: str, *, location_id: str | None = None
     ) -> list[AutomationWorkflow]:
-        """Return active workflows whose trigger type is 'appointment_state_changed'."""
-        result = await self.session.execute(
-            select(AutomationWorkflow).where(
-                AutomationWorkflow.institution_id == institution_id,
-                AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,
-                AutomationWorkflow.current_version_id.is_not(None),
-            )
+        """Return in-scope active workflows triggered by 'appointment_state_changed'."""
+        return await find_active_workflows(
+            self.session,
+            institution_id=institution_id,
+            trigger_type="appointment_state_changed",
+            location_id=location_id,
         )
-        return [
-            wf for wf in result.scalars().all()
-            if wf.trigger_type == "appointment_state_changed"
-        ]
 
 
 def compute_enrollment_eta(

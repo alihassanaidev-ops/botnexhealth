@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowStatus
+from src.app.models.automation_workflow import AutomationWorkflow
 from src.app.services.automation.campaign_conversation_service import _whole_token_match
 from src.app.services.automation.definition_schema import SmsReplyTrigger, WorkflowDefinition
+from src.app.services.automation.trigger_lookup import find_active_workflows
 
 
 class SmsReplyTriggerService:
@@ -22,23 +21,12 @@ class SmsReplyTriggerService:
         location_id: str | None,
     ) -> list[AutomationWorkflow]:
         """Return active workflows whose trigger type is 'sms_reply' for this sender."""
-        result = await self.session.execute(
-            select(AutomationWorkflow)
-            .options(selectinload(AutomationWorkflow.current_version))
-            .where(
-                AutomationWorkflow.institution_id == institution_id,
-                AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,
-                AutomationWorkflow.current_version_id.is_not(None),
-            )
+        return await find_active_workflows(
+            self.session,
+            institution_id=institution_id,
+            trigger_type="sms_reply",
+            location_id=location_id,
         )
-        workflows: list[AutomationWorkflow] = []
-        for wf in result.scalars().all():
-            if wf.trigger_type != "sms_reply":
-                continue
-            if wf.location_id is not None and str(wf.location_id) != str(location_id):
-                continue
-            workflows.append(wf)
-        return workflows
 
 
 def workflow_matches_sms_reply(workflow: AutomationWorkflow, body: str | None) -> bool:

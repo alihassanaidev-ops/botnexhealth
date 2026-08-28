@@ -1287,11 +1287,16 @@ async def _trigger_appointment_async(
         external_id=f"appt_trigger:{appointment_id}",
     ) as session:
         svc = AppointmentTriggerService(session)
-        workflows = await svc.find_active_appointment_workflows(institution_id)
         appointment_context = await svc.get_appointment_context(
             institution_id=institution_id,
             appointment_id=appointment_id,
             fallback_location_id=location_id,
+        )
+        # Resolve the location first: a workflow bound to another location in the
+        # same institution must not enroll for this appointment.
+        workflows = await svc.find_active_appointment_workflows(
+            institution_id,
+            location_id=location_id or appointment_context.get("location_id"),
         )
 
     scheduled = 0
@@ -1435,11 +1440,16 @@ async def _trigger_appointment_state_async(
         external_id=f"appt_state_trigger:{appointment_id}",
     ) as session:
         svc = AppointmentTriggerService(session)
-        workflows = await svc.find_active_appointment_state_workflows(institution_id)
         appointment_context = await svc.get_appointment_context(
             institution_id=institution_id,
             appointment_id=appointment_id,
             fallback_location_id=location_id,
+        )
+        # Resolve the location first: a workflow bound to another location in the
+        # same institution must not enroll for this appointment.
+        workflows = await svc.find_active_appointment_state_workflows(
+            institution_id,
+            location_id=location_id or appointment_context.get("location_id"),
         )
 
     enriched_metadata = {
@@ -1951,7 +1961,10 @@ async def _trigger_callback_async(
             }
 
         svc = CallbackTriggerService(session)
-        workflows = await svc.find_active_callback_workflows(institution_id)
+        workflows = await svc.find_active_callback_workflows(
+            institution_id,
+            location_id=location_id or (str(call.location_id) if call.location_id else None),
+        )
 
         # Consent capture (XC-6 / CB-3): a patient's inbound request to be called back is
         # an express basis to place that AI callback. Record a granted VOICE consent so the
@@ -2110,7 +2123,11 @@ async def _trigger_patient_status_async(
         svc = PatientStatusTriggerService(session)
         workflows = [
             (wf.id, wf.current_version_id, wf.definition)
-            for wf in await svc.find_active_status_workflows(institution_id)
+            for wf in await svc.find_active_status_workflows(
+                institution_id,
+                # The status event carries the location of the run that recorded it.
+                location_id=event_data["location_id"],
+            )
         ]
 
     scheduled = 0
@@ -3165,6 +3182,11 @@ async def _scan_recall_async() -> dict:
                 {
                     "workflow_id": str(wf.id),
                     "version_id": str(wf.current_version_id),
+                    # None means institution-wide; a value binds the workflow to
+                    # one location and it must not enroll from another's recalls.
+                    "location_id": (
+                        str(wf.location_id) if wf.location_id is not None else None
+                    ),
                 }
             )
 
@@ -3273,6 +3295,11 @@ async def _enroll_recalls_for_institution(
                 contact_id = str(contact.id) if contact else None
 
                 for wf in workflows:
+                    if (
+                        wf["location_id"] is not None
+                        and wf["location_id"] != str(location.id)
+                    ):
+                        continue
                     key = make_recall_idempotency_key(
                         wf["version_id"], patient_id, period
                     )

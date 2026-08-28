@@ -23,6 +23,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
+import { Checkbox } from "@/components/ui/checkbox"
+import { cn } from "@/lib/utils"
 import {
     Select,
     SelectContent,
@@ -32,15 +34,31 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
+import {
+    NODE_META,
+    CONDITION_OP_LABELS,
+    TRIGGER_META,
+    selectableTriggerTypes,
+} from "@/lib/workflow/catalog"
 import {
     listCampaignEmailTemplates,
     type CampaignEmailTemplate,
 } from "@/lib/campaign-email-templates-api"
-import { listPhoneCountryRegions, listWorkflowLlmModels, type PhoneCountryRegion } from "@/lib/workflow-api"
+import {
+    listPhoneCountryRegions,
+    listPmsAppointmentStatuses,
+    listWorkflowLlmModels,
+    type PhoneCountryRegion,
+    type PmsAppointmentStatus,
+} from "@/lib/workflow-api"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
-import { addVoiceOutcomeBranch, TRIGGER_NODE_ID, VOICE_OUTCOME_BRANCH_VALUES } from "@/lib/workflow/graph"
+import {
+    addVoiceOutcomeBranch,
+    createTrigger,
+    TRIGGER_NODE_ID,
+    VOICE_OUTCOME_BRANCH_VALUES,
+} from "@/lib/workflow/graph"
 import {
     contextFieldsForTrigger,
     contextValueAtPath,
@@ -63,6 +81,8 @@ import type {
     SendVoiceNode,
     SmsResponseMapping,
     SmsReplyWaitConfig,
+    EmailReplyWaitConfig,
+    WaitForConfig,
     TimeWaitConfig,
     TriggerType,
     UpdateAppointmentNode,
@@ -79,17 +99,49 @@ const NONE = "__none__"
 const CONDITION_OPS: ConditionOp[] = ["eq", "neq", "in", "in_case_insensitive", "not_in", "is_null", "is_not_null", "contains", "not_contains"]
 const CUSTOM_CONDITION_FIELD = "__custom_field__"
 const CUSTOM_RELATIVE_WAIT = "__custom__"
-const GOTRACKER_STATUS_OPTIONS = [
-    { id: 1, label: "Booked" },
-    { id: 2, label: "Booked + Waiting" },
-    { id: 3, label: "Cancelled" },
-    { id: 4, label: "Late" },
-    { id: 5, label: "No Show" },
-    { id: 6, label: "Office Cancel" },
-    { id: 7, label: "Pending" },
-    { id: 8, label: "Short Cancel" },
-    { id: 9, label: "Waiting" },
+/**
+ * Last-resort copy of the GoTracker disposition catalog, used only until the
+ * served catalog loads (and offline). The backend owns the real list in
+ * `src/app/pms/gotracker/statuses.py`.
+ */
+const FALLBACK_GOTRACKER_STATUSES: PmsAppointmentStatus[] = [
+    { id: 1, key: "booked", label: "Booked", semantics: "booked", readable: true, writable: true, description: "" },
+    { id: 2, key: "booked_waiting", label: "Booked + Waiting", semantics: "waiting", readable: true, writable: true, description: "" },
+    { id: 3, key: "cancelled", label: "Cancelled", semantics: "cancelled", readable: true, writable: true, description: "" },
+    { id: 4, key: "late", label: "Late", semantics: "late", readable: true, writable: true, description: "" },
+    { id: 5, key: "no_show", label: "No Show", semantics: "no_show", readable: true, writable: true, description: "" },
+    { id: 6, key: "office_cancel", label: "Office Cancel", semantics: "cancelled", readable: true, writable: true, description: "" },
+    { id: 7, key: "pending", label: "Pending", semantics: "pending", readable: true, writable: true, description: "" },
+    { id: 8, key: "short_cancel", label: "Short Cancel", semantics: "cancelled", readable: true, writable: true, description: "" },
+    { id: 9, key: "waiting", label: "Waiting", semantics: "waiting", readable: true, writable: true, description: "" },
 ]
+
+/** Module-level cache so every panel instance shares one fetch. */
+let pmsStatusCache: PmsAppointmentStatus[] | null = null
+
+/** The served PMS status catalog, falling back until it loads. */
+function usePmsAppointmentStatuses(): PmsAppointmentStatus[] {
+    const [statuses, setStatuses] = useState<PmsAppointmentStatus[]>(
+        pmsStatusCache ?? FALLBACK_GOTRACKER_STATUSES,
+    )
+    useEffect(() => {
+        if (pmsStatusCache) return
+        let active = true
+        listPmsAppointmentStatuses()
+            .then((loaded) => {
+                if (!loaded.length) return
+                pmsStatusCache = loaded
+                if (active) setStatuses(loaded)
+            })
+            .catch(() => {
+                /* keep the fallback so the picker stays usable */
+            })
+        return () => {
+            active = false
+        }
+    }, [])
+    return statuses
+}
 const FALLBACK_PHONE_COUNTRIES: PhoneCountryRegion[] = [
     { region: "US", calling_code: "+1" },
     { region: "GB", calling_code: "+44" },
@@ -172,12 +224,12 @@ function TriggerForm({
                 <Field label="Trigger type">
                     <Select
                         value={trigger.type}
-                        onValueChange={(v) => onChange(defaultTrigger(v as TriggerType))}
+                        onValueChange={(v) => onChange(createTrigger(v as TriggerType))}
                         disabled={readOnly}
                     >
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
-                            {(Object.keys(TRIGGER_META) as TriggerType[]).map((t) => (
+                            {selectableTriggerTypes(trigger.type).map((t) => (
                                 <SelectItem key={t} value={t}>{TRIGGER_META[t].label}</SelectItem>
                             ))}
                         </SelectContent>
@@ -217,25 +269,16 @@ function TriggerForm({
                                 }}
                             />
                         </Field>
-                        <Field label="GoTracker status (optional AND filter)">
-                            <Select
-                                value={trigger.status_ids[0] ? String(trigger.status_ids[0]) : NONE}
+                        <Field
+                            label="GoTracker statuses (optional filter)"
+                            hint="Select none to match any status. Selecting several matches any one of them."
+                        >
+                            <StatusIdMultiSelect
+                                selected={trigger.status_ids}
                                 disabled={readOnly}
-                                onValueChange={(value) => onChange({
-                                    ...trigger,
-                                    status_ids: value === NONE ? [] : [toInt(value, 1)],
-                                })}
-                            >
-                                <SelectTrigger aria-label="GoTracker status (optional AND filter)"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value={NONE}>Any status</SelectItem>
-                                    {GOTRACKER_STATUS_OPTIONS.map((status) => (
-                                        <SelectItem key={status.id} value={String(status.id)}>
-                                            {status.id} · {status.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                                ariaLabel="GoTracker statuses (optional filter)"
+                                onChange={(status_ids) => onChange({ ...trigger, status_ids })}
+                            />
                         </Field>
                         <div className="grid grid-cols-2 gap-2">
                             <Field label="Confirmed (optional AND filter)">
@@ -564,16 +607,58 @@ function SmsFields({
     )
 }
 
-function SmsReplyWaitFields({
+/** Default config for each wait mode, used when the author switches modes. */
+function defaultWaitFor(type: WaitForConfig["type"]): WaitForConfig {
+    if (type === "sms_reply") {
+        return {
+            type: "sms_reply",
+            response_window_seconds: 259200,
+            response_mappings: [
+                { tokens: ["YES", "Y"], context_updates: { sms_reply: "yes" } },
+                { tokens: ["NO", "N"], context_updates: { sms_reply: "no" } },
+            ],
+        }
+    }
+    if (type === "email_reply") {
+        // A week, not three days: email is answered on a slower rhythm and a
+        // weekend must not be read as a non-response.
+        return {
+            type: "email_reply",
+            response_window_seconds: 604800,
+            response_mappings: [
+                { tokens: ["YES", "CONFIRM"], context_updates: { email_reply: "yes" } },
+                { tokens: ["NO", "CANCEL"], context_updates: { email_reply: "no" } },
+            ],
+        }
+    }
+    return {
+        type: "time",
+        delay: { delay_type: "duration", duration_seconds: 3600 },
+        respect_quiet_hours: true,
+    }
+}
+
+
+/**
+ * Reply-wait editor shared by the SMS and email channels. `EmailReplyWaitConfig`
+ * carries the same fields as `SmsReplyWaitConfig` — the reply mapping is a
+ * token-to-context map, not anything SMS-specific — so an author configures both
+ * the same way and the two cannot drift apart.
+ */
+function ReplyWaitFields<T extends SmsReplyWaitConfig | EmailReplyWaitConfig>({
     config,
     onChange,
     readOnly,
 }: {
-    config: SmsReplyWaitConfig
-    onChange: (config: SmsReplyWaitConfig) => void
+    config: T
+    onChange: (config: T) => void
     readOnly?: boolean
 }) {
-    const responseWindowHours = Math.round((config.response_window_seconds ?? 259200) / 3600)
+    const isEmail = config.type === "email_reply"
+    const defaultWindowSeconds = isEmail ? 604800 : 259200
+    const responseWindowHours = Math.round(
+        (config.response_window_seconds ?? defaultWindowSeconds) / 3600,
+    )
     const mappings = config.response_mappings ?? []
     const updateMapping = (index: number, mapping: SmsResponseMapping) => {
         onChange({
@@ -1285,32 +1370,18 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                 <Select
                     value={node.wait_for.type}
                     disabled={readOnly}
-                    onValueChange={(v) =>
-                        setWaitFor(v === "sms_reply"
-                            ? {
-                                type: "sms_reply",
-                                response_window_seconds: 259200,
-                                response_mappings: [
-                                    { tokens: ["YES", "Y"], context_updates: { sms_reply: "yes" } },
-                                    { tokens: ["NO", "N"], context_updates: { sms_reply: "no" } },
-                                ],
-                            }
-                            : {
-                                type: "time",
-                                delay: { delay_type: "duration", duration_seconds: 3600 },
-                                respect_quiet_hours: true,
-                            })
-                    }
+                    onValueChange={(v) => setWaitFor(defaultWaitFor(v as WaitForConfig["type"]))}
                 >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                         <SelectItem value="time">Time</SelectItem>
                         <SelectItem value="sms_reply">SMS reply</SelectItem>
+                        <SelectItem value="email_reply">Email reply</SelectItem>
                     </SelectContent>
                 </Select>
             </Field>
-            {node.wait_for.type === "sms_reply" ? (
-                <SmsReplyWaitFields
+            {node.wait_for.type === "sms_reply" || node.wait_for.type === "email_reply" ? (
+                <ReplyWaitFields
                     config={node.wait_for}
                     onChange={setWaitFor}
                     readOnly={readOnly}
@@ -1615,6 +1686,9 @@ function UpdateGoTrackerAppointmentFields({
     readOnly?: boolean
 }) {
     const update = (patch: Partial<UpdateGoTrackerAppointmentNode>) => onChange({ ...node, ...patch })
+    // Writability comes from the served catalog, so a disposition Tracker will
+    // not accept is disabled here rather than failing mid-run.
+    const gotrackerStatuses = usePmsAppointmentStatuses()
     return (
         <>
             <Field label="Status">
@@ -1626,9 +1700,14 @@ function UpdateGoTrackerAppointmentFields({
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                         <SelectItem value={NONE}>Do not change</SelectItem>
-                        {GOTRACKER_STATUS_OPTIONS.map((status) => (
-                            <SelectItem key={status.id} value={String(status.id)}>
+                        {gotrackerStatuses.map((status) => (
+                            <SelectItem
+                                key={status.id}
+                                value={String(status.id)}
+                                disabled={!status.writable}
+                            >
                                 {status.id} · {status.label}
+                                {status.writable ? "" : " (read-only)"}
                             </SelectItem>
                         ))}
                     </SelectContent>
@@ -2240,6 +2319,72 @@ function NextStepField({
     )
 }
 
+/**
+ * Multi-select over the PMS appointment dispositions.
+ *
+ * The definition schema has always accepted `status_ids: number[]`, but this was
+ * rendered as a single-select writing a one-element array — so "booked OR
+ * cancelled" was unreachable from the builder despite the backend supporting it.
+ * An empty selection means "any status", matching the backend's treatment of an
+ * empty list.
+ */
+function StatusIdMultiSelect({
+    selected,
+    disabled,
+    ariaLabel,
+    onChange,
+}: {
+    selected: number[]
+    disabled?: boolean
+    ariaLabel: string
+    onChange: (statusIds: number[]) => void
+}) {
+    const statuses = usePmsAppointmentStatuses()
+    const chosen = new Set(selected)
+
+    const toggle = (id: number) => {
+        // Preserve catalog order rather than click order, so two workflows with
+        // the same selection serialize identically.
+        const next = new Set(chosen)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        onChange(statuses.filter((s) => next.has(s.id)).map((s) => s.id))
+    }
+
+    return (
+        <div role="group" aria-label={ariaLabel} className="space-y-1.5">
+            <div className="grid grid-cols-1 gap-1.5 rounded-md border border-border p-2 sm:grid-cols-2">
+                {statuses.map((status) => (
+                    <label
+                        key={status.id}
+                        className={cn(
+                            "flex items-center gap-2 text-sm",
+                            disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+                        )}
+                        title={status.description || undefined}
+                    >
+                        <Checkbox
+                            checked={chosen.has(status.id)}
+                            disabled={disabled}
+                            aria-label={status.label}
+                            onCheckedChange={() => toggle(status.id)}
+                        />
+                        <span className="truncate">
+                            <span className="text-muted-foreground">{status.id}</span> {status.label}
+                        </span>
+                    </label>
+                ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+                {chosen.size === 0
+                    ? "Any status matches."
+                    : `Matches ${chosen.size} of ${statuses.length} statuses.`}
+            </p>
+        </div>
+    )
+}
+
+
 function TriStateBooleanSelect({
     value,
     disabled,
@@ -2276,43 +2421,6 @@ function TriStateBooleanSelect({
 // ---------------------------------------------------------------------------
 // value helpers
 // ---------------------------------------------------------------------------
-function defaultTrigger(type: TriggerType): WorkflowTrigger {
-    switch (type) {
-        case "appointment_offset":
-            return { type, offset_hours: -24 }
-        case "appointment_state_changed":
-            return {
-                type,
-                status_ids: [],
-                confirmed: true,
-                preconfirmed: null,
-                flow_states: [],
-                max_followup_delay_hours: null,
-                campaign_goal: "post_op_followup",
-            }
-        case "recall_scan":
-            return { type, recall_interval_months: 6 }
-        case "manual":
-            return { type }
-        case "bulk_import":
-            return { type }
-        case "callback_requested":
-            return { type }
-        case "patient_status_changed":
-            return {
-                type,
-                statuses: ["appointment_confirmed"],
-                campaign_goal: "post_op_followup",
-            }
-        case "sms_reply":
-            return {
-                type,
-                tokens: [],
-                campaign_goal: "inbound_sms_followup",
-            }
-    }
-}
-
 function toInt(v: string, fallback: number): number {
     const n = parseInt(v, 10)
     return Number.isFinite(n) ? n : fallback

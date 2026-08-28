@@ -14,10 +14,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowStatus
+from src.app.models.automation_workflow import AutomationWorkflow
+from src.app.services.automation.trigger_lookup import find_active_workflows
 
 
 class CallbackTriggerService:
@@ -25,20 +25,15 @@ class CallbackTriggerService:
         self.session = session
 
     async def find_active_callback_workflows(
-        self, institution_id: str
+        self, institution_id: str, *, location_id: str | None = None
     ) -> list[AutomationWorkflow]:
-        """Return active workflows whose definition trigger type is 'callback_requested'."""
-        result = await self.session.execute(
-            select(AutomationWorkflow).where(
-                AutomationWorkflow.institution_id == institution_id,
-                AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,
-                AutomationWorkflow.current_version_id.is_not(None),
-            )
+        """Return in-scope active workflows triggered by 'callback_requested'."""
+        return await find_active_workflows(
+            self.session,
+            institution_id=institution_id,
+            trigger_type="callback_requested",
+            location_id=location_id,
         )
-        return [
-            wf for wf in result.scalars().all()
-            if wf.trigger_type == "callback_requested"
-        ]
 
 
 def compute_callback_eta(

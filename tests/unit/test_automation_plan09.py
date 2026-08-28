@@ -43,10 +43,12 @@ def _make_workflow(
     version_id="ver-1",
     offset_hours=-24,
     appointment_type_ids=None,
+    location_id=None,
 ):
     wf = MagicMock()
     wf.id = "wf-1"
     wf.institution_id = "inst-1"
+    wf.location_id = location_id
     wf.status = AutomationWorkflowStatus.ACTIVE.value
     wf.trigger_type = trigger_type
     wf.current_version_id = version_id
@@ -336,6 +338,48 @@ async def test_scan_recall_async_enrolls_due_patients():
         c.kwargs["kwargs"]["trigger_ref_type"] == "recall"
         for c in mock_task.apply_async.call_args_list
     )
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_skips_workflows_bound_to_another_location():
+    """A recall workflow bound to location B must not enroll location A's recalls."""
+    wf = _make_workflow(
+        trigger_type="recall_scan", version_id="ver-1", location_id="loc-other"
+    )
+    scan_session = _make_session(workflows=[wf])
+
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=MagicMock())
+    location = MagicMock()
+    location.id = "loc-1"
+    location.nexhealth_subdomain = "sub"
+    location.nexhealth_location_id = "nexloc-1"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    contact_result = MagicMock()
+    contact_result.scalar_one_or_none.return_value = None
+    inst_session.execute = AsyncMock(side_effect=[loc_result, contact_result])
+
+    adapter = AsyncMock()
+    adapter.list_patient_recalls = AsyncMock(
+        return_value=[{"patient_id": "p1", "due_date": "2020-01-01"}]
+    )
+    adapter.close = AsyncMock()
+
+    with patch(
+        "src.app.tasks.automation_workflow.get_system_db_session",
+        side_effect=[_cm(scan_session), _cm(inst_session)],
+    ), patch(
+        "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+        AsyncMock(return_value=adapter),
+    ), patch(
+        "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+    ) as mock_task:
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    assert result["enrolled"] == 0
+    assert mock_task.apply_async.call_count == 0
 
 
 # ---------------------------------------------------------------------------

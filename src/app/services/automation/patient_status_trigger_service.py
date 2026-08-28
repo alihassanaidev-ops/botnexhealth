@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowStatus
+from src.app.models.automation_workflow import AutomationWorkflow
 from src.app.services.automation.definition_schema import (
     PatientStatusChangedTrigger,
     WorkflowDefinition,
 )
+from src.app.services.automation.trigger_lookup import find_active_workflows
 
 
 class PatientStatusTriggerService:
@@ -17,20 +17,15 @@ class PatientStatusTriggerService:
         self.session = session
 
     async def find_active_status_workflows(
-        self, institution_id: str
+        self, institution_id: str, *, location_id: str | None = None
     ) -> list[AutomationWorkflow]:
-        """Return active workflows whose trigger type is 'patient_status_changed'."""
-        result = await self.session.execute(
-            select(AutomationWorkflow).where(
-                AutomationWorkflow.institution_id == institution_id,
-                AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,
-                AutomationWorkflow.current_version_id.is_not(None),
-            )
+        """Return in-scope active workflows triggered by 'patient_status_changed'."""
+        return await find_active_workflows(
+            self.session,
+            institution_id=institution_id,
+            trigger_type="patient_status_changed",
+            location_id=location_id,
         )
-        return [
-            wf for wf in result.scalars().all()
-            if wf.trigger_type == "patient_status_changed"
-        ]
 
 
 def workflow_matches_patient_status(workflow: AutomationWorkflow, status: str) -> bool:

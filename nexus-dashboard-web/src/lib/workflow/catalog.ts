@@ -175,12 +175,44 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
         description: "Enroll when a patient texts the clinic.",
         icon: MessageSquareReply,
     },
+    email_reply: {
+        label: "Email reply",
+        description: "Enroll when a patient replies to a clinic email.",
+        icon: Mail,
+    },
+}
+
+/**
+ * Trigger types the builder does not offer for new workflows.
+ *
+ * They stay in `TRIGGER_META` so an existing definition still renders its own
+ * trigger with a proper label instead of a raw key.
+ *
+ * - `bulk_import` has no enrollment path at all: there is no CSV import route on
+ *   `/automation/workflows`, so a workflow using it can never enroll anyone.
+ * - `email_reply` is accepted by the backend schema but has no trigger service
+ *   yet, so nothing enrolls from an inbound email. (The email *wait* node is
+ *   fully wired — that is a different feature.)
+ */
+export const UNAVAILABLE_TRIGGER_TYPES: ReadonlySet<TriggerType> = new Set<TriggerType>([
+    "bulk_import",
+    "email_reply",
+])
+
+/** Trigger types offered in the picker, plus whichever one is already selected. */
+export function selectableTriggerTypes(current: TriggerType): TriggerType[] {
+    return (Object.keys(TRIGGER_META) as TriggerType[]).filter(
+        (type) => type === current || !UNAVAILABLE_TRIGGER_TYPES.has(type),
+    )
 }
 
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
     { title: "Channels", group: "channel", types: ["send_sms", "retell_sms_conversation", "send_voice", "send_email"] },
-    { title: "Actions", group: "action", types: ["drip", "llm", "update_appointment", "update_gotracker_appointment"] },
+    // `update_gotracker_appointment` is deliberately absent: it is retained in the
+    // schema for already-published definitions, but binds a new workflow to one
+    // PMS. `update_appointment` is the PMS-neutral replacement.
+    { title: "Actions", group: "action", types: ["drip", "llm", "update_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },
 ]
