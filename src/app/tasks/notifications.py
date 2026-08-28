@@ -8,7 +8,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from src.app.config import settings
@@ -21,11 +21,6 @@ from src.app.models.call import Call, CallStatus
 from src.app.models.email_template import EmailTemplateType
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
-from src.app.models.user import InviteStatus, User, UserRole
-from src.app.models.external_notification_recipient import ExternalNotificationRecipient
-from src.app.models.user_email_notification_preference import (
-    UserEmailNotificationPreference,
-)
 from src.app.services.event_bus import publish_event
 from src.app.services.dead_letter import capture_dead_letter, should_retry_vendor_error
 from src.app.services.email_notification_service import (
@@ -34,6 +29,7 @@ from src.app.services.email_notification_service import (
     resolve_template_type,
 )
 from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
+from src.app.services.staff_recipients import resolve_staff_recipients
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -311,50 +307,19 @@ async def _resolve_recipients(
     location_id: str | None,
     template_type: str | None = None,
 ) -> list[str]:
-    filters = [
-        User.institution_id == institution_id,
-        User.is_active.is_(True),
-        User.deleted_at.is_(None),
-        User.invite_status == InviteStatus.ACCEPTED.value,
-    ]
+    """Staff recipients for a call notification, plus the operator CSV fallback.
 
-    scoped_location_roles = [UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value]
-    role_scope = [User.role == UserRole.INSTITUTION_ADMIN.value]
-    if location_id:
-        role_scope.append(
-            and_(
-                User.location_id == location_id,
-                User.role.in_(scoped_location_roles),
-            )
-        )
-
-    # Build the platform user query
-    user_query = select(User.email).where(*filters).where(or_(*role_scope))
-
-    # Exclude users who opted out of this template type
-    if template_type:
-        opted_out = (
-            select(UserEmailNotificationPreference.user_id).where(
-                UserEmailNotificationPreference.template_type == template_type,
-                UserEmailNotificationPreference.is_enabled.is_(False),
-            )
-        ).scalar_subquery()
-        user_query = user_query.where(User.id.not_in(opted_out))
-
-    result = await session.execute(user_query)
-    db_emails = [row[0] for row in result.all() if row and row[0]]
-
-    # Add external recipients for this template type
-    if template_type:
-        ext_result = await session.execute(
-            select(ExternalNotificationRecipient.email).where(
-                ExternalNotificationRecipient.institution_id == institution_id,
-                ExternalNotificationRecipient.template_type == template_type,
-                ExternalNotificationRecipient.is_active.is_(True),
-            )
-        )
-        db_emails.extend(row[0] for row in ext_result.all() if row and row[0])
-
+    The RBAC-aware resolution lives in ``services.staff_recipients`` so the
+    automation email node can reuse it. The ``RESEND_ALERT_RECIPIENTS`` fallback
+    stays here: it is a cross-tenant operator safety net for call alerts, not
+    something a tenant-scoped workflow should fan out to.
+    """
+    db_emails = await resolve_staff_recipients(
+        session,
+        institution_id=institution_id,
+        location_id=location_id,
+        notification_type=template_type,
+    )
     fallback = _split_csv(settings.resend_alert_recipients)
     return _unique_emails(db_emails + fallback)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from src.app.api.routes.twilio_webhooks import (
     _classify_confirmation_reply,
     _classify_intent,
     _verified_form,
+    inbound_sms,
 )
 
 
@@ -195,3 +197,139 @@ def test_verified_form_rejects_bad_signature():
             asyncio.run(_verified_form(request))
 
     assert exc_info.value.status_code == 401
+
+
+def test_confirm_reply_enqueues_resume_without_automatic_sms_acknowledgment():
+    lookup_session = AsyncMock()
+    tenant_session = AsyncMock()
+    location = SimpleNamespace(id="loc-1", institution_id="inst-1", name="Clinic")
+    inbound = SimpleNamespace(
+        id="inbound-1",
+        workflow_run_id="run-1",
+        conversation_thread_id="thread-1",
+        contact_id="contact-1",
+    )
+
+    with (
+        patch(
+            "src.app.api.routes.twilio_webhooks._verified_form",
+            new=AsyncMock(
+                return_value={
+                    "From": "+14165550100",
+                    "To": "+14165550199",
+                    "Body": "YES",
+                    "MessageSid": "SM123",
+                }
+            ),
+        ),
+        patch(
+            "src.app.api.routes.twilio_webhooks.get_system_db_session",
+            side_effect=[_session_cm(lookup_session), _session_cm(tenant_session)],
+        ),
+        patch(
+            "src.app.api.routes.twilio_webhooks._location_for_twilio_number",
+            new=AsyncMock(return_value=location),
+        ),
+        patch(
+            "src.app.services.automation.inbound_sms_routing_service.InboundSmsRoutingService.record_inbound",
+            new=AsyncMock(return_value=inbound),
+        ),
+        patch(
+            "src.app.services.automation.campaign_conversation_service.CampaignConversationService.match_sms_response_mapping",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.app.services.automation.campaign_response_service.CampaignResponseService.record_sms_response",
+            new=AsyncMock(return_value=(MagicMock(), None)),
+        ),
+        patch("src.app.tasks.automation_workflow.resume_sms_confirmation") as resume,
+    ):
+        response = asyncio.run(inbound_sms(MagicMock()))
+
+    resume.delay.assert_called_once()
+    assert b"Thanks, we received your reply." not in response.body
+    assert response.body == b'<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+
+
+def test_stop_suppresses_and_cancels_correlated_run_before_one_commit():
+    lookup_session = AsyncMock()
+    tenant_session = AsyncMock()
+    location = SimpleNamespace(id="loc-1", institution_id="inst-1", name="Clinic")
+    inbound = SimpleNamespace(
+        id="inbound-1",
+        workflow_run_id="run-1",
+        conversation_thread_id="thread-1",
+        contact_id="contact-1",
+    )
+    compliance = AsyncMock()
+    opt_out = AsyncMock()
+    operations: list[str] = []
+
+    async def suppress(**_kwargs):
+        operations.append("suppress")
+
+    async def cancel(**_kwargs):
+        operations.append("cancel")
+        return 1
+
+    async def commit():
+        operations.append("commit")
+
+    compliance.suppress.side_effect = suppress
+    opt_out.cancel_active_sms_runs.side_effect = cancel
+    tenant_session.commit.side_effect = commit
+
+    with (
+        patch(
+            "src.app.api.routes.twilio_webhooks._verified_form",
+            new=AsyncMock(
+                return_value={
+                    "From": "+14165550100",
+                    "To": "+14165550199",
+                    "Body": "STOP",
+                    "MessageSid": "SM123",
+                }
+            ),
+        ),
+        patch(
+            "src.app.api.routes.twilio_webhooks.get_system_db_session",
+            side_effect=[_session_cm(lookup_session), _session_cm(tenant_session)],
+        ),
+        patch(
+            "src.app.api.routes.twilio_webhooks._location_for_twilio_number",
+            new=AsyncMock(return_value=location),
+        ),
+        patch(
+            "src.app.services.automation.inbound_sms_routing_service."
+            "InboundSmsRoutingService.record_inbound",
+            new=AsyncMock(return_value=inbound),
+        ),
+        patch(
+            "src.app.services.automation.campaign_response_service."
+            "CampaignResponseService.record_sms_response",
+            new=AsyncMock(return_value=(MagicMock(), None)),
+        ),
+        patch(
+            "src.app.api.routes.twilio_webhooks.SmsComplianceService",
+            return_value=compliance,
+        ) as compliance_cls,
+        patch(
+            "src.app.api.routes.twilio_webhooks.SmsOptOutWorkflowService",
+            return_value=opt_out,
+        ) as opt_out_cls,
+        patch(
+            "src.app.api.routes.twilio_webhooks._audit_keyword",
+            new=AsyncMock(),
+        ),
+    ):
+        asyncio.run(inbound_sms(MagicMock()))
+
+    compliance_cls.assert_called_once_with(tenant_session)
+    opt_out_cls.assert_called_once_with(tenant_session)
+    opt_out.cancel_active_sms_runs.assert_awaited_once_with(
+        institution_id="inst-1",
+        location_id="loc-1",
+        phone="+14165550100",
+        correlated_run_id="run-1",
+    )
+    assert operations == ["suppress", "cancel", "commit"]

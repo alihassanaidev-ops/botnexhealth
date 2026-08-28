@@ -28,6 +28,7 @@ import {
     MessageSquare,
     Mail,
     MailCheck,
+    Inbox as InboxIcon,
     Settings,
     ClipboardList,
     Layers,
@@ -61,6 +62,24 @@ const adminNav: NavItemDef[] = [
         title: "Users",
         url: "/admin/users",
         icon: UserCog,
+    },
+    {
+        // Platform-wide patient conversations. The page filters by practice
+        // and location; the API is what actually enforces the span.
+        title: "Inbox",
+        url: "/inbox",
+        icon: InboxIcon,
+    },
+    {
+        // Both email admin surfaces ask which practice first.
+        title: "Campaign Emails",
+        url: "/institution-admin/campaign-email-templates",
+        icon: Mail,
+    },
+    {
+        title: "Sending Addresses",
+        url: "/institution-admin/email-sending-address",
+        icon: MailCheck,
     },
     {
         title: "Phone Numbers",
@@ -117,7 +136,7 @@ const institutionAdminNav: NavItemDef[] = [
         icon: CalendarClock,
     },
     {
-        title: "Do Not Contact",
+        title: "DNC Patients",
         url: "/institution-admin/do-not-contact",
         icon: ShieldOff,
     },
@@ -183,6 +202,13 @@ const groupNav: NavItemDef[] = [
         icon: Layers,
         exact: true,
     },
+    {
+        // Activity figures only — the API refuses this role conversation
+        // content, so the page renders volumes and response times.
+        title: "Conversations",
+        url: "/inbox",
+        icon: InboxIcon,
+    },
 ]
 
 // Institution setup nav items
@@ -197,6 +223,11 @@ const navSetup: NavItemDef[] = [
         title: "Appointment Types",
         url: "/setup/appointment-types",
         icon: CalendarCheck,
+    },
+    {
+        title: "Reasons",
+        url: "/setup/reasons",
+        icon: Tag,
     },
     {
         title: "Providers & Scheduling",
@@ -245,7 +276,7 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { user } = useAuth();
-    const { hasPms } = useInstitution();
+    const { hasPms, pmsType } = useInstitution();
     const location = useLocation();
 
     const isAdmin = user?.role === "SUPER_ADMIN";
@@ -262,9 +293,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 : user?.role === "LOCATION_ADMIN"
                     ? locationAdminNav
                     : staffNav;
+    const pmsSetupNav = pmsType === "gotracker"
+        ? navSetup
+        : navSetup.filter((item) => item.url !== "/setup/reasons")
     const setupNav = user?.role === "STAFF"
-        ? navSetup.filter((item) => item.url !== "/setup" && item.url !== "/setup/audit-logs")
-        : navSetup;
+        ? pmsSetupNav.filter((item) => item.url !== "/setup" && item.url !== "/setup/audit-logs")
+        : pmsSetupNav;
 
     return (
         <Sidebar
@@ -347,7 +381,38 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                             url: "/institution-admin/email-templates",
                                             icon: Mail,
                                         }}
-                                        isActive={location.pathname === "/institution-admin/email-templates" || location.pathname.startsWith("/institution-admin/email-templates")}
+                                        isActive={location.pathname === "/institution-admin/email-templates"}
+                                    />
+                                )}
+                                {/* Every role reaches the inbox; the API narrows what each
+                                    one sees, and gives group admins figures rather than
+                                    patient conversations. */}
+                                <NavItem
+                                    item={{
+                                        title: "Inbox",
+                                        url: "/inbox",
+                                        icon: InboxIcon,
+                                    }}
+                                    isActive={location.pathname.startsWith("/inbox")}
+                                />
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Campaign Emails",
+                                            url: "/institution-admin/campaign-email-templates",
+                                            icon: Mail,
+                                        }}
+                                        isActive={location.pathname.startsWith("/institution-admin/campaign-email-templates")}
+                                    />
+                                )}
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Sending Address",
+                                            url: "/institution-admin/email-sending-address",
+                                            icon: Mail,
+                                        }}
+                                        isActive={location.pathname.startsWith("/institution-admin/email-sending-address")}
                                     />
                                 )}
                                 <NavItem

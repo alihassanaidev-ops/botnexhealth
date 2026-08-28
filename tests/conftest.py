@@ -14,6 +14,54 @@ from src.app.main import app
 from src.app.nexhealth.client import NexHealthClient
 from src.app.retell.security import RetellSignatureVerifier
 
+class FakeEmailSender:
+    """Records what the email node handed the provider.
+
+    The executor resolves a provider per clinic, so tests assert against the
+    message the sender received rather than against one vendor's HTTP payload.
+    """
+
+    def __init__(self, provider="resend", fail_with=None, fail_times=0):
+        self.provider = provider
+        self.sent = []
+        self._fail_with = fail_with
+        self._fail_times = fail_times
+        self.attempts = 0
+
+    async def send(self, message):
+        self.attempts += 1
+        if self._fail_with is not None and self.attempts <= self._fail_times:
+            raise self._fail_with
+        self.sent.append(message)
+        from src.app.services.email.sender import EmailSendResult
+
+        return EmailSendResult(
+            provider=self.provider, provider_message_id=f"msg-{self.attempts}"
+        )
+
+    @property
+    def last(self):
+        return self.sent[-1] if self.sent else None
+
+
+def make_resolved_identity(**overrides):
+    """A verified clinic sending identity, as the executor would resolve one."""
+    from src.app.services.email.identity_service import ResolvedSendingIdentity
+
+    defaults = dict(
+        from_address="clinic@example.com",
+        from_name="Clinic",
+        reply_to=None,
+        provider="resend",
+        tenant_name=None,
+        configuration_set=None,
+        is_platform_fallback=False,
+        identity_id="identity-1",
+    )
+    defaults.update(overrides)
+    return ResolvedSendingIdentity(**defaults)
+
+
 @pytest.fixture
 def mock_settings():
     """Mock application settings for unit tests."""

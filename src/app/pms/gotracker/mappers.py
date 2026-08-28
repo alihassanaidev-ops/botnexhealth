@@ -45,6 +45,27 @@ def to_patient(raw: dict[str, Any]) -> UniversalPatient:
     )
 
 
+def to_upcoming_appointment(raw: dict[str, Any]) -> dict[str, Any]:
+    """Map a Tracker appointment to the safe Retell scheduling context.
+
+    The voice agent needs an opaque appointment ID plus enough context for the
+    caller to identify the visit.  Do not pass the raw Tracker record through:
+    it contains fields unrelated to scheduling and may contain unnecessary PHI.
+    """
+    raw_id = _first(raw, "AppointmentId", "appointment_id", "id")
+    provider_id = _first(raw, "ProviderId", "provider_id")
+    location_id = _first(raw, "LocationId", "location_id", "lid")
+    return {
+        "id": pid(raw_id) if raw_id is not None else None,
+        "provider_id": pid(provider_id) if provider_id is not None else None,
+        "provider_name": _first(raw, "ProviderName", "provider_name"),
+        "start_time": _appointment_start_time(raw),
+        "end_time": _first(raw, "EndTime", "end_time"),
+        "location_id": pid(location_id) if location_id is not None else None,
+        "confirmed": _first(raw, "IsConfirmed", "confirmed"),
+    }
+
+
 def to_provider(raw: dict[str, Any]) -> UniversalProvider:
     raw_id = _first(raw, "ProviderId", "provider_id", "id")
     first_name = _first(raw, "FirstName", "first_name")
@@ -100,6 +121,14 @@ def to_appointment_type(raw: dict[str, Any]) -> UniversalAppointmentType:
             "operatory_ids": [
                 pid(item)
                 for item in raw.get("operatory_ids") or raw.get("OperatoryIds") or []
+                if item is not None
+            ],
+            # Reasons are Tracker-native labels.  Keep their unprefixed IDs so
+            # they line up with the cached reason rows (like NexHealth
+            # descriptor IDs do today).
+            "reason_ids": [
+                str(item)
+                for item in raw.get("reason_ids") or raw.get("ReasonIds") or []
                 if item is not None
             ],
             "bookable_online": _first(raw, "bookable_online", "BookableOnline", default=True),
@@ -189,6 +218,18 @@ def _first(
 def _maybe_pid(raw: dict[str, Any], *keys: str) -> str | None:
     value = _first(raw, *keys)
     return pid(value) if value is not None else None
+
+
+def _appointment_start_time(raw: dict[str, Any]) -> str | None:
+    direct = _first(raw, "StartTime", "start_time")
+    if direct is not None:
+        return str(direct)
+
+    appointment_date = _first(raw, "AppointmentDate", "appointment_date")
+    appointment_time = _first(raw, "AppointmentTime", "appointment_time")
+    if appointment_date is None or appointment_time is None:
+        return None
+    return f"{str(appointment_date).split('T', 1)[0]}T{str(appointment_time).removesuffix('Z')}"
 
 
 def _minimum_extra(raw: dict[str, Any]) -> dict[str, Any]:

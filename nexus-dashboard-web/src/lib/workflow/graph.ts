@@ -16,7 +16,9 @@ import {
     type ChannelKey,
     type NodePosition,
     type NodeType,
+    type SmsResponseMapping,
     type TriggerType,
+    type WaitDelay,
     type WorkflowDefinition,
     type WorkflowNode,
     type WorkflowTrigger,
@@ -53,13 +55,29 @@ const NODE_H = 92
  * `issueLevel` is a validation overlay injected by the builder page (undefined = clean).
  */
 export type FlowNodeData =
-    | { kind: "trigger"; trigger: WorkflowTrigger; issueLevel?: "error" | "warning" | null }
+    | {
+          kind: "trigger"
+          trigger: WorkflowTrigger
+          issueLevel?: "error" | "warning" | null
+          executionStatus?: ExecutionNodeStatus
+      }
     | {
           kind: "step"
           node: WorkflowNode
           isEntry: boolean
           issueLevel?: "error" | "warning" | null
+          executionStatus?: ExecutionNodeStatus
+          executionAttempts?: number
       }
+
+export type ExecutionNodeStatus =
+    | "pending"
+    | "running"
+    | "waiting"
+    | "completed"
+    | "skipped"
+    | "failed"
+    | "blocked"
 
 export type FlowNode = Node<FlowNodeData>
 export type FlowEdge = Edge & {
@@ -124,6 +142,7 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
         case "wait":
         case "drip":
         case "send_sms":
+        case "retell_sms_conversation":
         case "send_voice":
         case "send_email":
         case "update_patient_status":
@@ -145,6 +164,7 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
 /** Delivery channel a send-node type targets (undefined for non-send nodes). */
 const CHANNEL_BY_NODE_TYPE: Partial<Record<NodeType, ChannelKey>> = {
     send_sms: "sms",
+    retell_sms_conversation: "sms",
     send_email: "email",
     send_voice: "voice",
 }
@@ -172,6 +192,7 @@ function singleNext(node: WorkflowNode): string | undefined {
         node.type === "wait" ||
         node.type === "drip" ||
         node.type === "send_sms" ||
+        node.type === "retell_sms_conversation" ||
         node.type === "send_voice" ||
         node.type === "send_email" ||
         node.type === "update_patient_status" ||
@@ -419,9 +440,12 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
             return {
                 type,
                 id,
-                delay: { delay_type: "duration", duration_seconds: 3600 },
+                wait_for: {
+                    type: "time",
+                    delay: { delay_type: "duration", duration_seconds: 3600 },
+                    respect_quiet_hours: true,
+                },
                 next_node_id: "",
-                respect_quiet_hours: true,
             }
         case "drip":
             return {
@@ -437,8 +461,19 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 id,
                 body_template: "",
                 next_node_id: "",
+                include_opt_out_footer: true,
                 respect_quiet_hours: true,
                 max_attempts: 1,
+                expect_response: false,
+                response_window_seconds: 259200,
+                response_mappings: [],
+            }
+        case "retell_sms_conversation":
+            return {
+                type,
+                id,
+                chat_profile_id: "",
+                next_node_id: "",
             }
         case "send_voice":
             return {
@@ -619,6 +654,12 @@ export function createTrigger(type: TriggerType): WorkflowTrigger {
                 statuses: ["appointment_confirmed"],
                 campaign_goal: "post_op_followup",
             }
+        case "sms_reply":
+            return {
+                type,
+                tokens: [],
+                campaign_goal: "inbound_sms_followup",
+            }
     }
 }
 
@@ -665,6 +706,7 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
                 case "wait":
                 case "drip":
                 case "send_sms":
+                case "retell_sms_conversation":
                 case "send_voice":
                 case "send_email":
                 case "update_patient_status":
@@ -716,6 +758,7 @@ export function connectNodes(
         case "wait":
         case "drip":
         case "send_sms":
+        case "retell_sms_conversation":
         case "send_voice":
         case "send_email":
         case "update_patient_status":
@@ -758,5 +801,61 @@ export function clearLayout(def: WorkflowDefinition): WorkflowDefinition {
 
 /** Ensure schema_version is set before sending to the backend. */
 export function serializeDefinition(def: WorkflowDefinition): WorkflowDefinition {
-    return { ...def, schema_version: SCHEMA_VERSION }
+    return { ...normalizeDefinition(def), schema_version: SCHEMA_VERSION }
+}
+
+/** Upgrade legacy wait shapes at the frontend seam before editing or saving. */
+export function normalizeDefinition(def: WorkflowDefinition): WorkflowDefinition {
+    const nodes = (def.nodes as unknown[]).map((raw): WorkflowNode => {
+        const node = raw as Record<string, unknown>
+        if (node.type === "wait_for_sms_reply") {
+            return {
+                type: "wait",
+                id: String(node.id),
+                next_node_id: String(node.next_node_id ?? ""),
+                wait_for: {
+                    type: "sms_reply",
+                    response_window_seconds: Number(node.response_window_seconds ?? 259200),
+                    response_mappings: Array.isArray(node.response_mappings)
+                        ? node.response_mappings as SmsResponseMapping[]
+                        : [],
+                },
+            }
+        }
+        if (node.type === "wait" && typeof node.wait_for === "object" && node.wait_for !== null) {
+            const waitFor = node.wait_for as Record<string, unknown>
+            if (waitFor.type === "sms_reply") {
+                const cleanWaitFor = { ...waitFor }
+                delete cleanWaitFor.include_reply_key
+                return { ...node, wait_for: cleanWaitFor } as unknown as WorkflowNode
+            }
+        }
+        if (node.type === "send_sms") {
+            const cleanNode = { ...node }
+            delete cleanNode.include_reply_key
+            return cleanNode as unknown as WorkflowNode
+        }
+        if (node.type === "wait" && !("wait_for" in node) && node.delay) {
+            return {
+                type: "wait",
+                id: String(node.id),
+                next_node_id: String(node.next_node_id ?? ""),
+                wait_for: {
+                    type: "time",
+                    delay: node.delay as WaitDelay,
+                    respect_quiet_hours: node.respect_quiet_hours !== false,
+                },
+            }
+        }
+        if (node.type === "retell_sms_conversation") {
+            return {
+                type: "retell_sms_conversation",
+                id: String(node.id),
+                chat_profile_id: String(node.chat_profile_id ?? ""),
+                next_node_id: String(node.next_node_id ?? ""),
+            }
+        }
+        return raw as WorkflowNode
+    })
+    return { ...def, nodes }
 }

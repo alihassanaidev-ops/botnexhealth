@@ -11,6 +11,7 @@ import {
     GitBranch,
     Mail,
     MessageSquare,
+    MessageSquareReply,
     MousePointerClick,
     Phone,
     RefreshCw,
@@ -40,6 +41,13 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         icon: MessageSquare,
         group: "channel",
         accent: "bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300",
+    },
+    retell_sms_conversation: {
+        label: "Retell SMS Conversation",
+        description: "Generate patient replies with Retell while Twilio remains the transport.",
+        icon: MessageSquareReply,
+        group: "channel",
+        accent: "bg-cyan-100 text-cyan-700 dark:bg-cyan-950/50 dark:text-cyan-300",
     },
     send_voice: {
         label: "AI Voice Call",
@@ -99,7 +107,7 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
     },
     wait: {
         label: "Wait",
-        description: "Pause for a duration or until a time.",
+        description: "Pause for time or an incoming event.",
         icon: Clock,
         group: "control",
         accent: "bg-slate-100 text-slate-700 dark:bg-slate-800/70 dark:text-slate-300",
@@ -162,11 +170,16 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
         description: "Enroll when a workflow records an internal status.",
         icon: ClipboardList,
     },
+    sms_reply: {
+        label: "SMS reply",
+        description: "Enroll when a patient texts the clinic.",
+        icon: MessageSquareReply,
+    },
 }
 
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
-    { title: "Channels", group: "channel", types: ["send_voice"] },
+    { title: "Channels", group: "channel", types: ["send_sms", "retell_sms_conversation", "send_voice", "send_email"] },
     { title: "Actions", group: "action", types: ["drip", "llm", "update_appointment", "update_gotracker_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },

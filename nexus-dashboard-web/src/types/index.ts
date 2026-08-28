@@ -103,6 +103,21 @@ export interface OutboundVoiceProfile {
     updated_at: string;
 }
 
+export interface RetellSmsChatProfile {
+    id: string;
+    institution_id: string;
+    location_id: string;
+    retell_agent_id: string | null;
+    agent_version: number | null;
+    display_name: string;
+    purpose: string | null;
+    allowed_tools: string[];
+    is_active: boolean;
+    config: Record<string, unknown> | null;
+    created_at: string;
+    updated_at: string;
+}
+
 export interface SyncResult {
     location: string;
     success: boolean;
@@ -161,6 +176,8 @@ export interface SetupOverview {
     pms_source: string | null;
     can_create_appointment_types: boolean;
     can_link_availability: boolean;
+    can_create_work_windows: boolean;
+    can_clear_working_window_override: boolean;
     counts: Record<string, number>;
     has_pms?: boolean;
 }
@@ -188,6 +205,7 @@ export interface CachedAppointmentType {
     source_metadata: {
         nh_appt_type_id?: number;
         descriptor_ids?: string[];
+        reason_ids?: string[];
         gotracker_appointment_type_id?: number | string;
         provider_ids?: string[];
         operatory_ids?: string[];
@@ -232,10 +250,14 @@ export interface CachedAvailability {
     appointment_type_names: string[] | null;
     active: boolean;
     synced: boolean;
+    /** GoTracker derived closed periods are shown read-only beside open windows. */
+    status: "open" | "closed" | string;
     /** v3 only: "NOTE" / "Lunch" / null. Null on v2, which cannot distinguish them. */
     label_name: string | null;
     /** False for PMS notes and breaks — they describe the schedule, not bookable time. */
     is_bookable_window: boolean;
+    /** GoTracker only: true when this window has a cloud type override. */
+    types_overridden: boolean;
     source_metadata: Record<string, unknown> | null;
     synced_at: string | null;
 }
@@ -300,19 +322,30 @@ export interface WorkflowStatus {
     created_at: string;
 }
 
-/**
- * An active do-not-contact record (staff-initiated opt-out). Phone is masked
- * server-side; `scope` is "location" | "institution"; `source` distinguishes
- * staff/system origin.
- */
-export interface DncRecord {
-    phone_masked: string;
+export type DncChannel = "sms" | "voice" | "email" | "all";
+export type DncRecordType = "sms_suppression" | "consent_record" | "do_not_contact";
+
+/** One independently releasable channel opt-out shown on the DNC patients page. */
+export interface DncChannelRecord {
+    id: string;
+    channel: DncChannel;
+    record_type: DncRecordType;
     scope: string;
     source: string;
     reason: string | null;
     location_id: string | null;
-    contact_id: string | null;
     created_at: string;
+}
+
+/** Active opt-outs grouped by patient (or by masked identity when unmatched). */
+export interface DncPatientRecord {
+    id: string;
+    contact_id: string | null;
+    patient_name: string | null;
+    phone_masked: string | null;
+    email_masked: string | null;
+    channels: DncChannelRecord[];
+    latest_opt_out_at: string;
 }
 
 /** The status reference embedded on a call (id/name/color only). */
@@ -448,6 +481,13 @@ export interface TwilioPhoneNumber {
         mms: boolean;
     };
     status: string | null;
+}
+
+export interface InstitutionProvisioningStatus {
+    twilio_configured: boolean;
+    twilio_account_sid_masked: string | null;
+    email_from_address: string | null;
+    email_from_name: string | null;
 }
 
 export interface RetellPhoneNumber {
@@ -791,6 +831,12 @@ export interface RunTimeline {
         id: string | null;
         display_name: string | null;
         phone_masked: string | null;
+    };
+    workflow_version: {
+        id: string;
+        version_number: number;
+        definition: Record<string, unknown>;
+        published_at: string;
     };
     items: RunTimelineItem[];
 }

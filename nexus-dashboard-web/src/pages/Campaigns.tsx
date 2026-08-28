@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { useSelectedLocationId } from "@/context/LocationContext"
 import {
     activateOutboundHalt,
     createDraftCampaign,
@@ -76,6 +77,7 @@ function TriggerLabel({ triggerType }: { triggerType: string | null }) {
 
 export default function Campaigns() {
     const navigate = useNavigate()
+    const locationId = useSelectedLocationId()
     const [campaigns, setCampaigns] = useState<AutomationWorkflow[]>([])
     const [haltStatus, setHaltStatus] = useState<OutboundHaltStatus | null>(null)
     const [loading, setLoading] = useState(true)
@@ -142,9 +144,13 @@ export default function Campaigns() {
     }
 
     async function handleCreateFromScratch() {
+        if (!locationId) {
+            toast.error("Select a location before creating a campaign")
+            return
+        }
         setActing("create-scratch")
         try {
-            const wf = await createDraftCampaign("Untitled campaign")
+            const wf = await createDraftCampaign("Untitled campaign", locationId)
             toast.success("Draft campaign created")
             navigate(`/institution-admin/campaigns/${wf.id}/builder`)
         } catch {

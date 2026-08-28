@@ -37,24 +37,38 @@ from src.app.services.automation.definition_schema import (
     ExitNode,
     JsonMapperNode,
     LlmNode,
+    RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    TimeWaitConfig,
     UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
+    email_reply_wait_spec,
+    sms_reply_wait_spec,
 )
 from src.app.services.automation.action_registry import get_action_executor
-from src.app.services.automation.compliance_gate import ComplianceGate, NoOpComplianceGate
+from src.app.services.automation.compliance_gate import (
+    ComplianceGate,
+    GateResult,
+    NoOpComplianceGate,
+)
 from src.app.services.automation.revalidation import NoOpRevalidator, RunRevalidator
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+from src.app.services.automation.node_registry import capability_for
 from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
 from src.app.services.automation.voice_node_executor import (
     _CALL_PLACED_AWAITING,
     VoiceCooldownDeferred,
     VoiceParked,
+)
+from src.app.services.automation.retell_sms_conversation_service import (
+    RetellSmsConversationBusyError,
+    RetellSmsConversationConfigurationError,
+    RetellSmsConversationService,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +78,18 @@ _MAX_STEPS = 50
 # "9 AM reminder" batch doesn't hit the vendor in one burst. Full budget-aware
 # pacing across NexHealth/Retell/Twilio is coordinated with Plans 09/11.
 _DEFAULT_CALENDAR_JITTER_SECONDS = 300
+
+
+def _is_patient_directed(node: object) -> bool:
+    """Whether a send node contacts the patient.
+
+    SMS and voice always do. Email can also be addressed to the clinic's own
+    staff or to a fixed address, and those are not patient contact — see
+    ``SendEmailNode.is_patient_directed``.
+    """
+    if isinstance(node, SendEmailNode):
+        return node.is_patient_directed
+    return True
 
 
 class WorkflowGoTrackerWritebackError(RuntimeError):
@@ -123,6 +149,7 @@ class WorkflowStepDispatcher:
         """Advance run from current_step_id (or entry node) until wait or exit."""
         now = now or datetime.now(tz=timezone.utc)
         context = {**(run.trigger_metadata or {}), **(context or {})}
+        self.runtime.set_trace_context(context)
         node_map = {n.id: n for n in definition.nodes}
         current_node_id = run.current_step_id or definition.entry_node_id
         steps_advanced = 0
@@ -142,12 +169,30 @@ class WorkflowStepDispatcher:
                     patient_status_event_ids=patient_status_event_ids,
                 )
 
+            capability = capability_for(node)
+            if capability is None or not capability.runtime_supported:
+                reason = f"node type '{node.type}' is not supported by this engine"
+                logger.error(
+                    "dispatch: unsupported node institution=%s run=%s node=%s type=%s",
+                    run.institution_id,
+                    run.id,
+                    node.id,
+                    node.type,
+                )
+                await self.runtime.fail_run(run, reason=reason)
+                return DispatchResult(
+                    status="failed",
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
             steps_advanced += 1
 
-            if isinstance(node, WaitNode):
-                due_at = _compute_due_at(node.delay, location_timezone, now, context=context)
+            if isinstance(node, WaitNode) and isinstance(node.wait_for, TimeWaitConfig):
+                delay = node.wait_for.delay
+                due_at = _compute_due_at(delay, location_timezone, now, context=context)
                 # Smooth calendar (fixed local-time) sends to avoid vendor stampedes.
-                if self.calendar_jitter_seconds and isinstance(node.delay, CalendarDelay):
+                if self.calendar_jitter_seconds and isinstance(delay, CalendarDelay):
                     due_at += timedelta(
                         seconds=secrets.randbelow(self.calendar_jitter_seconds + 1)
                     )
@@ -166,6 +211,61 @@ class WorkflowStepDispatcher:
                     due_at=due_at,
                     timezone_name=location_timezone,
                 )
+                await self.runtime.wait_run(run, step)
+                return DispatchResult(
+                    status="waiting",
+                    timer_id=timer.id,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
+            elif (reply_wait := sms_reply_wait_spec(node)) is not None:
+                due_at = now + timedelta(seconds=reply_wait.response_window_seconds)
+                step = await self.runtime.begin_step(
+                    run,
+                    step_id=reply_wait.node_id,
+                    step_type="wait",
+                    scheduled_at=due_at,
+                    scheduled_timezone=location_timezone,
+                )
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=step.id,
+                    due_at=due_at,
+                    timezone_name=location_timezone,
+                )
+                step.result_code = "awaiting_sms_reply"
+                await self.runtime.wait_run(run, step)
+                return DispatchResult(
+                    status="waiting",
+                    timer_id=timer.id,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
+            elif (email_wait := email_reply_wait_spec(node)) is not None:
+                # Same shape as the SMS wait: park the run with a timer bounding
+                # the window, and let the inbound router resume it early if the
+                # patient answers. The timer is the floor, not the expectation.
+                due_at = now + timedelta(seconds=email_wait.response_window_seconds)
+                step = await self.runtime.begin_step(
+                    run,
+                    step_id=email_wait.node_id,
+                    step_type="wait",
+                    scheduled_at=due_at,
+                    scheduled_timezone=location_timezone,
+                )
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=step.id,
+                    due_at=due_at,
+                    timezone_name=location_timezone,
+                )
+                step.result_code = "awaiting_email_reply"
                 await self.runtime.wait_run(run, step)
                 return DispatchResult(
                     status="waiting",
@@ -218,6 +318,79 @@ class WorkflowStepDispatcher:
                     patient_status_event_ids=patient_status_event_ids,
                 )
 
+            elif isinstance(node, RetellSmsConversationNode):
+                conversation_service = RetellSmsConversationService(self.session)
+                try:
+                    parked = await conversation_service.enter(
+                        run=run,
+                        node=node,
+                        runtime=self.runtime,
+                        now=now,
+                    )
+                except (
+                    RetellSmsConversationBusyError,
+                    RetellSmsConversationConfigurationError,
+                ) as exc:
+                    logger.warning(
+                        "retell SMS node could not start run=%s node=%s reason=%s",
+                        run.id,
+                        node.id,
+                        type(exc).__name__,
+                    )
+                    step = await self.runtime.begin_step(
+                        run, step_id=node.id, step_type=node.type
+                    )
+                    await self.runtime.fail_step(
+                        step,
+                        result_code="retell_sms_start_failed",
+                        error_message=type(exc).__name__,
+                    )
+                    if run.location_id and run.contact_id:
+                        from src.app.models.campaign_response import CampaignStaffHandoff
+                        from src.app.services.automation.campaign_conversation_service import (
+                            CampaignConversationService,
+                        )
+
+                        thread = await CampaignConversationService(
+                            self.session
+                        ).open_sms_thread(run)
+                        thread.status = "handoff"
+                        self.session.add(
+                            CampaignStaffHandoff(
+                                institution_id=str(run.institution_id),
+                                location_id=str(run.location_id),
+                                workflow_id=str(run.workflow_id),
+                                workflow_run_id=str(run.id),
+                                conversation_thread_id=str(thread.id),
+                                contact_id=str(run.contact_id),
+                                reason="automation_failed",
+                                status="open",
+                                summary=(
+                                    "The Retell SMS conversation could not start "
+                                    "and needs staff follow-up."
+                                ),
+                            )
+                        )
+                        await self.session.flush()
+                    current_node_id = node.next_node_id
+                    continue
+
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=parked.step.id,
+                    due_at=parked.due_at,
+                    timezone_name=location_timezone,
+                )
+                await self.runtime.wait_run(run, parked.step)
+                return DispatchResult(
+                    status="waiting",
+                    timer_id=timer.id,
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
             elif isinstance(node, (SendSmsNode, SendVoiceNode, SendEmailNode)):
                 # Dispatch-time revalidation: the appointment/state this run targets
                 # may have changed since enrollment (e.g. cancelled). Skip + exit if
@@ -243,7 +416,18 @@ class WorkflowStepDispatcher:
                 content_class = (
                     definition.compliance.content_class if definition.compliance else None
                 )
-                gate_result = await self.gate.check(run, node.type, content_class=content_class)
+                # The gate models *patient* protection — consent, do-not-contact
+                # and the quiet-hours hold. An email addressed to the clinic's own
+                # staff or to a fixed ops mailbox is not patient contact, so
+                # running it through the gate would let a patient's marketing
+                # opt-out silently drop an internal alert, and would hold an
+                # urgent one until the next permitted window.
+                if _is_patient_directed(node):
+                    gate_result = await self.gate.check(
+                        run, node.type, content_class=content_class
+                    )
+                else:
+                    gate_result = GateResult(action="allow", reason="non_patient_recipient")
                 if gate_result.action == "block":
                     step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
                     await self.runtime.fail_step(step, result_code="compliance_blocked")
@@ -443,6 +627,22 @@ class WorkflowStepDispatcher:
                     patient_status_event_ids=patient_status_event_ids,
                 )
 
+            else:  # pragma: no cover - registry tests keep dispatch exhaustive
+                reason = f"node type '{node.type}' has no runtime handler"
+                logger.critical(
+                    "dispatch: registry mismatch institution=%s run=%s node=%s type=%s",
+                    run.institution_id,
+                    run.id,
+                    node.id,
+                    node.type,
+                )
+                await self.runtime.fail_run(run, reason=reason)
+                return DispatchResult(
+                    status="failed",
+                    steps_advanced=steps_advanced,
+                    patient_status_event_ids=patient_status_event_ids,
+                )
+
         logger.error(
             "dispatch: max step limit institution=%s run=%s", run.institution_id, run.id
         )
@@ -465,7 +665,8 @@ class WorkflowStepDispatcher:
         """Resume a WAITING run after its timer fires, then continue advancing.
 
         Two kinds of waits resume here:
-          * a WaitNode delay — advance the step pointer past the wait node;
+          * a time-mode WaitNode — advance the step pointer past the wait node;
+          * an SMS-reply-mode WaitNode (or legacy node) — advance after reply/timeout;
           * a compliance *hold* deferred at a send node — leave the pointer on the
             send node so advance() re-checks the gate and (if now permitted) sends.
         Finds the waiting step execution, resumes the run, repositions the pointer
@@ -488,12 +689,28 @@ class WorkflowStepDispatcher:
 
         node_map = {n.id: n for n in definition.nodes}
         current_node = node_map.get(run.current_step_id or "")
-        is_wait = isinstance(current_node, WaitNode)
+        is_wait = isinstance(current_node, WaitNode) and isinstance(
+            current_node.wait_for, TimeWaitConfig
+        )
+        is_sms_reply_wait = sms_reply_wait_spec(current_node) is not None
+        is_email_reply_wait = email_reply_wait_spec(current_node) is not None
         is_drip = isinstance(current_node, DripNode)
+        is_retell_sms = isinstance(current_node, RetellSmsConversationNode)
         is_held_send = isinstance(current_node, (SendSmsNode, SendVoiceNode, SendEmailNode))
-        if not (is_wait or is_drip or is_held_send):
+        if not (
+            is_wait
+            or is_sms_reply_wait
+            or is_email_reply_wait
+            or is_drip
+            or is_retell_sms
+            or is_held_send
+        ):
             await self.runtime.fail_run(
-                run, reason=f"expected wait, drip, or held send node at '{run.current_step_id}'"
+                run,
+                reason=(
+                    "expected wait, reply wait, drip, Retell SMS, or held send node at "
+                    f"'{run.current_step_id}'"
+                ),
             )
             return DispatchResult(status="failed")
 
@@ -514,11 +731,89 @@ class WorkflowStepDispatcher:
             )
             return DispatchResult(status="failed")
 
+        if is_retell_sms:
+            from src.app.models.retell_sms import (
+                ACTIVE_RETELL_SMS_SESSION_STATUSES,
+                RetellSmsSession,
+                RetellSmsSessionStatus,
+            )
+
+            retell_session = (
+                await self.session.execute(
+                    select(RetellSmsSession)
+                    .where(
+                        RetellSmsSession.workflow_run_id == str(run.id),
+                        RetellSmsSession.step_id == current_node.id,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if retell_session is None:
+                await self.runtime.fail_run(run, reason="active Retell SMS session not found")
+                return DispatchResult(status="failed")
+            effective_now = now or datetime.now(tz=timezone.utc)
+            is_active_retell_session = (
+                retell_session.status in ACTIVE_RETELL_SMS_SESSION_STATUSES
+            )
+            if is_active_retell_session and retell_session.expires_at > effective_now:
+                timer = await self.scheduler.create_timer(
+                    institution_id=run.institution_id,
+                    location_id=run.location_id,
+                    workflow_run_id=run.id,
+                    step_execution_id=waiting_step.id,
+                    due_at=retell_session.expires_at,
+                    timezone_name=location_timezone,
+                )
+                return DispatchResult(status="waiting", timer_id=timer.id)
+
+            conversation_service = RetellSmsConversationService(self.session)
+            if is_active_retell_session:
+                conversation_service.mark_terminal(
+                    retell_session,
+                    status=RetellSmsSessionStatus.TIMED_OUT.value,
+                    outcome="timeout",
+                    now=effective_now,
+                )
+            result_context = conversation_service.result_context(retell_session)
+            metadata = dict(run.trigger_metadata or {})
+            metadata.update(result_context)
+            run.trigger_metadata = metadata
+            context = {**context, **result_context}
+            waiting_step.result_code = (
+                "retell_sms_timeout"
+                if is_active_retell_session
+                else f"retell_sms_{retell_session.terminal_outcome or retell_session.status}"
+            )
+            waiting_step.result_metadata = result_context
+
+        self.runtime.set_trace_context(context)
         await self.runtime.resume_run(run, waiting_step)
         if is_drip:
             waiting_step.result_code = "drip_released"
+        if is_sms_reply_wait and waiting_step.result_code == "awaiting_sms_reply":
+            waiting_step.result_code = (
+                "sms_reply_received"
+                if context.get("sms_response_message_sid")
+                or context.get("sms_confirmation_message_sid")
+                else "sms_reply_timeout"
+            )
+        if is_email_reply_wait and waiting_step.result_code == "awaiting_email_reply":
+            # The timer is the window's floor. Reaching it without a reply is a
+            # legitimate outcome a downstream branch can act on, not a failure.
+            waiting_step.result_code = (
+                "email_reply_received"
+                if context.get("email_reply_message_id")
+                else "email_reply_timeout"
+            )
         is_parked_voice = is_held_send and waiting_step.result_code == _CALL_PLACED_AWAITING
-        if is_wait or is_drip or is_parked_voice:
+        if (
+            is_wait
+            or is_sms_reply_wait
+            or is_email_reply_wait
+            or is_drip
+            or is_retell_sms
+            or is_parked_voice
+        ):
             # WaitNode/DripNode: move past the gate. Parked voice: the call already
             # went out, so advance PAST the send node (never re-dial) into whatever
             # follows — typically a ConditionNode that branches on `call_outcome`.

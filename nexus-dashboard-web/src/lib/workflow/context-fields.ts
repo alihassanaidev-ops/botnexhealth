@@ -13,8 +13,13 @@ export const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = [
     "appointment_state_changed",
     "patient_status_changed",
 ]
+const SMS_REPLY_CONTEXT_TRIGGERS: TriggerType[] = ["sms_reply"]
 
 export const WORKFLOW_CONTEXT_FIELDS: WorkflowContextField[] = [
+    field("sms_reply_body", "SMS reply body", "I need to reschedule", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
+    field("sms_reply_intent", "SMS reply intent", "free_text", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
+    field("sms_reply_message_sid", "SMS message SID", "SM123", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
+    field("inbound_sms_message_id", "Inbound SMS message ID", "inbound-1", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
     field("gotracker_appointment_id", "AppointmentId", "1343", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
     field("gotracker_contact_id", "ContactId", "583", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
     field("gotracker_provider_id", "ProviderId", "2", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
@@ -113,6 +118,10 @@ export const GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE = {
 export const SAMPLE_WORKFLOW_CONTEXT: Record<string, unknown> = {
     event: "appointment.created",
     source: "gotracker",
+    inbound_sms_message_id: "inbound-1",
+    sms_reply_message_sid: "SM123",
+    sms_reply_body: "I need to reschedule",
+    sms_reply_intent: "free_text",
     gotracker_appointment_id: "1343",
     gotracker_contact_id: "583",
     contact_id: "gt-583",

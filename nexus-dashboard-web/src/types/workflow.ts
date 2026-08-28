@@ -21,6 +21,7 @@ export type TriggerType =
     | "bulk_import"
     | "callback_requested"
     | "patient_status_changed"
+    | "sms_reply"
 
 export interface AppointmentOffsetTrigger {
     type: "appointment_offset"
@@ -58,6 +59,12 @@ export interface PatientStatusChangedTrigger {
     statuses: string[]
     campaign_goal?: string | null
 }
+export interface SmsReplyTrigger {
+    type: "sms_reply"
+    /** Optional whole-token filters. Empty means any non-compliance inbound SMS. */
+    tokens?: string[]
+    campaign_goal?: string | null
+}
 
 export type WorkflowTrigger =
     | AppointmentOffsetTrigger
@@ -67,6 +74,7 @@ export type WorkflowTrigger =
     | BulkImportTrigger
     | CallbackRequestedTrigger
     | PatientStatusChangedTrigger
+    | SmsReplyTrigger
 
 // ---------------------------------------------------------------------------
 // Wait delay (discriminated on `delay_type`)
@@ -109,6 +117,7 @@ export type NodeType =
     | "wait"
     | "drip"
     | "send_sms"
+    | "retell_sms_conversation"
     | "send_voice"
     | "send_email"
     | "update_patient_status"
@@ -119,12 +128,22 @@ export type NodeType =
     | "condition"
     | "exit"
 
+export interface TimeWaitConfig {
+    type: "time"
+    delay: WaitDelay
+    respect_quiet_hours?: boolean
+}
+export interface SmsReplyWaitConfig {
+    type: "sms_reply"
+    response_window_seconds?: number
+    response_mappings?: SmsResponseMapping[]
+}
+export type WaitForConfig = TimeWaitConfig | SmsReplyWaitConfig
 export interface WaitNode {
     type: "wait"
     id: string
-    delay: WaitDelay
+    wait_for: WaitForConfig
     next_node_id: string
-    respect_quiet_hours?: boolean
 }
 export interface DripNode {
     type: "drip"
@@ -138,8 +157,23 @@ export interface SendSmsNode {
     id: string
     body_template: string
     next_node_id: string
+    include_opt_out_footer?: boolean
     respect_quiet_hours?: boolean
     max_attempts?: number
+    expect_response?: boolean
+    response_window_seconds?: number
+    response_mappings?: SmsResponseMapping[]
+}
+export interface SmsResponseMapping {
+    tokens: string[]
+    context_updates?: Record<string, boolean | number | string | string[] | null>
+    handoff_reason?: string | null
+}
+export interface RetellSmsConversationNode {
+    type: "retell_sms_conversation"
+    id: string
+    chat_profile_id: string
+    next_node_id: string
 }
 export interface SendVoiceNode {
     type: "send_voice"
@@ -155,14 +189,32 @@ export interface SendVoiceNode {
     phone_country_region?: string | null
     wait_for_outcome?: boolean
 }
+/** Who a `send_email` node addresses. Mirrors the backend `EmailRecipient`
+ *  union in definition_schema.py. Omitted on definitions published before the
+ *  field existed, which the backend reads as `contact`. */
+export type EmailRecipient =
+    | { kind: "contact" }
+    | { kind: "staff"; notification_type?: string | null; include_external?: boolean }
+    | { kind: "static"; addresses: string[] }
+    | { kind: "merge_field"; field: string }
+
 export interface SendEmailNode {
     type: "send_email"
     id: string
+    /** Inline content. Empty when `template_key` names a saved template —
+     *  the backend rejects a node that carries both. */
     subject_template: string
     body_template: string
+    /** Optional HTML part for inline mode. A saved template brings its own. */
+    html_template?: string | null
+    /** Key of a saved campaign email template owned by this institution. */
+    template_key?: string | null
     next_node_id: string
     respect_quiet_hours?: boolean
     max_attempts?: number
+    recipient?: EmailRecipient
+    /** `continue` lets an optional email fail without abandoning the run. */
+    on_failure?: "fail_run" | "continue"
 }
 export interface UpdatePatientStatusNode {
     type: "update_patient_status"
@@ -253,6 +305,7 @@ export type WorkflowNode =
     | WaitNode
     | DripNode
     | SendSmsNode
+    | RetellSmsConversationNode
     | SendVoiceNode
     | SendEmailNode
     | UpdatePatientStatusNode
@@ -298,7 +351,7 @@ export interface WorkflowDefinition {
 }
 
 /** Node types that carry exactly one forward pointer (`next_node_id`). */
-export type LinearNode = WaitNode | DripNode | SendSmsNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode | UpdateAppointmentNode | UpdateGoTrackerAppointmentNode | JsonMapperNode | LlmNode
+export type LinearNode = WaitNode | DripNode | SendSmsNode | RetellSmsConversationNode | SendVoiceNode | SendEmailNode | UpdatePatientStatusNode | UpdateAppointmentNode | UpdateGoTrackerAppointmentNode | JsonMapperNode | LlmNode
 /** Node types that place a message/call on a channel. */
 export type SendNode = SendSmsNode | SendVoiceNode | SendEmailNode
 
@@ -326,6 +379,20 @@ export interface ValidationIssue {
 export interface ValidateDefinitionResponse {
     valid: boolean
     issues: ValidationIssue[]
+}
+
+export interface WorkflowNodeCapability {
+    node_type: string
+    outgoing_fields: string[]
+    authorable: boolean
+    runtime_supported: boolean
+    dry_run_supported: boolean
+    legacy: boolean
+}
+
+export interface WorkflowNodeCapabilitiesResponse {
+    registry_version: string
+    nodes: WorkflowNodeCapability[]
 }
 
 // ---------------------------------------------------------------------------

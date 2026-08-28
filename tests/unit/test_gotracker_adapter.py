@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -8,7 +10,8 @@ import pytest
 from src.app.pms.gotracker.adapter import GoTrackerAdapter
 from src.app.pms.gotracker.client import GoTrackerAPIError, GoTrackerClient
 from src.app.pms.gotracker import mappers
-from src.app.pms.models import BookingRequest
+from src.app.pms.base import SupportsWorkingWindowOverrides
+from src.app.pms.models import BookingRequest, PatientCreateRequest
 
 
 class FakeGoTrackerClient:
@@ -41,6 +44,125 @@ def _adapter(client: FakeGoTrackerClient | None = None) -> GoTrackerAdapter:
             gotracker_product_key_encrypted="encrypted",
         ),
     )
+
+
+def test_gotracker_adapter_supports_working_window_overrides() -> None:
+    """Setup must read real work windows rather than derived bookable slots."""
+    assert isinstance(_adapter(), SupportsWorkingWindowOverrides)
+
+
+@pytest.mark.asyncio
+async def test_working_windows_use_stable_ids_and_override_endpoints() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.extend(
+        [
+            {
+                "code": True,
+                "data": [
+                    {
+                        "working_window_id": 519,
+                        "WorkDate": "2026-08-28",
+                        "ProviderId": 3,
+                        "OperatoryId": 3,
+                        "StartTime": "09:00:00",
+                        "EndTime": "17:30:00",
+                        "Source": "synced",
+                        "appointment_type_ids": [1, 2],
+                        "types_overridden": False,
+                    }
+                ],
+            },
+            {
+                "code": True,
+                "data": {
+                    "working_window_id": 519,
+                    "appointment_type_ids": [1],
+                    "types_overridden": True,
+                },
+            },
+            {
+                "code": True,
+                "data": {
+                    "working_window_id": 519,
+                    "appointment_type_ids": [1, 2],
+                    "types_overridden": False,
+                },
+            },
+        ]
+    )
+    adapter = _adapter(client)
+
+    windows = await adapter.list_availabilities(
+        provider_id="gt-3", start_date="2026-08-28", days=7
+    )
+    updated = await adapter.update_availability("gt-519", appointment_type_ids=["gt-1"])
+    cleared = await adapter.clear_availability_override("gt-519")
+
+    assert windows[0]["id"] == 519
+    assert windows[0]["appointment_type_ids"] == [1, 2]
+    assert windows[0]["types_overridden"] is False
+    assert client.calls[0] == {
+        "method": "GET",
+        "path": "/api/scheduling/working_hours",
+        "params": {"start_date": "2026-08-28", "days": 7, "provider_ids": "3"},
+        "json": None,
+    }
+    assert client.calls[1] == {
+        "method": "PATCH",
+        "path": "/api/scheduling/working_hours/519",
+        "params": {},
+        "json": {"appointment_type_ids": ["1"]},
+    }
+    assert updated["types_overridden"] is True
+    assert client.calls[2] == {
+        "method": "DELETE",
+        "path": "/api/scheduling/working_hours/519/override",
+        "params": {},
+        "json": None,
+    }
+    assert cleared["types_overridden"] is False
+
+
+@pytest.mark.asyncio
+async def test_closed_working_period_is_display_only_and_never_patchable() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {
+                    "status": "closed",
+                    "working_window_id": None,
+                    "Source": "derived",
+                    "WorkDate": "2026-09-01",
+                    "ProviderId": 3,
+                    "OperatoryId": 3,
+                    "StartTime": "00:00:00",
+                    "EndTime": "09:00:00",
+                }
+            ],
+        }
+    )
+    adapter = _adapter(client)
+
+    windows = await adapter.list_availabilities(
+        provider_id="gt-3", start_date="2026-09-01", days=1, include_closed=True
+    )
+
+    assert client.calls[0]["params"] == {
+        "start_date": "2026-09-01",
+        "days": 1,
+        "include_closed": "true",
+        "provider_ids": "3",
+    }
+    assert windows[0]["status"] == "closed"
+    assert windows[0]["synced"] is False
+    assert windows[0]["id"] == "closed:2026-09-01:3:3:00:00:00:09:00:00"
+
+    with pytest.raises(ValueError, match="cannot be updated"):
+        await adapter.update_availability(windows[0]["id"], appointment_type_ids=["gt-1"])
+
+    assert len(client.calls) == 1
 
 
 def test_gotracker_mappers_prefix_ids_and_preserve_source() -> None:
@@ -105,6 +227,7 @@ def test_gotracker_appointment_type_metadata_is_prefixed_for_ui() -> None:
         "gotracker_appointment_type_id": 9,
         "provider_ids": ["gt-2", "gt-3"],
         "operatory_ids": ["gt-4"],
+        "reason_ids": [],
         "bookable_online": True,
     }
 
@@ -276,6 +399,109 @@ async def test_list_providers_reads_nested_provider_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_patient_uses_consumer_writeback_endpoint() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": {
+                "ContactId": 415,
+                "FirstName": "Ada",
+            },
+        }
+    )
+    adapter = _adapter(client)
+
+    result = await adapter.create_patient(
+        PatientCreateRequest(
+            first_name="Ada",
+            last_name="Lovelace",
+            email="ada@example.com",
+            phone="+14165551212",
+            date_of_birth="1990-12-10",
+            provider_id="gt-2",
+            gender="Female",
+        )
+    )
+
+    assert result == {
+        "success": True,
+        "patient_id": "gt-415",
+        "message": "Patient Ada created successfully.",
+    }
+    assert client.calls[0] == {
+        "method": "POST",
+        "path": "/api/patients/",
+        "params": {},
+        "json": {
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "email": "ada@example.com",
+            "phone_number": "+14165551212",
+            "date_of_birth": "1990-12-10",
+            "provider_id": "2",
+            "gender": "Female",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_patient_returns_only_upcoming_appointment_context() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {
+                    "AppointmentId": 900000001,
+                    "AppointmentDate": "2099-07-20T00:00:00.000Z",
+                    "AppointmentTime": "09:00:00",
+                    "ProviderId": 2,
+                    "ProviderName": "Dr. M. Smith",
+                    "ScheduleColumnId": 4,
+                    "IsConfirmed": True,
+                },
+                {
+                    "AppointmentId": 900000002,
+                    "AppointmentDate": "2099-07-21T00:00:00.000Z",
+                    "AppointmentTime": "10:00:00",
+                    "ProviderId": 2,
+                    "StatusId": 3,
+                }
+            ],
+        }
+    )
+    adapter = _adapter(client)
+
+    patient = await adapter.get_patient("gt-415", include=["upcoming_appts"])
+
+    assert patient is not None
+    assert patient.id == "gt-415"
+    assert patient.first_name == ""
+    assert patient.extra == {
+        "upcoming_appointments": [
+            {
+                "id": "gt-900000001",
+                "provider_id": "gt-2",
+                "provider_name": "Dr. M. Smith",
+                "start_time": "2099-07-20T09:00:00",
+                "end_time": None,
+                "location_id": None,
+                "confirmed": True,
+            }
+        ]
+    }
+    assert client.calls[0]["method"] == "GET"
+    assert client.calls[0]["path"] == "/api/appointments/getAllAppointments"
+    assert client.calls[0]["params"] == {
+        "contactId": "415",
+        "from": datetime.now(ZoneInfo("America/Toronto")).date().isoformat(),
+        "exclude_cancelled": "true",
+        "page": 1,
+    }
+
+
+@pytest.mark.asyncio
 async def test_book_and_cancel_use_documented_endpoints() -> None:
     client = FakeGoTrackerClient()
     client.responses.extend(
@@ -433,6 +659,7 @@ async def test_create_appointment_type_uses_gotracker_body() -> None:
                 "minutes": 60,
                 "provider_ids": [2, 3],
                 "operatory_ids": [4],
+                "reason_ids": [6],
                 "bookable_online": True,
             },
         }
@@ -442,7 +669,7 @@ async def test_create_appointment_type_uses_gotracker_body() -> None:
     result = await adapter.create_appointment_type(
         name="Adult Recall",
         duration_minutes=60,
-        descriptor_ids=["ignored"],
+        descriptor_ids=["6"],
         provider_ids=["gt-2", "3"],
         operatory_ids=["gt-4"],
     )
@@ -457,10 +684,12 @@ async def test_create_appointment_type_uses_gotracker_body() -> None:
             "bookable_online": True,
             "provider_ids": ["2", "3"],
             "operatory_ids": ["4"],
+            "reason_ids": ["6"],
         },
     }
     assert result.id == "gt-9"
     assert result.source_metadata["provider_ids"] == ["gt-2", "gt-3"]
+    assert result.source_metadata["reason_ids"] == ["6"]
 
 
 @pytest.mark.asyncio
@@ -475,6 +704,7 @@ async def test_update_appointment_type_uses_gotracker_body() -> None:
                 "minutes": 75,
                 "provider_ids": [2],
                 "operatory_ids": [],
+                "reason_ids": [6],
                 "bookable_online": False,
             },
         }
@@ -484,6 +714,7 @@ async def test_update_appointment_type_uses_gotracker_body() -> None:
     result = await adapter.update_appointment_type(
         "gt-9",
         duration_minutes=75,
+        descriptor_ids=["6"],
         provider_ids=["gt-2"],
         operatory_ids=[],
         bookable_online=False,
@@ -496,12 +727,54 @@ async def test_update_appointment_type_uses_gotracker_body() -> None:
         "json": {
             "minutes": 75,
             "bookable_online": False,
+            "reason_ids": ["6"],
             "provider_ids": ["2"],
             "operatory_ids": [],
         },
     }
     assert result.duration_minutes == 75
     assert result.source_metadata["bookable_online"] is False
+    assert result.source_metadata["reason_ids"] == ["6"]
+
+
+@pytest.mark.asyncio
+async def test_list_pms_descriptors_reads_gotracker_reasons() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {
+                    "id": 6,
+                    "name": "Bridge prep",
+                    "code": None,
+                    "minutes": 90,
+                    "is_recall": False,
+                    "active": True,
+                }
+            ],
+        }
+    )
+
+    reasons = await _adapter(client).list_pms_descriptors()
+
+    assert client.calls[0] == {
+        "method": "GET",
+        "path": "/api/reasons",
+        "params": {},
+        "json": None,
+    }
+    assert reasons == [
+        {
+            "id": 6,
+            "name": "Bridge prep",
+            "descriptor_type": "GoTracker Reason",
+            "code": None,
+            "active": True,
+            "minutes": 90,
+            "is_recall": False,
+        }
+    ]
 
 
 @pytest.mark.asyncio

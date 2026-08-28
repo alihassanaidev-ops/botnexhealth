@@ -2,10 +2,10 @@
 
 Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, appointment_state_changed, recall_scan, manual,
-            bulk_import, callback_requested, patient_status_changed
-  Nodes:    wait, drip, send_sms, send_voice, send_email, update_patient_status,
-            update_appointment, update_gotracker_appointment, json_mapper, llm,
-            condition, exit
+            bulk_import, callback_requested, patient_status_changed, sms_reply
+  Nodes:    wait, drip, send_sms, retell_sms_conversation, send_voice, send_email,
+            update_patient_status, update_appointment,
+            update_gotracker_appointment, json_mapper, llm, condition, exit
 
 ``update_appointment`` is the PMS-neutral appointment write-back and should be
 preferred; ``update_gotracker_appointment`` only runs on GoTracker locations and
@@ -14,10 +14,13 @@ is retained for already-published definitions.
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal, Union
 
 import phonenumbers
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from src.app.services.automation.node_registry import outgoing_references
 
 PHONE_COUNTRY_REGIONS = frozenset(phonenumbers.SUPPORTED_REGIONS)
 
@@ -152,6 +155,58 @@ class PatientStatusChangedTrigger(BaseModel):
         return normalized or None
 
 
+class SmsReplyTrigger(BaseModel):
+    """Enroll when an inbound patient SMS matches optional whole-token filters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["sms_reply"] = "sms_reply"
+    tokens: list[str] = Field(default_factory=list)
+    campaign_goal: str | None = None
+
+    @field_validator("tokens")
+    @classmethod
+    def normalize_tokens(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            token = value.strip()
+            if token and token.casefold() not in {item.casefold() for item in normalized}:
+                normalized.append(token)
+        return normalized
+
+    @field_validator("campaign_goal")
+    @classmethod
+    def normalize_campaign_goal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class EmailReplyTrigger(BaseModel):
+    """Enroll when an inbound patient email matches optional whole-token filters.
+
+    The email counterpart to ``SmsReplyTrigger``. Only replies that routed to a
+    known clinic reach this — unattributable mail is held, never enrolled.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["email_reply"] = "email_reply"
+    tokens: list[str] = Field(default_factory=list)
+    campaign_goal: str | None = None
+
+    @field_validator("tokens")
+    @classmethod
+    def normalize_tokens(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            token = value.strip()
+            if token and token.casefold() not in {item.casefold() for item in normalized}:
+                normalized.append(token)
+        return normalized
+
+
 WorkflowTrigger = Annotated[
     Union[
         AppointmentOffsetTrigger,
@@ -161,6 +216,8 @@ WorkflowTrigger = Annotated[
         BulkImportTrigger,
         CallbackRequestedTrigger,
         PatientStatusChangedTrigger,
+        SmsReplyTrigger,
+        EmailReplyTrigger,
     ],
     Field(discriminator="type"),
 ]
@@ -235,14 +292,169 @@ class ConditionRule(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class SmsResponseMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tokens: list[str] = Field(default_factory=list)
+    context_updates: dict[str, Any] = Field(default_factory=dict)
+    handoff_reason: str | None = None
+
+    @field_validator("tokens")
+    @classmethod
+    def normalize_tokens(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            token = value.strip()
+            if token and token.casefold() not in {item.casefold() for item in normalized}:
+                normalized.append(token)
+        return normalized
+
+
+class TimeWaitConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["time"] = "time"
+    delay: WaitDelay
+    respect_quiet_hours: bool = True
+
+
+class SmsReplyWaitConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["sms_reply"] = "sms_reply"
+    response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
+    response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_deprecated_reply_key(cls, value: object) -> object:
+        """Keep published definitions loadable after reply-key removal."""
+        if not isinstance(value, dict) or "include_reply_key" not in value:
+            return value
+        cleaned = dict(value)
+        cleaned.pop("include_reply_key", None)
+        return cleaned
+
+
+class EmailReplyWaitConfig(BaseModel):
+    """Park the run until the patient replies to the email, or the window closes.
+
+    The default window is a week rather than SMS's three days: people answer
+    email on a slower rhythm, and a campaign that gives up after 72 hours would
+    treat an ordinary weekend as a non-response.
+
+    ``response_mappings`` reuses ``SmsResponseMapping`` — it is a token-to-context
+    mapping, not anything SMS-specific — so a workflow author configures replies
+    the same way on both channels.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["email_reply"] = "email_reply"
+    response_window_seconds: int = Field(default=604800, ge=60, le=2592000)
+    response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+
+WaitForConfig = Annotated[
+    Union[TimeWaitConfig, SmsReplyWaitConfig, EmailReplyWaitConfig],
+    Field(discriminator="type"),
+]
+
+
 class WaitNode(BaseModel):
+    """One public wait node with typed time/event behavior.
+
+    The before-validator upgrades the original ``wait`` shape so already-published
+    definitions continue to execute without a data migration.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
     type: Literal["wait"] = "wait"
-    delay: WaitDelay
+    wait_for: WaitForConfig
     next_node_id: str
-    respect_quiet_hours: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_legacy_time_wait(cls, value: object) -> object:
+        if not isinstance(value, dict) or "wait_for" in value or "delay" not in value:
+            return value
+        upgraded = dict(value)
+        upgraded["wait_for"] = {
+            "type": "time",
+            "delay": upgraded.pop("delay"),
+            "respect_quiet_hours": upgraded.pop("respect_quiet_hours", True),
+        }
+        return upgraded
+
+
+class WaitForSmsReplyNode(BaseModel):
+    """Legacy compatibility input. New definitions use WaitNode + SmsReplyWaitConfig."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["wait_for_sms_reply"] = "wait_for_sms_reply"
+    next_node_id: str
+    response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
+    response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_deprecated_reply_key(cls, value: object) -> object:
+        """Keep legacy published definitions loadable after reply-key removal."""
+        if not isinstance(value, dict) or "include_reply_key" not in value:
+            return value
+        cleaned = dict(value)
+        cleaned.pop("include_reply_key", None)
+        return cleaned
+
+
+class SmsReplyWaitSpec(BaseModel):
+    """Small internal interface shared by SMS correlation and dispatch modules."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    response_window_seconds: int
+    response_mappings: list[SmsResponseMapping]
+
+
+def sms_reply_wait_spec(
+    node: WaitNode | WaitForSmsReplyNode | object,
+) -> SmsReplyWaitSpec | None:
+    if isinstance(node, WaitNode) and isinstance(node.wait_for, SmsReplyWaitConfig):
+        config = node.wait_for
+    elif isinstance(node, WaitForSmsReplyNode):
+        config = node
+    else:
+        return None
+    return SmsReplyWaitSpec(
+        node_id=node.id,
+        response_window_seconds=config.response_window_seconds,
+        response_mappings=config.response_mappings,
+    )
+
+
+class EmailReplyWaitSpec(BaseModel):
+    """Internal interface shared by email correlation and dispatch."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    response_window_seconds: int
+    response_mappings: list[SmsResponseMapping]
+
+
+def email_reply_wait_spec(node: object) -> EmailReplyWaitSpec | None:
+    if not isinstance(node, WaitNode) or not isinstance(node.wait_for, EmailReplyWaitConfig):
+        return None
+    return EmailReplyWaitSpec(
+        node_id=node.id,
+        response_window_seconds=node.wait_for.response_window_seconds,
+        response_mappings=node.wait_for.response_mappings,
+    )
 
 
 class DripNode(BaseModel):
@@ -262,8 +474,64 @@ class SendSmsNode(BaseModel):
     type: Literal["send_sms"] = "send_sms"
     body_template: str = Field(min_length=1)
     next_node_id: str
+    include_opt_out_footer: bool = True
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
+    expect_response: bool = False
+    response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
+    response_mappings: list[SmsResponseMapping] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_deprecated_reply_key(cls, value: object) -> object:
+        """Keep published definitions loadable after reply-key removal."""
+        if not isinstance(value, dict) or "include_reply_key" not in value:
+            return value
+        cleaned = dict(value)
+        cleaned.pop("include_reply_key", None)
+        return cleaned
+
+
+_LEGACY_RETELL_SMS_POLICY_FIELDS = frozenset(
+    {
+        "inactivity_timeout_seconds",
+        "max_duration_seconds",
+        "max_patient_turns",
+        "dynamic_variable_mappings",
+        "human_handoff_tokens",
+        "timeout_behavior",
+        "failure_behavior",
+        "respect_quiet_hours",
+        "max_response_segments",
+    }
+)
+
+
+class RetellSmsConversationNode(BaseModel):
+    """Park a run while Retell generates replies for a Twilio SMS conversation.
+
+    BotNexHealth remains the transport and lifecycle owner. A Retell ``chat_id``
+    is created lazily on the first patient reply and is never used as the local
+    conversation identity.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["retell_sms_conversation"] = "retell_sms_conversation"
+    chat_profile_id: str = Field(min_length=1)
+    next_node_id: str
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_author_policy(cls, value: Any) -> Any:
+        """Load old published definitions while enforcing platform policy now."""
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: item
+            for key, item in value.items()
+            if key not in _LEGACY_RETELL_SMS_POLICY_FIELDS
+        }
 
 
 class SendVoiceNode(BaseModel):
@@ -318,16 +586,120 @@ class SendVoiceNode(BaseModel):
         return self
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
+
+
+class ContactRecipient(BaseModel):
+    """Send to the enrolled patient. The behaviour of every definition
+    published before ``recipient`` existed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["contact"] = "contact"
+
+
+class StaffRecipient(BaseModel):
+    """Send to the clinic's own staff — institution admins plus the run
+    location's admins and staff. Used for internal alerts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["staff"] = "staff"
+    # When set, users who opted out of this notification type are excluded and
+    # matching external recipients are included.
+    notification_type: str | None = Field(default=None, max_length=50)
+    include_external: bool = True
+
+
+class StaticRecipient(BaseModel):
+    """Send to fixed addresses — an ops mailbox, a monitoring alias."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["static"] = "static"
+    addresses: list[str] = Field(min_length=1, max_length=10)
+
+    @field_validator("addresses")
+    @classmethod
+    def validate_addresses(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for raw in value:
+            address = (raw or "").strip()
+            if not _EMAIL_RE.match(address):
+                raise ValueError(f"'{raw}' is not a valid email address")
+            cleaned.append(address)
+        return cleaned
+
+
+class MergeFieldRecipient(BaseModel):
+    """Send to an address resolved from a merge field at send time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["merge_field"] = "merge_field"
+    field: str = Field(min_length=1, max_length=80)
+
+
+EmailRecipient = Annotated[
+    ContactRecipient | StaffRecipient | StaticRecipient | MergeFieldRecipient,
+    Field(discriminator="kind"),
+]
+
+
 class SendEmailNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
     type: Literal["send_email"] = "send_email"
-    subject_template: str = Field(min_length=1)
-    body_template: str = Field(min_length=1)
+    # Inline content. Required unless ``template_key`` names a saved template.
+    subject_template: str = Field(default="", max_length=500)
+    body_template: str = Field(default="")
+    # Optional HTML part sent alongside the text one. Inline mode only; a saved
+    # template carries its own HTML.
+    html_template: str | None = None
+    # Reference to a CampaignEmailTemplate owned by this institution. When set,
+    # the saved template supplies subject, text and HTML, so editing it once
+    # updates every campaign that uses it.
+    template_key: str | None = Field(default=None, max_length=80)
     next_node_id: str
     respect_quiet_hours: bool = True
     max_attempts: int = Field(default=1, ge=1, le=3)
+    # Who receives this email. Defaults to the enrolled patient so definitions
+    # published before this field existed keep their original behaviour.
+    recipient: EmailRecipient = Field(default_factory=ContactRecipient)
+    # A courtesy email failing should not necessarily kill the whole run.
+    # Defaults to the historical behaviour (fail the run).
+    on_failure: Literal["fail_run", "continue"] = "fail_run"
+
+    @model_validator(mode="after")
+    def require_content(self) -> "SendEmailNode":
+        """Exactly one content source: a saved template, or inline text.
+
+        Inline subject/body stayed required-by-default so every definition
+        published before ``template_key`` existed still validates unchanged.
+        """
+        if self.template_key:
+            if self.subject_template or self.body_template or self.html_template:
+                raise ValueError(
+                    "send_email: use either template_key or inline content, not both"
+                )
+            return self
+        if not self.subject_template.strip():
+            raise ValueError("send_email: subject_template is required")
+        if not self.body_template.strip():
+            raise ValueError("send_email: body_template is required")
+        return self
+
+    @property
+    def is_patient_directed(self) -> bool:
+        """True when this email goes to the patient.
+
+        ``merge_field`` counts as patient-directed: it usually resolves to the
+        contact, and where it does not, keeping the consent check is the
+        conservative outcome — a send that is wrongly blocked is recoverable,
+        one that wrongly bypasses consent is not.
+        """
+        return self.recipient.kind in ("contact", "merge_field")
 
 
 class UpdatePatientStatusNode(BaseModel):
@@ -525,8 +897,10 @@ class ExitNode(BaseModel):
 WorkflowNode = Annotated[
     Union[
         WaitNode,
+        WaitForSmsReplyNode,
         DripNode,
         SendSmsNode,
+        RetellSmsConversationNode,
         SendVoiceNode,
         SendEmailNode,
         UpdatePatientStatusNode,
@@ -597,33 +971,11 @@ class WorkflowDefinition(BaseModel):
             )
 
         for node in self.nodes:
-            if isinstance(
-                node,
-                (
-                    WaitNode,
-                    DripNode,
-                    SendSmsNode,
-                    SendVoiceNode,
-                    SendEmailNode,
-                    UpdatePatientStatusNode,
-                    UpdateGoTrackerAppointmentNode,
-                    JsonMapperNode,
-                    LlmNode,
-                ),
-            ):
-                if node.next_node_id not in node_ids:
+            for ref_name, ref_id in outgoing_references(node):
+                if ref_id not in node_ids:
                     raise ValueError(
-                        f"node '{node.id}' next_node_id '{node.next_node_id}' not found in nodes"
+                        f"node '{node.id}' {ref_name} '{ref_id}' not found in nodes"
                     )
-            elif isinstance(node, ConditionNode):
-                for ref_name, ref_id in (
-                    ("true_next_node_id", node.true_next_node_id),
-                    ("false_next_node_id", node.false_next_node_id),
-                ):
-                    if ref_id not in node_ids:
-                        raise ValueError(
-                            f"condition node '{node.id}' {ref_name} '{ref_id}' not found in nodes"
-                        )
 
         if not any(isinstance(n, ExitNode) for n in self.nodes):
             raise ValueError("workflow definition must contain at least one exit node")

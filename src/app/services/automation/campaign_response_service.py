@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.automation_workflow import AutomationWorkflowRun
+from src.app.models.campaign_conversation_thread import CampaignConversationThread
 from src.app.models.campaign_response import CampaignResponseEvent, CampaignStaffHandoff
 from src.app.models.inbound_sms_message import InboundSmsMessage
 from src.app.models.outbound_voice import WorkflowVoiceAttempt
@@ -47,6 +48,7 @@ class CampaignResponseService:
             location_id=str(inbound.location_id) if inbound.location_id else None,
             workflow_id=str(run.workflow_id) if run else None,
             workflow_run_id=str(run.id) if run else inbound.workflow_run_id,
+            conversation_thread_id=inbound.conversation_thread_id,
             contact_id=str(inbound.contact_id) if inbound.contact_id else None,
             channel="sms",
             normalized_intent=parsed.intent,
@@ -62,21 +64,16 @@ class CampaignResponseService:
         self.session.add(event)
         await self.session.flush()
 
-        if run is not None:
-            self._merge_run_response_context(
-                run,
-                channel="sms",
-                intent=parsed.intent,
-                outcome=parsed.outcome,
-                response_event_id=str(event.id),
-                source_event_id=source_event_id,
-            )
-
         handoff = None
-        if parsed.handoff_reason:
+        handoff_reason = parsed.handoff_reason
+        if parsed.intent == "confirm" and run is None:
+            event.normalized_outcome = "staff_handoff_required"
+            handoff_reason = "ambiguous_response"
+
+        if handoff_reason:
             handoff = await self._create_handoff(
                 event,
-                reason=parsed.handoff_reason,
+                reason=handoff_reason,
                 summary=self._handoff_summary(parsed),
             )
         await self.session.flush()
@@ -238,6 +235,7 @@ class CampaignResponseService:
             location_id=event.location_id,
             workflow_id=event.workflow_id,
             workflow_run_id=event.workflow_run_id,
+            conversation_thread_id=event.conversation_thread_id,
             contact_id=event.contact_id,
             response_event_id=str(event.id),
             reason=reason,
@@ -245,6 +243,13 @@ class CampaignResponseService:
             summary=summary,
         )
         self.session.add(handoff)
+        if event.conversation_thread_id:
+            thread = await self.session.get(
+                CampaignConversationThread,
+                str(event.conversation_thread_id),
+            )
+            if isinstance(thread, CampaignConversationThread) and thread.status != "completed":
+                thread.status = "handoff"
         return handoff
 
     @staticmethod

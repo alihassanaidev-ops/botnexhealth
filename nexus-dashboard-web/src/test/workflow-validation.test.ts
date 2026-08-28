@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
     isPublishable,
+    reachableCycleNodes,
     unreachableNodes,
     validateDefinition,
 } from "@/lib/workflow/validation"
@@ -87,6 +88,25 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.node_id === "sms-1" && i.message.includes("body is empty"))).toBe(true)
     })
 
+    it("requires a Retell SMS profile", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "sms_reply" },
+            entry_node_id: "chat-1",
+            nodes: [
+                {
+                    type: "retell_sms_conversation",
+                    id: "chat-1",
+                    chat_profile_id: "",
+                    next_node_id: "exit-1",
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+        }
+        const issues = validateDefinition(def)
+        expect(issues.some((issue) => issue.message.includes("no chat profile"))).toBe(true)
+    })
+
     it("validates drip batch size and interval", () => {
         const def: WorkflowDefinition = {
             schema_version: "1.0",
@@ -100,6 +120,31 @@ describe("workflow validation", () => {
         const issues = validateDefinition(def)
         expect(issues.some((i) => i.node_id === "drip-1" && i.message.includes("batch size"))).toBe(true)
         expect(issues.some((i) => i.node_id === "drip-1" && i.message.includes("interval"))).toBe(true)
+    })
+
+    it("validates the response window for an SMS reply wait mode", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "wait-1",
+            nodes: [
+                {
+                    type: "wait",
+                    id: "wait-1",
+                    wait_for: {
+                        type: "sms_reply",
+                        response_window_seconds: 30,
+                        response_mappings: [],
+                    },
+                    next_node_id: "exit-1",
+                },
+                { type: "exit", id: "exit-1", outcome: "timed_out" },
+            ],
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((i) => i.node_id === "wait-1" && i.message.includes("response window"))).toBe(true)
     })
 
     it("flags out-of-range max_attempts", () => {
@@ -159,7 +204,7 @@ describe("workflow validation", () => {
 
     it("warns when a merge field is unavailable for the message channel", () => {
         const def = base()
-        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{appointment_type}}"
+        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{location_address}}"
         const issues = validateDefinition(def)
         expect(
             issues.some((i) => i.severity === "warning" && i.message.includes("Unavailable merge field")),
@@ -174,6 +219,20 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.node_id === "orphan" && i.severity === "warning")).toBe(true)
     })
 
+    it("blocks reachable execution loops", () => {
+        const def = base()
+        ;(def.nodes[0] as { next_node_id: string }).next_node_id = "sms-1"
+
+        expect(reachableCycleNodes(def)).toEqual(["sms-1"])
+        const issues = validateDefinition(def)
+        expect(issues).toContainEqual(expect.objectContaining({
+            node_id: "sms-1",
+            severity: "error",
+            code: "graph_cycle",
+        }))
+        expect(isPublishable(issues)).toBe(false)
+    })
+
     it("flags a recall interval below 1", () => {
         const def = base()
         def.trigger = { type: "recall_scan", recall_interval_months: 0 }
@@ -185,7 +244,7 @@ describe("workflow validation", () => {
         const def = base()
         def.trigger = { type: "patient_status_changed", statuses: [] }
         const issues = validateDefinition(def)
-        expect(issues.some((i) => i.message.includes("Patient status trigger"))).toBe(true)
+        expect(issues.some((i) => i.message.includes("Internal status trigger"))).toBe(true)
     })
 
     it("flags condition branches that are not connected", () => {

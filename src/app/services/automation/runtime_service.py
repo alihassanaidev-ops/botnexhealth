@@ -15,6 +15,7 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowRun,
     AutomationWorkflowStepExecution,
 )
+from src.app.services.automation.execution_trace import trace_safe_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,11 @@ class AutomationWorkflowRuntimeService:
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+        self._trace_context: dict = {}
+
+    def set_trace_context(self, context: dict | None) -> None:
+        """Bind the live dispatcher context used for attempt snapshots."""
+        self._trace_context = context or {}
 
     async def start_run(self, run: AutomationWorkflowRun) -> AutomationWorkflowRun:
         if run.status != AutomationRunStatus.PENDING.value:
@@ -94,12 +100,24 @@ class AutomationWorkflowRuntimeService:
             scheduled_at=scheduled_at,
             scheduled_local_at=scheduled_local_at,
             scheduled_timezone=scheduled_timezone,
-            status=AutomationStepStatus.PENDING.value,
+            status=AutomationStepStatus.RUNNING.value,
+            input_snapshot=trace_safe_mapping(self._trace_context),
+            started_at=datetime.now(tz=timezone.utc),
         )
         self.session.add(step)
         run.current_step_id = step_id
         await self.session.flush()
-        await self._emit(run, "step.started", step_id=step_id, metadata={"step_type": step_type})
+        await self._emit(
+            run,
+            "step.started",
+            step_id=step_id,
+            metadata={
+                "step_type": step_type,
+                "attempt_number": attempt_number,
+                "max_attempts": max_attempts,
+                "status": step.status,
+            },
+        )
         return step
 
     async def already_sent(self, run: AutomationWorkflowRun, step_id: str) -> bool:
@@ -138,8 +156,10 @@ class AutomationWorkflowRuntimeService:
         step.status = AutomationStepStatus.COMPLETED.value
         step.result_code = result_code
         step.result_metadata = result_metadata
+        step.output_snapshot = self._output_snapshot(result_code, result_metadata)
         step.completed_at = datetime.now(tz=timezone.utc)
         await self.session.flush()
+        await self._emit_step(step, "step.completed")
         return step
 
     async def mark_step_awaiting_outcome(
@@ -155,6 +175,7 @@ class AutomationWorkflowRuntimeService:
         (advance past) from a quiet-hours hold step (re-run the gate)."""
         step.result_code = result_code
         step.result_metadata = result_metadata
+        step.output_snapshot = self._output_snapshot(result_code, result_metadata)
         await self.session.flush()
         return step
 
@@ -170,8 +191,14 @@ class AutomationWorkflowRuntimeService:
         step.error_message = error_message
         step.result_code = result_code
         step.result_metadata = result_metadata
+        step.output_snapshot = self._output_snapshot(result_code, result_metadata)
         step.completed_at = datetime.now(tz=timezone.utc)
         await self.session.flush()
+        await self._emit_step(
+            step,
+            "step.failed",
+            metadata={"error": "Step failed" if error_message else None},
+        )
         return step
 
     async def wait_run(
@@ -182,8 +209,10 @@ class AutomationWorkflowRuntimeService:
         """Transition run and current step to waiting (timer has been set)."""
         run.status = AutomationRunStatus.WAITING.value
         step.status = AutomationStepStatus.WAITING.value
+        step.output_snapshot = self._output_snapshot(step.result_code, step.result_metadata)
         await self.session.flush()
         await self._emit(run, "run.waiting", step_id=step.step_id)
+        await self._emit_step(step, "step.waiting")
 
     async def resume_run(
         self,
@@ -197,9 +226,11 @@ class AutomationWorkflowRuntimeService:
             )
         run.status = AutomationRunStatus.RUNNING.value
         step.status = AutomationStepStatus.COMPLETED.value
+        step.output_snapshot = self._output_snapshot(step.result_code, step.result_metadata)
         step.completed_at = datetime.now(tz=timezone.utc)
         await self.session.flush()
         await self._emit(run, "run.resumed", step_id=step.step_id)
+        await self._emit_step(step, "step.completed")
 
     async def complete_run(
         self,
@@ -213,6 +244,7 @@ class AutomationWorkflowRuntimeService:
         run.outcome = outcome
         run.completed_at = datetime.now(tz=timezone.utc)
         await self.session.flush()
+        await self._close_sms_threads(run, completion_reason="workflow_completed")
         await self._emit(run, "run.completed", metadata={"outcome": outcome})
         return run
 
@@ -228,8 +260,31 @@ class AutomationWorkflowRuntimeService:
         run.blocked_reason = reason
         run.completed_at = datetime.now(tz=timezone.utc)
         await self.session.flush()
+        await self._close_sms_threads(run, completion_reason="workflow_failed")
         await self._emit(run, "run.failed", metadata={"reason": reason})
         return run
+
+    async def _close_sms_threads(
+        self,
+        run: AutomationWorkflowRun,
+        *,
+        completion_reason: str,
+    ) -> None:
+        try:
+            from src.app.services.automation.campaign_conversation_service import (
+                CampaignConversationService,
+            )
+
+            await CampaignConversationService(self.session).close_terminal_threads_for_run(
+                run,
+                completion_reason=completion_reason,
+            )
+        except Exception:  # noqa: BLE001 - run lifecycle should not fail on thread cleanup.
+            logger.warning(
+                "Failed to close SMS conversation threads for run=%s",
+                run.id,
+                exc_info=True,
+            )
 
     async def _emit(
         self,
@@ -260,4 +315,41 @@ class AutomationWorkflowRuntimeService:
             except Exception:  # noqa: BLE001 — SSE is a non-critical hint
                 logger.debug("workflow_run_updated SSE publish failed", exc_info=True)
 
+        return event
+
+    def _output_snapshot(
+        self,
+        result_code: str | None,
+        result_metadata: dict | None,
+    ) -> dict:
+        return {
+            "context": trace_safe_mapping(self._trace_context),
+            "result_code": result_code,
+            "result_metadata": trace_safe_mapping(result_metadata or {}),
+        }
+
+    async def _emit_step(
+        self,
+        step: AutomationWorkflowStepExecution,
+        event_type: str,
+        *,
+        metadata: dict | None = None,
+    ) -> AutomationWorkflowEvent:
+        details = {
+            "attempt_number": step.attempt_number,
+            "max_attempts": step.max_attempts,
+            "result_code": step.result_code,
+            "status": step.status,
+            **(metadata or {}),
+        }
+        event = AutomationWorkflowEvent(
+            institution_id=step.institution_id,
+            location_id=step.location_id,
+            workflow_run_id=step.workflow_run_id,
+            event_type=event_type,
+            step_id=step.step_id,
+            event_metadata={key: value for key, value in details.items() if value is not None},
+        )
+        self.session.add(event)
+        await self.session.flush()
         return event

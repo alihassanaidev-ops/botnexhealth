@@ -13,6 +13,7 @@ import {
     getSetupOverview,
     listAppointmentTypes,
     listDescriptors,
+    listReasons,
     listOperatories,
     listProviders,
     createAppointmentType,
@@ -68,16 +69,18 @@ export default function AppointmentTypes() {
         if (!locationId) return
         setLoading(true)
         try {
-            const [overviewData, typesData, descriptorsData, providersData, operatoriesData] = await Promise.all([
-                getSetupOverview(locationId),
+            const overviewData = await getSetupOverview(locationId)
+            const [typesData, linkableItems, providersData, operatoriesData] = await Promise.all([
                 listAppointmentTypes(locationId),
-                listDescriptors(locationId),
+                overviewData.pms_source === "gotracker"
+                    ? listReasons(locationId)
+                    : listDescriptors(locationId),
                 listProviders(locationId),
                 listOperatories(locationId),
             ])
             setOverview(overviewData)
             setTypes(typesData)
-            setDescriptors(descriptorsData)
+            setDescriptors(linkableItems)
             setProviders(providersData)
             setOperatories(operatoriesData)
         } catch (error: unknown) {
@@ -99,7 +102,9 @@ export default function AppointmentTypes() {
             const result = await triggerSync(locationId)
             if (result.success) {
                 toast.success(
-                    `Synced: ${result.appointment_types_synced} appointment types, ${result.descriptors_synced} descriptors`
+                    isGoTracker
+                        ? `Synced: ${result.appointment_types_synced} appointment types, ${result.descriptors_synced} reasons`
+                        : `Synced: ${result.appointment_types_synced} appointment types, ${result.descriptors_synced} descriptors`
                 )
                 await fetchData()
             } else {
@@ -128,7 +133,8 @@ export default function AppointmentTypes() {
             await createAppointmentType({
                 name: newName.trim(),
                 duration_minutes: newDuration,
-                descriptor_ids: isGoTracker ? [] : selectedDescriptorIds,
+                descriptor_ids: isGoTracker ? undefined : selectedDescriptorIds,
+                reason_ids: isGoTracker ? selectedDescriptorIds : undefined,
                 provider_ids: isGoTracker ? selectedProviderIds : undefined,
                 operatory_ids: isGoTracker ? selectedOperatoryIds : undefined,
                 bookable_online: isGoTracker ? bookableOnline : undefined,
@@ -165,7 +171,11 @@ export default function AppointmentTypes() {
             return
         }
 
-        const baselineDescriptorIds = (editTarget.source_metadata?.descriptor_ids || []) as string[]
+        const baselineDescriptorIds = ((
+            isGoTracker
+                ? editTarget.source_metadata?.reason_ids
+                : editTarget.source_metadata?.descriptor_ids
+        ) || []) as string[]
         const baselineProviderIds = (editTarget.source_metadata?.provider_ids || []) as string[]
         const baselineOperatoryIds = (editTarget.source_metadata?.operatory_ids || []) as string[]
         const baselineBookableOnline = editTarget.source_metadata?.bookable_online !== false
@@ -180,6 +190,7 @@ export default function AppointmentTypes() {
             name?: string
             duration_minutes?: number
             descriptor_ids?: string[]
+            reason_ids?: string[]
             provider_ids?: string[]
             operatory_ids?: string[]
             bookable_online?: boolean
@@ -190,6 +201,7 @@ export default function AppointmentTypes() {
             payload.duration_minutes = parsedDuration
         }
         if (isGoTracker) {
+            if (normalizedEdit !== normalizedBase) payload.reason_ids = editDescriptorIds
             if (normalizedProviderEdit !== normalizedProviderBase) payload.provider_ids = editProviderIds
             if (normalizedOperatoryEdit !== normalizedOperatoryBase) payload.operatory_ids = editOperatoryIds
             if (editBookableOnline !== baselineBookableOnline) payload.bookable_online = editBookableOnline
@@ -248,7 +260,11 @@ export default function AppointmentTypes() {
         setEditTarget(type)
         setEditName(type.name)
         setEditDuration(type.duration_minutes ? String(type.duration_minutes) : "")
-        setEditDescriptorIds((type.source_metadata?.descriptor_ids || []) as string[])
+        setEditDescriptorIds(((
+            isGoTracker
+                ? type.source_metadata?.reason_ids
+                : type.source_metadata?.descriptor_ids
+        ) || []) as string[])
         setEditProviderIds((type.source_metadata?.provider_ids || []) as string[])
         setEditOperatoryIds((type.source_metadata?.operatory_ids || []) as string[])
         setEditBookableOnline(type.source_metadata?.bookable_online !== false)
@@ -268,6 +284,10 @@ export default function AppointmentTypes() {
     }
 
     const toggleDescriptor = (sourceId: string) => {
+        if (isGoTracker) {
+            setSelectedDescriptorIds((prev) => prev.includes(sourceId) ? [] : [sourceId])
+            return
+        }
         setSelectedDescriptorIds((prev) =>
             prev.includes(sourceId)
                 ? prev.filter((id) => id !== sourceId)
@@ -276,6 +296,10 @@ export default function AppointmentTypes() {
     }
 
     const toggleEditDescriptor = (sourceId: string) => {
+        if (isGoTracker) {
+            setEditDescriptorIds((prev) => prev.includes(sourceId) ? [] : [sourceId])
+            return
+        }
         setEditDescriptorIds((prev) =>
             prev.includes(sourceId)
                 ? prev.filter((id) => id !== sourceId)
@@ -316,7 +340,9 @@ export default function AppointmentTypes() {
     }
 
     const getDescriptorNames = (type: CachedAppointmentType): string => {
-        const ids = type.source_metadata?.descriptor_ids || []
+        const ids = isGoTracker
+            ? type.source_metadata?.reason_ids || []
+            : type.source_metadata?.descriptor_ids || []
         if (ids.length === 0) return "-"
         return ids
             .map((id) => {
@@ -391,7 +417,7 @@ export default function AppointmentTypes() {
                         <TableRow>
                             <TableHead>Name</TableHead>
                             <TableHead>Duration</TableHead>
-                            <TableHead>{isGoTracker ? "Linked Providers" : "EMR Descriptors"}</TableHead>
+                            <TableHead>{isGoTracker ? "Linked Reason & Availability" : "EMR Descriptors"}</TableHead>
                             {canManage && canCreateAppointmentTypes && <TableHead className="text-right">Actions</TableHead>}
                         </TableRow>
                     </TableHeader>
@@ -428,7 +454,8 @@ export default function AppointmentTypes() {
                                 <TableCell className="max-w-[300px] text-sm text-muted-foreground">
                                     {isGoTracker ? (
                                         <div className="space-y-1">
-                                            <div className="truncate">{getProviderNames(type)}</div>
+                                            <div className="truncate">Reason: {getDescriptorNames(type)}</div>
+                                            <div className="truncate text-xs">Providers: {getProviderNames(type)}</div>
                                             <div className="truncate text-xs">{getOperatoryNames(type)}</div>
                                         </div>
                                     ) : (
@@ -469,7 +496,7 @@ export default function AppointmentTypes() {
                                 <DialogTitle>Create Appointment Type</DialogTitle>
                                 <DialogDescription>
                                     {isGoTracker
-                                        ? "Define a new appointment type and link the providers who can offer it."
+                                        ? "Define a scheduling appointment type and optionally link one Tracker-native reason."
                                         : "Define a new appointment type. Optionally link EMR descriptors to map to PMS procedure codes."}
                                 </DialogDescription>
                             </DialogHeader>
@@ -559,6 +586,40 @@ export default function AppointmentTypes() {
                                         </div>
                                     </>
                                 )}
+                                {isGoTracker && (
+                                    <div className="space-y-2">
+                                        <Label>
+                                            <Tag className="h-3 w-3 inline mr-1" />
+                                            Tracker Reason (one optional selection)
+                                        </Label>
+                                        <Input
+                                            placeholder="Search reasons..."
+                                            value={descriptorSearch}
+                                            onChange={(e) => setDescriptorSearch(e.target.value)}
+                                        />
+                                        <div className="border rounded-md max-h-48 overflow-y-auto">
+                                            {filteredDescriptors.length === 0 ? (
+                                                <p className="p-3 text-sm text-muted-foreground">No reasons found. Sync the practice to load them.</p>
+                                            ) : (
+                                                filteredDescriptors.map((reason) => (
+                                                    <label
+                                                        key={reason.source_id}
+                                                        className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                    >
+                                                        <Checkbox
+                                                            checked={selectedDescriptorIds.includes(reason.source_id)}
+                                                            onCheckedChange={() => toggleDescriptor(reason.source_id)}
+                                                        />
+                                                        <span className="text-sm">{reason.name}</span>
+                                                    </label>
+                                                ))
+                                            )}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            A GoTracker appointment type can link to one native reason.
+                                        </p>
+                                    </div>
+                                )}
                                 {!isGoTracker && descriptors.length > 0 && (
                                     <div className="space-y-2">
                                         <Label>
@@ -620,7 +681,7 @@ export default function AppointmentTypes() {
                                 <DialogTitle>Edit Appointment Type</DialogTitle>
                                 <DialogDescription>
                                     {isGoTracker
-                                        ? "Update the appointment type details and provider links."
+                                        ? "Update the appointment type details, its one Tracker reason, and provider links."
                                         : "Update the appointment type details and linked EMR descriptors."}
                                 </DialogDescription>
                             </DialogHeader>
@@ -709,6 +770,40 @@ export default function AppointmentTypes() {
                                             </p>
                                         </div>
                                     </>
+                                )}
+                                {isGoTracker && (
+                                    <div className="space-y-2">
+                                        <Label>
+                                            <Tag className="h-3 w-3 inline mr-1" />
+                                            Tracker Reason (one optional selection)
+                                        </Label>
+                                        <Input
+                                            placeholder="Search reasons..."
+                                            value={editDescriptorSearch}
+                                            onChange={(e) => setEditDescriptorSearch(e.target.value)}
+                                        />
+                                        <div className="border rounded-md max-h-48 overflow-y-auto">
+                                            {filteredEditDescriptors.length === 0 ? (
+                                                <p className="p-3 text-sm text-muted-foreground">No reasons found. Sync the practice to load them.</p>
+                                            ) : (
+                                                filteredEditDescriptors.map((reason) => (
+                                                    <label
+                                                        key={reason.source_id}
+                                                        className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                    >
+                                                        <Checkbox
+                                                            checked={editDescriptorIds.includes(reason.source_id)}
+                                                            onCheckedChange={() => toggleEditDescriptor(reason.source_id)}
+                                                        />
+                                                        <span className="text-sm">{reason.name}</span>
+                                                    </label>
+                                                ))
+                                            )}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            A GoTracker appointment type can link to one native reason.
+                                        </p>
+                                    </div>
                                 )}
                                 {!isGoTracker && descriptors.length > 0 && (
                                     <div className="space-y-2">

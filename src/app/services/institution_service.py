@@ -12,6 +12,7 @@ from src.app.models.institution import Institution
 from src.app.models.institution_group import InstitutionGroup
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_voice import OutboundVoiceProfile
+from src.app.models.retell_sms import RetellSmsChatProfile
 from src.app.services.sms_privacy import hash_for_logging
 
 logger = logging.getLogger(__name__)
@@ -263,9 +264,9 @@ class InstitutionService:
         """Get location and its parent institution by Retell agent ID.
 
         Inbound/location-wide agents are stored on ``InstitutionLocation``.
-        Outbound campaign agents are stored on ``OutboundVoiceProfile``. Retell
-        function calls during outbound workflows still need location routing for
-        PMS operations, so resolve both.
+        Outbound campaign agents are stored on ``OutboundVoiceProfile`` and SMS
+        response-generator agents on ``RetellSmsChatProfile``. Retell function
+        calls still need location routing for PMS operations, so resolve all three.
         """
         result = await self.session.execute(
             select(InstitutionLocation, Institution)
@@ -292,6 +293,27 @@ class InstitutionService:
                 OutboundVoiceProfile.institution_id
                 == InstitutionLocation.institution_id,
                 OutboundVoiceProfile.is_active.is_(True),
+                InstitutionLocation.is_active.is_(True),
+                Institution.is_active.is_(True),
+            )
+            .limit(1)
+        )
+        row = result.first()
+        if row:
+            return row[0], row[1]
+        result = await self.session.execute(
+            select(InstitutionLocation, Institution)
+            .select_from(RetellSmsChatProfile)
+            .join(
+                InstitutionLocation,
+                RetellSmsChatProfile.location_id == InstitutionLocation.id,
+            )
+            .join(Institution, RetellSmsChatProfile.institution_id == Institution.id)
+            .where(
+                RetellSmsChatProfile.retell_agent_id == agent_id,
+                RetellSmsChatProfile.institution_id
+                == InstitutionLocation.institution_id,
+                RetellSmsChatProfile.is_active.is_(True),
                 InstitutionLocation.is_active.is_(True),
                 Institution.is_active.is_(True),
             )

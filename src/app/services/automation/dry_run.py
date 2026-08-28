@@ -16,14 +16,20 @@ from src.app.services.automation.definition_schema import (
     ExitNode,
     JsonMapperNode,
     LlmNode,
+    RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    TimeWaitConfig,
+    UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
+    UpdatePatientStatusNode,
     WaitNode,
     WorkflowDefinition,
+    sms_reply_wait_spec,
 )
 from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG
+from src.app.services.automation.node_registry import capability_for
 from src.app.services.automation.step_dispatcher import (
     _assign_context_value,
     _classify_with_label_rules,
@@ -60,9 +66,13 @@ def _sample_context(extra: dict | None) -> dict:
 
 
 def _describe_wait(node: WaitNode) -> str:
-    delay = node.delay
+    if not isinstance(node.wait_for, TimeWaitConfig):
+        return "Wait for event"
+    delay = node.wait_for.delay
     if delay.delay_type == "duration":
         return f"Wait {delay.duration_seconds} seconds"
+    if delay.delay_type == "appointment_relative":
+        return f"Wait until appointment offset {delay.offset_seconds} seconds"
     return f"Wait until day +{delay.offset_days} at {delay.time_of_day} (local)"
 
 
@@ -99,9 +109,31 @@ def simulate_run(
             )
             result.outcome = "error"
             break
+        capability = capability_for(node)
+        if capability is None or not capability.dry_run_supported:
+            result.steps.append(
+                DryRunStep(
+                    node_id=node.id,
+                    node_type=node.type,
+                    summary=f"Step type '{node.type}' is not supported by dry-run",
+                )
+            )
+            result.outcome = "error"
+            break
         steps += 1
 
-        if isinstance(node, WaitNode):
+        reply_wait = sms_reply_wait_spec(node)
+        if reply_wait is not None:
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    "wait",
+                    "Wait for SMS reply",
+                    f"Pause up to {reply_wait.response_window_seconds} seconds",
+                )
+            )
+            current = node.next_node_id
+        elif isinstance(node, WaitNode):
             result.steps.append(DryRunStep(node.id, "wait", _describe_wait(node)))
             current = node.next_node_id
         elif isinstance(node, DripNode):
@@ -111,16 +143,59 @@ def simulate_run(
             body = render_sms_body(node.body_template, None, None, ctx)
             result.steps.append(DryRunStep(node.id, "send_sms", "Send SMS", body))
             current = node.next_node_id
-        elif isinstance(node, SendEmailNode):
-            subject = render_sms_body(node.subject_template, None, None, ctx)
-            body = render_sms_body(node.body_template, None, None, ctx)
+        elif isinstance(node, RetellSmsConversationNode):
             result.steps.append(
-                DryRunStep(node.id, "send_email", f"Send email — {subject}", body)
+                DryRunStep(
+                    node.id,
+                    node.type,
+                    "Wait for Retell-powered SMS conversation",
+                    "Patient and appointment context supplied automatically",
+                )
             )
+            current = node.next_node_id
+        elif isinstance(node, SendEmailNode):
+            if node.template_key:
+                # The dry run is synchronous and has no session, so a saved
+                # template's content isn't loaded here — name it instead of
+                # rendering an empty body.
+                result.steps.append(
+                    DryRunStep(
+                        node.id,
+                        "send_email",
+                        f"Send email — saved template '{node.template_key}'",
+                        "",
+                    )
+                )
+            else:
+                subject = render_sms_body(node.subject_template, None, None, ctx)
+                body = render_sms_body(node.body_template, None, None, ctx)
+                result.steps.append(
+                    DryRunStep(node.id, "send_email", f"Send email — {subject}", body)
+                )
             current = node.next_node_id
         elif isinstance(node, SendVoiceNode):
             result.steps.append(
                 DryRunStep(node.id, "send_voice", "Place AI voice call", f"agent {node.retell_agent_id}")
+            )
+            current = node.next_node_id
+        elif isinstance(node, UpdatePatientStatusNode):
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    node.type,
+                    f"Set internal patient status to {node.status}",
+                )
+            )
+            current = node.next_node_id
+        elif isinstance(node, UpdateAppointmentNode):
+            detail = node.start_time if node.operation == "reschedule" else None
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    node.type,
+                    f"{node.operation.title()} appointment",
+                    detail,
+                )
             )
             current = node.next_node_id
         elif isinstance(node, JsonMapperNode):
@@ -158,7 +233,15 @@ def simulate_run(
             result.steps.append(DryRunStep(node.id, "exit", f"Exit — {node.outcome or 'done'}"))
             result.outcome = node.outcome or "exit"
             current = None
-        else:  # pragma: no cover - discriminated union is exhaustive
-            current = None
+        else:  # pragma: no cover - registry contract tests keep this exhaustive
+            result.steps.append(
+                DryRunStep(
+                    node_id=node.id,
+                    node_type=node.type,
+                    summary=f"Step type '{node.type}' has no dry-run handler",
+                )
+            )
+            result.outcome = "error"
+            break
 
     return result

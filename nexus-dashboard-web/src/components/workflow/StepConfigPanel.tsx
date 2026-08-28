@@ -33,6 +33,10 @@ import {
     SelectValue,
 } from "@/components/ui/select"
 import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
+import {
+    listCampaignEmailTemplates,
+    type CampaignEmailTemplate,
+} from "@/lib/campaign-email-templates-api"
 import { listPhoneCountryRegions, listWorkflowLlmModels, type PhoneCountryRegion } from "@/lib/workflow-api"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
@@ -44,17 +48,22 @@ import {
     GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE,
     SAMPLE_WORKFLOW_CONTEXT,
 } from "@/lib/workflow/context-fields"
-import type { OutboundVoiceProfile } from "@/types"
+import type { OutboundVoiceProfile, RetellSmsChatProfile } from "@/types"
 import type {
     ConditionNode,
     ConditionOp,
     ConditionRule,
     DripNode,
+    EmailRecipient,
     JsonMapperNode,
     LlmNode,
+    RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    SmsResponseMapping,
+    SmsReplyWaitConfig,
+    TimeWaitConfig,
     TriggerType,
     UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
@@ -108,6 +117,7 @@ export interface StepConfigPanelProps {
     onSetEntry: (id: string) => void
     locationId?: string | null
     voiceProfiles?: OutboundVoiceProfile[]
+    retellSmsProfiles?: RetellSmsChatProfile[]
     readOnly?: boolean
 }
 
@@ -342,6 +352,33 @@ function TriggerForm({
                         <ContextPreview triggerType={trigger.type} />
                     </>
                 )}
+                {trigger.type === "sms_reply" && (
+                    <>
+                        <Field label="Reply tokens" hint="Optional comma-separated whole-token filters. Leave empty for any non-compliance inbound SMS.">
+                            <Textarea
+                                value={(trigger.tokens ?? []).join(", ")}
+                                disabled={readOnly}
+                                placeholder="pricing, reschedule, question"
+                                onChange={(e) => onChange({
+                                    ...trigger,
+                                    tokens: textToStringList(e.target.value),
+                                })}
+                            />
+                        </Field>
+                        <Field label="Campaign goal">
+                            <Input
+                                value={trigger.campaign_goal ?? ""}
+                                disabled={readOnly}
+                                placeholder="inbound_sms_followup"
+                                onChange={(e) => onChange({
+                                    ...trigger,
+                                    campaign_goal: e.target.value.trim() || null,
+                                })}
+                            />
+                        </Field>
+                        <ContextPreview triggerType={trigger.type} />
+                    </>
+                )}
             </div>
         </>
     )
@@ -358,6 +395,7 @@ function NodeForm({
     onDeleteNode,
     onSetEntry,
     voiceProfiles,
+    retellSmsProfiles,
     readOnly,
 }: StepConfigPanelProps & { node: WorkflowNode }) {
     const meta = NODE_META[node.type]
@@ -375,6 +413,14 @@ function NodeForm({
             <div className="space-y-4 py-4">
                 {node.type === "send_sms" && <SmsFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "send_email" && <EmailFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />}
+                {node.type === "retell_sms_conversation" && (
+                    <RetellSmsFields
+                        node={node}
+                        onChange={onNodeChange}
+                        profiles={retellSmsProfiles ?? []}
+                        readOnly={readOnly}
+                    />
+                )}
                 {node.type === "send_voice" && (
                     <VoiceFields
                         node={node}
@@ -385,7 +431,7 @@ function NodeForm({
                         readOnly={readOnly}
                     />
                 )}
-                {node.type === "wait" && <WaitFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
+                {node.type === "wait" && <WaitFields key={`${node.id}-${node.wait_for.type}`} node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "drip" && <DripFields node={node} onChange={onNodeChange} readOnly={readOnly} />}
                 {node.type === "update_patient_status" && (
                     <UpdatePatientStatusFields node={node} onChange={onNodeChange} readOnly={readOnly} />
@@ -428,8 +474,8 @@ function NodeForm({
                     />
                 )}
 
-                {(node.type === "wait" ||
-                    node.type === "send_sms" ||
+                {(node.type === "send_sms" ||
+                    node.type === "retell_sms_conversation" ||
                     node.type === "send_voice" ||
                     node.type === "send_email") && (
                     <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
@@ -493,12 +539,203 @@ function SmsFields({
                 channel="sms"
                 readOnly={readOnly}
             />
+            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
+                <div>
+                    <Label className="text-sm">Include STOP opt-out footer</Label>
+                    <p className="text-xs text-muted-foreground">
+                        Append “Reply STOP to opt out.” unless the message already contains it.
+                    </p>
+                </div>
+                <Switch
+                    aria-label="Include STOP opt-out footer"
+                    checked={node.include_opt_out_footer ?? true}
+                    disabled={readOnly}
+                    onCheckedChange={(checked) =>
+                        onChange({ ...node, include_opt_out_footer: checked })
+                    }
+                />
+            </div>
             <div className="space-y-1.5">
                 <Label className="text-sm">Preview</Label>
                 <SmsPreview node={node} />
             </div>
             <AttemptsField value={node.max_attempts ?? 1} onChange={(v) => onChange({ ...node, max_attempts: v })} readOnly={readOnly} />
         </>
+    )
+}
+
+function SmsReplyWaitFields({
+    config,
+    onChange,
+    readOnly,
+}: {
+    config: SmsReplyWaitConfig
+    onChange: (config: SmsReplyWaitConfig) => void
+    readOnly?: boolean
+}) {
+    const responseWindowHours = Math.round((config.response_window_seconds ?? 259200) / 3600)
+    const mappings = config.response_mappings ?? []
+    const updateMapping = (index: number, mapping: SmsResponseMapping) => {
+        onChange({
+            ...config,
+            response_mappings: mappings.map((current, currentIndex) => (
+                currentIndex === index ? mapping : current
+            )),
+        })
+    }
+    const removeMapping = (index: number) => {
+        onChange({
+            ...config,
+            response_mappings: mappings.filter((_, currentIndex) => currentIndex !== index),
+        })
+    }
+    const addMapping = () => {
+        onChange({
+            ...config,
+            response_mappings: [
+                ...mappings,
+                { tokens: [], context_updates: { sms_reply: "" } },
+            ],
+        })
+    }
+
+    return (
+        <div className="space-y-3">
+            <Field label="Response window hours">
+                <Input
+                    type="number"
+                    min={1}
+                    max={720}
+                    value={responseWindowHours}
+                    disabled={readOnly}
+                    onChange={(e) => {
+                        const hours = Math.max(1, Number(e.target.value || 1))
+                        onChange({ ...config, response_window_seconds: hours * 3600 })
+                    }}
+                />
+            </Field>
+            <div className="space-y-2">
+                <div>
+                    <Label className="text-sm">Reply rules</Label>
+                    <p className="text-xs text-muted-foreground">
+                        Match whole words without regard to capitalization, then continue the workflow or create a staff handoff.
+                    </p>
+                </div>
+                {mappings.map((mapping, index) => {
+                    const contextEntry = Object.entries(mapping.context_updates ?? {})[0]
+                    const contextField = contextEntry?.[0] ?? "sms_reply"
+                    const contextValue = contextEntry?.[1]
+                    const action = mapping.handoff_reason ? "handoff" : "continue"
+                    const tokensId = `sms-reply-rule-${index}-tokens`
+                    const fieldId = `sms-reply-rule-${index}-field`
+                    const valueId = `sms-reply-rule-${index}-value`
+
+                    return (
+                        <div key={index} className="space-y-3 rounded-md border border-border p-3">
+                            <Field
+                                label="Accepted replies"
+                                hint="Separate alternatives with commas, for example YES, Y."
+                                htmlFor={tokensId}
+                            >
+                                <Input
+                                    key={mapping.tokens.join("\u001f")}
+                                    id={tokensId}
+                                    defaultValue={mapping.tokens.join(", ")}
+                                    disabled={readOnly}
+                                    placeholder="YES, Y"
+                                    onBlur={(event) => updateMapping(index, {
+                                        ...mapping,
+                                        tokens: textToStringList(event.currentTarget.value),
+                                    })}
+                                />
+                            </Field>
+                            <Field label="When matched">
+                                <Select
+                                    value={action}
+                                    disabled={readOnly}
+                                    onValueChange={(value) => updateMapping(index, value === "handoff"
+                                        ? {
+                                            tokens: mapping.tokens,
+                                            handoff_reason: mapping.handoff_reason || "sms_reply_requires_staff",
+                                        }
+                                        : {
+                                            tokens: mapping.tokens,
+                                            context_updates: mapping.context_updates ?? { sms_reply: "" },
+                                        })}
+                                >
+                                    <SelectTrigger aria-label={`Action for reply rule ${index + 1}`}>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="continue">Continue workflow</SelectItem>
+                                        <SelectItem value="handoff">Create staff handoff</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </Field>
+                            {action === "continue" ? (
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    <Field label="Save to context field" htmlFor={fieldId}>
+                                        <Input
+                                            id={fieldId}
+                                            value={contextField}
+                                            disabled={readOnly}
+                                            placeholder="sms_reply"
+                                            onChange={(event) => updateMapping(index, {
+                                                tokens: mapping.tokens,
+                                                context_updates: {
+                                                    [event.target.value.trim() || "sms_reply"]: contextValue ?? "",
+                                                },
+                                            })}
+                                        />
+                                    </Field>
+                                    <Field label="Save value" htmlFor={valueId}>
+                                        <Input
+                                            id={valueId}
+                                            value={ruleValueToText(contextValue)}
+                                            disabled={readOnly}
+                                            placeholder="yes"
+                                            onChange={(event) => updateMapping(index, {
+                                                tokens: mapping.tokens,
+                                                context_updates: { [contextField]: event.target.value },
+                                            })}
+                                        />
+                                    </Field>
+                                </div>
+                            ) : (
+                                <Field label="Handoff reason" htmlFor={valueId}>
+                                    <Input
+                                        id={valueId}
+                                        value={mapping.handoff_reason ?? ""}
+                                        disabled={readOnly}
+                                        placeholder="sms_reply_requires_staff"
+                                        onChange={(event) => updateMapping(index, {
+                                            tokens: mapping.tokens,
+                                            handoff_reason: event.target.value,
+                                        })}
+                                    />
+                                </Field>
+                            )}
+                            {!readOnly && (
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="gap-1.5 text-destructive hover:text-destructive"
+                                    onClick={() => removeMapping(index)}
+                                >
+                                    <Trash2 className="h-3.5 w-3.5" /> Remove rule
+                                </Button>
+                            )}
+                        </div>
+                    )
+                })}
+                {!readOnly && (
+                    <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={addMapping}>
+                        <Plus className="h-3.5 w-3.5" /> Add reply rule
+                    </Button>
+                )}
+            </div>
+        </div>
     )
 }
 
@@ -513,28 +750,269 @@ function EmailFields({
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
+    const [savedTemplates, setSavedTemplates] = useState<CampaignEmailTemplate[]>([])
+    const usingSavedTemplate = Boolean(node.template_key)
+
+    useEffect(() => {
+        let cancelled = false
+        listCampaignEmailTemplates(true)
+            .then((list) => {
+                if (!cancelled) setSavedTemplates(list)
+            })
+            // A failed lookup must not break the config panel; the picker simply
+            // shows as empty and inline content still works.
+            .catch(() => undefined)
+        return () => {
+            cancelled = true
+        }
+    }, [])
+
+    // The backend rejects a node carrying both a template key and inline
+    // content, so switching clears the other side rather than leaving a
+    // leftover that fails validation on publish.
+    const onContentModeChange = (mode: string) => {
+        if (mode === "template") {
+            onChange({
+                ...node,
+                template_key: savedTemplates[0]?.key ?? "",
+                subject_template: "",
+                body_template: "",
+                html_template: null,
+            })
+        } else {
+            onChange({ ...node, template_key: null })
+        }
+    }
+
+    // Definitions published before `recipient` existed have no value; the
+    // backend reads that as the patient, so mirror it here.
+    const recipient = node.recipient ?? { kind: "contact" as const }
+    const patientDirected = recipient.kind === "contact" || recipient.kind === "merge_field"
+
+    const setRecipient = (next: EmailRecipient) => onChange({ ...node, recipient: next })
+
+    const onKindChange = (kind: EmailRecipient["kind"]) => {
+        if (kind === recipient.kind) return
+        // Each variant carries different fields; rebuild rather than merge so a
+        // stale `addresses` or `field` can't ride along and fail backend validation.
+        if (kind === "contact") setRecipient({ kind: "contact" })
+        else if (kind === "staff") setRecipient({ kind: "staff", include_external: true })
+        else if (kind === "static") setRecipient({ kind: "static", addresses: [] })
+        else setRecipient({ kind: "merge_field", field: "" })
+    }
+
     return (
         <>
-            <Field label="Subject">
-                <Input
-                    value={node.subject_template}
-                    disabled={readOnly}
-                    onChange={(e) => onChange({ ...node, subject_template: e.target.value })}
-                />
+            <Field
+                label="Send to"
+                hint={
+                    patientDirected
+                        ? "Patient emails respect consent, quiet hours, and carry an unsubscribe link."
+                        : "Internal emails skip consent checks, quiet hours, and the unsubscribe footer."
+                }
+            >
+                <Select value={recipient.kind} disabled={readOnly} onValueChange={onKindChange}>
+                    <SelectTrigger>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="contact">The patient</SelectItem>
+                        <SelectItem value="staff">Clinic staff</SelectItem>
+                        <SelectItem value="static">Specific address</SelectItem>
+                        <SelectItem value="merge_field">Address from a merge field</SelectItem>
+                    </SelectContent>
+                </Select>
             </Field>
-            <MessageField
-                label="Body"
-                value={node.body_template}
-                onChange={(v) => onChange({ ...node, body_template: v })}
-                triggerType={def.trigger.type}
-                channel="email"
-                readOnly={readOnly}
-            />
-            <div className="space-y-1.5">
-                <Label className="text-sm">Preview</Label>
-                <EmailPreview node={node} />
-            </div>
+
+            {recipient.kind === "staff" && (
+                <Field
+                    label="Notification type"
+                    hint="Optional. Respects each staff member's notification preferences and includes any external recipients configured for this type."
+                >
+                    <Input
+                        value={recipient.notification_type ?? ""}
+                        placeholder="e.g. urgent_alert"
+                        disabled={readOnly}
+                        onChange={(e) =>
+                            setRecipient({
+                                ...recipient,
+                                notification_type: e.target.value.trim() || null,
+                            })
+                        }
+                    />
+                </Field>
+            )}
+
+            {recipient.kind === "static" && (
+                <Field label="Addresses" hint="Comma-separated. Up to 10.">
+                    <Input
+                        value={recipient.addresses.join(", ")}
+                        placeholder="ops@clinic.com, alerts@clinic.com"
+                        disabled={readOnly}
+                        onChange={(e) =>
+                            setRecipient({
+                                ...recipient,
+                                addresses: e.target.value
+                                    .split(",")
+                                    .map((a) => a.trim())
+                                    .filter(Boolean),
+                            })
+                        }
+                    />
+                </Field>
+            )}
+
+            {recipient.kind === "merge_field" && (
+                <Field
+                    label="Merge field"
+                    hint="Treated as a patient email — consent and quiet hours still apply."
+                >
+                    <Input
+                        value={recipient.field}
+                        placeholder="e.g. patient_email"
+                        disabled={readOnly}
+                        onChange={(e) => setRecipient({ ...recipient, field: e.target.value.trim() })}
+                    />
+                </Field>
+            )}
+
+            <Field
+                label="Content"
+                hint={
+                    usingSavedTemplate
+                        ? "Edited in Campaign Emails. Changing it there updates every campaign using it."
+                        : "Written here and used only by this step."
+                }
+            >
+                <Select
+                    value={usingSavedTemplate ? "template" : "inline"}
+                    disabled={readOnly}
+                    onValueChange={onContentModeChange}
+                >
+                    <SelectTrigger>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="inline">Write it here</SelectItem>
+                        <SelectItem value="template">Use a saved template</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+
+            {usingSavedTemplate ? (
+                <Field
+                    label="Template"
+                    hint={
+                        savedTemplates.length === 0
+                            ? "No templates yet — create one under Campaign Emails."
+                            : undefined
+                    }
+                >
+                    <Select
+                        value={node.template_key ?? ""}
+                        disabled={readOnly || savedTemplates.length === 0}
+                        onValueChange={(v) => onChange({ ...node, template_key: v })}
+                    >
+                        <SelectTrigger>
+                            <SelectValue placeholder="Select a template" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {savedTemplates.map((t) => (
+                                <SelectItem key={t.key} value={t.key}>
+                                    {t.name}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </Field>
+            ) : (
+                <>
+                    <Field label="Subject">
+                        <Input
+                            value={node.subject_template}
+                            disabled={readOnly}
+                            onChange={(e) => onChange({ ...node, subject_template: e.target.value })}
+                        />
+                    </Field>
+                    <MessageField
+                        label="Body"
+                        value={node.body_template}
+                        onChange={(v) => onChange({ ...node, body_template: v })}
+                        triggerType={def.trigger.type}
+                        channel="email"
+                        readOnly={readOnly}
+                    />
+                    <div className="space-y-1.5">
+                        <Label className="text-sm">Preview</Label>
+                        <EmailPreview node={node} />
+                    </div>
+                </>
+            )}
             <AttemptsField value={node.max_attempts ?? 1} onChange={(v) => onChange({ ...node, max_attempts: v })} readOnly={readOnly} />
+            <Field
+                label="If sending fails"
+                hint="Continue is for optional emails that should not abandon a run that has already done its real work."
+            >
+                <Select
+                    value={node.on_failure ?? "fail_run"}
+                    disabled={readOnly}
+                    onValueChange={(v) =>
+                        onChange({ ...node, on_failure: v as "fail_run" | "continue" })
+                    }
+                >
+                    <SelectTrigger>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="fail_run">Stop the workflow</SelectItem>
+                        <SelectItem value="continue">Carry on to the next step</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+        </>
+    )
+}
+
+function RetellSmsFields({
+    node,
+    onChange,
+    profiles,
+    readOnly,
+}: {
+    node: RetellSmsConversationNode
+    onChange: (n: WorkflowNode) => void
+    profiles: RetellSmsChatProfile[]
+    readOnly?: boolean
+}) {
+    return (
+        <>
+            <Field
+                label="AI SMS agent profile"
+                hint="Choose the response agent. Patient, clinic, and appointment context is supplied automatically; Twilio sends and receives every SMS."
+            >
+                <Select
+                    value={node.chat_profile_id || NONE}
+                    disabled={readOnly}
+                    onValueChange={(value) =>
+                        onChange({ ...node, chat_profile_id: value === NONE ? "" : value })
+                    }
+                >
+                    <SelectTrigger><SelectValue placeholder="Choose chat profile" /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE} disabled={profiles.length > 0}>No profile selected</SelectItem>
+                        {profiles.map((profile) => (
+                            <SelectItem key={profile.id} value={profile.id}>
+                                {profile.display_name || profile.purpose || "Unnamed chat profile"}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </Field>
+            {profiles.length === 0 && (
+                <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-muted-foreground">
+                    No Retell SMS chat profiles are configured for this location. Ask a platform admin to add one.
+                </p>
+            )}
         </>
     )
 }
@@ -799,23 +1277,81 @@ function VoiceFields({
 }
 
 function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n: WorkflowNode) => void; readOnly?: boolean }) {
-    const delay = node.delay
+    const setWaitFor = (waitFor: WaitNode["wait_for"]) => onChange({ ...node, wait_for: waitFor })
+
     return (
         <>
-            <Field label="Wait type">
+            <Field label="Wait for">
+                <Select
+                    value={node.wait_for.type}
+                    disabled={readOnly}
+                    onValueChange={(v) =>
+                        setWaitFor(v === "sms_reply"
+                            ? {
+                                type: "sms_reply",
+                                response_window_seconds: 259200,
+                                response_mappings: [
+                                    { tokens: ["YES", "Y"], context_updates: { sms_reply: "yes" } },
+                                    { tokens: ["NO", "N"], context_updates: { sms_reply: "no" } },
+                                ],
+                            }
+                            : {
+                                type: "time",
+                                delay: { delay_type: "duration", duration_seconds: 3600 },
+                                respect_quiet_hours: true,
+                            })
+                    }
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="time">Time</SelectItem>
+                        <SelectItem value="sms_reply">SMS reply</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+            {node.wait_for.type === "sms_reply" ? (
+                <SmsReplyWaitFields
+                    config={node.wait_for}
+                    onChange={setWaitFor}
+                    readOnly={readOnly}
+                />
+            ) : (
+                <TimeWaitFields
+                    config={node.wait_for}
+                    onChange={setWaitFor}
+                    readOnly={readOnly}
+                />
+            )}
+        </>
+    )
+}
+
+function TimeWaitFields({
+    config,
+    onChange,
+    readOnly,
+}: {
+    config: TimeWaitConfig
+    onChange: (config: TimeWaitConfig) => void
+    readOnly?: boolean
+}) {
+    const delay = config.delay
+    const setDelay = (nextDelay: TimeWaitConfig["delay"]) => onChange({ ...config, delay: nextDelay })
+
+    return (
+        <>
+            <Field label="Timing">
                 <Select
                     value={delay.delay_type}
                     disabled={readOnly}
                     onValueChange={(v) =>
-                        onChange({
-                            ...node,
-                            delay:
-                                v === "duration"
-                                    ? { delay_type: "duration", duration_seconds: 3600 }
-                                    : v === "appointment_relative"
-                                      ? { delay_type: "appointment_relative", offset_seconds: -3600, anchor_field: "appointment_at" }
-                                      : { delay_type: "calendar", offset_days: 0, time_of_day: "09:00" },
-                        })
+                        setDelay(
+                            v === "duration"
+                                ? { delay_type: "duration", duration_seconds: 3600 }
+                                : v === "appointment_relative"
+                                  ? { delay_type: "appointment_relative", offset_seconds: -3600, anchor_field: "appointment_at" }
+                                  : { delay_type: "calendar", offset_days: 0, time_of_day: "09:00" },
+                        )
                     }
                 >
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -835,10 +1371,7 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                         value={round2(delay.duration_seconds / 3600)}
                         disabled={readOnly}
                         onChange={(e) =>
-                            onChange({
-                                ...node,
-                                delay: { delay_type: "duration", duration_seconds: Math.round(toFloat(e.target.value, 0) * 3600) },
-                            })
+                            setDelay({ delay_type: "duration", duration_seconds: Math.round(toFloat(e.target.value, 0) * 3600) })
                         }
                     />
                 </Field>
@@ -850,16 +1383,16 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                             value={delay.offset_days}
                             disabled={readOnly}
                             onChange={(e) =>
-                                onChange({ ...node, delay: { ...delay, offset_days: toInt(e.target.value, 0) } })
+                                setDelay({ ...delay, offset_days: toInt(e.target.value, 0) })
                             }
                         />
                     </Field>
-                    <Field label="Send time (HH:MM, local)">
+                    <Field label="Resume time (HH:MM, local)">
                         <Input
                             type="time"
                             value={delay.time_of_day}
                             disabled={readOnly}
-                            onChange={(e) => onChange({ ...node, delay: { ...delay, time_of_day: e.target.value } })}
+                            onChange={(e) => setDelay({ ...delay, time_of_day: e.target.value })}
                         />
                     </Field>
                 </>
@@ -873,13 +1406,10 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                                 const offsetSeconds = v === CUSTOM_RELATIVE_WAIT
                                     ? (isRelativeWaitPreset(delay.offset_seconds) ? 0 : delay.offset_seconds)
                                     : Number(v)
-                                onChange({
-                                    ...node,
-                                    delay: {
-                                        delay_type: "appointment_relative",
-                                        offset_seconds: offsetSeconds,
-                                        anchor_field: delay.anchor_field ?? "appointment_at",
-                                    },
+                                setDelay({
+                                    delay_type: "appointment_relative",
+                                    offset_seconds: offsetSeconds,
+                                    anchor_field: delay.anchor_field ?? "appointment_at",
                                 })
                             }}
                         >
@@ -901,19 +1431,27 @@ function WaitFields({ node, onChange, readOnly }: { node: WaitNode; onChange: (n
                             value={round2(delay.offset_seconds / 3600)}
                             disabled={readOnly}
                             onChange={(e) =>
-                                onChange({
-                                    ...node,
-                                    delay: {
-                                        delay_type: "appointment_relative",
-                                        offset_seconds: Math.round(toFloat(e.target.value, 0) * 3600),
-                                        anchor_field: delay.anchor_field ?? "appointment_at",
-                                    },
+                                setDelay({
+                                    delay_type: "appointment_relative",
+                                    offset_seconds: Math.round(toFloat(e.target.value, 0) * 3600),
+                                    anchor_field: delay.anchor_field ?? "appointment_at",
                                 })
                             }
                         />
                     </Field>
                 </>
             )}
+            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
+                <div>
+                    <Label className="text-sm">Respect quiet hours</Label>
+                    <p className="text-xs text-muted-foreground">Hold the workflow outside the location's window.</p>
+                </div>
+                <Switch
+                    checked={config.respect_quiet_hours ?? true}
+                    disabled={readOnly}
+                    onCheckedChange={(checked) => onChange({ ...config, respect_quiet_hours: checked })}
+                />
+            </div>
         </>
     )
 }
@@ -1765,6 +2303,12 @@ function defaultTrigger(type: TriggerType): WorkflowTrigger {
                 type,
                 statuses: ["appointment_confirmed"],
                 campaign_goal: "post_op_followup",
+            }
+        case "sms_reply":
+            return {
+                type,
+                tokens: [],
+                campaign_goal: "inbound_sms_followup",
             }
     }
 }

@@ -86,6 +86,7 @@ export async function createAppointmentType(
         name: string;
         duration_minutes: number;
         descriptor_ids?: string[];
+        reason_ids?: string[];
         provider_ids?: string[];
         operatory_ids?: string[];
         bookable_online?: boolean;
@@ -112,6 +113,7 @@ export async function updateAppointmentType(
         name?: string;
         duration_minutes?: number;
         descriptor_ids?: string[];
+        reason_ids?: string[];
         provider_ids?: string[];
         operatory_ids?: string[];
         bookable_online?: boolean;
@@ -158,6 +160,12 @@ export async function listDescriptors(locationId?: string): Promise<CachedDescri
     return unwrapArray<CachedDescriptor>(data, `${BASE}/descriptors`);
 }
 
+/** GoTracker-native reasons, cached during the normal practice sync. */
+export async function listReasons(locationId?: string): Promise<CachedDescriptor[]> {
+    const { data } = await api.get<unknown>(`${BASE}/reasons${qs(locationId)}`);
+    return unwrapArray<CachedDescriptor>(data, `${BASE}/reasons`);
+}
+
 // ── Availabilities ──────────────────────────────────────────────────────
 
 export async function listAvailabilities(
@@ -166,6 +174,7 @@ export async function listAvailabilities(
     options?: {
         startDate?: string;
         days?: number;
+        includeClosed?: boolean;
     }
 ): Promise<CachedAvailability[]> {
     const params = new URLSearchParams();
@@ -173,6 +182,7 @@ export async function listAvailabilities(
     if (providerSourceId) params.set("provider_source_id", providerSourceId);
     if (options?.startDate) params.set("start_date", options.startDate);
     if (options?.days) params.set("days", String(options.days));
+    if (options?.includeClosed) params.set("include_closed", "true");
     const q = params.toString() ? `?${params.toString()}` : "";
     const { data } = await api.get<unknown>(`${BASE}/availabilities${q}`);
     return unwrapArray<CachedAvailability>(data, `${BASE}/availabilities`);
@@ -259,6 +269,16 @@ export async function updateAvailability(
     const { data } = await api.patch<CachedAvailability>(
         `${BASE}/availabilities/${sourceId}${qs(locationId)}`,
         payload
+    );
+    return data;
+}
+
+export async function clearAvailabilityOverride(
+    sourceId: string,
+    locationId?: string
+): Promise<CachedAvailability> {
+    const { data } = await api.delete<CachedAvailability>(
+        `${BASE}/availabilities/${sourceId}/override${qs(locationId)}`
     );
     return data;
 }

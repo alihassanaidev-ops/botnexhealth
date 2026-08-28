@@ -187,6 +187,37 @@ async def test_update_appointment_type_rejects_empty_gotracker_providers(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_update_appointment_type_rejects_multiple_gotracker_reasons(monkeypatch):
+    cached = SimpleNamespace(
+        id="appt-1",
+        source_id="gt-100",
+        name="Updated Name",
+        duration_minutes=45,
+        source_metadata=None,
+        is_active=True,
+        synced_at=datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc),
+    )
+    _monkeypatch_session(monkeypatch, cached)
+
+    async def fake_get_adapter(*_args, **_kwargs):
+        return _FakeGoTrackerAdapter()
+
+    monkeypatch.setattr(route, "_get_adapter", fake_get_adapter)
+
+    req = route.UpdateAppointmentTypeRequest(reason_ids=["1", "2"])
+    with pytest.raises(HTTPException) as exc:
+        await route.update_appointment_type(
+            source_id="gt-100",
+            req=req,
+            current_user=SimpleNamespace(id="user-1", role="INSTITUTION_ADMIN"),
+            location_id=None,
+        )
+
+    assert exc.value.status_code == 400
+    assert "only one reason" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_update_appointment_type_requires_capability(monkeypatch):
     cached = SimpleNamespace(
         id="appt-1",

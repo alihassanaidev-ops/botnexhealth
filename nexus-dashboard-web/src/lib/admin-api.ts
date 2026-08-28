@@ -9,6 +9,7 @@ import type {
     SendSmsRequest,
     SendSmsResponse,
     OutboundVoiceProfile,
+    InstitutionProvisioningStatus,
 } from "@/types"
 import type { AuditLogPaginatedResponse } from "./tenant-api"
 
@@ -27,8 +28,53 @@ export async function listRetellAgents(): Promise<RetellAgent[]> {
     return data
 }
 
+export async function verifyRetellChatAgent(agentId: string): Promise<unknown> {
+    const { data } = await api.get(`/admin/institutions/retell/chat-agents/${agentId}`)
+    return data
+}
+
+export async function listRetellChatAgents(): Promise<RetellAgent[]> {
+    const { data } = await api.get<RetellAgent[]>("/admin/institutions/retell/chat-agents")
+    return data
+}
+
 export async function listTwilioPhoneNumbers(): Promise<TwilioPhoneNumber[]> {
     const { data } = await api.get<TwilioPhoneNumber[]>("/admin/twilio/phone-numbers")
+    return data
+}
+
+export async function getInstitutionProvisioning(
+    institutionSlug: string,
+): Promise<InstitutionProvisioningStatus> {
+    const { data } = await api.get<InstitutionProvisioningStatus>(
+        `/admin/institutions/${institutionSlug}/provisioning`,
+    )
+    return data
+}
+
+export async function updateInstitutionTwilioProvisioning(
+    institutionSlug: string,
+    credentials: { twilio_account_sid: string; twilio_auth_token: string },
+): Promise<InstitutionProvisioningStatus> {
+    const { data } = await api.patch<InstitutionProvisioningStatus>(
+        `/admin/institutions/${institutionSlug}/provisioning`,
+        credentials,
+    )
+    return data
+}
+
+export async function clearInstitutionTwilioProvisioning(
+    institutionSlug: string,
+): Promise<void> {
+    await api.delete(`/admin/institutions/${institutionSlug}/provisioning/twilio`)
+}
+
+export async function listInstitutionTwilioPhoneNumbers(
+    institutionSlug: string,
+): Promise<TwilioPhoneNumber[]> {
+    const { data } = await api.get<TwilioPhoneNumber[]>(
+        `/admin/institutions/${institutionSlug}/twilio/phone-numbers`,
+    )
     return data
 }
 

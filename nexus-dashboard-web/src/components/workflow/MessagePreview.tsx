@@ -8,14 +8,18 @@ import type { SendEmailNode, SendSmsNode } from "@/types/workflow"
 
 export function SmsPreview({ node }: { node: SendSmsNode }) {
     const rendered = renderTemplate(node.body_template)
-    const segments = smsSegments(rendered)
+    const includeFooter = node.include_opt_out_footer ?? true
+    const previewBody = rendered && includeFooter && !rendered.toLowerCase().includes("reply stop")
+        ? `${rendered}\nReply STOP to opt out.`
+        : rendered
+    const segments = smsSegments(previewBody)
     return (
         <div className="space-y-1.5">
-            <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-blue-500 px-3 py-2 text-sm text-white shadow-sm">
-                {rendered || <span className="italic opacity-70">No message yet</span>}
+            <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-blue-500 px-3 py-2 text-sm text-white shadow-sm">
+                {previewBody || <span className="italic opacity-70">No message yet</span>}
             </div>
             <p className="text-[10px] text-muted-foreground">
-                {rendered.length} chars · {segments} segment{segments === 1 ? "" : "s"} · preview uses sample data
+                {previewBody.length} chars · {segments} segment{segments === 1 ? "" : "s"} · preview uses sample data
             </p>
         </div>
     )

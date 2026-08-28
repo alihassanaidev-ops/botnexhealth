@@ -1,30 +1,30 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter, Route, Routes } from "react-router-dom"
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
+import { toast } from "sonner"
 import CampaignDetail from "@/pages/CampaignDetail"
 import {
     deleteCampaign,
+    enrollContactInCampaign,
     enrollCampaignAudience,
     getCampaign,
     getCampaignAudience,
     getCampaignAnalytics,
-    getCampaignOperations,
     getCampaignOverview,
-    getRunTimeline,
     getUsageByCampaign,
     getUsageSummary,
     listCampaignRuns,
     previewCampaignAudience,
     saveCampaignAudience,
 } from "@/lib/automation-api"
+import { listContacts } from "@/lib/contacts-api"
 
 vi.mock("@/lib/automation-api", () => ({
     getCampaign: vi.fn(),
     getCampaignOverview: vi.fn(),
     getCampaignAnalytics: vi.fn(),
     listCampaignRuns: vi.fn(),
-    getCampaignOperations: vi.fn(),
     getUsageSummary: vi.fn(),
     getUsageByCampaign: vi.fn(),
     getCampaignAudience: vi.fn(),
@@ -38,7 +38,6 @@ vi.mock("@/lib/automation-api", () => ({
     cancelCampaignRun: vi.fn(),
     deleteCampaign: vi.fn(),
     emergencyHaltCampaign: vi.fn(),
-    getRunTimeline: vi.fn(),
 }))
 vi.mock("@/lib/contacts-api", () => ({ listContacts: vi.fn() }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
@@ -47,30 +46,34 @@ const campaign = getCampaign as ReturnType<typeof vi.fn>
 const overview = getCampaignOverview as ReturnType<typeof vi.fn>
 const analytics = getCampaignAnalytics as ReturnType<typeof vi.fn>
 const runs = listCampaignRuns as ReturnType<typeof vi.fn>
-const operations = getCampaignOperations as ReturnType<typeof vi.fn>
 const usageSummary = getUsageSummary as ReturnType<typeof vi.fn>
 const usageByCampaign = getUsageByCampaign as ReturnType<typeof vi.fn>
 const audience = getCampaignAudience as ReturnType<typeof vi.fn>
 const previewAudience = previewCampaignAudience as ReturnType<typeof vi.fn>
 const saveAudience = saveCampaignAudience as ReturnType<typeof vi.fn>
 const enrollAudience = enrollCampaignAudience as ReturnType<typeof vi.fn>
-const timeline = getRunTimeline as ReturnType<typeof vi.fn>
 const remove = deleteCampaign as ReturnType<typeof vi.fn>
+const enrollContact = enrollContactInCampaign as ReturnType<typeof vi.fn>
+const contacts = listContacts as ReturnType<typeof vi.fn>
+const errorToast = toast.error as ReturnType<typeof vi.fn>
+const successToast = toast.success as ReturnType<typeof vi.fn>
 
 beforeEach(() => {
     campaign.mockReset()
     overview.mockReset()
     analytics.mockReset()
     runs.mockReset()
-    operations.mockReset()
     usageSummary.mockReset()
     usageByCampaign.mockReset()
     audience.mockReset()
     previewAudience.mockReset()
     saveAudience.mockReset()
     enrollAudience.mockReset()
-    timeline.mockReset()
     remove.mockReset()
+    enrollContact.mockReset()
+    contacts.mockReset()
+    errorToast.mockReset()
+    successToast.mockReset()
 
     campaign.mockResolvedValue({
         id: "wf-1",
@@ -161,67 +164,6 @@ beforeEach(() => {
         rollup_fresh_at: "2026-07-18T00:05:00Z",
     })
     runs.mockResolvedValue({ items: [], limit: 50, next_cursor: null })
-    timeline.mockResolvedValue({
-        run: {
-            id: "run-1",
-            workflow_id: "wf-1",
-            workflow_version_id: "ver-1",
-            status: "completed",
-            current_step_id: "exit-1",
-            current_step_type: "exit",
-            outcome: "confirmed",
-            blocked_reason: null,
-            contact_id: "contact-1",
-            contact_name: "Browser Phone QA",
-            next_due_at: null,
-            latest_event_at: "2026-07-24T17:24:00Z",
-            started_at: "2026-07-24T17:23:00Z",
-            completed_at: "2026-07-24T17:24:00Z",
-            created_at: "2026-07-24T17:23:00Z",
-        },
-        contact: {
-            id: "contact-1",
-            display_name: "Browser Phone QA",
-            phone_masked: "(***) ***-0843",
-        },
-        items: [
-            {
-                id: "step-1",
-                kind: "step",
-                occurred_at: "2026-07-24T17:24:00Z",
-                title: "Voice step",
-                status: "completed",
-                step_id: "voice_test",
-                channel: "voice",
-                summary: "Result: call_placed_awaiting_outcome",
-                metadata: {},
-                input: {
-                    context: {
-                        appointment_time: "10:00 AM",
-                        patient_first_name: "[redacted]",
-                    },
-                },
-                output: {
-                    retell_call_id: "call_123",
-                    call_outcome: "confirmed",
-                },
-                node: {
-                    type: "send_voice",
-                    retell_agent_id: "agent_test",
-                    wait_for_outcome: true,
-                },
-                duration_ms: 43000,
-                error_message: null,
-            },
-        ],
-    })
-    operations.mockResolvedValue({
-        stuck_waiting_runs: [],
-        failed_sends: [],
-        suppressed_skipped_runs: [],
-        open_handoffs: [],
-        generated_at: "2026-07-18T00:00:00Z",
-    })
     usageSummary.mockResolvedValue({ currency: "USD", total_cost: 8.5, channels: [] })
     usageByCampaign.mockResolvedValue({ campaigns: [] })
     audience.mockResolvedValue({
@@ -288,9 +230,49 @@ beforeEach(() => {
         counts_by_reason: {},
     })
     remove.mockResolvedValue(undefined)
+    contacts.mockResolvedValue({
+        items: [
+            {
+                id: "contact-dnc",
+                full_name: "DNC Patient",
+                phone_masked: "+1******0100",
+            },
+        ],
+        limit: 10,
+        next_cursor: null,
+    })
 })
 
 describe("CampaignDetail lifecycle actions", () => {
+    it("shows the backend DNC reason when manual enrollment is rejected", async () => {
+        const user = userEvent.setup()
+        enrollContact.mockRejectedValue({
+            response: {
+                data: {
+                    detail: "Patient has an active all-channel DNC restriction and cannot be enrolled.",
+                },
+            },
+        })
+        render(
+            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
+                <Routes>
+                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("button", { name: "Enroll" }))
+        await user.click(await screen.findByRole("button", { name: "Enroll" }))
+
+        await waitFor(() => {
+            expect(errorToast).toHaveBeenCalledWith(
+                "Patient has an active all-channel DNC restriction and cannot be enrolled.",
+            )
+        })
+        expect(successToast).not.toHaveBeenCalled()
+    })
+
     it("deletes a campaign after confirmation and returns to the campaign list", async () => {
         const user = userEvent.setup()
         render(
@@ -314,8 +296,13 @@ describe("CampaignDetail lifecycle actions", () => {
     })
 })
 
-describe("CampaignDetail runs tab", () => {
-    it("expands a run timeline item with input, output, and node details", async () => {
+function LocationDisplay() {
+    const location = useLocation()
+    return <div>{location.pathname}{location.search}</div>
+}
+
+describe("CampaignDetail executions tab", () => {
+    it("links a run to its visual execution in the workflow builder", async () => {
         const user = userEvent.setup()
         runs.mockResolvedValue({
             items: [
@@ -345,21 +332,18 @@ describe("CampaignDetail runs tab", () => {
             <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
                 <Routes>
                     <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                    <Route path="/institution-admin/campaigns/:id/builder" element={<LocationDisplay />} />
                 </Routes>
             </MemoryRouter>,
         )
 
         await screen.findByText("Recall campaign")
-        await user.click(screen.getByRole("tab", { name: "Runs" }))
-        await user.click(await screen.findByRole("button", { name: "Timeline" }))
-        await user.click(await screen.findByRole("button", { name: /Voice step/i }))
+        expect(screen.queryByRole("tab", { name: "Operations" })).not.toBeInTheDocument()
+        await user.click(screen.getByRole("tab", { name: "Executions" }))
+        await user.click(await screen.findByRole("button", { name: "Inspect" }))
 
-        expect(await screen.findByText(/call_123/)).toBeInTheDocument()
-        expect(screen.getAllByText(/confirmed/).length).toBeGreaterThan(0)
-        await user.click(screen.getByRole("tab", { name: "Node" }))
-        expect(screen.getByText(/agent_test/)).toBeInTheDocument()
-        await user.click(screen.getByRole("tab", { name: "Input" }))
-        expect(screen.getByText(/\[redacted\]/)).toBeInTheDocument()
-        expect(timeline).toHaveBeenCalledWith("wf-1", "run-1")
+        expect(await screen.findByText(
+            "/institution-admin/campaigns/wf-1/builder?view=executions&run=run-1",
+        )).toBeInTheDocument()
     })
 })

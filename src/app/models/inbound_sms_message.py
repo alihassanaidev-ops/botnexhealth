@@ -52,6 +52,12 @@ class InboundSmsMessage(Base):
     )
     # Best-effort correlation to an open run (nullable; only set when unambiguous).
     workflow_run_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    conversation_thread_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("campaign_conversation_threads.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     message_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     from_phone_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -58,6 +58,12 @@ class CampaignResponseEvent(Base):
         ForeignKey("automation_workflow_runs.id", ondelete="SET NULL"),
         nullable=True,
     )
+    conversation_thread_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("campaign_conversation_threads.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     contact_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("contacts.id", ondelete="SET NULL"),
@@ -153,6 +159,12 @@ class CampaignStaffHandoff(Base):
         UUID(as_uuid=False),
         ForeignKey("automation_workflow_runs.id", ondelete="SET NULL"),
         nullable=True,
+    )
+    conversation_thread_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("campaign_conversation_threads.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     contact_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),

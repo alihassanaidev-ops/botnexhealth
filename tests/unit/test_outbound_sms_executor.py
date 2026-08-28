@@ -102,11 +102,17 @@ def _make_run(contact_id="c-1", location_id="l-1"):
     return run
 
 
-def _make_node(body_template="Hi {{patient_first_name}}", next_id="node-2"):
+def _make_node(
+    body_template="Hi {{patient_first_name}}",
+    next_id="node-2",
+    *,
+    include_opt_out_footer=True,
+):
     return SendSmsNode(
         id="node-1",
         body_template=body_template,
         next_node_id=next_id,
+        include_opt_out_footer=include_opt_out_footer,
     )
 
 
@@ -186,9 +192,14 @@ def test_executor_sends_and_completes_step():
     run = _make_run()
     node = _make_node()
 
+    thread = MagicMock(id="thread-1")
     with patch(
         "src.app.services.automation.sms_node_executor.SmsService"
-    ) as MockSms:
+    ) as MockSms, patch(
+        "src.app.services.automation.sms_node_executor.CampaignConversationService"
+    ) as MockThreads:
+        MockThreads.return_value.open_sms_thread = AsyncMock(return_value=thread)
+        MockThreads.return_value.mark_message_seen = AsyncMock()
         instance = MockSms.return_value
         instance.send_sms = AsyncMock(return_value=MagicMock())
         result = asyncio.run(executor.execute(run, node, {}))
@@ -199,9 +210,31 @@ def test_executor_sends_and_completes_step():
     send_kwargs = instance.send_sms.call_args.kwargs
     assert send_kwargs["workflow_run_id"] == "run-1"
     assert send_kwargs["workflow_id"] == "wf-1"
+    assert send_kwargs["conversation_thread_id"] == "thread-1"
+    assert send_kwargs["include_opt_out_footer"] is True
     runtime.complete_step.assert_called_once()
     assert runtime.complete_step.call_args.kwargs.get("result_code") == "sent"
     runtime.fail_run.assert_not_called()
+
+
+def test_executor_can_disable_opt_out_footer():
+    contact = _make_contact()
+    location = _make_location()
+    executor, _runtime = _make_executor(contact=contact, location=location)
+
+    thread = MagicMock(id="thread-1")
+    with patch(
+        "src.app.services.automation.sms_node_executor.SmsService"
+    ) as MockSms, patch(
+        "src.app.services.automation.sms_node_executor.CampaignConversationService"
+    ) as MockThreads:
+        MockThreads.return_value.open_sms_thread = AsyncMock(return_value=thread)
+        MockThreads.return_value.mark_message_seen = AsyncMock()
+        instance = MockSms.return_value
+        instance.send_sms = AsyncMock(return_value=MagicMock())
+        asyncio.run(executor.execute(_make_run(), _make_node(include_opt_out_footer=False), {}))
+
+    assert instance.send_sms.call_args.kwargs["include_opt_out_footer"] is False
 
 
 def test_executor_is_idempotent_when_already_sent():
@@ -233,9 +266,14 @@ def test_executor_fails_run_on_twilio_error():
     run = _make_run()
     node = _make_node()
 
+    thread = MagicMock(id="thread-1")
     with patch(
         "src.app.services.automation.sms_node_executor.SmsService"
-    ) as MockSms:
+    ) as MockSms, patch(
+        "src.app.services.automation.sms_node_executor.CampaignConversationService"
+    ) as MockThreads:
+        MockThreads.return_value.open_sms_thread = AsyncMock(return_value=thread)
+        MockThreads.return_value.mark_message_seen = AsyncMock()
         instance = MockSms.return_value
         instance.send_sms = AsyncMock(side_effect=RuntimeError("Twilio boom"))
         asyncio.run(executor.execute(run, node, {}))

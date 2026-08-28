@@ -26,6 +26,7 @@ from src.app.tasks.automation_workflow import (
     _poll_retell_voice_outcomes_async,
     _retell_call_details_outcome,
     _retell_call_details_ready_for_resume,
+    _resume_sms_confirmation_async,
     _resolve_gotracker_writeback_target,
     _trigger_appointment_state_async,
     _trigger_patient_status_async,
@@ -76,6 +77,82 @@ _WAIT_CONFIRM_DEFINITION = {
     ],
 }
 
+_SMS_MAPPING_DEFINITION = {
+    "trigger": {"type": "manual"},
+    "entry_node_id": "sms-1",
+    "nodes": [
+        {
+            "type": "send_sms",
+            "id": "sms-1",
+            "body_template": "Reply DONE when forms are complete.",
+            "next_node_id": "wait-response",
+            "expect_response": True,
+            "include_reply_key": True,
+            "response_mappings": [
+                {
+                    "tokens": ["DONE"],
+                    "context_updates": {"forms_status": "complete"},
+                },
+                {
+                    "tokens": ["CALL"],
+                    "handoff_reason": "patient_asks_for_staff",
+                },
+            ],
+        },
+        {
+            "type": "wait",
+            "id": "wait-response",
+            "delay": {"delay_type": "duration", "duration_seconds": 7200},
+            "next_node_id": "check-forms",
+        },
+        {
+            "type": "condition",
+            "id": "check-forms",
+            "rules": [{"field": "forms_status", "op": "eq", "value": "complete"}],
+            "true_next_node_id": "exit-complete",
+            "false_next_node_id": "exit-no-response",
+        },
+        {"type": "exit", "id": "exit-complete", "outcome": "forms_complete"},
+        {"type": "exit", "id": "exit-no-response", "outcome": "no_response"},
+    ],
+}
+
+_SMS_REPLY_WAIT_DEFINITION = {
+    "trigger": {"type": "manual"},
+    "entry_node_id": "sms-1",
+    "nodes": [
+        {
+            "type": "send_sms",
+            "id": "sms-1",
+            "body_template": "Reply YES or NO.",
+            "next_node_id": "wait-response",
+        },
+        {
+            "type": "wait",
+            "id": "wait-response",
+            "next_node_id": "check-reply",
+            "wait_for": {
+                "type": "sms_reply",
+                "response_mappings": [
+                    {
+                        "tokens": ["YES"],
+                        "context_updates": {"sms_reply": "yes"},
+                    }
+                ],
+            },
+        },
+        {
+            "type": "condition",
+            "id": "check-reply",
+            "rules": [{"field": "sms_reply", "op": "eq", "value": "yes"}],
+            "true_next_node_id": "exit-yes",
+            "false_next_node_id": "exit-no-response",
+        },
+        {"type": "exit", "id": "exit-yes", "outcome": "yes"},
+        {"type": "exit", "id": "exit-no-response", "outcome": "no_response"},
+    ],
+}
+
 _WAIT_BOOKED_DEFINITION = {
     "trigger": {"type": "recall_scan", "recall_interval_months": 18},
     "entry_node_id": "wait-48h",
@@ -119,11 +196,14 @@ def test_retry_countdown(retries, expected) -> None:
 def test_waiting_step_targets_context_field_is_field_specific() -> None:
     confirm = WorkflowDefinition.model_validate(_WAIT_CONFIRM_DEFINITION)
     booked = WorkflowDefinition.model_validate(_WAIT_BOOKED_DEFINITION)
+    sms_reply = WorkflowDefinition.model_validate(_SMS_REPLY_WAIT_DEFINITION)
 
     assert _waiting_step_targets_field(confirm, "wait-response", "appointment_status")
     assert not _waiting_step_targets_field(confirm, "wait-response", "appointment_booked")
     assert _waiting_step_targets_field(booked, "wait-48h", "appointment_booked")
     assert not _waiting_step_targets_field(booked, "wait-48h", "appointment_status")
+    assert _waiting_step_targets_field(sms_reply, "wait-response", "sms_reply")
+    assert not _waiting_step_targets_field(sms_reply, "wait-response", "appointment_status")
 
 
 def test_dial_outcome_for_attempt_maps_business_outcome_to_answered() -> None:
@@ -685,6 +765,108 @@ def _mock_session_get(return_map: dict):
     mock_result.scalar_one_or_none.return_value = None
     session.execute = AsyncMock(return_value=mock_result)
     return session
+
+
+def _result(*, scalars_all=None, scalar_one_or_none=None):
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = scalars_all or []
+    result.scalar_one_or_none.return_value = scalar_one_or_none
+    return result
+
+
+@pytest.mark.asyncio
+async def test_sms_response_mapping_updates_context_and_resumes_one_run() -> None:
+    run = MagicMock()
+    run.id = "run-1"
+    run.institution_id = "inst-1"
+    run.location_id = "loc-1"
+    run.workflow_version_id = "ver-1"
+    run.current_step_id = "wait-response"
+    run.status = AutomationRunStatus.WAITING.value
+    run.trigger_metadata = {"source": "test"}
+    version = MagicMock()
+    version.definition = _SMS_MAPPING_DEFINITION
+    event = MagicMock()
+    event.id = "event-1"
+    session = _mock_session_get({
+        (AutomationWorkflowRun, "run-1"): run,
+        (AutomationWorkflowVersion, "ver-1"): version,
+    })
+    session.execute = AsyncMock(
+        side_effect=[
+            _result(scalars_all=["contact-1"]),
+            _result(scalar_one_or_none=event),
+            _result(scalar_one_or_none=run),
+        ]
+    )
+
+    mapping = WorkflowDefinition.model_validate(_SMS_MAPPING_DEFINITION).nodes[0].response_mappings[0]
+    match = SimpleNamespace(node_id="sms-1", mapping=mapping)
+    dispatcher = AsyncMock()
+    from src.app.services.automation.step_dispatcher import DispatchResult
+
+    dispatcher.resume_after_timer = AsyncMock(
+        return_value=DispatchResult(status="completed", outcome="forms_complete")
+    )
+
+    with (
+        patch("src.app.tasks.automation_workflow.get_system_db_session", return_value=session),
+        patch("src.app.tasks.automation_workflow.build_dispatcher", new=AsyncMock(return_value=(dispatcher, "UTC"))),
+        patch("src.app.tasks.automation_workflow.AutomationWorkflowSchedulerService") as Scheduler,
+        patch("src.app.tasks.automation_workflow._confirm_appointments_for_runs", new=AsyncMock()) as confirm,
+        patch("src.app.services.automation.campaign_conversation_service.CampaignConversationService.match_sms_response_mapping", new=AsyncMock(return_value=match)),
+    ):
+        Scheduler.return_value.cancel_timers_for_run = AsyncMock(return_value=1)
+        result = await _resume_sms_confirmation_async(
+            institution_id="inst-1",
+            location_id="loc-1",
+            from_number="+14165551234",
+            body="DONE R2ABCD",
+            message_sid="SM123",
+            workflow_run_id="run-1",
+            conversation_thread_id="thread-1",
+        )
+
+    assert result["resumed"] == 1
+    assert result["outcomes"] == {"forms_complete": 1}
+    assert run.trigger_metadata["forms_status"] == "complete"
+    assert run.trigger_metadata["sms_response_node_id"] == "sms-1"
+    assert run.trigger_metadata["last_campaign_response_event_id"] == "event-1"
+    dispatcher.resume_after_timer.assert_awaited_once()
+    confirm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sms_response_mapping_with_handoff_only_does_not_resume() -> None:
+    session = _mock_session_get({})
+    session.execute = AsyncMock(
+        side_effect=[
+            _result(scalars_all=["contact-1"]),
+            _result(scalar_one_or_none=None),
+        ]
+    )
+    mapping = WorkflowDefinition.model_validate(_SMS_MAPPING_DEFINITION).nodes[0].response_mappings[1]
+    match = SimpleNamespace(node_id="sms-1", mapping=mapping)
+
+    with (
+        patch("src.app.tasks.automation_workflow.get_system_db_session", return_value=session),
+        patch("src.app.tasks.automation_workflow.build_dispatcher", new=AsyncMock()) as build,
+        patch("src.app.services.automation.campaign_conversation_service.CampaignConversationService.match_sms_response_mapping", new=AsyncMock(return_value=match)),
+    ):
+        result = await _resume_sms_confirmation_async(
+            institution_id="inst-1",
+            location_id="loc-1",
+            from_number="+14165551234",
+            body="CALL R2ABCD",
+            message_sid="SM123",
+            workflow_run_id="run-1",
+            conversation_thread_id="thread-1",
+        )
+
+    assert result["resumed"] == 0
+    assert result["matched"] == 1
+    assert result["reason"] == "mapping_created_handoff"
+    build.assert_not_awaited()
 
 
 @pytest.mark.asyncio

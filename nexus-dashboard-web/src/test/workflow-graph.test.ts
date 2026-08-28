@@ -11,6 +11,7 @@ import {
     createTrigger,
     definitionToFlow,
     genId,
+    normalizeDefinition,
     outgoing,
     referencedIds,
     removeNode,
@@ -37,7 +38,10 @@ const LINEAR: WorkflowDefinition = {
         {
             type: "wait",
             id: "wait-1",
-            delay: { delay_type: "duration", duration_seconds: 3600 },
+            wait_for: {
+                type: "time",
+                delay: { delay_type: "duration", duration_seconds: 3600 },
+            },
             next_node_id: "exit-1",
         },
         { type: "exit", id: "exit-1", outcome: "sent" },
@@ -149,8 +153,22 @@ describe("workflow graph — factories", () => {
     })
     it("createNode yields schema-shaped defaults", () => {
         expect(createNode("wait", "w").type).toBe("wait")
+        expect(createNode("wait", "wr")).toMatchObject({
+            wait_for: {
+                type: "time",
+                delay: { delay_type: "duration", duration_seconds: 3600 },
+            },
+        })
         expect(createNode("drip", "d")).toMatchObject({ batch_size: 25, interval_seconds: 3600 })
-        expect(createNode("send_sms", "s")).toMatchObject({ max_attempts: 1, body_template: "" })
+        expect(createNode("send_sms", "s")).toMatchObject({
+            max_attempts: 1,
+            body_template: "",
+            include_opt_out_footer: true,
+        })
+        expect(createNode("retell_sms_conversation", "chat")).toMatchObject({
+            chat_profile_id: "",
+            next_node_id: "",
+        })
         expect(createNode("send_voice", "v")).toMatchObject({
             wait_for_outcome: false,
             max_attempts: 1,
@@ -158,6 +176,88 @@ describe("workflow graph — factories", () => {
             phone_country_region: "US",
         })
         expect(createNode("condition", "c")).toMatchObject({ logic: "AND" })
+    })
+    it("normalizes legacy wait shapes into typed wait modes", () => {
+        const legacy = {
+            ...LINEAR,
+            nodes: [
+                {
+                    type: "wait_for_sms_reply",
+                    id: "reply-1",
+                    next_node_id: "exit-1",
+                    response_window_seconds: 3600,
+                    include_reply_key: true,
+                    response_mappings: [],
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+            entry_node_id: "reply-1",
+        } as unknown as WorkflowDefinition
+
+        expect(normalizeDefinition(legacy).nodes[0]).toMatchObject({
+            type: "wait",
+            wait_for: {
+                type: "sms_reply",
+                response_window_seconds: 3600,
+            },
+        })
+        expect(normalizeDefinition(legacy).nodes[0]).not.toHaveProperty("wait_for.include_reply_key")
+    })
+    it("removes deprecated reply keys from current wait and SMS nodes", () => {
+        const legacy = {
+            ...LINEAR,
+            nodes: [
+                {
+                    type: "send_sms",
+                    id: "sms-1",
+                    body_template: "Reply YES",
+                    next_node_id: "wait-1",
+                    include_reply_key: true,
+                },
+                {
+                    type: "wait",
+                    id: "wait-1",
+                    next_node_id: "exit-1",
+                    wait_for: {
+                        type: "sms_reply",
+                        include_reply_key: true,
+                        response_mappings: [],
+                    },
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+            entry_node_id: "sms-1",
+        } as unknown as WorkflowDefinition
+
+        const normalized = normalizeDefinition(legacy)
+
+        expect(normalized.nodes[0]).not.toHaveProperty("include_reply_key")
+        expect(normalized.nodes[1]).not.toHaveProperty("wait_for.include_reply_key")
+    })
+    it("removes legacy author policy from Retell SMS nodes", () => {
+        const legacy = {
+            ...LINEAR,
+            entry_node_id: "chat-1",
+            nodes: [
+                {
+                    type: "retell_sms_conversation",
+                    id: "chat-1",
+                    chat_profile_id: "profile-1",
+                    next_node_id: "exit-1",
+                    inactivity_timeout_seconds: 900,
+                    failure_behavior: "continue",
+                    dynamic_variable_mappings: [{ name: "raw", source_field: "payload" }],
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+        } as unknown as WorkflowDefinition
+
+        expect(normalizeDefinition(legacy).nodes[0]).toEqual({
+            type: "retell_sms_conversation",
+            id: "chat-1",
+            chat_profile_id: "profile-1",
+            next_node_id: "exit-1",
+        })
     })
     it("createTrigger yields sensible defaults", () => {
         expect(createTrigger("appointment_offset")).toMatchObject({ offset_hours: -24 })
@@ -168,6 +268,10 @@ describe("workflow graph — factories", () => {
         expect(createTrigger("patient_status_changed")).toMatchObject({
             statuses: ["appointment_confirmed"],
             campaign_goal: "post_op_followup",
+        })
+        expect(createTrigger("sms_reply")).toMatchObject({
+            tokens: [],
+            campaign_goal: "inbound_sms_followup",
         })
     })
     it("blankDefinition is a valid minimal graph", () => {

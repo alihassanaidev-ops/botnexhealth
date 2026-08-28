@@ -99,7 +99,13 @@ cdk.out/
 
 # Graphify knowledge graph (generated; large graph.json). Rebuild with `graphify .`
 graphify-out/
-
+git 
 .claude
 /docs/
+# Architecture decisions are source-controlled even though other ad-hoc docs are not.
+!/docs/
+/docs/*
+!/docs/adr/
+/docs/adr/*
+!/docs/adr/0002-retell-chat-generation-with-platform-sms-transport.md
 /Internal/

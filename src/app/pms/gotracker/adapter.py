@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
@@ -16,9 +17,11 @@ from src.app.pms.base import (
     PMSAdapter,
     SupportsAppointmentConfirmation,
     SupportsAppointmentTypeCreation,
+    SupportsWorkingWindowOverrides,
 )
 from src.app.pms.gotracker import mappers
 from src.app.pms.gotracker.client import GoTrackerAPIError, GoTrackerClient
+from src.app.pms.gotracker.statuses import is_non_attending_status
 from src.app.pms.models import (
     BookingRequest,
     BookingResult,
@@ -38,6 +41,7 @@ class GoTrackerAdapter(
     PMSAdapter,
     SupportsAppointmentConfirmation,
     SupportsAppointmentTypeCreation,
+    SupportsWorkingWindowOverrides,
 ):
     source = "gotracker"
 
@@ -124,14 +128,75 @@ class GoTrackerAdapter(
         )
 
     async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]:
-        return {
-            "success": False,
-            "patient_id": None,
-            "message": (
-                "GoTracker patient creation is handled by the on-site synchronizer "
-                "agent; API patient upsert is not available through the product key."
-            ),
+        """Create a patient through the Synchronizer's consumer write-back API."""
+        body = {
+            "first_name": req.first_name,
+            "last_name": req.last_name,
+            "email": req.email,
+            "phone_number": req.phone,
+            "date_of_birth": req.date_of_birth,
+            "provider_id": mappers.strip(req.provider_id),
+            "gender": req.gender,
         }
+        try:
+            raw = await self._client.request("POST", "/api/patients/", json=body)
+        except GoTrackerAPIError as exc:
+            return {
+                "success": False,
+                "patient_id": None,
+                "message": str(exc),
+            }
+
+        data = _data_object(raw)
+        contact_id = _first(data, "ContactId", "contact_id", "id", "patient_id")
+        if contact_id is None:
+            return {
+                "success": False,
+                "patient_id": None,
+                "message": "GoTracker did not return a created patient ID.",
+            }
+        first_name = str(_first(data, "FirstName", "first_name") or req.first_name)
+        return {
+            "success": True,
+            "patient_id": mappers.pid(contact_id),
+            "message": f"Patient {first_name} created successfully.",
+        }
+
+    async def get_patient(
+        self,
+        patient_id: str,
+        include: list[str] | None = None,
+    ) -> UniversalPatient | None:
+        """Return only a verified patient's future appointment context.
+
+        Retell performs identity verification from ``search_patients`` before
+        this method is called.  The follow-up read deliberately avoids fetching
+        patient demographics again and asks the Synchronizer only for this
+        contact's appointments from the clinic's current day onward.
+        """
+        del include
+        raw_patient_id = mappers.strip(patient_id)
+        if not raw_patient_id:
+            return None
+
+        appointments = await self.list_appointments(
+            contact_id=raw_patient_id,
+            from_date=self._local_today(),
+            exclude_cancelled=True,
+            max_items=100,
+        )
+        upcoming = [
+            mappers.to_upcoming_appointment(appointment)
+            for appointment in appointments
+            if not _is_non_attending_appointment(appointment)
+        ]
+        return UniversalPatient(
+            id=mappers.pid(raw_patient_id),
+            source=self.source,
+            first_name="",
+            last_name="",
+            extra={"upcoming_appointments": upcoming},
+        )
 
     # ── Appointment Types ────────────────────────────────────────────────
 
@@ -141,7 +206,26 @@ class GoTrackerAdapter(
         return [mappers.to_appointment_type(item) for item in data]
 
     async def list_pms_descriptors(self) -> list[dict]:
-        return []
+        """Expose Tracker reasons through Nexus's generic read-only cache."""
+        raw = await self._client.request("GET", "/api/reasons")
+        rows = raw.get("data") if isinstance(raw.get("data"), list) else []
+        return [
+            {
+                "id": _first(row, "id", "ReasonId", "reason_id"),
+                "name": str(_first(row, "name", "Name") or ""),
+                "descriptor_type": "GoTracker Reason",
+                "code": _first(row, "code", "Code"),
+                "active": bool(
+                    _first(row, "active", "is_active", "IsActive")
+                    if _first(row, "active", "is_active", "IsActive") is not None
+                    else True
+                ),
+                "minutes": _first(row, "minutes", "Minutes"),
+                "is_recall": bool(_first(row, "is_recall", "IsRecall")),
+            }
+            for row in rows
+            if isinstance(row, dict)
+        ]
 
     async def create_appointment_type(
         self,
@@ -153,13 +237,15 @@ class GoTrackerAdapter(
         operatory_ids: list[str] | None = None,
         bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
-        del descriptor_ids
+        if len(descriptor_ids) > 1:
+            raise ValueError("GoTracker appointment types can link to only one reason.")
         body = {
             "name": name,
             "minutes": duration_minutes,
             "bookable_online": True if bookable_online is None else bookable_online,
             "provider_ids": _strip_ids(provider_ids),
             "operatory_ids": _strip_ids(operatory_ids),
+            "reason_ids": _strip_ids(descriptor_ids),
         }
         raw = await self._client.request("POST", "/api/appointment_types", json=body)
         return mappers.to_appointment_type(_data_object(raw))
@@ -174,7 +260,6 @@ class GoTrackerAdapter(
         operatory_ids: list[str] | None = None,
         bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
-        del descriptor_ids
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name
@@ -182,6 +267,10 @@ class GoTrackerAdapter(
             body["minutes"] = duration_minutes
         if bookable_online is not None:
             body["bookable_online"] = bookable_online
+        if descriptor_ids is not None:
+            if len(descriptor_ids) > 1:
+                raise ValueError("GoTracker appointment types can link to only one reason.")
+            body["reason_ids"] = _strip_ids(descriptor_ids)
         if provider_ids is not None:
             body["provider_ids"] = _strip_ids(provider_ids)
         if operatory_ids is not None:
@@ -212,6 +301,80 @@ class GoTrackerAdapter(
         raw = await self._client.request("GET", "/api/scheduling/operatories")
         data = raw.get("data") if isinstance(raw.get("data"), list) else []
         return [mappers.to_operatory(item) for item in data]
+
+    # ── Working windows ─────────────────────────────────────────────────
+
+    async def list_availabilities(self, **kwargs: Any) -> list[dict]:
+        """List synced Tracker working windows, including their cloud override.
+
+        A working window is not a derived bookable slot.  ``working_window_id``
+        is stable across synchronizer refreshes and is the only ID accepted by
+        the override mutation endpoints.
+        """
+        provider_id = kwargs.pop("provider_id", None)
+        operatory_ids = kwargs.pop("operatory_ids", None)
+        include_closed = bool(kwargs.pop("include_closed", False))
+        kwargs.pop("ignore_past_dates", None)
+        start_date = kwargs.pop("start_date", None) or self._local_today()
+        days = int(kwargs.pop("days", 7))
+        if not 1 <= days <= 60:
+            raise ValueError("GoTracker working-window days must be between 1 and 60.")
+
+        params: dict[str, Any] = {"start_date": start_date, "days": days}
+        if include_closed:
+            params["include_closed"] = "true"
+        if provider_id:
+            params["provider_ids"] = str(mappers.strip(provider_id))
+        if operatory_ids:
+            raw_ids = [mappers.strip(value) for value in operatory_ids]
+            params["operatory_ids"] = ",".join(
+                str(value) for value in raw_ids if value
+            )
+
+        raw = await self._client.request(
+            "GET", "/api/scheduling/working_hours", params=params
+        )
+        rows = raw.get("data") if isinstance(raw.get("data"), list) else []
+        return [_to_working_window(row) for row in rows if isinstance(row, dict)]
+
+    async def update_availability(
+        self,
+        availability_id: str,
+        appointment_type_ids: list[str] | None = None,
+        days: list[str] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        operatory_id: str | None = None,
+        active: bool | None = None,
+    ) -> dict:
+        """Set a GoTracker window's cloud-only appointment-type override."""
+        raw_id = mappers.strip(availability_id)
+        if raw_id and raw_id.startswith("closed:"):
+            raise ValueError("Derived closed periods cannot be updated.")
+        if any(value is not None for value in (days, start_time, end_time, operatory_id, active)):
+            raise ValueError(
+                "GoTracker working windows are PMS-owned; only appointment-type overrides can be updated."
+            )
+        if appointment_type_ids is None:
+            raise ValueError("appointment_type_ids is required for a GoTracker override.")
+
+        raw = await self._client.request(
+            "PATCH",
+            f"/api/scheduling/working_hours/{raw_id}",
+            json={"appointment_type_ids": _strip_ids(appointment_type_ids)},
+        )
+        return _to_working_window(_data_object(raw, fallback_id=mappers.strip(availability_id)))
+
+    async def clear_availability_override(self, availability_id: str) -> dict:
+        """Remove a cloud override and expose Tracker's standing type links again."""
+        raw_id = mappers.strip(availability_id)
+        if raw_id and raw_id.startswith("closed:"):
+            raise ValueError("Derived closed periods have no override to clear.")
+        raw = await self._client.request(
+            "DELETE",
+            f"/api/scheduling/working_hours/{raw_id}/override",
+        )
+        return _to_working_window(_data_object(raw, fallback_id=mappers.strip(availability_id)))
 
     # ── Slots ────────────────────────────────────────────────────────────
 
@@ -310,14 +473,28 @@ class GoTrackerAdapter(
     async def list_appointments(
         self,
         *,
-        start_date: str,
-        end_date: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        contact_id: str | None = None,
+        from_date: str | None = None,
+        exclude_cancelled: bool = False,
         max_items: int = 1000,
     ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {}
+        if start_date:
+            params["start"] = start_date
+        if end_date:
+            params["end"] = end_date
+        if contact_id:
+            params["contactId"] = mappers.strip(contact_id)
+        if from_date:
+            params["from"] = from_date
+        if exclude_cancelled:
+            params["exclude_cancelled"] = "true"
         return await self._fetch_all(
             "GET",
             "/api/appointments/getAllAppointments",
-            params={"start": start_date, "end": end_date},
+            params=params,
             max_items=max_items,
         )
 
@@ -631,11 +808,38 @@ class GoTrackerAdapter(
             hours=None,
         )
 
+    def _local_today(self) -> str:
+        timezone_name = getattr(self._location, "timezone", None) or "UTC"
+        try:
+            return datetime.now(ZoneInfo(timezone_name)).date().isoformat()
+        except ZoneInfoNotFoundError:
+            return datetime.now(ZoneInfo("UTC")).date().isoformat()
+
+
+def _is_non_attending_appointment(appointment: dict[str, Any]) -> bool:
+    if bool(
+        _first(appointment, "Cancelled", "cancelled", "IsCancelled", "is_cancelled")
+    ):
+        return True
+    status_id = _first(appointment, "StatusId", "status_id")
+    try:
+        return is_non_attending_status(int(status_id))
+    except (TypeError, ValueError):
+        return False
+
 
 def _strip_ids(values: list[str] | None) -> list[str]:
     if not values:
         return []
     return [stripped for value in values if (stripped := mappers.strip(value))]
+
+
+def _first(raw: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = raw.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 def _data_object(raw: dict[str, Any], *, fallback_id: str | None = None) -> dict[str, Any]:
@@ -662,3 +866,36 @@ def _list_data(raw: dict[str, Any], *, nested_key: str) -> list[dict[str, Any]]:
     if isinstance(raw.get(nested_key), list):
         return [item for item in raw[nested_key] if isinstance(item, dict)]
     return []
+
+
+def _to_working_window(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize the Synchronizer's working-window shape for setup routes."""
+    window_id = _first(raw, "working_window_id", "id")
+    window_status = str(_first(raw, "status", "Status") or "open").lower()
+    if window_status == "closed" and window_id is None:
+        # Derived closed periods have no writable working_window_id.  Give them
+        # a deterministic display ID only; the route/UI explicitly keeps them
+        # read-only.
+        window_id = "closed:" + ":".join(
+            str(value or "")
+            for value in (
+                _first(raw, "WorkDate", "work_date"),
+                _first(raw, "ProviderId", "provider_id"),
+                _first(raw, "OperatoryId", "operatory_id"),
+                _first(raw, "StartTime", "start_time"),
+                _first(raw, "EndTime", "end_time"),
+            )
+        )
+    return {
+        "id": window_id,
+        "provider_id": _first(raw, "ProviderId", "provider_id"),
+        "operatory_id": _first(raw, "OperatoryId", "operatory_id"),
+        "begin_time": _first(raw, "StartTime", "start_time"),
+        "end_time": _first(raw, "EndTime", "end_time"),
+        "specific_date": _first(raw, "WorkDate", "work_date"),
+        "appointment_type_ids": _first(raw, "appointment_type_ids") or [],
+        "active": True,
+        "synced": _first(raw, "Source", "source") == "synced",
+        "status": window_status,
+        "types_overridden": bool(_first(raw, "types_overridden")),
+    }

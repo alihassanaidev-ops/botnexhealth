@@ -12,7 +12,7 @@ import phonenumbers
 from src.app.security import keyed_hash
 
 
-CASL_FOOTER = "Reply STOP to opt out. Reply HELP for help."
+CASL_FOOTER = "Reply STOP to opt out."
 MAX_SMS_BODY_LENGTH = 1600
 
 _PHONE_RE = re.compile(r"(?<!\w)\+?\d[\d\s().-]{6,}\d(?!\w)")
@@ -254,18 +254,17 @@ def redact_payload(payload: Any) -> Any:
     return "[redacted]"
 
 
-def prepare_outbound_sms_body(*, body: str, clinic_identity: str | None) -> str:
-    """Apply clinic identity and CASL opt-out copy to an outbound SMS body."""
+def prepare_outbound_sms_body(
+    *,
+    body: str,
+    include_opt_out_footer: bool = True,
+) -> str:
+    """Normalize an outbound SMS body and append CASL opt-out copy."""
     message = (body or "").strip()
     if not message:
         raise ValueError("SMS body is required")
 
-    identity = (clinic_identity or "Clinic").strip() or "Clinic"
-    lower = message.lower()
-    if not lower.startswith(f"{identity.lower()}:"):
-        message = f"{identity}: {message}"
-
-    if "reply stop" not in message.lower() or "reply help" not in message.lower():
+    if include_opt_out_footer and "reply stop" not in message.lower():
         message = f"{message}\n{CASL_FOOTER}"
 
     if len(message) > MAX_SMS_BODY_LENGTH:

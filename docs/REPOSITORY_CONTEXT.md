@@ -166,12 +166,18 @@ depending on sensitivity — check the per-route `dependencies=` when editing it
 
 There is **no code in this repo that creates, duplicates, or configures Retell
 agents**, imports phone numbers, or defines tool/function JSON schemas. All of
-that is done in the **Retell dashboard**. The repo's only outbound Retell API
-calls are **read-only**, used by admins to pick/verify an existing agent:
+that is done in the **Retell dashboard**. Admin provisioning calls are
+**read-only**, used to pick/verify an existing agent; workflow execution also
+uses Retell's create-chat/completion/get/end endpoints for the
+`retell_sms_conversation` response-generator node:
 
 - `GET /api/.../retell/agents` → Retell `list-agents` (`admin_institutions.py`)
 - `GET /api/.../retell/agents/{id}` → Retell `get-agent/{id}` — *"verify a manually
   entered Retell Agent ID."*
+- `GET /api/.../retell/chat-agents` → Retell `list-chat-agents` — populate the
+  SMS-profile Chat Agent selector.
+- `GET /api/.../retell/chat-agents/{id}` → Retell `get-chat-agent/{id}` — verify
+  a selected or manually entered Chat Agent ID.
 
 **Per-location onboarding, end to end:**
 
@@ -226,6 +232,15 @@ binding is strictly **1 Retell agent ↔ 1 InstitutionLocation**.
   date of birth, and an exact full phone number or email match before any patient
   ID is returned. Failed, missing, and ambiguous matches return the same neutral
   no-data response.
+- **GoTracker full lookup:** after that identity gate passes,
+  `lookup_patient(detail_level="full")` queries the Synchronizer's appointment
+  list for the verified `contactId` from the clinic-local current day onward,
+  with `exclude_cancelled=true`, and returns a normalized
+  `upcoming_appointments` list. Its appointment IDs retain the `gt-` prefix and
+  are the only IDs a voice agent may pass to cancellation or rescheduling.
+  GoTracker new-patient creation uses the Synchronizer's
+  `POST /api/patients/` consumer write-back endpoint through the same shared
+  `create_patient` handler; there is no GoTracker-specific Retell tool name.
 
 After the call, Retell posts a `call_analyzed` webhook → the request thread only
 verifies the signature, claims an idempotency row, and enqueues a Celery task
@@ -271,12 +286,163 @@ as JSON, validated by `definition_schema.py`, published as immutable versions,
 and executed as tenant/location-scoped runs with step executions, durable timers,
 events, and drip state. The dashboard surfaces this through the workflow builder
 and campaign detail pages under `nexus-dashboard-web/`.
+Drafts created from the Campaigns page inherit the institution admin's currently
+selected location so channel readiness, enrollment, and inbound reply routing all
+use the same location-level Twilio number.
+
+Every step attempt records a PHI-safe input snapshot when execution starts and an
+output snapshot when it completes, fails, waits, or resumes. These snapshots are
+stored on `automation_workflow_step_executions`; unknown context keys are redacted
+before persistence. The run timeline also returns the immutable workflow version
+used by that run. The builder's **Executions** view uses that version and the
+attempt ledger to render the traversed path, per-node status, retries, duration,
+result, error, and recorded input/output. Its node inspector defaults to a
+client-readable summary, omits internal/redacted fields, explains failures, and
+only shows retry history when multiple attempts exist. Raw input/output remains
+available under collapsed **Technical details** for administrators. Older step
+rows without snapshots retain the legacy timeline projection as a compatibility
+fallback.
+
+Campaign detail intentionally keeps execution monitoring compact: its
+**Executions** tab lists and filters runs, then links each run to the builder at
+`?view=executions&run=<run-id>`. The builder is the single visual inspection
+surface for the graph, node attempts, inputs, outputs, errors, and timing. The
+former campaign-level **Operations** tab and duplicate timeline drawer were
+removed; operational exceptions should become actionable, owner-aware issues
+rather than a second read-only execution log.
+
+Workflow node support is declared once in
+`src/app/services/automation/node_registry.py`. The registry owns each node
+type's outgoing-edge fields and whether it is authorable, executable, and
+dry-run capable. Schema graph checks, publish validation, dry-run, runtime
+guards, and the builder capability list all consume that contract. The builder
+also runs the authoritative backend validator after edits and again immediately
+before publish. Publish fails closed on duplicate node IDs, missing edge targets,
+unsupported capabilities, reachable execution cycles, and reachable paths that
+cannot terminate; unreachable orphan steps remain a warning. Validation issues
+include stable codes, node/field attribution, and a recommended fix where one is
+available.
 
 Current schema version `1.0` supports triggers such as `appointment_offset`,
 `appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
-`callback_requested`, and `patient_status_changed`; node types include `wait`,
-`drip`, `send_sms`, `send_voice`, `send_email`, `update_patient_status`,
+`callback_requested`, `patient_status_changed`, and `sms_reply`; node types
+include `wait`, `drip`, `send_sms`, `send_voice`, `send_email`,
+`retell_sms_conversation`, `update_patient_status`,
 `update_gotracker_appointment`, `json_mapper`, `llm`, `condition`, and `exit`.
+
+`send_sms` is run-scoped and only sends the message. The node does **not** carry
+an arbitrary recipient number; it sends to the workflow run's `Contact.phone`
+from the resolved `InstitutionLocation.twilio_from_number`. New workflow SMS
+sends open or reuse one active `CampaignConversationThread` for the workflow run
+and channel. The thread links outbound `sms_history_logs`, inbound
+`inbound_sms_messages`, normalized `campaign_response_events`, and
+`campaign_staff_handoffs` without duplicating encrypted message bodies.
+
+`retell_sms_conversation` is a stateful response-generator node. It parks the
+run and owns a local `RetellSmsSession`; Retell does **not** own the phone number
+or send SMS. The Twilio webhook keeps transport, signature validation,
+STOP/START/HELP processing, consent, encrypted logs, delivery callbacks, and
+thread correlation. On the first non-compliance patient reply, a worker lazily
+creates a Retell Chat API `chat_id`, submits the inbound text, bounds the agent
+reply to the configured SMS segment limit, and sends it through the existing
+`SmsService`. `RetellSmsTurn` rows deduplicate Twilio webhook retries and prevent
+blind replay after an ambiguous mutating Retell request.
+
+The local session—not Retell—is the lifecycle authority. Platform policy fixes
+the inactivity TTL at one hour and resets it after each accepted turn, subject
+to a 24-hour maximum-duration cap, 12 patient turns, and three SMS segments per
+generated reply. These are not workflow-author settings. Inactivity ends the
+session and advances to the next step without creating a handoff; provider or
+delivery failure creates a staff handoff. Retell-ended chats and STOP also end
+the local session. Cancelling the owning workflow run marks its active Retell
+session `cancelled` in the same transaction, releasing the patient/location
+guard; a migration repairs sessions stranded by cancellations from older code.
+A later unmatched patient SMS can start a new `sms_reply` workflow, which
+creates a new local session and a new Retell `chat_id`; terminal chat IDs are
+never reused. When that new run parks directly on a Retell SMS node, the
+triggering inbound message becomes its first turn—the patient does not need to
+text twice. See [ADR 0002](adr/0002-retell-chat-generation-with-platform-sms-transport.md).
+
+Retell dynamic variables are automatic and deliberately allow-listed. NexHealth
+and GoTracker deliveries first become the same normalized workflow/merge
+context; Retell then receives only available patient first-name/language,
+clinic, appointment, booking, recall, callback, conversation-goal, and previous
+message values. Workflow authors cannot map arbitrary fields. Internal
+institution/location/workflow-run/session IDs go in Retell metadata. The worker
+never forwards the entire trigger context or a raw PMS delivery. If the Retell
+agent ends the chat with a collected `conversation_outcome`, the runtime exposes
+it as `retell_sms_agent_outcome` for a downstream Condition node.
+
+Retell SMS chat profiles are provisioned by a platform operator from
+**Superadmin → Institutions → Location → Edit → Retell SMS Profiles**. The
+location editor can create, verify, edit, activate/deactivate, or delete an
+unused profile and records its display name, selected Retell Chat Agent, and
+active state. New sessions always use the agent's latest Retell version;
+legacy purpose/version storage is not authorable. Workflow authors only select
+active profiles for their current location. `GET /api/retell-sms/profiles` returns
+sanitized location-scoped choices to institution users; a superadmin must pass
+`location_id` and receives the technical fields needed by the editor. Retell
+agent creation and prompt configuration still happen manually in Retell's own
+dashboard, and no Retell phone number is required for this SMS mode.
+
+`wait` is the single first-class pause step and has a typed `wait_for`
+configuration. `wait_for.type = time` owns duration, calendar, or
+appointment-relative timing. `wait_for.type = sms_reply` parks the workflow run
+with a timeout timer and owns the response window and deterministic
+`response_mappings`; the normal dispatcher then resumes into the next node
+(usually a `condition`) after an inbound mapping or timeout. The builder exposes
+these as modes inside the same Wait node and authors reply mappings through
+structured accepted-reply, context-output, and staff-handoff controls. The JSON
+representation remains an internal workflow-definition detail. Future event
+waits can use the same public node without mixing their runtime correlation
+logic.
+Legacy `wait_for_sms_reply`, direct-delay `wait`, and Send SMS response settings
+remain accepted as compatibility inputs for already-published definitions.
+
+SMS replies resolve through that thread first, not by resuming every matching
+waiting run:
+
+- bare replies such as `YES` only correlate when exactly one active SMS thread
+  belonging to a running or waiting workflow run matches the patient/contact
+  and location; threads retained for staff handoff after a run becomes terminal
+  are excluded from automated correlation;
+- when a phone number belongs to multiple contacts (for example, family members
+  sharing one number), all matching contacts are considered and the reply is
+  correlated only if exactly one reply-eligible thread exists across them;
+- deterministic `response_mappings` on the SMS-reply-mode `wait` use whole-token,
+  case-insensitive matching to update workflow context and resume the normal
+  dispatcher; mappings that request staff handoff create a handoff and do not
+  resume;
+- for ordinary replies, the Twilio webhook persists the inbound message and
+  campaign response event but treats the correlated workflow run as read-only.
+  The Celery resume task owns workflow-run metadata updates and advancement under
+  its worker database context. STOP is the narrow exception described below;
+- ordinary and mapped replies return empty TwiML. Reply acknowledgments are not
+  hardcoded; authors must add another Send SMS node when a workflow should send
+  a follow-up message;
+- PMS writes never happen inside the SMS node or mapping handler. A following
+  workflow action such as `update_gotracker_appointment` must perform any PMS
+  update.
+
+`sms_reply` is an inbound-SMS trigger. After compliance keywords and existing
+run-scoped replies are handled, an unmatched inbound SMS from a resolved contact
+can enroll active `sms_reply` workflows for that institution/location. Optional
+trigger tokens use the same whole-token matching as reply mappings; empty tokens
+mean any non-compliance inbound SMS can start the workflow.
+
+Active thread statuses are `open` and `handoff`. Terminal runs close active SMS
+threads unless an unresolved handoff (`open`/`assigned`) still exists, in which
+case the thread remains in `handoff` for staff review. A retained handoff thread
+does not compete with a later running or waiting run when an inbound reply is
+correlated for automation.
+
+The public inbound webhook runs under the tenant/location-scoped `twilio` RLS
+context. It has read access to the workflow rows needed for reply correlation.
+Its workflow write access is limited to the STOP terminal path: updating the
+correlated run and pending/claimed timers, inserting the cancellation event, and
+closing the SMS thread. Other workflow mutation remains restricted to the Celery
+execution context. Replies requiring staff review emit an `inbound_sms_reply`
+in-app notification.
 
 Appointment-triggered campaigns use a disposable working set rather than live PMS
 reads on every dispatch:
@@ -291,6 +457,15 @@ reads on every dispatch:
   patient events for `pms_type="gotracker"` locations, updates the same working
   set, cancels runs for non-attending/cancelled states, and records writeback
   completion/failure events.
+- Location administration owns an explicit GoTracker webhook reconnect operation.
+  When a local provider subscription id exists it calls the Synchronizer's
+  `POST /api/webhooks/subscriptions/{id}/rotate-secret` operation and stores the
+  returned signing secret encrypted. A `404` from rotation means the stored id is
+  stale, so reconnect creates a replacement subscription and stores its new id and
+  secret. Without a stored provider id it follows the same create path. Reconnect
+  commits the credentials immediately after the Synchronizer response; persistence
+  failure is a hard reconnect error. Routine location saves and scheduled lifecycle
+  reconciliation never rotate healthy secrets.
 - `GoTrackerAppointmentWritebackService` tracks ScaleNexus-originated GoTracker
   appointment writes until the synchronizer confirms or fails them. It serializes
   writes per appointment with an advisory lock because GoTracker has one pending
@@ -300,6 +475,28 @@ GoTracker's **on-site synchronizer, local SQL agent, installer, offline queue,
 and stored-procedure implementation remain outside this repo**. This repo owns
 the PMS adapter contract, the cloud-facing GoTracker adapter/webhooks, and
 workflow behavior that must stay PMS-agnostic.
+
+For GoTracker-backed locations, Providers & Scheduling reads the Synchronizer's
+PMS-synced per-date working windows rather than synthesizing rows from available
+slots. Nexus can set a cloud-only appointment-type override for a stable working
+window ID and clear it to restore the provider/operatory standing rules. It must
+not create or alter the underlying window: Tracker remains the source of truth
+for its date, time, provider, and operatory.
+
+GoTracker can also return derived closed periods when Nexus requests them. They
+are the gaps between open Tracker windows (including a positively stated
+00:00–24:00 fully closed day), have no writable working-window ID, and are
+shown read-only in both the schedule list and calendar so staff can distinguish
+a closed chair from a booked one. Calendar closed spans are a separate visual
+layer: they are never merged with open windows, never open the linking drawer,
+and never affect open-time, working-window, or unlinked-window counts.
+
+GoTracker Reasons are Tracker-native, read-only scheduling references (the
+equivalent of NexHealth EMR descriptors). They are synchronized into the shared
+reference cache and shown on the Reasons setup page. A Synchronizer-owned
+GoTracker appointment type may link to **at most one** reason, matching the
+single native reason accepted by a GoTracker appointment write; NexHealth keeps
+its independent multi-descriptor appointment-type mapping.
 
 ---
 
@@ -320,21 +517,41 @@ repo has no Twilio Voice/TwiML voice wiring.
   per-department numbers for **live-call transfer**, surfaced to the agent via the
   `list_transfer_numbers` function.
 
-**Provisioning is manual** — numbers are purchased externally, not via API.
-`client.incoming_phone_numbers.list()` (`api/routes/twilio.py`) is read-only, so an
-admin can *see* owned numbers; `twilio_from_number` is then set through admin
-location CRUD.
+**Number purchasing is manual** — numbers are purchased externally, not via API.
+In the Super Admin institution detail page, the Credentials tab stores one
+encrypted Twilio account SID/auth token pair for the institution. The Locations
+tab then lists SMS-capable numbers from that institution account through
+`GET /admin/institutions/{slug}/twilio/phone-numbers`; the selected number is
+stored as the location's `twilio_from_number`. Saving an assigned number also
+uses the institution credentials to set that Twilio number's inbound message
+webhook to `<PUBLIC_API_URL>/api/v1/twilio/webhooks/inbound-sms` with method
+`POST`. Existing direct webhook URLs are replaced because selecting the number
+is the explicit ownership action; an existing Twilio SMS Application binding
+fails with a conflict instead of being silently removed. The location editor
+also exposes a reconnect action for reapplying the webhook after a local tunnel
+or deployment URL changes. The platform-wide
+`GET /admin/twilio/phone-numbers` endpoint remains available for platform account
+operations, but it is not used by the location picker.
 
 ### 6.2 Webhooks (`src/app/api/routes/twilio_webhooks.py`, prefix `/twilio/webhooks`)
 
-- `POST /inbound-sms` — keyword opt-out/in (STOP/UNSUBSCRIBE/… → suppress;
-  START/UNSTOP → release; HELP/INFO → help text). Routes `To` number → location
-  via `twilio_from_number`. Replies with TwiML.
+- `POST /inbound-sms` — case-insensitive keyword opt-out/in
+  (STOP/UNSUBSCRIBE/… → suppress; START/UNSTOP → release; HELP/INFO → help
+  text). Suppression is scoped to the location resolved from the receiving `To`
+  number, so the same phone may still receive SMS from another location. Every
+  contact sharing that phone is suppressed at the receiving location. In the
+  same transaction, STOP cancels the unambiguously correlated active workflow
+  run, its pending/claimed timers, and its SMS thread with reason `sms_opt_out`.
+  For a shared-phone ambiguity it cancels every active run with an active SMS
+  thread for that phone and location, without touching unrelated email/voice-only
+  runs. Routes `To` via `twilio_from_number` and replies with TwiML.
 - `POST /sms-status` — delivery-status callback; updates the `SmsHistoryLog`.
 
 Both **require Twilio signature validation** (`RequestValidator` against the raw
 URL + form): **503** if the secret isn't configured, **401** on missing/invalid
-`X-Twilio-Signature`. Unmatched location / `MessageSid` → dead-letter.
+`X-Twilio-Signature`. In ECS, Gunicorn/Uvicorn trusts the CDK
+`trustedProxyCidrs` so the ALB's `X-Forwarded-Proto` preserves the public HTTPS
+URL Twilio signed. Unmatched location / `MessageSid` → dead-letter.
 
 ### 6.3 Outbound SMS
 
@@ -347,14 +564,66 @@ row (encrypted body, masked/hashed number), calls Twilio (offloaded via
 task (`tasks/sms.py`, 5 retries, exp backoff, dead-letters on exhaustion).
 Call-triggered auto-SMS is enqueued from the post-call pipeline only if a body +
 patient phone + `twilio_from_number` are all present.
+Outbound bodies preserve the rendered template text without automatically
+prepending the location name. Send SMS nodes default to appending `Reply STOP to
+opt out.` when equivalent case-insensitive copy is not already present; workflow
+authors may disable that footer per node. Manual/admin SMS entry points retain
+the enabled default. STOP suppression itself remains centralized and cannot be
+disabled by a workflow.
 
-### 6.4 Gotchas
+Every outbound Twilio message gets a delivery callback URL. By default it is
+derived as `<PUBLIC_API_URL>/api/v1/twilio/webhooks/sms-status`; the legacy
+`TWILIO_SMS_STATUS_CALLBACK_URL` setting remains an optional explicit override.
+Twilio posts message state transitions such as `sent`, `delivered`, `failed`,
+and `undelivered` to that route, which verifies the Twilio signature and updates
+the existing `SmsHistoryLog` by `MessageSid`.
+
+### 6.4 DNC patients and channel opt-outs
+
+Institution admins manage opt-outs from the **DNC Patients** page
+(`/institution-admin/do-not-contact`). Its API projection groups three durable
+sources by contact/identity: active `SmsSuppression` rows for SMS STOP replies,
+latest revoked `ConsentRecord` rows for voice/email (and legacy SMS consent
+revocations), and legacy/staff `DoNotContact` rows that block all channels. The
+page shows an independently removable SMS, voice, or email tag plus its location
+when the restriction is location-scoped. Removing a tag uses its opaque row ID,
+is audited, writes the corresponding granted consent state, and leaves every
+other channel restriction intact. Legacy all-channel rows appear as a single
+**All channels** tag and are released as one unit.
+
+Spoken Retell opt-outs now write a location-scoped revoked **voice** consent;
+they do not suppress SMS or email. Email unsubscribe/bounce/complaint handling
+writes an email-identity revocation. SMS STOP continues to create a
+location-scoped SMS suppression and now retains an unambiguous matched
+`contact_id` so the patient can be named on the DNC page.
+
+Manual campaign enrollment resolves the selected contact and checks active
+all-channel `DoNotContact` rows by both contact ID and phone hash before creating
+a workflow run. A matching institution- or campaign-location-scoped DNC returns
+HTTP 409 with a clear instruction to remove the restriction; the dashboard shows
+that detail instead of reporting a successful enrollment. Dispatch-time channel
+gates remain authoritative for opt-outs recorded after enrollment and other
+send-time consent changes.
+
+### 6.5 Gotchas
 
 - **Env var is misspelled `TWILLIO_` (double-L)**: `TWILLIO_SID`,
   `TWILLIO_API_SECRET` — but `TWILIO_SMS_STATUS_CALLBACK_URL` is spelled
   correctly. Easy to trip on.
-- **Single platform-level Twilio account** serves all tenants; the auth token
-  doubles as the webhook-signature secret. No per-tenant Twilio credentials.
+- `PUBLIC_API_URL` is non-secret deployment configuration and must be the
+  externally reachable backend URL for the current environment, with no trailing
+  slash. For local testing, set it to the current HTTPS tunnel URL before saving
+  the location's number. Staging and production each use their own value and
+  should not manage the same Twilio number.
+- Twilio credentials resolve **institution → platform**: an institution may store
+  encrypted Twilio sub-account SID/token; otherwise outbound sends and webhook
+  signature validation fall back to platform `TWILLIO_SID` /
+  `TWILLIO_API_SECRET`. Configure both institution account fields together. The
+  Super Admin location picker deliberately does not use this fallback: it requires
+  institution credentials so numbers cannot be selected from the wrong account.
+- `twilio_from_number` is still **per location**. Reusing one sender number on
+  multiple active locations makes inbound `To`-number routing ambiguous and
+  should be avoided operationally.
 - Twilio client is constructed in two places (`twilio.py` and `sms_service.py`) —
   prefer `SmsService`.
 
@@ -372,7 +641,7 @@ injected via Docker secret files using the `*_FILE` variants.
 | **NexHealth** (PMS) | Universal PMS integration layer for NexHealth-backed institutions | `NEXHEALTH_API_KEY`, `NEXHEALTH_BASE_URL` (`https://nexhealth.info`), `NEXHEALTH_API_VERSION`, `NEXHEALTH_WEBHOOK_SECRET`, connection-pool vars |
 | **GoTracker Synchronizer** (PMS) | PMS adapter + webhooks for GoTracker-backed institutions | `GOTRACKER_BASE_URL`, `GOTRACKER_WEBHOOK_SECRET`; per-location product key/base URL fields |
 | **Retell AI** (voice) | Inbound and workflow-driven voice agent calls | `RETELL_API_SECRET` (signature verify + read-only agents API) |
-| **Twilio** (SMS) | Outbound/inbound SMS, delivery callbacks | `TWILLIO_SID`, `TWILLIO_API_SECRET`, `TWILIO_SMS_STATUS_CALLBACK_URL` *(note spelling)* |
+| **Twilio** (SMS) | Outbound/inbound SMS, delivery callbacks | `PUBLIC_API_URL`; `TWILLIO_SID`, `TWILLIO_API_SECRET`; optional `TWILIO_SMS_STATUS_CALLBACK_URL` override *(note spelling)* |
 | **Resend** (email) | Transactional email — **verified, see below** | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_REPLY_TO`, `RESEND_ALERT_RECIPIENTS` |
 | **AWS S3** | Call-recording storage | `AWS_S3_BUCKET_NAME`, `AWS_REGION` (`ca-central-1`) |
 | **JWT / Auth** | Access/refresh token signing | `JWT_SECRET` (required), `JWT_ALGORITHM` (HS256), `JWT_ISSUER`, `JWT_AUDIENCE` |
@@ -424,7 +693,7 @@ the `retell_agent_id` location lookup) · `sync_service` (pull providers/appt-ty
 operatories from the PMS adapter) · `slot_filter` (trim slots to operating hours) ·
 `automation/*` (workflow definition, enrollment, scheduling, channel dispatch,
 appointment projection, campaign analytics, GoTracker writeback) ·
-`sms_service` / `sms_compliance` / `sms_privacy` (SMS send + consent/DNC) ·
+`sms_service` / `sms_compliance` / `sms_privacy` (SMS send + multichannel consent/DNC) ·
 `email_notification_service` / `auth_email_service` / `email_template_service`
 (Resend + templates) · `mfa` (WebAuthn/TOTP/recovery) ·
 `refresh_token_service` (Redis sessions) · `event_bus` (SSE over Redis) ·
@@ -447,16 +716,17 @@ appointment projection, campaign analytics, GoTracker writeback) ·
   NexHealth. `nexhealth`, `gotracker`, and `none` have different setup and
   failure modes, but all PMS-touching routes still require explicit location
   scope.
-- **Provisioning is manual** for both Retell agents and Twilio numbers today.
-  `retell_agent_id` / `twilio_from_number` are set via admin CRUD; no API write
-  path creates them. This is the most common source of "why isn't this clinic's
-  agent/SMS working" — check those two fields are populated.
+- **Provisioning is manual** for Retell agents and purchasing Twilio numbers.
+  Super Admin stores each institution's Twilio credentials and assigns an owned
+  number per location, but no API write path purchases a number or creates a
+  Retell agent. For "why isn't this clinic's agent/SMS working", check
+  `retell_agent_id`, institution Twilio credentials, and `twilio_from_number`.
 - **Schemas the LLM sees live in Retell**, not the repo. Changing a function's
   parameters means editing the Retell dashboard tool config *and* the handler.
-- **Single/shared vendor accounts remain common**: NexHealth currently uses the
-  platform key plus per-location subdomain/location ID; Twilio/Retell are shared
-  account integrations. Per-clinic credential columns exist for future expansion,
-  and GoTracker uses per-location synchronizer product-key config.
+- **Vendor credential scope differs**: NexHealth currently uses the platform key
+  plus per-location subdomain/location ID; Twilio uses one account per institution
+  plus a sender number per location; Retell remains shared; and GoTracker uses
+  per-location synchronizer product-key config.
 - **`TWILLIO_` env vars are misspelled** (double-L) — match the existing spelling.
 - **Migrations** are manual (one-off ECS task before deploy); **CI/CD is manual**
   (no GitHub Actions). For roadmap details, verify the focused roadmap docs and

@@ -33,6 +33,7 @@ def _make_run():
 
 def _make_runtime():
     rt = AsyncMock()
+    rt.set_trace_context = MagicMock()
     step = MagicMock()
     step.id = "step-1"
     rt.begin_step = AsyncMock(return_value=step)

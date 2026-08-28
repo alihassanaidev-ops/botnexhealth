@@ -91,3 +91,32 @@ def test_dry_run_truncates_on_loop() -> None:
     )
     r = simulate_run(d)
     assert r.truncated is True
+
+
+def test_dry_run_supports_internal_status_and_pms_appointment_updates() -> None:
+    definition = _defn(
+        [
+            {
+                "type": "update_patient_status",
+                "id": "status-1",
+                "status": "ready_to_book",
+                "next_node_id": "appointment-1",
+            },
+            {
+                "type": "update_appointment",
+                "id": "appointment-1",
+                "operation": "confirm",
+                "next_node_id": "exit-1",
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "confirmed"},
+        ],
+        "status-1",
+    )
+
+    result = simulate_run(definition)
+
+    assert [step.node_type for step in result.steps] == [
+        "update_patient_status",
+        "update_appointment",
+        "exit",
+    ]

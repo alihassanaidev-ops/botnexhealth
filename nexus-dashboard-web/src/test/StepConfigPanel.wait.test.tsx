@@ -8,9 +8,12 @@ import type { WaitNode, WorkflowDefinition, WorkflowNode } from "@/types/workflo
 const WAIT_NODE: WaitNode = {
     type: "wait",
     id: "wait-1",
-    delay: { delay_type: "appointment_relative", offset_seconds: -3600, anchor_field: "appointment_at" },
+    wait_for: {
+        type: "time",
+        delay: { delay_type: "appointment_relative", offset_seconds: -3600, anchor_field: "appointment_at" },
+        respect_quiet_hours: true,
+    },
     next_node_id: "voice-1",
-    respect_quiet_hours: true,
 }
 
 const BASE_DEF: WorkflowDefinition = {
@@ -57,20 +60,92 @@ function WaitPanelHarness({ onNodeChange }: { onNodeChange: (node: WorkflowNode)
 }
 
 describe("StepConfigPanel appointment-relative wait", () => {
+    it("switches the same Wait node to SMS reply mode", async () => {
+        const user = userEvent.setup()
+        const onNodeChange = vi.fn()
+
+        render(<WaitPanelHarness onNodeChange={onNodeChange} />)
+
+        await user.click(screen.getAllByRole("combobox")[0])
+        await user.click(await screen.findByRole("option", { name: "SMS reply" }))
+
+        expect(screen.queryByText("Include reply key")).not.toBeInTheDocument()
+        expect(onNodeChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                type: "wait",
+                id: "wait-1",
+                wait_for: expect.objectContaining({ type: "sms_reply" }),
+            }),
+        )
+    })
+
+    it("edits deterministic SMS replies without exposing response mapping JSON", async () => {
+        const user = userEvent.setup()
+        const onNodeChange = vi.fn()
+
+        render(<WaitPanelHarness onNodeChange={onNodeChange} />)
+
+        await user.click(screen.getAllByRole("combobox")[0])
+        await user.click(await screen.findByRole("option", { name: "SMS reply" }))
+
+        const acceptedReplies = screen.getAllByLabelText("Accepted replies")[0]
+        expect(acceptedReplies).toHaveValue("YES, Y")
+        expect(screen.queryByText(/context_updates/)).not.toBeInTheDocument()
+
+        await user.clear(acceptedReplies)
+        await user.type(acceptedReplies, "CONFIRM, YES")
+        await user.tab()
+
+        expect(onNodeChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                wait_for: expect.objectContaining({
+                    response_mappings: expect.arrayContaining([
+                        expect.objectContaining({
+                            tokens: ["CONFIRM", "YES"],
+                            context_updates: { sms_reply: "yes" },
+                        }),
+                    ]),
+                }),
+            }),
+        )
+
+        await user.click(screen.getByRole("combobox", { name: "Action for reply rule 1" }))
+        await user.click(await screen.findByRole("option", { name: "Create staff handoff" }))
+
+        expect(onNodeChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                wait_for: expect.objectContaining({
+                    response_mappings: expect.arrayContaining([
+                        expect.objectContaining({
+                            tokens: ["CONFIRM", "YES"],
+                            handoff_reason: "sms_reply_requires_staff",
+                        }),
+                    ]),
+                }),
+            }),
+        )
+    })
+
     it("offers a custom timing option and stores custom hours as seconds", async () => {
         const user = userEvent.setup()
         const onNodeChange = vi.fn()
 
         render(<WaitPanelHarness onNodeChange={onNodeChange} />)
 
-        await user.click(screen.getAllByRole("combobox")[1])
+        const timingSelect = screen.getAllByRole("combobox").find(
+            (element) => element.textContent?.includes("1 hour before appointment"),
+        )
+        expect(timingSelect).toBeDefined()
+        await user.click(timingSelect!)
         await user.click(await screen.findByRole("option", { name: "Custom offset" }))
 
         expect(onNodeChange).toHaveBeenLastCalledWith(
             expect.objectContaining({
-                delay: expect.objectContaining({
-                    delay_type: "appointment_relative",
-                    offset_seconds: 0,
+                wait_for: expect.objectContaining({
+                    delay: expect.objectContaining({
+                        delay_type: "appointment_relative",
+                        offset_seconds: 0,
+                    }),
                 }),
             }),
         )
@@ -81,9 +156,11 @@ describe("StepConfigPanel appointment-relative wait", () => {
 
         expect(onNodeChange).toHaveBeenLastCalledWith(
             expect.objectContaining({
-                delay: expect.objectContaining({
-                    delay_type: "appointment_relative",
-                    offset_seconds: 900,
+                wait_for: expect.objectContaining({
+                    delay: expect.objectContaining({
+                        delay_type: "appointment_relative",
+                        offset_seconds: 900,
+                    }),
                 }),
             }),
         )

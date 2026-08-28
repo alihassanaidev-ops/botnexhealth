@@ -22,6 +22,8 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowStatus,
     AutomationWorkflowVersion,
 )
+from src.app.models.contact import Contact
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_halt import OutboundEmergencyHalt
 from src.app.models.user import User
 from src.app.services.automation.definition_schema import WorkflowDefinition
@@ -49,9 +51,14 @@ from src.app.services.automation.campaign_analytics_service import (
     resolve_window,
 )
 from src.app.services.automation.merge_field_catalog import fields_for
+from src.app.services.automation.node_registry import (
+    NODE_REGISTRY_VERSION,
+    public_capabilities,
+)
 from src.app.services.automation.validation_service import WorkflowValidationService
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.step_dispatcher import build_dispatcher
+from src.app.services.sms_compliance import SmsComplianceService
 
 router = APIRouter(prefix="/automation/workflows", tags=["Automation Workflows"])
 _OPENAI_MODELS_CACHE: tuple[datetime, list["WorkflowLlmModelResponse"]] | None = None
@@ -90,6 +97,7 @@ class WorkflowCreateRequest(BaseModel):
 
 class WorkflowDraftCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    location_id: str | None = None
 
 
 class WorkflowUpdateRequest(BaseModel):
@@ -232,11 +240,26 @@ class ValidationIssueResponse(BaseModel):
     field_path: list[Any] = Field(default_factory=list)
     message: str
     code: str | None = None
+    fix: str | None = None
 
 
 class ValidateDefinitionResponse(BaseModel):
     valid: bool
     issues: list[ValidationIssueResponse] = Field(default_factory=list)
+
+
+class NodeCapabilityResponse(BaseModel):
+    node_type: str
+    outgoing_fields: list[str] = Field(default_factory=list)
+    authorable: bool
+    runtime_supported: bool
+    dry_run_supported: bool
+    legacy: bool
+
+
+class NodeCapabilitiesResponse(BaseModel):
+    registry_version: str
+    nodes: list[NodeCapabilityResponse] = Field(default_factory=list)
 
 
 class PhoneCountryRegionResponse(BaseModel):
@@ -570,6 +593,7 @@ class TimelineItemResponse(BaseModel):
 class RunTimelineResponse(BaseModel):
     run: CampaignRunListItemResponse
     contact: dict[str, Any]
+    workflow_version: dict[str, Any] = Field(default_factory=dict)
     items: list[TimelineItemResponse] = Field(default_factory=list)
 
 
@@ -674,8 +698,27 @@ async def create_draft_workflow(
 ) -> WorkflowResponse:
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
+        if data.location_id:
+            location_id = (
+                await session.execute(
+                    sa_select(InstitutionLocation.id).where(
+                        InstitutionLocation.id == data.location_id,
+                        InstitutionLocation.institution_id == inst_id,
+                        InstitutionLocation.is_active.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            if location_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Location not found",
+                )
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await svc.create_draft(institution_id=inst_id, name=data.name)
+        wf = await svc.create_draft(
+            institution_id=inst_id,
+            name=data.name,
+            location_id=data.location_id,
+        )
         return WorkflowResponse.from_model(wf)
 
 
@@ -710,11 +753,24 @@ async def validate_definition(
             field_path=list(i.field_path),
             message=i.message,
             code=i.code,
+            fix=i.fix,
         )
         for i in issues
     ]
     valid = not any(i.severity == "error" for i in issues)
     return ValidateDefinitionResponse(valid=valid, issues=responses)
+
+
+@router.get("/node-capabilities", response_model=NodeCapabilitiesResponse)
+async def list_node_capabilities(
+    current_user: _InstitutionAdmin,
+) -> NodeCapabilitiesResponse:
+    """Return the engine's authoritative authoring/runtime support contract."""
+    _institution_id(current_user)
+    return NodeCapabilitiesResponse(
+        registry_version=NODE_REGISTRY_VERSION,
+        nodes=[NodeCapabilityResponse(**item) for item in public_capabilities()],
+    )
 
 
 @router.get("/phone-country-regions", response_model=list[PhoneCountryRegionResponse])
@@ -1474,6 +1530,27 @@ async def enroll_in_workflow(
                 detail="Workflow has no published version",
             )
 
+        if data.contact_id:
+            contact = await session.get(Contact, data.contact_id)
+            if contact is None or str(contact.institution_id) != inst_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Patient not found",
+                )
+            if await SmsComplianceService(session).is_do_not_contact(
+                institution_id=inst_id,
+                location_id=location_id,
+                phone_hash=contact.phone_hash,
+                contact_id=str(contact.id),
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Patient has an active all-channel DNC restriction and "
+                        "cannot be enrolled. Remove the DNC restriction before enrolling."
+                    ),
+                )
+
         enroll_svc = AutomationWorkflowEnrollmentService(session)
         run, created = await enroll_svc.enroll(
             institution_id=inst_id,
@@ -1630,6 +1707,7 @@ async def get_run_timeline(
     return RunTimelineResponse(
         run=CampaignRunListItemResponse(**timeline.run.__dict__),
         contact=timeline.contact,
+        workflow_version=timeline.workflow_version,
         items=[TimelineItemResponse(**item.__dict__) for item in timeline.items],
     )
 

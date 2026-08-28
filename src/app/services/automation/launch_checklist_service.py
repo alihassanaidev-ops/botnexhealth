@@ -33,6 +33,7 @@ from src.app.services.automation.channel_readiness import ChannelReadinessServic
 from src.app.services.automation.definition_schema import (
     ConditionNode,
     ExitNode,
+    RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -40,16 +41,22 @@ from src.app.services.automation.definition_schema import (
 )
 from src.app.services.automation.nexhealth_sync_status_service import assess_sync_status
 from src.app.services.automation.pms_capability_service import PmsCapabilityService
+from src.app.services.automation.retell_sms_policy import RETELL_SMS_POLICY
 from src.app.services.automation.validation_service import WorkflowValidationService
 
 ChecklistStatus = Literal["pass", "warning", "blocked", "unknown"]
 
-_SEND_NODE_TYPES = (SendSmsNode, SendEmailNode, SendVoiceNode)
+_SEND_NODE_TYPES = (
+    SendSmsNode,
+    RetellSmsConversationNode,
+    SendEmailNode,
+    SendVoiceNode,
+)
 _BROAD_TRIGGER_TYPES = {"recall_scan"}
 _APPOINTMENT_TRIGGER_TYPES = {"appointment_offset", "recall_scan"}
 _STATUS_EVENT_TRIGGER_TYPES = {"patient_status_changed"}
 _FRESHNESS_WINDOW = timedelta(hours=24)
-_SMS_STOP_HELP_COPY = "SMS bodies are normalized with clinic identity plus STOP/HELP copy at send time."
+_SMS_STOP_COPY = "All SMS steps include automatic STOP copy at send time."
 
 
 @dataclass(frozen=True)
@@ -411,8 +418,18 @@ class CampaignLaunchChecklistService:
             suppression_msg = "Consent records are not required by this definition; suppression/DNC still applies."
 
         sms_nodes = [n for n in send_nodes if isinstance(n, SendSmsNode)]
-        stop_help_status: ChecklistStatus = "pass"
-        stop_help_msg = _SMS_STOP_HELP_COPY if sms_nodes else "No SMS steps require STOP/HELP footer copy."
+        stop_status: ChecklistStatus = "pass"
+        disabled_stop_nodes = [n for n in sms_nodes if not n.include_opt_out_footer]
+        if not sms_nodes:
+            stop_msg = "No SMS steps require STOP footer copy."
+        elif disabled_stop_nodes:
+            stop_status = "warning"
+            stop_msg = (
+                f"{len(disabled_stop_nodes)} SMS step(s) disable the automatic STOP footer. "
+                "Add opt-out copy to the message manually when required."
+            )
+        else:
+            stop_msg = _SMS_STOP_COPY
 
         return [
             CampaignLaunchChecklistItem(
@@ -440,9 +457,9 @@ class CampaignLaunchChecklistService:
             CampaignLaunchChecklistItem(
                 id="sms_stop_help_copy",
                 section="compliance",
-                label="SMS STOP/HELP copy",
-                status=stop_help_status,
-                message=stop_help_msg,
+                label="SMS STOP copy",
+                status=stop_status,
+                message=stop_msg,
                 fix_href="#message-editor",
             ),
         ]
@@ -1052,7 +1069,7 @@ def _issue_payload(issue: Any) -> dict[str, Any]:
 def _channels_used(definition: WorkflowDefinition) -> set[str]:
     channels: set[str] = set()
     for node in definition.nodes:
-        if isinstance(node, SendSmsNode):
+        if isinstance(node, (SendSmsNode, RetellSmsConversationNode)):
             channels.add("sms")
         elif isinstance(node, SendEmailNode):
             channels.add("email")
@@ -1108,6 +1125,10 @@ def _planned_sends_per_contact(send_nodes: list[Any]) -> dict[str, int]:
         attempts = int(getattr(node, "max_attempts", 1) or 1)
         if isinstance(node, SendSmsNode):
             volume["sms"] += attempts
+        elif isinstance(node, RetellSmsConversationNode):
+            # Conversation replies are demand-driven; expose the hidden platform
+            # ceiling instead of pretending this is one fixed send.
+            volume["sms"] += RETELL_SMS_POLICY.max_patient_turns
         elif isinstance(node, SendEmailNode):
             volume["email"] += attempts
         elif isinstance(node, SendVoiceNode):

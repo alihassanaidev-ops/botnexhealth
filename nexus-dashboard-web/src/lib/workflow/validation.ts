@@ -121,41 +121,50 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
         if (!node.id) {
             issues.push({ node_id: null, severity: "error", message: "A step is missing an id." })
         }
-        // Self-loop warning.
-        if (referencedIds(node).includes(node.id)) {
-            issues.push({
-                node_id: node.id,
-                severity: "warning",
-                message: "This step points back to itself, which can loop indefinitely.",
-            })
-        }
-
         switch (node.type) {
             case "wait": {
                 refError(node, node.next_node_id, "Wait step")
-                if (node.delay.delay_type === "duration") {
-                    if (node.delay.duration_seconds < 0) {
+                if (node.wait_for.type === "sms_reply") {
+                    const windowSeconds = node.wait_for.response_window_seconds ?? 259200
+                    if (!Number.isFinite(windowSeconds) || windowSeconds < 60 || windowSeconds > 2592000) {
+                        issues.push({
+                            node_id: node.id,
+                            severity: "error",
+                            message: "SMS reply response window must be between 60 seconds and 30 days.",
+                        })
+                    }
+                    for (const mapping of node.wait_for.response_mappings ?? []) {
+                        if (!mapping.tokens?.length) {
+                            issues.push({
+                                node_id: node.id,
+                                severity: "warning",
+                                message: "SMS response mapping has no tokens.",
+                            })
+                        }
+                    }
+                } else if (node.wait_for.delay.delay_type === "duration") {
+                    if (node.wait_for.delay.duration_seconds < 0) {
                         issues.push({
                             node_id: node.id,
                             severity: "error",
                             message: "Wait duration cannot be negative.",
                         })
-                    } else if (node.delay.duration_seconds === 0) {
+                    } else if (node.wait_for.delay.duration_seconds === 0) {
                         issues.push({
                             node_id: node.id,
                             severity: "warning",
                             message: "Wait duration is zero — the step will not pause.",
                         })
                     }
-                } else if (node.delay.delay_type === "calendar" && !HHMM_RE.test(node.delay.time_of_day)) {
+                } else if (node.wait_for.delay.delay_type === "calendar" && !HHMM_RE.test(node.wait_for.delay.time_of_day)) {
                     issues.push({
                         node_id: node.id,
                         severity: "error",
-                        message: `Send time "${node.delay.time_of_day}" is not a valid HH:MM time.`,
+                        message: `Send time "${node.wait_for.delay.time_of_day}" is not a valid HH:MM time.`,
                     })
                 } else if (
-                    node.delay.delay_type === "appointment_relative" &&
-                    !Number.isFinite(node.delay.offset_seconds)
+                    node.wait_for.delay.delay_type === "appointment_relative" &&
+                    !Number.isFinite(node.wait_for.delay.offset_seconds)
                 ) {
                     issues.push({
                         node_id: node.id,
@@ -194,6 +203,22 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                     })
                 }
                 checkAttempts(node.max_attempts, node.id, issues)
+                if ((node.response_window_seconds ?? 259200) < 60) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "SMS response window must be at least 60 seconds.",
+                    })
+                }
+                for (const mapping of node.response_mappings ?? []) {
+                    if (!mapping.tokens?.length) {
+                        issues.push({
+                            node_id: node.id,
+                            severity: "warning",
+                            message: "SMS response mapping has no tokens.",
+                        })
+                    }
+                }
                 checkTokens(node.body_template, node.id, def, "sms", issues)
                 break
             }
@@ -216,6 +241,18 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                 checkAttempts(node.max_attempts, node.id, issues)
                 checkTokens(node.subject_template, node.id, def, "email", issues)
                 checkTokens(node.body_template, node.id, def, "email", issues)
+                break
+            }
+            case "retell_sms_conversation": {
+                refError(node, node.next_node_id, "Retell SMS conversation")
+                if (!node.chat_profile_id.trim()) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Retell SMS conversation has no chat profile selected.",
+                        fix: "Choose an active location Retell SMS profile.",
+                    })
+                }
                 break
             }
             case "send_voice": {
@@ -427,6 +464,16 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
         })
     }
 
+    for (const node of reachableCycleNodes(def)) {
+        issues.push({
+            node_id: node,
+            severity: "error",
+            message: "This step is part of an execution loop.",
+            fix: "Remove the loop or route the branch to an Exit step.",
+            code: "graph_cycle",
+        })
+    }
+
     // Errors first, then warnings — stable within group.
     return issues.sort((a, b) => severityRank(a.severity) - severityRank(b.severity))
 }
@@ -497,6 +544,33 @@ export function unreachableNodes(def: WorkflowDefinition): string[] {
         }
     }
     return def.nodes.map((n) => n.id).filter((id) => !reached.has(id))
+}
+
+/** Node ids participating in a cycle reachable from the trigger. */
+export function reachableCycleNodes(def: WorkflowDefinition): string[] {
+    const byId = new Map(def.nodes.map((node) => [node.id, node]))
+    const colors = new Map<string, number>()
+    const active: string[] = []
+    const cycles = new Set<string>()
+
+    const visit = (id: string) => {
+        colors.set(id, 1)
+        active.push(id)
+        const node = byId.get(id)
+        for (const target of node ? referencedIds(node) : []) {
+            if (!byId.has(target)) continue
+            if (!colors.has(target)) {
+                visit(target)
+            } else if (colors.get(target) === 1) {
+                active.slice(active.indexOf(target)).forEach((cycleId) => cycles.add(cycleId))
+            }
+        }
+        active.pop()
+        colors.set(id, 2)
+    }
+
+    if (byId.has(def.entry_node_id)) visit(def.entry_node_id)
+    return [...cycles].sort()
 }
 
 /** Convenience: true if there are no error-severity issues. */

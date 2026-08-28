@@ -38,6 +38,8 @@ def test_automation_models_use_separate_namespace_from_call_workflow_statuses() 
     assert AutomationWorkflowVersion.__tablename__ == "automation_workflow_versions"
     assert AutomationWorkflowRun.__tablename__ == "automation_workflow_runs"
     assert AutomationWorkflowStepExecution.__tablename__ == "automation_workflow_step_executions"
+    assert "input_snapshot" in AutomationWorkflowStepExecution.__table__.columns
+    assert "output_snapshot" in AutomationWorkflowStepExecution.__table__.columns
     assert AutomationWorkflowTimer.__tablename__ == "automation_workflow_timers"
     assert AutomationWorkflowEvent.__tablename__ == "automation_workflow_events"
 

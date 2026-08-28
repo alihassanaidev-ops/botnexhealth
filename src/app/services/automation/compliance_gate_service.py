@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.automation_workflow import AutomationWorkflowRun
@@ -130,12 +130,18 @@ class ComplianceGateService:
         # Email consent is keyed on the email address, not the phone — an
         # email-only contact must not be blocked "no_phone".
         if channel_type == "send_email":
-            return await self._check_email_consent(run.institution_id, contact, content_class)
+            return await self._check_email_consent(
+                run.institution_id, run.location_id, contact, content_class
+            )
 
         # Voice consent is phone-identity based, like SMS.
         if channel_type == "send_voice":
             return await self._check_phone_consent(
-                run.institution_id, contact, ConsentChannel.VOICE.value, content_class
+                run.institution_id,
+                run.location_id,
+                contact,
+                ConsentChannel.VOICE.value,
+                content_class,
             )
 
         # Unknown channel type — allow and let the send handler decide
@@ -177,6 +183,7 @@ class ComplianceGateService:
     async def _check_phone_consent(
         self,
         institution_id: str,
+        location_id: str | None,
         contact: Contact,
         channel: str,
         content_class: str | None = None,
@@ -195,6 +202,10 @@ class ComplianceGateService:
                 ConsentRecord.institution_id == institution_id,
                 ConsentRecord.channel == channel,
                 ConsentRecord.phone_hash == phone_hash,
+                or_(
+                    ConsentRecord.location_id.is_(None),
+                    ConsentRecord.location_id == location_id,
+                ),
             )
             .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
             .limit(1)
@@ -204,6 +215,7 @@ class ComplianceGateService:
     async def _check_email_consent(
         self,
         institution_id: str,
+        location_id: str | None,
         contact: Contact,
         content_class: str | None = None,
     ) -> GateResult:
@@ -222,6 +234,10 @@ class ComplianceGateService:
                 ConsentRecord.institution_id == institution_id,
                 ConsentRecord.channel == ConsentChannel.EMAIL.value,
                 ConsentRecord.email_hash == email_hash,
+                or_(
+                    ConsentRecord.location_id.is_(None),
+                    ConsentRecord.location_id == location_id,
+                ),
             )
             .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
             .limit(1)

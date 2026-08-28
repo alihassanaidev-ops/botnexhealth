@@ -4,6 +4,7 @@ import ipaddress
 import logging
 import os
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 import structlog
@@ -66,6 +67,9 @@ class Settings(BaseSettings):
     # App settings
     app_env: str = "local"
     log_level: str = "info"
+    # Public backend origin for provider webhooks. This is deployment metadata,
+    # not a credential. It may include a deployment path prefix, but no query.
+    public_api_url: str | None = None
 
     # NexHealth API settings
     nexhealth_api_key: str = ""
@@ -78,11 +82,15 @@ class Settings(BaseSettings):
     # Optional NexHealth settings
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
-    nexhealth_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound webhook signatures
+    nexhealth_webhook_secret: str = (
+        ""  # HMAC-SHA256 secret for inbound webhook signatures
+    )
     nexhealth_webhook_callback_url: str | None = None
     nexhealth_shadow_webhook_callback_base_url: str | None = None
     gotracker_base_url: str = "https://synchronizer.scalenexus.ai"
-    gotracker_webhook_secret: str = ""  # HMAC-SHA256 secret for inbound GoTracker webhooks
+    gotracker_webhook_secret: str = (
+        ""  # HMAC-SHA256 secret for inbound GoTracker webhooks
+    )
     gotracker_webhook_callback_base_url: str | None = None
 
     # Retell AI settings
@@ -121,6 +129,47 @@ class Settings(BaseSettings):
     # Public base URL used to build one-click links in outbound emails (unsubscribe).
     public_base_url: str = "https://app.scalenexus.ai"
 
+    # ── Patient-facing email provider ────────────────────────────────────
+    # Auth emails and staff call alerts always go through Resend. This selects
+    # the provider for patient-facing campaign email only, which is the traffic
+    # that carries health information and therefore has to sit under an
+    # agreement covering it (see docs/compliance/04-gap-register.md G-013/G-017).
+    #
+    # "resend" keeps today's behaviour. "ses" routes patient mail through
+    # Amazon SES in ``ses_region`` — same AWS account and region as the rest of
+    # the platform, so the content stays inside our own infrastructure.
+    patient_email_provider: Literal["resend", "ses"] = "resend"
+
+    ses_region: str = "ca-central-1"
+    # Parent domain that per-clinic sending subdomains are created under, e.g.
+    # "brightsmile.mail.scalenexus.ai". Must be a Route 53 hosted zone this
+    # account controls, so DKIM records can be published without the clinic
+    # touching DNS.
+    ses_sending_domain: str | None = None
+    ses_sending_hosted_zone_id: str | None = None
+    # Prefix for the per-clinic configuration set that carries event
+    # destinations (bounce/complaint) and reputation options.
+    ses_configuration_set_prefix: str = "scalenexus"
+    # ── Inbound email (patient replies) ──────────────────────────────────
+    # One shared receiving domain for the whole platform, not one per clinic:
+    # SES caps receipt rules at 200 per rule set with no increase path, so a
+    # rule-per-clinic design would wall at ~200 clinics. The clinic a reply
+    # belongs to is carried in the signed Reply-To instead.
+    ses_inbound_domain: str | None = None
+    #: Bucket the receipt rule writes the full MIME into.
+    ses_inbound_bucket: str | None = None
+    ses_inbound_prefix: str = "inbound/"
+    #: SQS queue subscribed to the receipt rule's SNS topic. A queue rather than
+    #: a public HTTPS endpoint: no signature-verification surface to get wrong,
+    #: and mail survives a deploy or an outage instead of being retried at us.
+    ses_inbound_queue_url: str | None = None
+    #: Messages larger than this are recorded with their metadata but the body is
+    #: left in object storage rather than pulled into the database.
+    inbound_email_max_body_bytes: int = 256_000
+    #: Per-sender cap over an hour, so a loop or a flood on the catch-all cannot
+    #: fill the inbox.
+    inbound_email_sender_hourly_limit: int = 60
+
     # Celery
     celery_broker_url: str | None = None
     redis_url: str | None = None
@@ -139,10 +188,9 @@ class Settings(BaseSettings):
     retention_dead_letter_raw_days: int = 30
     retention_idempotency_days: int = 7
 
-
     # Twilio (SMS / phone numbers)
-    twillio_sid: str | None = None          # Account SID (env: TWILLIO_SID)
-    twillio_api_secret: str | None = None   # Auth Token (env: TWILLIO_API_SECRET)
+    twillio_sid: str | None = None  # Account SID (env: TWILLIO_SID)
+    twillio_api_secret: str | None = None  # Auth Token (env: TWILLIO_API_SECRET)
     twilio_sms_status_callback_url: str | None = None
 
     # Database (PostgreSQL)
@@ -209,7 +257,9 @@ class Settings(BaseSettings):
     jwt_audience: str = "nexhealth-dashboard"
     jwt_secret_file: str | None = None
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     @model_validator(mode="after")
     def load_secrets_from_files(self) -> "Settings":
@@ -244,6 +294,31 @@ class Settings(BaseSettings):
             nexhealth_api_contract.accept_header,
         )
 
+        for field_name in (
+            "public_api_url",
+            "twilio_sms_status_callback_url",
+        ):
+            value = getattr(self, field_name)
+            if not value:
+                continue
+            normalized = value.strip().rstrip("/")
+            parsed = urlparse(normalized)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    f"{field_name.upper()} must be an absolute HTTP(S) URL "
+                    "without credentials, query parameters, or a fragment"
+                )
+            if self.is_production and parsed.scheme != "https":
+                raise ValueError(f"{field_name.upper()} must use https in production")
+            object.__setattr__(self, field_name, normalized)
+
         # Block wildcard CORS in production
         if self.is_production and self.cors_allowed_origins.strip() == "*":
             raise ValueError(
@@ -273,9 +348,7 @@ class Settings(BaseSettings):
             )
 
         if self.cookie_samesite.lower() not in {"strict", "lax", "none"}:
-            raise ValueError(
-                "COOKIE_SAMESITE must be 'strict', 'lax', or 'none'."
-            )
+            raise ValueError("COOKIE_SAMESITE must be 'strict', 'lax', or 'none'.")
         if self.is_production and not self.cookie_secure:
             raise ValueError("COOKIE_SECURE must be true in production.")
         if self.cookie_samesite.lower() == "none" and not self.cookie_secure:
@@ -315,11 +388,14 @@ class Settings(BaseSettings):
             and self.nexhealth_webhook_callback_url
             and urlparse(self.nexhealth_webhook_callback_url).scheme != "https"
         ):
-            raise ValueError("NEXHEALTH_WEBHOOK_CALLBACK_URL must use https in production")
+            raise ValueError(
+                "NEXHEALTH_WEBHOOK_CALLBACK_URL must use https in production"
+            )
         if (
             self.is_production
             and self.nexhealth_shadow_webhook_callback_base_url
-            and urlparse(self.nexhealth_shadow_webhook_callback_base_url).scheme != "https"
+            and urlparse(self.nexhealth_shadow_webhook_callback_base_url).scheme
+            != "https"
         ):
             raise ValueError(
                 "NEXHEALTH_SHADOW_WEBHOOK_CALLBACK_BASE_URL must use https in production"
@@ -391,6 +467,22 @@ class Settings(BaseSettings):
         return normalize_redis_url(self.celery_broker_url)
 
     @property
+    def twilio_inbound_sms_webhook_url(self) -> str | None:
+        """Return the Twilio inbound SMS webhook for this deployment."""
+        if not self.public_api_url:
+            return None
+        return f"{self.public_api_url}/api/v1/twilio/webhooks/inbound-sms"
+
+    @property
+    def effective_twilio_sms_status_callback_url(self) -> str | None:
+        """Return the explicit or deployment-derived SMS delivery callback."""
+        if self.twilio_sms_status_callback_url:
+            return self.twilio_sms_status_callback_url
+        if not self.public_api_url:
+            return None
+        return f"{self.public_api_url}/api/v1/twilio/webhooks/sms-status"
+
+    @property
     def effective_redis_url(self) -> str | None:
         """Return the best available Redis URL for session storage."""
         return self.normalized_redis_url or self.normalized_celery_broker_url
@@ -451,7 +543,6 @@ class Settings(BaseSettings):
         )
 
 
-
 def setup_logging(log_level: str = "info", app_env: str = "local") -> None:
     """Configure application logging."""
     level = getattr(logging, log_level.upper(), logging.INFO)
@@ -461,9 +552,7 @@ def setup_logging(log_level: str = "info", app_env: str = "local") -> None:
         if is_dev
         else structlog.processors.JSONRenderer()
     )
-    exception_processors = (
-        [] if is_dev else [structlog.processors.format_exc_info]
-    )
+    exception_processors = [] if is_dev else [structlog.processors.format_exc_info]
     shared_processors = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,

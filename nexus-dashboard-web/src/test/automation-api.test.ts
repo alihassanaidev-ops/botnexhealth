@@ -38,9 +38,10 @@ beforeEach(() => {
 describe("automation-api", () => {
     it("creates a draft campaign from scratch", async () => {
         post.mockResolvedValue({ data: { id: "wf-1", status: "draft" } })
-        const wf = await createDraftCampaign("Untitled campaign")
+        const wf = await createDraftCampaign("Untitled campaign", "loc-1")
         expect(post).toHaveBeenCalledWith("/automation/workflows/draft", {
             name: "Untitled campaign",
+            location_id: "loc-1",
         })
         expect(wf.status).toBe("draft")
     })

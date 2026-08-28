@@ -16,6 +16,9 @@ from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_consent import ConsentSource
 from src.app.services.audit import log_audit
+from src.app.services.automation.sms_opt_out_workflow_service import (
+    SmsOptOutWorkflowService,
+)
 from src.app.services.dead_letter import capture_dead_letter
 from src.app.services.sms_compliance import SmsComplianceService
 from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
@@ -113,27 +116,92 @@ async def inbound_sms(request: Request) -> Response:
         from src.app.services.automation.campaign_response_service import (
             CampaignResponseService,
         )
+        from src.app.services.automation.campaign_conversation_service import (
+            CampaignConversationService,
+        )
+        from src.app.services.automation.sms_intent_parser import SmsIntentResult
+        from src.app.services.automation.retell_sms_conversation_service import (
+            RetellSmsConversationService,
+        )
+
+        retell_sms_service = RetellSmsConversationService(session)
+        retell_sms_session = (
+            await retell_sms_service.find_active_for_inbound(_inbound_msg)
+            if intent not in {"START", "HELP"}
+            else None
+        )
+
+        mapping_match = None
+        parsed_for_record = parsed_reply
+        if retell_sms_session is not None and intent not in {"STOP", "START", "HELP"}:
+            # Retell owns free-text interpretation for this parked node. Persist a
+            # neutral event here so the generic parser does not create a premature
+            # staff handoff before the chat worker processes the turn.
+            parsed_for_record = SmsIntentResult(
+                "retell_chat_turn", outcome="retell_chat_processing"
+            )
+        elif _inbound_msg.workflow_run_id and intent not in {"STOP", "START", "HELP"}:
+            mapping_match = await CampaignConversationService(session).match_sms_response_mapping(
+                workflow_run_id=_inbound_msg.workflow_run_id,
+                body=body,
+            )
+            if mapping_match is not None:
+                mapping = mapping_match.mapping
+                if mapping.context_updates:
+                    parsed_for_record = SmsIntentResult(
+                        "mapped_response",
+                        outcome="mapped_response",
+                    )
+                elif mapping.handoff_reason:
+                    parsed_for_record = SmsIntentResult(
+                        "mapped_response",
+                        outcome="staff_handoff_required",
+                        handoff_reason=mapping.handoff_reason,
+                    )
 
         _, _handoff = await CampaignResponseService(session).record_sms_response(
             _inbound_msg,
             body=body,
             raw_payload=dict(form),
-            parsed=parsed_reply,
+            parsed=parsed_for_record,
         )
 
         if intent == "STOP":
+            if retell_sms_session is not None:
+                from src.app.models.retell_sms import RetellSmsSessionStatus
+
+                retell_sms_service.mark_terminal(
+                    retell_sms_session,
+                    status=RetellSmsSessionStatus.OPTED_OUT.value,
+                    outcome="opted_out",
+                )
             await compliance.suppress(
                 institution_id=location.institution_id,
                 location_id=str(location.id),
+                contact_id=_inbound_msg.contact_id,
                 phone=from_number,
                 source=ConsentSource.TWILIO_KEYWORD,
                 keyword=keyword,
                 reason=f"Twilio inbound keyword: {keyword}",
             )
+            await SmsOptOutWorkflowService(session).cancel_active_sms_runs(
+                institution_id=str(location.institution_id),
+                location_id=str(location.id),
+                phone=from_number,
+                correlated_run_id=_inbound_msg.workflow_run_id,
+            )
             await _audit_keyword(
                 location, from_number, AuditAction.SMS_SUPPRESSION_CREATE, keyword
             )
             await session.commit()
+            if retell_sms_session is not None:
+                from src.app.tasks.retell_sms import end_retell_sms_chat
+
+                end_retell_sms_chat.delay(
+                    institution_id=str(location.institution_id),
+                    location_id=str(location.id),
+                    session_id=str(retell_sms_session.id),
+                )
             return _twiml(
                 f"You have been opted out of SMS from {location.name}. Reply START to opt back in."
             )
@@ -158,24 +226,95 @@ async def inbound_sms(request: Request) -> Response:
             await session.commit()
             return _twiml(_help_text(location))
 
-        if from_number and parsed_reply.intent == "confirm":
-            from src.app.tasks.automation_workflow import resume_sms_confirmation
+        if retell_sms_session is not None:
+            from src.app.tasks.retell_sms import process_retell_sms_turn
 
-            resume_sms_confirmation.delay(
+            await session.commit()
+            process_retell_sms_turn.delay(
                 institution_id=str(location.institution_id),
                 location_id=str(location.id),
-                from_number=from_number,
-                body=body,
-                message_sid=_field(form, "MessageSid"),
+                session_id=str(retell_sms_session.id),
+                inbound_sms_message_id=str(_inbound_msg.id),
             )
-            await session.commit()
-            return _twiml("Thanks, we received your confirmation reply.")
+            return _twiml("")
+
+        scheduled_sms_reply_triggers = 0
+        if (
+            intent not in {"STOP", "START", "HELP"}
+            and _inbound_msg.workflow_run_id is None
+            and _inbound_msg.contact_id
+        ):
+            from src.app.services.automation.sms_reply_trigger_service import (
+                SmsReplyTriggerService,
+                sms_reply_idempotency_key,
+                workflow_matches_sms_reply,
+            )
+            from src.app.tasks.automation_workflow import enroll_and_start_workflow_run
+
+            workflows = await SmsReplyTriggerService(
+                session
+            ).find_active_sms_reply_workflows(
+                str(location.institution_id),
+                location_id=str(location.id),
+            )
+            for workflow in workflows:
+                if not workflow.current_version_id:
+                    continue
+                if not workflow_matches_sms_reply(workflow, body):
+                    continue
+                enroll_and_start_workflow_run.delay(
+                    institution_id=str(location.institution_id),
+                    workflow_id=str(workflow.id),
+                    workflow_version_id=str(workflow.current_version_id),
+                    contact_id=_inbound_msg.contact_id,
+                    location_id=str(location.id),
+                    trigger_type="sms_reply",
+                    trigger_ref_type="inbound_sms_message",
+                    trigger_ref_id=str(_inbound_msg.id),
+                    idempotency_key=sms_reply_idempotency_key(
+                        str(workflow.current_version_id),
+                        str(_inbound_msg.id),
+                    ),
+                    trigger_metadata={
+                        "inbound_sms_message_id": str(_inbound_msg.id),
+                        "sms_reply_message_sid": _field(form, "MessageSid"),
+                        "sms_reply_body": body,
+                        "sms_reply_intent": parsed_reply.intent,
+                    },
+                )
+                scheduled_sms_reply_triggers += 1
+
+        should_resume_mapping = bool(
+            mapping_match is not None and mapping_match.mapping.context_updates
+        )
+        if from_number and (parsed_reply.intent == "confirm" or should_resume_mapping):
+            if _inbound_msg.workflow_run_id:
+                from src.app.tasks.automation_workflow import resume_sms_confirmation
+
+                resume_sms_confirmation.delay(
+                    institution_id=str(location.institution_id),
+                    location_id=str(location.id),
+                    from_number=from_number,
+                    body=body,
+                    message_sid=_field(form, "MessageSid"),
+                    workflow_run_id=_inbound_msg.workflow_run_id,
+                    conversation_thread_id=_inbound_msg.conversation_thread_id,
+                )
+                await session.commit()
+                return _twiml("")
+            logger.info(
+                "Inbound SMS reply not resumed: from_hash=%s location_hash=%s persisted=%s",
+                hash_for_logging(from_number),
+                hash_for_logging(str(location.id)),
+                _inbound_msg.id,
+            )
 
         # Free text / non-automated patient requests — surface to staff so they can
         # continue manually.
         # The reply is already persisted above; here we alert staff via the existing
         # in-app + SSE notification path (Celery, so the webhook stays fast).
-        if parsed_reply.requires_handoff:
+        needs_staff_review = parsed_for_record.requires_handoff or _handoff is not None
+        if needs_staff_review:
             try:
                 from src.app.tasks.in_app_notifications import enqueue_in_app_notifications
 
@@ -193,7 +332,7 @@ async def inbound_sms(request: Request) -> Response:
                         "contact_id": _inbound_msg.contact_id,
                         "workflow_run_id": _inbound_msg.workflow_run_id,
                         "campaign_staff_handoff_id": str(_handoff.id) if _handoff else None,
-                        "patient_response_intent": parsed_reply.intent,
+                        "patient_response_intent": parsed_for_record.intent,
                     },
                 )
             except Exception as notif_err:  # noqa: BLE001 — never fail the webhook on notify
@@ -203,13 +342,13 @@ async def inbound_sms(request: Request) -> Response:
                     safe_error_summary(notif_err),
                 )
 
-        if parsed_reply.requires_handoff:
+        if needs_staff_review:
             logger.info(
                 "Inbound SMS staff handoff: from_hash=%s to_hash=%s location_hash=%s intent=%s persisted=%s",
                 hash_for_logging(from_number),
                 hash_for_logging(to_number),
                 hash_for_logging(str(location.id)),
-                parsed_reply.intent,
+                parsed_for_record.intent,
                 _inbound_msg.id,
             )
         else:
@@ -218,8 +357,15 @@ async def inbound_sms(request: Request) -> Response:
                 hash_for_logging(from_number),
                 hash_for_logging(to_number),
                 hash_for_logging(str(location.id)),
-                parsed_reply.intent,
+                parsed_for_record.intent,
                 _inbound_msg.id,
+            )
+        if scheduled_sms_reply_triggers:
+            logger.info(
+                "Inbound SMS triggered workflows: location_hash=%s persisted=%s scheduled=%d",
+                hash_for_logging(str(location.id)),
+                _inbound_msg.id,
+                scheduled_sms_reply_triggers,
             )
         await session.commit()
         return _twiml("")

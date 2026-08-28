@@ -26,14 +26,22 @@ beforeEach(() => {
 
 describe("do-not-contact-api", () => {
     it("unwraps the records list", async () => {
-        get.mockResolvedValue({ data: { records: [{ phone_masked: "+1555***4567" }] } })
+        get.mockResolvedValue({
+            data: {
+                records: [{
+                    id: "patient-1",
+                    phone_masked: "+1555***4567",
+                    channels: [],
+                }],
+            },
+        })
         const records = await listDoNotContact()
         expect(get).toHaveBeenCalledWith("/institution/do-not-contact")
         expect(records).toHaveLength(1)
         expect(records[0].phone_masked).toBe("+1555***4567")
     })
 
-    it("creates an institution-scoped opt-out", async () => {
+    it("records a staff-requested all-channel DNC", async () => {
         post.mockResolvedValue({ data: { phone_masked: "+1555***4567", scope: "institution" } })
         await createDoNotContact({
             phone: "+15551234567",
@@ -49,12 +57,12 @@ describe("do-not-contact-api", () => {
         })
     })
 
-    it("releases by phone via a DELETE body", async () => {
+    it("releases one channel entry by opaque record ID", async () => {
         del.mockResolvedValue({ data: { released: true } })
-        const released = await releaseDoNotContact("+15551234567")
-        expect(del).toHaveBeenCalledWith("/institution/do-not-contact", {
-            data: { phone: "+15551234567" },
-        })
+        const released = await releaseDoNotContact("sms_suppression", "suppression-1")
+        expect(del).toHaveBeenCalledWith(
+            "/institution/do-not-contact/entries/sms_suppression/suppression-1",
+        )
         expect(released).toBe(true)
     })
 })

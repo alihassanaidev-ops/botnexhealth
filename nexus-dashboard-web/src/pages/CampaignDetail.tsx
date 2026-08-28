@@ -6,7 +6,6 @@ import {
     Ban,
     CheckCircle2,
     ChevronDown,
-    ChevronRight,
     Hash,
     Loader2,
     MessageSquare,
@@ -50,13 +49,6 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select"
-import {
-    Sheet,
-    SheetContent,
-    SheetDescription,
-    SheetHeader,
-    SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -65,9 +57,7 @@ import {
     enrollContactInCampaign,
     emergencyHaltCampaign,
     getCampaign,
-    getCampaignOperations,
     getCampaignOverview,
-    getRunTimeline,
     getUsageByCampaign,
     listCampaignRuns,
     pauseCampaign,
@@ -78,14 +68,10 @@ import { cn } from "@/lib/utils"
 import type {
     AutomationWorkflow,
     AutomationWorkflowRun,
-    CampaignOperationItem,
-    CampaignOperations,
     CampaignOverview,
     CampaignRunFilters,
     CampaignRunListItem,
     CampaignUsage,
-    RunTimeline,
-    RunTimelineItem,
 } from "@/types"
 
 const WORKFLOW_STATUS_STYLES: Record<string, string> = {
@@ -112,12 +98,6 @@ const TRIGGER_LABELS: Record<string, string> = {
     bulk_import: "Bulk import",
     callback_requested: "Callback",
     patient_status_changed: "Patient status",
-}
-
-const CHANNEL_LABELS: Record<string, string> = {
-    sms: "SMS",
-    email: "Email",
-    voice: "Voice",
 }
 
 function fmt(iso: string | null): string {
@@ -153,19 +133,6 @@ function label(value: string | null | undefined): string {
 
 function isCancelable(run: Pick<CampaignRunListItem, "status">): boolean {
     return !["completed", "cancelled", "failed", "blocked"].includes(run.status)
-}
-
-function durationMs(value: number | null | undefined): string {
-    if (value === null || value === undefined) return "-"
-    if (value < 1000) return `${value}ms`
-    const seconds = Math.round(value / 100) / 10
-    if (seconds < 60) return `${seconds}s`
-    const minutes = Math.floor(seconds / 60)
-    return `${minutes}m ${Math.round(seconds % 60)}s`
-}
-
-function hasDetails(data: Record<string, unknown> | null | undefined): boolean {
-    return Boolean(data && Object.keys(data).length > 0)
 }
 
 interface StatProps {
@@ -249,8 +216,10 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
             toast.success(`${contact.full_name ?? "Patient"} enrolled`)
             onEnrolled(run)
             onClose()
-        } catch {
-            toast.error("Failed to enroll patient")
+        } catch (error) {
+            const detail = (error as { response?: { data?: { detail?: string } } })
+                ?.response?.data?.detail
+            toast.error(detail ?? "Failed to enroll patient")
         } finally {
             setEnrolling(null)
         }
@@ -414,71 +383,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     )
 }
 
-function TimelineJsonPanel({
-    data,
-    empty,
-}: {
-    data: Record<string, unknown>
-    empty: string
-}) {
-    if (!hasDetails(data)) {
-        return <p className="rounded-md bg-muted/30 p-3 text-sm text-muted-foreground">{empty}</p>
-    }
-    return (
-        <pre className="max-h-[520px] overflow-auto rounded-md bg-muted/40 p-3 text-[11px] leading-relaxed text-muted-foreground">
-            {JSON.stringify(data, null, 2)}
-        </pre>
-    )
-}
-
-function TimelineItemInspector({ item }: { item: RunTimelineItem }) {
-    return (
-        <div className="rounded-md border border-border bg-background">
-            <div className="border-b border-border p-4">
-                <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                        <p className="text-sm font-semibold">{item.title}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">{fmt(item.occurred_at)}</p>
-                    </div>
-                    {item.status && <Badge variant="outline" className="capitalize">{label(item.status)}</Badge>}
-                </div>
-                {item.summary && <p className="mt-3 text-sm text-muted-foreground">{item.summary}</p>}
-                <div className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-                    <InfoRow label="Kind" value={label(item.kind)} />
-                    <InfoRow label="Duration" value={durationMs(item.duration_ms)} />
-                    <InfoRow label="Step id" value={item.step_id ?? "-"} />
-                </div>
-            </div>
-            {item.error_message && (
-                <div className="m-4 rounded-md border border-red-900/40 bg-red-950/20 p-3 text-xs text-red-200">
-                    {item.error_message}
-                </div>
-            )}
-            <Tabs defaultValue="output" className="p-4 pt-3">
-                <TabsList className="grid w-full grid-cols-4">
-                    <TabsTrigger value="input">Input</TabsTrigger>
-                    <TabsTrigger value="output">Output</TabsTrigger>
-                    <TabsTrigger value="node">Node</TabsTrigger>
-                    <TabsTrigger value="metadata">Metadata</TabsTrigger>
-                </TabsList>
-                <TabsContent value="input" className="mt-3">
-                    <TimelineJsonPanel data={item.input} empty="No input context captured." />
-                </TabsContent>
-                <TabsContent value="output" className="mt-3">
-                    <TimelineJsonPanel data={item.output} empty="No output captured." />
-                </TabsContent>
-                <TabsContent value="node" className="mt-3">
-                    <TimelineJsonPanel data={item.node} empty="No node config snapshot captured." />
-                </TabsContent>
-                <TabsContent value="metadata" className="mt-3">
-                    <TimelineJsonPanel data={item.metadata} empty="No metadata captured." />
-                </TabsContent>
-            </Tabs>
-        </div>
-    )
-}
-
-function RunsTab({
+function ExecutionsTab({
     runs,
     loading,
     filters,
@@ -505,7 +410,7 @@ function RunsTab({
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <CardTitle className="flex items-center gap-2 text-base font-semibold">
                         <ActivitySquare className="h-4 w-4" />
-                        Runs
+                        Executions
                         {!loading && <span className="text-xs font-normal text-muted-foreground">({runs.length})</span>}
                     </CardTitle>
                 </div>
@@ -554,7 +459,7 @@ function RunsTab({
                                     <span className="text-xs text-muted-foreground">{elapsed(run)}</span>
                                     <div className="flex justify-end gap-1">
                                         <Button variant="ghost" size="sm" onClick={() => onSelectRun(run)}>
-                                            Timeline
+                                            Inspect
                                         </Button>
                                         {isCancelable(run) && (
                                             <Button
@@ -600,7 +505,7 @@ function EmptyState() {
             <div className="grid size-12 place-items-center rounded-full bg-muted">
                 <ActivitySquare className="h-6 w-6 opacity-40" />
             </div>
-            <p className="text-sm font-medium text-foreground/70">No runs match this view</p>
+            <p className="text-sm font-medium text-foreground/70">No executions match this view</p>
             <p className="text-xs">Patients enrolled in this campaign will appear here.</p>
         </div>
     )
@@ -681,179 +586,6 @@ function RunFilters({
     )
 }
 
-function OperationsTab({
-    operations,
-    loading,
-    onSelectRun,
-}: {
-    operations: CampaignOperations | null
-    loading: boolean
-    onSelectRun: (runId: string) => void
-}) {
-    const sections = [
-        ["Patient handoffs", operations?.open_handoffs ?? []],
-        ["Stuck waiting", operations?.stuck_waiting_runs ?? []],
-        ["Failed sends", operations?.failed_sends ?? []],
-        ["Suppressions and skips", operations?.suppressed_skipped_runs ?? []],
-    ] as const
-    return (
-        <div className="grid gap-4 lg:grid-cols-4">
-            {sections.map(([title, items]) => (
-                <Card key={title}>
-                    <CardHeader className="pb-3">
-                        <CardTitle className="text-base font-semibold">{title}</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        {loading ? (
-                            <div className="space-y-2">
-                                {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
-                            </div>
-                        ) : items.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">No items.</p>
-                        ) : (
-                            <ul className="space-y-3">
-                                {items.map((item) => (
-                                    <OperationRow key={item.id} item={item} onSelectRun={onSelectRun} />
-                                ))}
-                            </ul>
-                        )}
-                    </CardContent>
-                </Card>
-            ))}
-        </div>
-    )
-}
-
-function OperationRow({
-    item,
-    onSelectRun,
-}: {
-    item: CampaignOperationItem
-    onSelectRun: (runId: string) => void
-}) {
-    return (
-        <li className="rounded-md border border-border p-3">
-            <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{item.title}</p>
-                    <p className="text-xs text-muted-foreground">{fmt(item.occurred_at)}</p>
-                </div>
-                <Badge variant="outline" className="capitalize">{label(item.severity)}</Badge>
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">{item.reason ?? "Needs review."}</p>
-            <div className="mt-3 flex items-center justify-between gap-2">
-                <span className="font-mono text-xs text-muted-foreground">{item.run_id.slice(0, 8)}</span>
-                <Button variant="outline" size="sm" onClick={() => onSelectRun(item.run_id)}>
-                    Timeline
-                </Button>
-            </div>
-        </li>
-    )
-}
-
-function TimelineDrawer({
-    timeline,
-    loading,
-    onClose,
-}: {
-    timeline: RunTimeline | null
-    loading: boolean
-    onClose: () => void
-}) {
-    const [openItemKey, setOpenItemKey] = useState<string | null>(null)
-    const selectedItem =
-        timeline?.items.find((item) => `${item.kind}:${item.id}` === openItemKey) ??
-        timeline?.items.find(
-            (item) =>
-                hasDetails(item.input) ||
-                hasDetails(item.output) ||
-                hasDetails(item.node) ||
-                hasDetails(item.metadata),
-        ) ??
-        timeline?.items[0] ??
-        null
-    const selectedItemKey = selectedItem ? `${selectedItem.kind}:${selectedItem.id}` : null
-
-    return (
-        <Sheet open={Boolean(timeline) || loading} onOpenChange={(open) => !open && onClose()}>
-            <SheetContent className="w-full overflow-y-auto sm:max-w-5xl">
-                <SheetHeader>
-                    <SheetTitle>Run timeline</SheetTitle>
-                    <SheetDescription>
-                        {timeline?.contact.display_name ?? "Patient context masked"} ({timeline?.run.id.slice(0, 8) ?? "loading"})
-                    </SheetDescription>
-                </SheetHeader>
-                {loading ? (
-                    <div className="mt-6 space-y-3">
-                        {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
-                    </div>
-                ) : timeline ? (
-                    <div className="mt-6 space-y-4">
-                        <div className="grid gap-3 rounded-md border border-border p-3 text-sm sm:grid-cols-3">
-                            <InfoRow label="Status" value={label(timeline.run.status)} />
-                            <InfoRow label="Current step" value={label(timeline.run.current_step_type ?? timeline.run.current_step_id)} />
-                            <InfoRow label="Outcome" value={label(timeline.run.outcome)} />
-                        </div>
-                        <div className="grid gap-4 lg:grid-cols-[minmax(280px,0.85fr)_minmax(420px,1.15fr)]">
-                            <ol className="space-y-2">
-                                {timeline.items.map((item) => {
-                                    const itemKey = `${item.kind}:${item.id}`
-                                    const selected = selectedItemKey === itemKey
-                                    return (
-                                        <li key={itemKey}>
-                                            <button
-                                                type="button"
-                                                className={cn(
-                                                    "w-full rounded-md border border-border p-3 text-left transition-colors hover:bg-muted/30",
-                                                    selected && "border-primary/60 bg-muted/30",
-                                                )}
-                                                onClick={() => setOpenItemKey(itemKey)}
-                                            >
-                                                <div className="flex items-start justify-between gap-3">
-                                                    <div className="flex min-w-0 items-start gap-2">
-                                                        <ChevronRight
-                                                            className={cn(
-                                                                "mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform",
-                                                                selected && "rotate-90 text-primary",
-                                                            )}
-                                                        />
-                                                        <div className="min-w-0">
-                                                            <p className="truncate text-sm font-medium">{item.title}</p>
-                                                            <p className="text-xs text-muted-foreground">{fmt(item.occurred_at)}</p>
-                                                        </div>
-                                                    </div>
-                                                    {item.status && <Badge variant="outline" className="capitalize">{label(item.status)}</Badge>}
-                                                </div>
-                                                {item.summary && (
-                                                    <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{item.summary}</p>
-                                                )}
-                                                <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                                                    {item.channel && <span>Channel: {CHANNEL_LABELS[item.channel] ?? item.channel}</span>}
-                                                    {item.step_id && <span>Step: {item.step_id}</span>}
-                                                    {item.duration_ms !== null && item.duration_ms !== undefined && (
-                                                        <span>Duration: {durationMs(item.duration_ms)}</span>
-                                                    )}
-                                                </div>
-                                            </button>
-                                        </li>
-                                    )
-                                })}
-                            </ol>
-                            {selectedItem ? (
-                                <TimelineItemInspector item={selectedItem} />
-                            ) : (
-                                <div className="rounded-md border border-border p-4 text-sm text-muted-foreground">
-                                    Select a timeline item to inspect its run data.
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                ) : null}
-            </SheetContent>
-        </Sheet>
-    )
-}
-
 export default function CampaignDetail() {
     const { id } = useParams<{ id: string }>()
     const navigate = useNavigate()
@@ -861,14 +593,10 @@ export default function CampaignDetail() {
     const [overview, setOverview] = useState<CampaignOverview | null>(null)
     const [runs, setRuns] = useState<CampaignRunListItem[]>([])
     const [nextCursor, setNextCursor] = useState<string | null>(null)
-    const [operations, setOperations] = useState<CampaignOperations | null>(null)
     const [campaignUsage, setCampaignUsage] = useState<CampaignUsage | null>(null)
     const [filters, setFilters] = useState<CampaignRunFilters>({ limit: 50 })
     const [loading, setLoading] = useState(true)
     const [runsLoading, setRunsLoading] = useState(true)
-    const [operationsLoading, setOperationsLoading] = useState(true)
-    const [timelineLoading, setTimelineLoading] = useState(false)
-    const [timeline, setTimeline] = useState<RunTimeline | null>(null)
     const [acting, setActing] = useState<string | null>(null)
     const [deleteOpen, setDeleteOpen] = useState(false)
     const [haltOpen, setHaltOpen] = useState(false)
@@ -881,27 +609,23 @@ export default function CampaignDetail() {
         (overview?.run_counts.waiting ?? 0)
 
     // Deliberately independent of `filters`: changing a run filter must refetch
-    // runs only, not the overview / operations / usage panels alongside them.
+    // runs only, not the overview / usage panels alongside them.
     const refreshAll = useCallback(async () => {
         if (!id) return
         setLoading(true)
-        setOperationsLoading(true)
         try {
-            const [wf, ov, ops, byCampaign] = await Promise.all([
+            const [wf, ov, byCampaign] = await Promise.all([
                 getCampaign(id),
                 getCampaignOverview(id),
-                getCampaignOperations(id),
                 getUsageByCampaign(undefined, 1, { workflowId: id }),
             ])
             setCampaign(wf)
             setOverview(ov)
-            setOperations(ops)
             setCampaignUsage(byCampaign.campaigns.find((row) => row.workflow_id === id) ?? null)
         } catch {
             toast.error("Failed to load campaign")
         } finally {
             setLoading(false)
-            setOperationsLoading(false)
         }
     }, [id])
 
@@ -1002,30 +726,9 @@ export default function CampaignDetail() {
         }
     }
 
-    async function openTimeline(run: CampaignRunListItem) {
+    function openExecution(run: CampaignRunListItem) {
         if (!campaign) return
-        setTimelineLoading(true)
-        setTimeline(null)
-        try {
-            setTimeline(await getRunTimeline(campaign.id, run.id))
-        } catch {
-            toast.error("Failed to load run timeline")
-        } finally {
-            setTimelineLoading(false)
-        }
-    }
-
-    async function openTimelineById(runId: string) {
-        if (!campaign) return
-        setTimelineLoading(true)
-        setTimeline(null)
-        try {
-            setTimeline(await getRunTimeline(campaign.id, runId))
-        } catch {
-            toast.error("Failed to load run timeline")
-        } finally {
-            setTimelineLoading(false)
-        }
+        navigate(`/institution-admin/campaigns/${campaign.id}/builder?view=executions&run=${encodeURIComponent(run.id)}`)
     }
 
     function handleManualEnrolled() {
@@ -1130,8 +833,7 @@ export default function CampaignDetail() {
             <Tabs defaultValue="overview" className="space-y-4">
                 <TabsList>
                     <TabsTrigger value="overview">Overview</TabsTrigger>
-                    <TabsTrigger value="runs">Runs</TabsTrigger>
-                    <TabsTrigger value="operations">Operations</TabsTrigger>
+                    <TabsTrigger value="executions">Executions</TabsTrigger>
                 </TabsList>
                 <TabsContent value="overview">
                     <OverviewTab
@@ -1140,24 +842,17 @@ export default function CampaignDetail() {
                         loading={loading}
                     />
                 </TabsContent>
-                <TabsContent value="runs">
-                    <RunsTab
+                <TabsContent value="executions">
+                    <ExecutionsTab
                         runs={runs}
                         loading={runsLoading}
                         filters={filters}
                         onFiltersChange={setFilters}
-                        onSelectRun={openTimeline}
+                        onSelectRun={openExecution}
                         onCancelRun={setCancelTarget}
                         acting={acting}
                         nextCursor={nextCursor}
                         onLoadMore={() => refreshRuns(nextCursor)}
-                    />
-                </TabsContent>
-                <TabsContent value="operations">
-                    <OperationsTab
-                        operations={operations}
-                        loading={operationsLoading}
-                        onSelectRun={openTimelineById}
                     />
                 </TabsContent>
             </Tabs>
@@ -1223,14 +918,6 @@ export default function CampaignDetail() {
                     onEnrolled={handleManualEnrolled}
                 />
             )}
-            <TimelineDrawer
-                timeline={timeline}
-                loading={timelineLoading}
-                onClose={() => {
-                    setTimeline(null)
-                    setTimelineLoading(false)
-                }}
-            />
         </div>
     )
 }

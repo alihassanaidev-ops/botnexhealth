@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -13,6 +14,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from src.app.services.institution_service import InstitutionService
+from src.app.services.automation.campaign_conversation_service import (
+    CampaignConversationService,
+)
+from src.app.services.automation.sms_opt_out_workflow_service import (
+    SmsOptOutWorkflowService,
+)
+from src.app.models.sms_consent import ConsentSource
+from src.app.services.sms_compliance import SmsComplianceService
 
 pytestmark = pytest.mark.rls
 
@@ -879,6 +888,259 @@ async def test_outbound_voice_attempt_visibility_for_webhook_and_poller_contexts
                 "WHERE retell_call_id = :call_id"
             ),
             {"call_id": retell_call_id},
+        ) == 1
+
+
+@pytest.mark.asyncio
+async def test_twilio_context_atomically_suppresses_and_cancels_sms_workflow_run(
+    rls_engine,
+) -> None:
+    """Twilio STOP can suppress and terminate its tenant/location-scoped SMS run."""
+    workflow_id = "92000000-0000-0000-0000-000000000001"
+    version_id = "92000000-0000-0000-0000-000000000002"
+    run_id = "92000000-0000-0000-0000-000000000003"
+    thread_id = "92000000-0000-0000-0000-000000000004"
+    timer_id = "92000000-0000-0000-0000-000000000005"
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "sms-1",
+        "nodes": [
+            {
+                "type": "send_sms",
+                "id": "sms-1",
+                "body_template": "Reply YES or NO",
+                "next_node_id": "wait-1",
+            },
+            {
+                "type": "wait",
+                "id": "wait-1",
+                "next_node_id": "exit-1",
+                "wait_for": {
+                    "type": "sms_reply",
+                    "response_window_seconds": 3600,
+                    "response_mappings": [
+                        {
+                            "tokens": ["YES"],
+                            "context_updates": {"sms_reply": "yes"},
+                        }
+                    ],
+                },
+            },
+            {"type": "exit", "id": "exit-1"},
+        ],
+    }
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflows
+                  (id, institution_id, location_id, name, status, is_template)
+                VALUES (:workflow_id, :inst_a, :loc_a1, 'SMS RLS proof', 'active', false)
+                """
+            ),
+            {"workflow_id": workflow_id, "inst_a": INST_A, "loc_a1": LOC_A1},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_versions
+                  (id, institution_id, location_id, workflow_id, version_number, definition)
+                VALUES (
+                  :version_id, :inst_a, :loc_a1, :workflow_id, 1,
+                  CAST(:definition AS jsonb)
+                )
+                """
+            ),
+            {
+                "version_id": version_id,
+                "workflow_id": workflow_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+                "definition": json.dumps(definition),
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE automation_workflows
+                SET current_version_id = :version_id
+                WHERE id = :workflow_id
+                """
+            ),
+            {"version_id": version_id, "workflow_id": workflow_id},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_runs
+                  (id, institution_id, location_id, workflow_id,
+                   workflow_version_id, contact_id, status, current_step_id)
+                VALUES (
+                  :run_id, :inst_a, :loc_a1, :workflow_id,
+                  :version_id, :contact_a1, 'waiting', 'wait-1'
+                )
+                """
+            ),
+            {
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "version_id": version_id,
+                "contact_a1": CONTACT_A1,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_timers
+                  (id, institution_id, location_id, workflow_run_id, due_at, status)
+                VALUES (
+                  :timer_id, :inst_a, :loc_a1, :run_id,
+                  now() + interval '1 hour', 'claimed'
+                )
+                """
+            ),
+            {
+                "timer_id": timer_id,
+                "run_id": run_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO campaign_conversation_threads
+                  (id, institution_id, location_id, contact_id, workflow_id,
+                   workflow_run_id, channel, status)
+                VALUES (
+                  :thread_id, :inst_a, :loc_a1, :contact_a1, :workflow_id,
+                  :run_id, 'sms', 'open'
+                )
+                """
+            ),
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "contact_a1": CONTACT_A1,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+
+    session_factory = async_sessionmaker(rls_engine, expire_on_commit=False)
+    async with session_factory.begin() as session:
+        await _set_context(
+            session,
+            context_type="twilio",
+            institution_id=INST_A,
+            location_id=LOC_A1,
+        )
+        resolved = await CampaignConversationService(session).resolve_sms_thread(
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            contact_ids=[CONTACT_A1],
+        )
+
+        assert resolved is not None
+        assert resolved.id == thread_id
+        assert resolved.workflow_run_id == run_id
+
+        await SmsComplianceService(session).suppress(
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            contact_id=CONTACT_A1,
+            phone="+14165550100",
+            source=ConsentSource.TWILIO_KEYWORD,
+            keyword="STOP",
+            reason="integration test",
+        )
+        cancelled = await SmsOptOutWorkflowService(session).cancel_active_sms_runs(
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            phone="+14165550100",
+            correlated_run_id=run_id,
+        )
+        assert cancelled == 1
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        run_row = (
+            await conn.execute(
+                text(
+                    "SELECT status, blocked_reason FROM automation_workflow_runs "
+                    "WHERE id = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+        ).one()
+        timer_row = (
+            await conn.execute(
+                text(
+                    "SELECT status, cancelled_at FROM automation_workflow_timers "
+                    "WHERE id = :timer_id"
+                ),
+                {"timer_id": timer_id},
+            )
+        ).one()
+        thread_row = (
+            await conn.execute(
+                text(
+                    "SELECT status, completion_reason FROM campaign_conversation_threads "
+                    "WHERE id = :thread_id"
+                ),
+                {"thread_id": thread_id},
+            )
+        ).one()
+        suppression_count = await conn.scalar(
+            text(
+                "SELECT count(*) FROM sms_suppressions "
+                "WHERE institution_id = :inst_a AND location_id = :loc_a1 "
+                "AND is_active = true"
+            ),
+            {"inst_a": INST_A, "loc_a1": LOC_A1},
+        )
+
+        assert tuple(run_row) == ("cancelled", "sms_opt_out")
+        assert timer_row.status == "cancelled"
+        assert timer_row.cancelled_at is not None
+        assert tuple(thread_row) == ("completed", "sms_opt_out")
+        assert suppression_count == 1
+
+
+@pytest.mark.asyncio
+async def test_inbound_sms_reply_is_an_allowed_notification_type(rls_engine) -> None:
+    """The database constraint accepts the notification emitted by the webhook."""
+    notification_id = "93000000-0000-0000-0000-000000000001"
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO notifications
+                  (id, institution_id, user_id, type, title_encrypted,
+                   message_encrypted, is_read)
+                VALUES (
+                  :notification_id, :inst_a, :staff_a1, 'inbound_sms_reply',
+                  'cipher', 'cipher', false
+                )
+                """
+            ),
+            {
+                "notification_id": notification_id,
+                "inst_a": INST_A,
+                "staff_a1": USER_STAFF_A1,
+            },
+        )
+
+        assert await conn.scalar(
+            text("SELECT count(*) FROM notifications WHERE id = :notification_id"),
+            {"notification_id": notification_id},
         ) == 1
 
 

@@ -73,6 +73,8 @@ function makeAvailability(overrides: Partial<CachedAvailability>): CachedAvailab
         synced: true,
         label_name: null,
         is_bookable_window: true,
+        status: "open",
+        types_overridden: false,
         source_metadata: null,
         synced_at: null,
         ...overrides,
@@ -128,7 +130,13 @@ function mountWith(availabilities: CachedAvailability[]) {
         // the "Work Windows" heading and the linking UI. Without it the page
         // renders in "Live Slots" mode and none of that exists.
         if (url.startsWith("/institution/setup/overview"))
-            return Promise.resolve({ data: { can_link_availability: true } })
+            return Promise.resolve({
+                data: {
+                    can_link_availability: true,
+                    can_create_work_windows: true,
+                    can_clear_working_window_override: false,
+                },
+            })
         if (url.startsWith("/institution/setup/availabilities")) return Promise.resolve({ data: availabilities })
         return Promise.resolve({ data: [] })
     })
@@ -322,6 +330,28 @@ describe("Inactive windows", () => {
 })
 
 describe("Notes and breaks (v3 labels)", () => {
+    it("shows derived closed periods without any linking controls", async () => {
+        mountWith([
+            makeAvailability({
+                id: "closed:2026-09-01:3:3:00:00:00:09:00:00",
+                source_id: "closed-period",
+                specific_date: addDays(todayISO(), 1),
+                begin_time: "00:00",
+                end_time: "09:00",
+                synced: false,
+                status: "closed",
+                appointment_type_ids: [],
+                appointment_type_names: [],
+                is_bookable_window: false,
+            }),
+        ])
+
+        await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
+        expect(screen.getByText("Closed — read-only")).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /edit linking/i })).not.toBeInTheDocument()
+        expect(screen.queryByText(/Appointment Types:/i)).not.toBeInTheDocument()
+    })
+
     it("shows non-bookable rows with their label, and can hide them", async () => {
         // NexHealth returns Lunch blocks and synced OpenDental notes in the same
         // collection as real working hours. For one clinic that was 659 of 2,045
@@ -345,7 +375,7 @@ describe("Notes and breaks (v3 labels)", () => {
         expect(screen.getByText("Lunch")).toBeInTheDocument()
         expect(screen.getByText("NOTE")).toBeInTheDocument()
 
-        await user.click(screen.getByRole("checkbox", { name: /show notes & breaks/i }))
+        await user.click(screen.getByRole("checkbox", { name: /show closed periods, notes & breaks/i }))
 
         await waitFor(() => expect(rowCount()).toBe(1))
         expect(screen.queryByText("Lunch")).not.toBeInTheDocument()
@@ -374,7 +404,7 @@ describe("Notes and breaks (v3 labels)", () => {
         ])
 
         await waitFor(() => expect(rowCount()).toBe(2))
-        expect(screen.queryByRole("checkbox", { name: /show notes & breaks/i })).toBeInTheDocument()
+        expect(screen.queryByRole("checkbox", { name: /show closed periods, notes & breaks/i })).toBeInTheDocument()
     })
 })
 

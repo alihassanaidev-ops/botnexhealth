@@ -44,6 +44,8 @@ function av(overrides: Partial<CachedAvailability> = {}): CachedAvailability {
         synced: true,
         label_name: null,
         is_bookable_window: true,
+        status: "open",
+        types_overridden: false,
         source_metadata: null,
         synced_at: null,
         ...overrides,

@@ -28,19 +28,18 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.services.automation.definition_schema import (
-    ConditionNode,
-    DripNode,
-    JsonMapperNode,
-    LlmNode,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
-    UpdateGoTrackerAppointmentNode,
-    UpdatePatientStatusNode,
-    WaitNode,
     WorkflowDefinition,
 )
 from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG, MergeFieldSpec
+from src.app.services.automation.node_registry import (
+    capability_for,
+    node_id,
+    node_type,
+    outgoing_references,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +56,7 @@ class ValidationIssue:
     node_id: str | None = None
     field_path: list[str] = field(default_factory=list)
     code: str | None = None
+    fix: str | None = None
 
 
 class ContentComplianceValidator(Protocol):
@@ -126,12 +126,13 @@ class WorkflowValidationService:
         institution_id: str,
         location_id: str | None = None,
     ) -> list[ValidationIssue]:
-        # 1. Structural validation. If this fails the graph can't be reasoned
-        #    about further, so return the structural errors alone.
+        # Raw graph checks preserve node/field attribution even when Pydantic's
+        # model-level graph validator would otherwise collapse the error to root.
+        graph_issues = self._raw_graph_issues(definition_dict)
         try:
             definition = WorkflowDefinition.model_validate(definition_dict)
         except ValidationError as exc:
-            return [
+            schema_issues = [
                 ValidationIssue(
                     severity="error",
                     message=e.get("msg", "invalid"),
@@ -140,32 +141,201 @@ class WorkflowValidationService:
                     code="schema",
                 )
                 for e in exc.errors()
+                # Avoid a duplicate root-level graph error when the precise node-
+                # linked preflight already reported it.
+                if e.get("loc") or not graph_issues
             ]
+            return _dedupe_issues([*graph_issues, *schema_issues])
 
-        issues: list[ValidationIssue] = []
-        issues += self._unreachable_nodes(definition)
+        issues = list(graph_issues)
+        issues += self._graph_semantic_issues(definition)
         # Compliance classification/content checks are managed by Retell for now.
         # Keep the schema fields for backwards compatibility, but do not enforce
         # them in this workflow builder validation path.
         # issues += self._consent_and_content(definition)
         issues += self._merge_field_issues(definition)
+        issues += await self._email_template_issues(
+            definition, institution_id=institution_id
+        )
         # issues += await self.content_validator.validate(
         #     definition, institution_id=institution_id, location_id=location_id
         # )
         issues += await self.readiness_checker.check(
             definition, institution_id=institution_id, location_id=location_id
         )
-        return issues
+        return _dedupe_issues(issues)
 
     @staticmethod
     def is_publishable(issues: list[ValidationIssue]) -> bool:
         return not any(i.severity == "error" for i in issues)
 
+    async def _email_template_issues(
+        self, definition: WorkflowDefinition, *, institution_id: str
+    ) -> list[ValidationIssue]:
+        """Reject a definition pointing at a missing or inactive email template.
+
+        Without this the failure surfaces at send time, mid-campaign, on a live
+        patient run — the most expensive place to discover it.
+        """
+        from src.app.services.automation.definition_schema import SendEmailNode
+        from src.app.services.campaign_email_template_service import (
+            CampaignEmailTemplateService,
+        )
+
+        referencing = [
+            node
+            for node in definition.nodes
+            if isinstance(node, SendEmailNode) and node.template_key
+        ]
+        if not referencing:
+            return []
+
+        service = CampaignEmailTemplateService(self.session)
+        issues: list[ValidationIssue] = []
+        for node in referencing:
+            template = await service.get_by_key(institution_id, node.template_key)
+            if template is None:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=f"Email template '{node.template_key}' does not exist",
+                        node_id=node.id,
+                        field_path=["template_key"],
+                        code="email_template_missing",
+                    )
+                )
+            elif not template.is_active:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=f"Email template '{node.template_key}' is inactive",
+                        node_id=node.id,
+                        field_path=["template_key"],
+                        code="email_template_inactive",
+                    )
+                )
+        return issues
+
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _unreachable_nodes(definition: WorkflowDefinition) -> list[ValidationIssue]:
+    def _raw_graph_issues(definition: dict) -> list[ValidationIssue]:
+        nodes = definition.get("nodes")
+        if not isinstance(nodes, list):
+            return []
+
+        issues: list[ValidationIssue] = []
+        ids = [node_id(node) for node in nodes if isinstance(node, dict)]
+        valid_ids = {value for value in ids if value}
+        seen: set[str] = set()
+        for index, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                continue
+            current_id = node_id(node)
+            current_type = node_type(node)
+            if current_id and current_id in seen:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=f"Step id '{current_id}' is used more than once.",
+                        node_id=current_id,
+                        field_path=["nodes", str(index), "id"],
+                        code="duplicate_node_id",
+                        fix="Give every step a unique id.",
+                    )
+                )
+            if current_id:
+                seen.add(current_id)
+
+            capability = capability_for(node)
+            if capability is None and current_type:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=f"Step type '{current_type}' is not supported.",
+                        node_id=current_id,
+                        field_path=["nodes", str(index), "type"],
+                        code="node_type_unsupported",
+                        fix="Replace this step with a supported node type.",
+                    )
+                )
+                continue
+            if capability and not capability.runtime_supported:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=f"Step type '{current_type}' cannot execute in this engine version.",
+                        node_id=current_id,
+                        code="node_runtime_unsupported",
+                    )
+                )
+            if capability and not capability.dry_run_supported:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=f"Step type '{current_type}' cannot be tested before publishing.",
+                        node_id=current_id,
+                        code="node_dry_run_unsupported",
+                    )
+                )
+            if capability and capability.legacy:
+                issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        message=f"Step type '{current_type}' is legacy and cannot be newly authored.",
+                        node_id=current_id,
+                        code="legacy_node_type",
+                        fix="Replace it with the current Wait node.",
+                    )
+                )
+
+            for field_name, target_id in outgoing_references(node):
+                if target_id in valid_ids:
+                    continue
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=(
+                            f"'{field_name}' is not connected to an existing step."
+                            if not target_id
+                            else f"'{field_name}' points to missing step '{target_id}'."
+                        ),
+                        node_id=current_id,
+                        field_path=["nodes", str(index), field_name],
+                        code="edge_target_missing",
+                        fix="Connect this output to an existing step.",
+                    )
+                )
+
+        entry_id = str(definition.get("entry_node_id") or "")
+        if entry_id not in valid_ids:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    message="The trigger is not connected to an existing first step.",
+                    field_path=["entry_node_id"],
+                    code="entry_node_missing",
+                    fix="Connect the trigger to the first step.",
+                )
+            )
+        if not any(node_type(node) == "exit" for node in nodes):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    message="Workflow must contain at least one exit node.",
+                    code="exit_node_missing",
+                    fix="Add an Exit step and connect every branch to an ending.",
+                )
+            )
+        return issues
+
+    @staticmethod
+    def _graph_semantic_issues(definition: WorkflowDefinition) -> list[ValidationIssue]:
         node_map = {n.id: n for n in definition.nodes}
+        adjacency = {
+            node.id: [target for _, target in outgoing_references(node)]
+            for node in definition.nodes
+        }
         reachable: set[str] = set()
         stack = [definition.entry_node_id]
         while stack:
@@ -173,32 +343,58 @@ class WorkflowValidationService:
             if nid in reachable or nid not in node_map:
                 continue
             reachable.add(nid)
-            node = node_map[nid]
-            if isinstance(node, ConditionNode):
-                stack.extend([node.true_next_node_id, node.false_next_node_id])
-            elif isinstance(
-                node,
-                (
-                    WaitNode,
-                    DripNode,
-                    UpdatePatientStatusNode,
-                    UpdateGoTrackerAppointmentNode,
-                    JsonMapperNode,
-                    LlmNode,
-                    *_SEND_NODE_TYPES,
-                ),
-            ):
-                stack.append(node.next_node_id)
-        return [
+            stack.extend(adjacency[nid])
+
+        issues = [
             ValidationIssue(
                 severity="warning",
                 message=f"Node '{n.id}' is unreachable from the trigger and will never run.",
                 node_id=n.id,
                 code="unreachable",
+                fix="Connect this step to the workflow or remove it.",
             )
             for n in definition.nodes
             if n.id not in reachable
         ]
+
+        cycle_nodes = _reachable_cycle_nodes(adjacency, definition.entry_node_id)
+        for current_id in sorted(cycle_nodes):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    message="This step is part of an execution loop.",
+                    node_id=current_id,
+                    code="graph_cycle",
+                    fix="Remove the loop or route the branch to an Exit step.",
+                )
+            )
+
+        reverse: dict[str, list[str]] = {current_id: [] for current_id in node_map}
+        for source, targets in adjacency.items():
+            for target in targets:
+                if target in reverse:
+                    reverse[target].append(source)
+        can_reach_exit = {
+            node.id for node in definition.nodes if node_type(node) == "exit"
+        }
+        stack = list(can_reach_exit)
+        while stack:
+            current_id = stack.pop()
+            for parent in reverse[current_id]:
+                if parent not in can_reach_exit:
+                    can_reach_exit.add(parent)
+                    stack.append(parent)
+        for current_id in sorted(reachable - can_reach_exit - cycle_nodes):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    message="This step has no path to an Exit step.",
+                    node_id=current_id,
+                    code="no_exit_path",
+                    fix="Connect every possible path to an Exit step.",
+                )
+            )
+        return issues
 
     @staticmethod
     def _consent_and_content(definition: WorkflowDefinition) -> list[ValidationIssue]:
@@ -328,3 +524,44 @@ def _node_templates(node: object) -> list[tuple[str, str]]:
             ("body_template", node.body_template),
         ]
     return []
+
+
+def _reachable_cycle_nodes(
+    adjacency: dict[str, list[str]], entry_node_id: str
+) -> set[str]:
+    colors: dict[str, int] = {}
+    active: list[str] = []
+    cycle_nodes: set[str] = set()
+
+    def visit(current_id: str) -> None:
+        colors[current_id] = 1
+        active.append(current_id)
+        for target_id in adjacency.get(current_id, []):
+            if target_id not in adjacency:
+                continue
+            if colors.get(target_id, 0) == 0:
+                visit(target_id)
+            elif colors.get(target_id) == 1:
+                cycle_nodes.update(active[active.index(target_id):])
+        active.pop()
+        colors[current_id] = 2
+
+    if entry_node_id in adjacency:
+        visit(entry_node_id)
+    return cycle_nodes
+
+
+def _dedupe_issues(issues: list[ValidationIssue]) -> list[ValidationIssue]:
+    unique: list[ValidationIssue] = []
+    seen: set[tuple] = set()
+    for issue in issues:
+        key = (
+            issue.code,
+            issue.node_id,
+            tuple(issue.field_path),
+            issue.message,
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append(issue)
+    return unique

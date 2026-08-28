@@ -173,16 +173,15 @@ describe("LocationProvider — INSTITUTION_ADMIN", () => {
         expect(screen.getByTestId("location-selector").textContent).toContain(LOC_A.name)
     })
 
-    it("LocationSelector hides when only one active location exists (nothing to switch)", async () => {
+    it("LocationSelector shows the name when only one active location exists", async () => {
         setupApiMocks({ user: makeUser("INSTITUTION_ADMIN"), locations: [LOC_A] })
 
         renderWithProviders(<LocationSelector />)
 
-        // After load completes, the selector should still not render.
-        await act(async () => {
-            await Promise.resolve()
+        await waitFor(() => {
+            expect(screen.getByTestId("location-selector")).toHaveTextContent(LOC_A.name)
         })
-        expect(screen.queryByTestId("location-selector")).not.toBeInTheDocument()
+        expect(screen.queryByRole("combobox", { name: "Active location" })).not.toBeInTheDocument()
     })
 })
 

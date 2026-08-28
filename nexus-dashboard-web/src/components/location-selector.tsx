@@ -21,7 +21,19 @@ export function LocationSelector() {
 
     if (!canSwitch) return null
     if (isLoading) return null
-    if (locations.length <= 1) return null
+    if (locations.length === 0) return null
+    if (locations.length === 1) {
+        return (
+            <div
+                aria-label="Active location"
+                className="flex h-8 w-full items-center truncate rounded-md border border-sidebar-border bg-sidebar-accent/30 px-3 text-xs font-medium text-sidebar-foreground"
+                data-testid="location-selector"
+                title={locations[0].name}
+            >
+                {locations[0].name}
+            </div>
+        )
+    }
 
     return (
         <Select

@@ -34,6 +34,7 @@ from src.app.services.automation.definition_schema import (
     LlmLabelRule,
     LlmNode,
     SendSmsNode,
+    SmsReplyWaitConfig,
     UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
     WaitNode,
@@ -83,6 +84,7 @@ def _make_step(
 
 def _make_runtime() -> AsyncMock:
     rt = AsyncMock()
+    rt.set_trace_context = MagicMock()
     step = MagicMock()
     step.id = "step-exec-1"
     step.step_id = "step-1"
@@ -656,6 +658,33 @@ def test_advance_wait_node_returns_waiting() -> None:
     rt.wait_run.assert_awaited_once()
 
 
+def test_advance_sms_reply_wait_mode_creates_timeout_timer() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run()
+    defn = _definition(
+        nodes=[
+            WaitNode(
+                id="wait-sms-1",
+                wait_for=SmsReplyWaitConfig(response_window_seconds=1800),
+                next_node_id="exit-1",
+            ),
+            ExitNode(id="exit-1"),
+        ],
+        entry="wait-sms-1",
+    )
+
+    result = asyncio.run(dispatcher.advance(run, defn, context={}, now=_NOW))
+
+    assert result.status == "waiting"
+    assert result.timer_id == "timer-1"
+    assert sched.create_timer.await_args.kwargs["due_at"] == _NOW + timedelta(minutes=30)
+    rt.wait_run.assert_awaited_once()
+
+
 def test_advance_appointment_relative_wait_uses_appointment_at_context() -> None:
     session = _make_session()
     rt = _make_runtime()
@@ -816,6 +845,42 @@ def test_resume_after_timer_moves_past_drip_gate() -> None:
     assert result.outcome == "released"
     assert run.current_step_id == "exit-1"
     assert waiting_step.result_code == "drip_released"
+    rt.resume_run.assert_awaited_once_with(run, waiting_step)
+
+
+def test_resume_after_timer_moves_past_sms_reply_wait() -> None:
+    session = _make_session()
+    waiting_step = _make_step(step_id="wait-sms-1", step_type="wait")
+    waiting_step.id = "step-exec-1"
+    waiting_step.result_code = "awaiting_sms_reply"
+    result_row = MagicMock()
+    result_row.scalar_one_or_none.return_value = waiting_step
+    session.execute = AsyncMock(return_value=result_row)
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run(status=AutomationRunStatus.WAITING.value)
+    run.id = "run-1"
+    run.current_step_id = "wait-sms-1"
+    defn = _definition(
+        nodes=[
+            WaitNode(
+                id="wait-sms-1",
+                wait_for=SmsReplyWaitConfig(response_window_seconds=1800),
+                next_node_id="exit-1",
+            ),
+            ExitNode(id="exit-1", outcome="no_response"),
+        ],
+        entry="wait-sms-1",
+    )
+
+    result = asyncio.run(dispatcher.resume_after_timer(run, defn, context={}, now=_NOW))
+
+    assert result.status == "completed"
+    assert result.outcome == "no_response"
+    assert run.current_step_id == "exit-1"
+    assert waiting_step.result_code == "sms_reply_timeout"
     rt.resume_run.assert_awaited_once_with(run, waiting_step)
 
 

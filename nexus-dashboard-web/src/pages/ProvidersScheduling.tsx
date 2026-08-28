@@ -23,6 +23,7 @@ import {
     listOperatories,
     createAvailability,
     updateAvailability,
+    clearAvailabilityOverride,
     previewBulkLinkRange,
     applyBulkLinkRange,
     updateProvider,
@@ -106,6 +107,9 @@ export default function ProvidersScheduling() {
     const [maxAge, setMaxAge] = useState<number | "">("")
     const [savingSettings, setSavingSettings] = useState(false)
     const [canLinkAvailability, setCanLinkAvailability] = useState(false)
+    const [pmsSource, setPmsSource] = useState<string | null>(null)
+    const [canCreateWorkWindows, setCanCreateWorkWindows] = useState(false)
+    const [canClearWorkingWindowOverride, setCanClearWorkingWindowOverride] = useState(false)
     // NexHealth returns PMS notes and lunch breaks in the same collection as
     // real working windows. Only v3 labels them, so on v2 every row reports as
     // bookable and this toggle is inert. Shown by default: seeing "Lunch" on a
@@ -143,6 +147,9 @@ export default function ProvidersScheduling() {
                 listOperatories(locationId),
             ])
             setCanLinkAvailability(overview.can_link_availability)
+            setPmsSource(overview.pms_source)
+            setCanCreateWorkWindows(overview.can_create_work_windows)
+            setCanClearWorkingWindowOverride(overview.can_clear_working_window_override)
             setProviders(p)
             setAppointmentTypes(at)
             setOperatories(ops)
@@ -166,7 +173,9 @@ export default function ProvidersScheduling() {
         setLoadingAvailabilities(true)
         setAvailabilities([])
         try {
-            const data = await listAvailabilities(locationId, selectedProviderId)
+            const data = await listAvailabilities(locationId, selectedProviderId, {
+                includeClosed: pmsSource === "gotracker",
+            })
             setAvailabilities(data)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load availabilities"
@@ -174,7 +183,7 @@ export default function ProvidersScheduling() {
         } finally {
             setLoadingAvailabilities(false)
         }
-    }, [selectedProviderId, locationId])
+    }, [selectedProviderId, locationId, pmsSource])
 
     useEffect(() => {
         fetchData()
@@ -414,6 +423,7 @@ export default function ProvidersScheduling() {
                 ...editTarget,
                 appointment_type_ids: typeIds,
                 appointment_type_names: typeIds.map((id) => nameBySourceId.get(id) ?? id),
+                types_overridden: updated.types_overridden,
             }
             setAvailabilities((prev) =>
                 prev.map((a) => (a.source_id === merged.source_id ? merged : a))
@@ -422,6 +432,34 @@ export default function ProvidersScheduling() {
             setEditTarget(null)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to update"
+            toast.error(message)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const handleClearEditOverride = async () => {
+        if (!canManage || !editTarget) return
+        setSaving(true)
+        try {
+            const updated = await clearAvailabilityOverride(editTarget.source_id, locationId)
+            const nameBySourceId = new Map(appointmentTypes.map((at) => [at.source_id, at.name]))
+            const typeIds = updated.appointment_type_ids ?? []
+            const merged: CachedAvailability = {
+                ...editTarget,
+                appointment_type_ids: typeIds,
+                appointment_type_names: typeIds.map((id) => nameBySourceId.get(id) ?? id),
+                types_overridden: updated.types_overridden,
+            }
+            setAvailabilities((prev) =>
+                prev.map((availability) =>
+                    availability.source_id === merged.source_id ? merged : availability
+                )
+            )
+            toast.success("Restored the PMS appointment-type links")
+            setEditTarget(null)
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to restore PMS links"
             toast.error(message)
         } finally {
             setSaving(false)
@@ -625,6 +663,9 @@ export default function ProvidersScheduling() {
     // operatory_id), so resolve the display name from the operatories list by
     // source_id. Names can collide, so rows still show the ID alongside.
     const operatoryNameBySourceId = new Map(operatories.map((op) => [op.source_id, op.name]))
+    const appointmentTypeNameBySourceId = new Map(
+        appointmentTypes.map((appointmentType) => [appointmentType.source_id, appointmentType.name])
+    )
 
     const allBulkOperatoriesSelected =
         relevantOperatories.length > 0 &&
@@ -652,17 +693,25 @@ export default function ProvidersScheduling() {
     // One row, rendered by both the recurring section and the paginated
     // dated list, so the two cannot drift apart visually.
     const renderWindow = (av: CachedAvailability) => {
+        const isClosed = av.status === "closed"
         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
+        const appointmentTypeNames = (av.appointment_type_ids || []).map(
+            (id) => appointmentTypeNameBySourceId.get(id) ?? id
+        )
         const isPastDate = isAvailabilityExpired(av)
-        const isWarning = canLinkAvailability && !hasTypes && !isPastDate
+        const isWarning = canLinkAvailability && !isClosed && !hasTypes && !isPastDate
 
-        const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
-        const normalClass = isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
+        const mutedClass = isClosed
+            ? "text-slate-500 dark:text-slate-400"
+            : isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
+        const normalClass = isClosed ? "text-slate-700 dark:text-slate-300" : isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
 
         return (
             <div
                 key={av.id}
-                className={`rounded-lg border p-4 transition-colors ${isPastDate
+                className={`rounded-lg border p-4 transition-colors ${isClosed
+                        ? "border-slate-400/40 border-dashed bg-slate-500/5"
+                        : isPastDate
                         ? "border-border/40 bg-muted/20 opacity-50"
                         : isWarning
                             ? "border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] dark:bg-[rgb(255,244,227)]/10"
@@ -681,6 +730,15 @@ export default function ProvidersScheduling() {
                                     Expired
                                 </Badge>
                             )}
+                            {isClosed && (
+                                <Badge
+                                    variant="outline"
+                                    className="text-xs border-slate-500/50 text-slate-600 dark:text-slate-300"
+                                    title="Derived from the gaps between PMS working windows; this period cannot be edited"
+                                >
+                                    Closed — read-only
+                                </Badge>
+                            )}
                             {av.label_name && (
                             <Badge
                                 variant="outline"
@@ -690,7 +748,7 @@ export default function ProvidersScheduling() {
                                 {av.label_name}
                             </Badge>
                         )}
-                        {av.synced && (
+                        {!isClosed && av.synced && (
                                 <Badge
                                     variant={isWarning ? "outline" : "secondary"}
                                     className={`text-xs ${isWarning
@@ -701,13 +759,18 @@ export default function ProvidersScheduling() {
                                     Synced from PMS
                                 </Badge>
                             )}
-                            {!av.synced && (
+                            {!isClosed && !av.synced && (
                                 <Badge
                                     variant="outline"
                                     className={`text-xs ${isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300" : ""
                                         }`}
                                 >
                                     Manual
+                                </Badge>
+                            )}
+                            {av.types_overridden && (
+                                <Badge variant="outline" className="text-xs border-violet-500/50 text-violet-700 dark:text-violet-300">
+                                    Type override
                                 </Badge>
                             )}
                         </div>
@@ -730,11 +793,11 @@ export default function ProvidersScheduling() {
                                 Specific date: {av.specific_date}
                             </div>
                         )}
-                        {canLinkAvailability && (
+                        {canLinkAvailability && !isClosed && (
                             <div className={`text-sm ${normalClass}`}>
                                 <span className={mutedClass}>Appointment Types: </span>
                                 {hasTypes ? (
-                                    <span>{av.appointment_type_names?.join(", ")}</span>
+                                    <span>{appointmentTypeNames.join(", ")}</span>
                                 ) : (
                                     <span className="text-indigo-700 dark:text-indigo-300 font-medium">
                                         None linked
@@ -743,7 +806,7 @@ export default function ProvidersScheduling() {
                             </div>
                         )}
                     </div>
-                    {canManage && canLinkAvailability && (
+                    {canManage && canLinkAvailability && !isClosed && (
                         <Button
                             variant="outline"
                             size="sm"
@@ -794,7 +857,7 @@ export default function ProvidersScheduling() {
                                         Link date range
                                     </Button>
                                 )}
-                                {canLinkAvailability && (
+                                {canCreateWorkWindows && (
                                     <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
                                         Create Work Window
                                     </Button>
@@ -845,6 +908,7 @@ export default function ProvidersScheduling() {
                     operatories={operatories}
                     appointmentTypes={appointmentTypes}
                     canManage={canManage}
+                    pmsSource={pmsSource}
                     timezone={selectedLocation?.timezone ?? undefined}
                 />
             ) : (
@@ -1045,7 +1109,7 @@ export default function ProvidersScheduling() {
                                             checked={showNonBookable}
                                             onCheckedChange={(checked) => setShowNonBookable(checked === true)}
                                         />
-                                        Show notes &amp; breaks (Lunch, NOTE)
+                                            Show closed periods, notes &amp; breaks
                                     </label>
                                 )}
 
@@ -1067,7 +1131,9 @@ export default function ProvidersScheduling() {
                                         ? selectedApptTypeId !== "all"
                                             ? "No work windows match this appointment type."
                                             : canManage
-                                                ? "No work windows found for this provider. Add one above."
+                                                ? canCreateWorkWindows
+                                                    ? "No work windows found for this provider. Add one above."
+                                                    : "No work windows found for this provider. Refresh from your PMS."
                                                 : "No work windows found for this provider."
                                         : "No live slots found for this provider in the next 7 days."}
                                 </p>
@@ -1349,6 +1415,11 @@ export default function ProvidersScheduling() {
                                 )}
                             </div>
                             <DialogFooter>
+                                {canClearWorkingWindowOverride && editTarget?.types_overridden && (
+                                    <Button variant="outline" onClick={handleClearEditOverride} disabled={saving}>
+                                        Use standing rules
+                                    </Button>
+                                )}
                                 <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
                                 <Button onClick={handleSaveEdit} disabled={saving}>
                                     {saving ? "Saving..." : "Save"}
@@ -1358,6 +1429,7 @@ export default function ProvidersScheduling() {
                     </Dialog>
 
                     {/* Create Work Window Dialog */}
+                    {canCreateWorkWindows && (
                     <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
                         <DialogContent className="max-w-md">
                             <DialogHeader>
@@ -1463,6 +1535,7 @@ export default function ProvidersScheduling() {
                             </DialogFooter>
                         </DialogContent>
                     </Dialog>
+                    )}
                 </>
             )}
         </div>

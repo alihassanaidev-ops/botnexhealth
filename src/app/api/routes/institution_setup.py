@@ -31,7 +31,12 @@ from src.app.models.institution_location import InstitutionLocation
 from src.app.models.institution_operatory import InstitutionOperatory
 from src.app.models.institution_provider import InstitutionProvider
 from src.app.models.user import User, UserRole
-from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
+from src.app.pms.base import (
+    PMSAdapter,
+    SupportsAppointmentTypeCreation,
+    SupportsAvailabilityLinking,
+    SupportsWorkingWindowOverrides,
+)
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.services.audit import log_audit_background
 from src.app.services.sms_privacy import safe_error_summary
@@ -219,48 +224,65 @@ class CachedAvailabilityResponse(BaseModel):
     appointment_type_names: list[str] | None = None
     active: bool = True
     synced: bool = False
+    # GoTracker may return a derived, read-only closed period alongside open
+    # PMS windows.  The ID on such a row is display-only and cannot be patched.
+    status: str = "open"
     # v3-only. `label_name` is what separates a genuine working window (None)
     # from a synced PMS note ("NOTE") or a break ("Lunch"). v2 cannot tell them
     # apart, so both stay None/True there.
     label_name: str | None = None
     is_bookable_window: bool = True
+    # GoTracker only: whether ``appointment_type_ids`` is a cloud override or
+    # the effective set inherited from the standing provider/operatory rules.
+    types_overridden: bool = False
     source_metadata: dict | None = None
     synced_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
 
-def _prefixed_nexhealth_id(value: Any) -> str | None:
+def _prefixed_source_id(value: Any, source: str) -> str | None:
     if value in (None, ""):
         return None
     value_str = str(value)
-    return value_str if value_str.startswith("nh-") else f"nh-{value_str}"
+    prefix = {"nexhealth": "nh", "gotracker": "gt"}.get(source, source[:2])
+    return value_str if value_str.startswith(("nh-", "gt-")) else f"{prefix}-{value_str}"
+
+
+def _supports_working_window_updates(adapter: PMSAdapter) -> bool:
+    return isinstance(adapter, (SupportsAvailabilityLinking, SupportsWorkingWindowOverrides))
+
+
+def _adapter_source(adapter: PMSAdapter) -> str:
+    """Return the adapter source while keeping lightweight test fakes compatible."""
+    return str(getattr(adapter, "source", "nexhealth"))
 
 
 def _availability_response_from_raw(
     item: dict[str, Any],
     *,
     fallback_source_id: str | None = None,
+    source: str = "nexhealth",
 ) -> CachedAvailabilityResponse:
     raw_id = item.get("id") or fallback_source_id
     appointment_types = item.get("appointment_types") or []
     raw_type_ids = item.get("appointment_type_ids") or []
     type_ids = [
-        _prefixed_nexhealth_id(at.get("id"))
+        _prefixed_source_id(at.get("id"), source)
         for at in appointment_types
         if at.get("id") is not None
     ] or [
-        _prefixed_nexhealth_id(type_id)
+        _prefixed_source_id(type_id, source)
         for type_id in raw_type_ids
         if type_id is not None
     ]
 
     return CachedAvailabilityResponse(
         id=str(raw_id or ""),
-        source_id=_prefixed_nexhealth_id(raw_id) or "",
-        provider_source_id=_prefixed_nexhealth_id(item.get("provider_id")),
+        source_id=_prefixed_source_id(raw_id, source) or "",
+        provider_source_id=_prefixed_source_id(item.get("provider_id"), source),
         provider_name=item.get("provider_name"),
-        operatory_source_id=_prefixed_nexhealth_id(item.get("operatory_id")),
+        operatory_source_id=_prefixed_source_id(item.get("operatory_id"), source),
         operatory_name=item.get("operatory_name"),
         begin_time=item.get("begin_time"),
         end_time=item.get("end_time"),
@@ -274,10 +296,15 @@ def _availability_response_from_raw(
         ],
         active=item.get("active", True),
         synced=item.get("synced", False),
+        status=item.get("status", "open"),
         label_name=item.get("label_name"),
         # A labelled row describes the schedule rather than offering bookable
         # time: Lunch fills the gap between working windows, NOTE annotates one.
-        is_bookable_window=item.get("label_name") is None,
+        # GoTracker's derived closed periods are likewise display-only.
+        is_bookable_window=(
+            item.get("label_name") is None and item.get("status", "open") != "closed"
+        ),
+        types_overridden=bool(item.get("types_overridden")),
         source_metadata={
             "tz_offset": item.get("tz_offset"),
             "custom_recurrence": item.get("custom_recurrence"),
@@ -524,6 +551,8 @@ class SetupOverviewResponse(BaseModel):
     pms_source: str | None = None
     can_create_appointment_types: bool = False
     can_link_availability: bool = False
+    can_create_work_windows: bool = False
+    can_clear_working_window_override: bool = False
     counts: dict[str, int] = {}
     # False for call-intelligence-only tenants — the UI hides Practice Setup.
     has_pms: bool = True
@@ -536,6 +565,9 @@ class CreateAppointmentTypeRequest(BaseModel):
     name: str
     duration_minutes: int
     descriptor_ids: list[str] = []
+    # GoTracker's equivalent of an EMR descriptor. At most one may be linked
+    # because its appointment write accepts a single native reason.
+    reason_ids: list[str] = []
     provider_ids: list[str] = []
     operatory_ids: list[str] = []
     bookable_online: bool | None = None
@@ -545,6 +577,7 @@ class UpdateAppointmentTypeRequest(BaseModel):
     name: str | None = None
     duration_minutes: int | None = None
     descriptor_ids: list[str] | None = None
+    reason_ids: list[str] | None = None
     provider_ids: list[str] | None = None
     operatory_ids: list[str] | None = None
     bookable_online: bool | None = None
@@ -645,7 +678,11 @@ async def get_setup_overview(
             location=LocationInfoResponse.model_validate(location),
             pms_source=adapter.source,
             can_create_appointment_types=isinstance(adapter, SupportsAppointmentTypeCreation),
-            can_link_availability=isinstance(adapter, SupportsAvailabilityLinking),
+            can_link_availability=_supports_working_window_updates(adapter),
+            can_create_work_windows=isinstance(adapter, SupportsAvailabilityLinking),
+            can_clear_working_window_override=isinstance(
+                adapter, SupportsWorkingWindowOverrides
+            ),
             counts=counts,
             has_pms=True,
         )
@@ -832,6 +869,8 @@ async def create_appointment_type(
             raise HTTPException(400, "This PMS does not support creating appointment types")
         if adapter.source == "gotracker" and not req.provider_ids:
             raise HTTPException(400, "GoTracker appointment types require at least one provider")
+        if adapter.source == "gotracker" and len(req.reason_ids) > 1:
+            raise HTTPException(400, "GoTracker appointment types can link to only one reason")
         if req.operatory_ids:
             await _ensure_operatory_ids_visible(
                 session,
@@ -843,7 +882,7 @@ async def create_appointment_type(
         result = await adapter.create_appointment_type(
             name=req.name,
             duration_minutes=req.duration_minutes,
-            descriptor_ids=req.descriptor_ids,
+            descriptor_ids=req.reason_ids if adapter.source == "gotracker" else req.descriptor_ids,
             provider_ids=req.provider_ids,
             operatory_ids=req.operatory_ids,
             bookable_online=req.bookable_online,
@@ -911,6 +950,7 @@ async def update_appointment_type(
         req.name is None
         and req.duration_minutes is None
         and req.descriptor_ids is None
+        and req.reason_ids is None
         and req.provider_ids is None
         and req.operatory_ids is None
         and req.bookable_online is None
@@ -925,6 +965,8 @@ async def update_appointment_type(
             raise HTTPException(400, "This PMS does not support updating appointment types")
         if adapter.source == "gotracker" and req.provider_ids == []:
             raise HTTPException(400, "GoTracker appointment types require at least one provider")
+        if adapter.source == "gotracker" and req.reason_ids is not None and len(req.reason_ids) > 1:
+            raise HTTPException(400, "GoTracker appointment types can link to only one reason")
         if req.operatory_ids:
             await _ensure_operatory_ids_visible(
                 session,
@@ -937,7 +979,7 @@ async def update_appointment_type(
             appointment_type_id=source_id,
             name=req.name,
             duration_minutes=req.duration_minutes,
-            descriptor_ids=req.descriptor_ids,
+            descriptor_ids=req.reason_ids if adapter.source == "gotracker" else req.descriptor_ids,
             provider_ids=req.provider_ids,
             operatory_ids=req.operatory_ids,
             bookable_online=req.bookable_online,
@@ -1128,6 +1170,31 @@ async def list_descriptors(
         return [CachedDescriptorResponse.model_validate(d) for d in result.scalars().all()]
 
 
+@router.get("/reasons", response_model=list[CachedDescriptorResponse])
+async def list_reasons(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
+):
+    """List cached Tracker-native reasons for a GoTracker location."""
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
+        if adapter.source != "gotracker":
+            raise HTTPException(400, "Reasons are available only for GoTracker locations")
+        result = await session.execute(
+            select(InstitutionDescriptor)
+            .where(
+                InstitutionDescriptor.institution_id == institution.id,
+                InstitutionDescriptor.location_id == location.id,
+                InstitutionDescriptor.source == "gotracker",
+                InstitutionDescriptor.descriptor_type == "GoTracker Reason",
+                InstitutionDescriptor.is_active.is_(True),
+            )
+            .order_by(InstitutionDescriptor.name)
+        )
+        return [CachedDescriptorResponse.model_validate(reason) for reason in result.scalars().all()]
+
+
 # ── Availabilities (fetched LIVE from PMS — too volatile for cache) ───────
 
 
@@ -1140,7 +1207,11 @@ async def list_availabilities(
         None,
         description="YYYY-MM-DD start date for slot-derived availability on PMSs without work windows.",
     ),
-    days: int = Query(7, ge=1, le=31),
+    days: int = Query(7, ge=1, le=60),
+    include_closed: bool = Query(
+        False,
+        description="Include derived closed periods for GoTracker working windows.",
+    ),
 ):
     """Fetch schedule availability live from PMS for the institution location."""
     async with get_db_session() as session:
@@ -1154,10 +1225,18 @@ async def list_availabilities(
             extra["provider_id"] = provider_source_id
 
         try:
-            if isinstance(adapter, SupportsAvailabilityLinking):
+            supports_work_windows = _supports_working_window_updates(adapter)
+            if supports_work_windows:
+                if isinstance(adapter, SupportsWorkingWindowOverrides):
+                    extra["start_date"] = start_date or _today_for_location(location)
+                    extra["days"] = days
+                    extra["include_closed"] = include_closed
                 raw_items = await adapter.list_availabilities(**extra)
                 return _filter_visible_availabilities(
-                    [_availability_response_from_raw(item) for item in raw_items],
+                    [
+                        _availability_response_from_raw(item, source=_adapter_source(adapter))
+                        for item in raw_items
+                    ],
                     hidden_operatory_ids,
                 )
 
@@ -1202,7 +1281,7 @@ async def preview_bulk_link_range_availabilities(
         institution, location = await _resolve_institution_location(current_user, session, location_id)
         adapter = await _get_adapter(institution, location)
 
-        if not isinstance(adapter, SupportsAvailabilityLinking):
+        if not _supports_working_window_updates(adapter):
             raise HTTPException(400, "This PMS does not support availability updates")
 
         range_dates = _parse_range_dates(location, req.start_date, req.end_date)
@@ -1220,6 +1299,11 @@ async def preview_bulk_link_range_availabilities(
         raw_items = await adapter.list_availabilities(
             provider_id=req.provider_id,
             ignore_past_dates=False,
+            **(
+                {"start_date": req.start_date, "days": len(range_dates)}
+                if isinstance(adapter, SupportsWorkingWindowOverrides)
+                else {}
+            ),
         )
         matched_items = _match_availabilities_in_range(
             raw_items,
@@ -1237,7 +1321,10 @@ async def preview_bulk_link_range_availabilities(
         end_date=range_dates[-1],
         day_count=len(range_dates),
         matched_count=len(matched_items),
-        windows=[_availability_response_from_raw(item) for item in matched_items],
+        windows=[
+            _availability_response_from_raw(item, source=_adapter_source(adapter))
+            for item in matched_items
+        ],
         batch_size=BULK_LINK_BATCH_SIZE,
         batch_pause_seconds=BULK_LINK_BATCH_PAUSE_SECONDS,
     )
@@ -1262,7 +1349,7 @@ async def apply_bulk_link_range_availabilities(
         institution, location = await _resolve_institution_location(current_user, session, location_id)
         adapter = await _get_adapter(institution, location)
 
-        if not isinstance(adapter, SupportsAvailabilityLinking):
+        if not _supports_working_window_updates(adapter):
             raise HTTPException(400, "This PMS does not support availability updates")
 
         async def _link_one(availability_id: str) -> str | Exception:
@@ -1351,7 +1438,7 @@ async def create_availability(
         if isinstance(created.get("availability"), dict):
             created = created["availability"]
 
-        response = _availability_response_from_raw(created)
+        response = _availability_response_from_raw(created, source=_adapter_source(adapter))
         loc_slug = location.slug
         institution_id = institution.id
         created_source_id = response.source_id
@@ -1386,7 +1473,7 @@ async def update_availability(
         institution, location = await _resolve_institution_location(current_user, session, location_id)
         adapter = await _get_adapter(institution, location)
 
-        if not isinstance(adapter, SupportsAvailabilityLinking):
+        if not _supports_working_window_updates(adapter):
             raise HTTPException(400, "This PMS does not support availability updates")
         if req.operatory_id is not None:
             await _ensure_operatory_is_visible(session, institution.id, location.id, req.operatory_id)
@@ -1401,7 +1488,9 @@ async def update_availability(
             active=req.active,
         )
 
-        response = _availability_response_from_raw(updated, fallback_source_id=source_id)
+        response = _availability_response_from_raw(
+            updated, fallback_source_id=source_id, source=_adapter_source(adapter)
+        )
         loc_slug = location.slug
         institution_id = institution.id
         fields_changed = sorted(req.model_fields_set)
@@ -1416,6 +1505,44 @@ async def update_availability(
             "actor_role": current_user.role,
             "action": "update_availability",
             "fields_changed": fields_changed,
+        },
+        institution_id=institution_id,
+    )
+    return response
+
+
+@router.delete(
+    "/availabilities/{source_id}/override",
+    response_model=CachedAvailabilityResponse,
+)
+async def clear_availability_override(
+    source_id: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
+):
+    """Clear a GoTracker cloud-only type override for one PMS work window."""
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
+        if not isinstance(adapter, SupportsWorkingWindowOverrides):
+            raise HTTPException(400, "This PMS does not support clearing work-window overrides")
+
+        updated = await adapter.clear_availability_override(source_id)
+        response = _availability_response_from_raw(
+            updated, fallback_source_id=source_id, source=_adapter_source(adapter)
+        )
+        loc_slug = location.slug
+        institution_id = institution.id
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/availability:{source_id}:override",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "clear_availability_override",
         },
         institution_id=institution_id,
     )

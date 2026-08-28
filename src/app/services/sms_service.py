@@ -71,6 +71,8 @@ class SmsService:
         call_id: str | None = None,
         workflow_run_id: str | None = None,
         workflow_id: str | None = None,
+        conversation_thread_id: str | None = None,
+        include_opt_out_footer: bool = True,
     ) -> SmsHistoryLog:
         """
         Send an SMS via Twilio and log the history in the database.
@@ -85,6 +87,8 @@ class SmsService:
             workflow_run_id: Optional campaign run that sent this SMS (Plan 11
                 attribution — carried to the delivery webhook's usage event).
             workflow_id: Optional campaign/workflow id for per-campaign spend.
+            conversation_thread_id: Optional run-scoped campaign conversation thread.
+            include_opt_out_footer: Append the standard STOP copy when absent.
 
         Returns:
             The SmsHistoryLog database record.
@@ -137,7 +141,7 @@ class SmsService:
             )
             prepared_body = prepare_outbound_sms_body(
                 body=body,
-                clinic_identity=location.name,
+                include_opt_out_footer=include_opt_out_footer,
             )
         except SmsSendBlockedError as blocked:
             # Use the structured reason code only — never the stringified
@@ -156,13 +160,16 @@ class SmsService:
                 call_id=call_id,
                 workflow_run_id=workflow_run_id,
                 workflow_id=workflow_id,
+                conversation_thread_id=conversation_thread_id,
                 to_number_hash=identity.phone_hash,
                 to_number_masked=identity.phone_masked,
                 last_status_at=now,
                 retain_until=default_sms_row_retain_until(
                     now, metadata_days=_sms_meta_days, body_days=_sms_body_days
                 ),
-                body_retain_until=default_sms_body_retain_until(now, days=_sms_body_days),
+                body_retain_until=default_sms_body_retain_until(
+                    now, days=_sms_body_days
+                ),
             )
             sms_log.to_number = to_number
             sms_log.body = body
@@ -188,6 +195,7 @@ class SmsService:
             call_id=call_id,
             workflow_run_id=workflow_run_id,
             workflow_id=workflow_id,
+            conversation_thread_id=conversation_thread_id,
             to_number_hash=identity.phone_hash,
             to_number_masked=identity.phone_masked,
             timestamp=now,
@@ -219,9 +227,9 @@ class SmsService:
                 "from_": from_number,
                 "to": to_number,
             }
-            if settings.twilio_sms_status_callback_url:
+            if settings.effective_twilio_sms_status_callback_url:
                 create_kwargs["status_callback"] = (
-                    settings.twilio_sms_status_callback_url
+                    settings.effective_twilio_sms_status_callback_url
                 )
 
             message = await asyncio.to_thread(

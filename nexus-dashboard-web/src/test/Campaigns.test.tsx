@@ -23,6 +23,9 @@ vi.mock("@/lib/automation-api", () => ({
 vi.mock("sonner", () => ({
     toast: { error: vi.fn(), success: vi.fn() },
 }))
+vi.mock("@/context/LocationContext", () => ({
+    useSelectedLocationId: () => "loc-1",
+}))
 
 const list = listCampaigns as ReturnType<typeof vi.fn>
 const halt = getOutboundHaltStatus as ReturnType<typeof vi.fn>
@@ -58,7 +61,7 @@ describe("Campaigns page", () => {
         await userEvent.click(screen.getByRole("button", { name: /create from scratch/i }))
 
         await waitFor(() => {
-            expect(create).toHaveBeenCalledWith("Untitled campaign")
+            expect(create).toHaveBeenCalledWith("Untitled campaign", "loc-1")
         })
         expect(await screen.findByText("Builder opened")).toBeInTheDocument()
     })
