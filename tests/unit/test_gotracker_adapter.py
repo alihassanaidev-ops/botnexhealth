@@ -123,6 +123,48 @@ async def test_working_windows_use_stable_ids_and_override_endpoints() -> None:
     assert cleared["types_overridden"] is False
 
 
+@pytest.mark.asyncio
+async def test_closed_working_period_is_display_only_and_never_patchable() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {
+                    "status": "closed",
+                    "working_window_id": None,
+                    "Source": "derived",
+                    "WorkDate": "2026-09-01",
+                    "ProviderId": 3,
+                    "OperatoryId": 3,
+                    "StartTime": "00:00:00",
+                    "EndTime": "09:00:00",
+                }
+            ],
+        }
+    )
+    adapter = _adapter(client)
+
+    windows = await adapter.list_availabilities(
+        provider_id="gt-3", start_date="2026-09-01", days=1, include_closed=True
+    )
+
+    assert client.calls[0]["params"] == {
+        "start_date": "2026-09-01",
+        "days": 1,
+        "include_closed": "true",
+        "provider_ids": "3",
+    }
+    assert windows[0]["status"] == "closed"
+    assert windows[0]["synced"] is False
+    assert windows[0]["id"] == "closed:2026-09-01:3:3:00:00:00:09:00:00"
+
+    with pytest.raises(ValueError, match="cannot be updated"):
+        await adapter.update_availability(windows[0]["id"], appointment_type_ids=["gt-1"])
+
+    assert len(client.calls) == 1
+
+
 def test_gotracker_mappers_prefix_ids_and_preserve_source() -> None:
     patient = mappers.to_patient(
         {

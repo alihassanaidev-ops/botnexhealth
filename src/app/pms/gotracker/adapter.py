@@ -313,6 +313,7 @@ class GoTrackerAdapter(
         """
         provider_id = kwargs.pop("provider_id", None)
         operatory_ids = kwargs.pop("operatory_ids", None)
+        include_closed = bool(kwargs.pop("include_closed", False))
         kwargs.pop("ignore_past_dates", None)
         start_date = kwargs.pop("start_date", None) or self._local_today()
         days = int(kwargs.pop("days", 7))
@@ -320,6 +321,8 @@ class GoTrackerAdapter(
             raise ValueError("GoTracker working-window days must be between 1 and 60.")
 
         params: dict[str, Any] = {"start_date": start_date, "days": days}
+        if include_closed:
+            params["include_closed"] = "true"
         if provider_id:
             params["provider_ids"] = str(mappers.strip(provider_id))
         if operatory_ids:
@@ -345,6 +348,9 @@ class GoTrackerAdapter(
         active: bool | None = None,
     ) -> dict:
         """Set a GoTracker window's cloud-only appointment-type override."""
+        raw_id = mappers.strip(availability_id)
+        if raw_id and raw_id.startswith("closed:"):
+            raise ValueError("Derived closed periods cannot be updated.")
         if any(value is not None for value in (days, start_time, end_time, operatory_id, active)):
             raise ValueError(
                 "GoTracker working windows are PMS-owned; only appointment-type overrides can be updated."
@@ -354,16 +360,19 @@ class GoTrackerAdapter(
 
         raw = await self._client.request(
             "PATCH",
-            f"/api/scheduling/working_hours/{mappers.strip(availability_id)}",
+            f"/api/scheduling/working_hours/{raw_id}",
             json={"appointment_type_ids": _strip_ids(appointment_type_ids)},
         )
         return _to_working_window(_data_object(raw, fallback_id=mappers.strip(availability_id)))
 
     async def clear_availability_override(self, availability_id: str) -> dict:
         """Remove a cloud override and expose Tracker's standing type links again."""
+        raw_id = mappers.strip(availability_id)
+        if raw_id and raw_id.startswith("closed:"):
+            raise ValueError("Derived closed periods have no override to clear.")
         raw = await self._client.request(
             "DELETE",
-            f"/api/scheduling/working_hours/{mappers.strip(availability_id)}/override",
+            f"/api/scheduling/working_hours/{raw_id}/override",
         )
         return _to_working_window(_data_object(raw, fallback_id=mappers.strip(availability_id)))
 
@@ -862,6 +871,21 @@ def _list_data(raw: dict[str, Any], *, nested_key: str) -> list[dict[str, Any]]:
 def _to_working_window(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize the Synchronizer's working-window shape for setup routes."""
     window_id = _first(raw, "working_window_id", "id")
+    window_status = str(_first(raw, "status", "Status") or "open").lower()
+    if window_status == "closed" and window_id is None:
+        # Derived closed periods have no writable working_window_id.  Give them
+        # a deterministic display ID only; the route/UI explicitly keeps them
+        # read-only.
+        window_id = "closed:" + ":".join(
+            str(value or "")
+            for value in (
+                _first(raw, "WorkDate", "work_date"),
+                _first(raw, "ProviderId", "provider_id"),
+                _first(raw, "OperatoryId", "operatory_id"),
+                _first(raw, "StartTime", "start_time"),
+                _first(raw, "EndTime", "end_time"),
+            )
+        )
     return {
         "id": window_id,
         "provider_id": _first(raw, "ProviderId", "provider_id"),
@@ -872,5 +896,6 @@ def _to_working_window(raw: dict[str, Any]) -> dict[str, Any]:
         "appointment_type_ids": _first(raw, "appointment_type_ids") or [],
         "active": True,
         "synced": _first(raw, "Source", "source") == "synced",
+        "status": window_status,
         "types_overridden": bool(_first(raw, "types_overridden")),
     }

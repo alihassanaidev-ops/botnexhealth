@@ -108,6 +108,7 @@ export default function ProvidersScheduling() {
     const [maxAge, setMaxAge] = useState<number | "">("")
     const [savingSettings, setSavingSettings] = useState(false)
     const [canLinkAvailability, setCanLinkAvailability] = useState(false)
+    const [pmsSource, setPmsSource] = useState<string | null>(null)
     const [canCreateWorkWindows, setCanCreateWorkWindows] = useState(false)
     const [canClearWorkingWindowOverride, setCanClearWorkingWindowOverride] = useState(false)
     // NexHealth returns PMS notes and lunch breaks in the same collection as
@@ -147,6 +148,7 @@ export default function ProvidersScheduling() {
                 listOperatories(locationId),
             ])
             setCanLinkAvailability(overview.can_link_availability)
+            setPmsSource(overview.pms_source)
             setCanCreateWorkWindows(overview.can_create_work_windows)
             setCanClearWorkingWindowOverride(overview.can_clear_working_window_override)
             setProviders(p)
@@ -172,7 +174,9 @@ export default function ProvidersScheduling() {
         setLoadingAvailabilities(true)
         setAvailabilities([])
         try {
-            const data = await listAvailabilities(locationId, selectedProviderId)
+            const data = await listAvailabilities(locationId, selectedProviderId, {
+                includeClosed: pmsSource === "gotracker",
+            })
             setAvailabilities(data)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load availabilities"
@@ -180,7 +184,7 @@ export default function ProvidersScheduling() {
         } finally {
             setLoadingAvailabilities(false)
         }
-    }, [selectedProviderId, locationId])
+    }, [selectedProviderId, locationId, pmsSource])
 
     useEffect(() => {
         fetchData()
@@ -691,20 +695,25 @@ export default function ProvidersScheduling() {
     // One row, rendered by both the recurring section and the paginated
     // dated list, so the two cannot drift apart visually.
     const renderWindow = (av: CachedAvailability) => {
+        const isClosed = av.status === "closed"
         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
         const appointmentTypeNames = (av.appointment_type_ids || []).map(
             (id) => appointmentTypeNameBySourceId.get(id) ?? id
         )
         const isPastDate = isAvailabilityExpired(av)
-        const isWarning = canLinkAvailability && !hasTypes && !isPastDate
+        const isWarning = canLinkAvailability && !isClosed && !hasTypes && !isPastDate
 
-        const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
-        const normalClass = isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
+        const mutedClass = isClosed
+            ? "text-slate-500 dark:text-slate-400"
+            : isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
+        const normalClass = isClosed ? "text-slate-700 dark:text-slate-300" : isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
 
         return (
             <div
                 key={av.id}
-                className={`rounded-lg border p-4 transition-colors ${isPastDate
+                className={`rounded-lg border p-4 transition-colors ${isClosed
+                        ? "border-slate-400/40 border-dashed bg-slate-500/5"
+                        : isPastDate
                         ? "border-border/40 bg-muted/20 opacity-50"
                         : isWarning
                             ? "border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] dark:bg-[rgb(255,244,227)]/10"
@@ -723,6 +732,15 @@ export default function ProvidersScheduling() {
                                     Expired
                                 </Badge>
                             )}
+                            {isClosed && (
+                                <Badge
+                                    variant="outline"
+                                    className="text-xs border-slate-500/50 text-slate-600 dark:text-slate-300"
+                                    title="Derived from the gaps between PMS working windows; this period cannot be edited"
+                                >
+                                    Closed — read-only
+                                </Badge>
+                            )}
                             {av.label_name && (
                             <Badge
                                 variant="outline"
@@ -732,7 +750,7 @@ export default function ProvidersScheduling() {
                                 {av.label_name}
                             </Badge>
                         )}
-                        {av.synced && (
+                        {!isClosed && av.synced && (
                                 <Badge
                                     variant={isWarning ? "outline" : "secondary"}
                                     className={`text-xs ${isWarning
@@ -743,7 +761,7 @@ export default function ProvidersScheduling() {
                                     Synced from PMS
                                 </Badge>
                             )}
-                            {!av.synced && (
+                            {!isClosed && !av.synced && (
                                 <Badge
                                     variant="outline"
                                     className={`text-xs ${isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300" : ""
@@ -777,7 +795,7 @@ export default function ProvidersScheduling() {
                                 Specific date: {av.specific_date}
                             </div>
                         )}
-                        {canLinkAvailability && (
+                        {canLinkAvailability && !isClosed && (
                             <div className={`text-sm ${normalClass}`}>
                                 <span className={mutedClass}>Appointment Types: </span>
                                 {hasTypes ? (
@@ -790,7 +808,7 @@ export default function ProvidersScheduling() {
                             </div>
                         )}
                     </div>
-                    {canManage && canLinkAvailability && (
+                    {canManage && canLinkAvailability && !isClosed && (
                         <Button
                             variant="outline"
                             size="sm"
@@ -1102,7 +1120,7 @@ export default function ProvidersScheduling() {
                                             checked={showNonBookable}
                                             onCheckedChange={(checked) => setShowNonBookable(checked === true)}
                                         />
-                                        Show notes &amp; breaks (Lunch, NOTE)
+                                            Show closed periods, notes &amp; breaks
                                     </label>
                                 )}
 

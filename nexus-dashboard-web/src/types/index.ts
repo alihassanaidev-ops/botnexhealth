@@ -247,6 +247,8 @@ export interface CachedAvailability {
     appointment_type_names: string[] | null;
     active: boolean;
     synced: boolean;
+    /** GoTracker derived closed periods are shown read-only beside open windows. */
+    status: "open" | "closed" | string;
     /** v3 only: "NOTE" / "Lunch" / null. Null on v2, which cannot distinguish them. */
     label_name: string | null;
     /** False for PMS notes and breaks — they describe the schedule, not bookable time. */

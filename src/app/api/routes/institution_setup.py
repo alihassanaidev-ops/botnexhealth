@@ -224,6 +224,9 @@ class CachedAvailabilityResponse(BaseModel):
     appointment_type_names: list[str] | None = None
     active: bool = True
     synced: bool = False
+    # GoTracker may return a derived, read-only closed period alongside open
+    # PMS windows.  The ID on such a row is display-only and cannot be patched.
+    status: str = "open"
     # v3-only. `label_name` is what separates a genuine working window (None)
     # from a synced PMS note ("NOTE") or a break ("Lunch"). v2 cannot tell them
     # apart, so both stay None/True there.
@@ -293,10 +296,14 @@ def _availability_response_from_raw(
         ],
         active=item.get("active", True),
         synced=item.get("synced", False),
+        status=item.get("status", "open"),
         label_name=item.get("label_name"),
         # A labelled row describes the schedule rather than offering bookable
         # time: Lunch fills the gap between working windows, NOTE annotates one.
-        is_bookable_window=item.get("label_name") is None,
+        # GoTracker's derived closed periods are likewise display-only.
+        is_bookable_window=(
+            item.get("label_name") is None and item.get("status", "open") != "closed"
+        ),
         types_overridden=bool(item.get("types_overridden")),
         source_metadata={
             "tz_offset": item.get("tz_offset"),
@@ -1201,6 +1208,10 @@ async def list_availabilities(
         description="YYYY-MM-DD start date for slot-derived availability on PMSs without work windows.",
     ),
     days: int = Query(7, ge=1, le=60),
+    include_closed: bool = Query(
+        False,
+        description="Include derived closed periods for GoTracker working windows.",
+    ),
 ):
     """Fetch schedule availability live from PMS for the institution location."""
     async with get_db_session() as session:
@@ -1219,6 +1230,7 @@ async def list_availabilities(
                 if isinstance(adapter, SupportsWorkingWindowOverrides):
                     extra["start_date"] = start_date or _today_for_location(location)
                     extra["days"] = days
+                    extra["include_closed"] = include_closed
                 raw_items = await adapter.list_availabilities(**extra)
                 return _filter_visible_availabilities(
                     [

@@ -174,6 +174,7 @@ export async function listAvailabilities(
     options?: {
         startDate?: string;
         days?: number;
+        includeClosed?: boolean;
     }
 ): Promise<CachedAvailability[]> {
     const params = new URLSearchParams();
@@ -181,6 +182,7 @@ export async function listAvailabilities(
     if (providerSourceId) params.set("provider_source_id", providerSourceId);
     if (options?.startDate) params.set("start_date", options.startDate);
     if (options?.days) params.set("days", String(options.days));
+    if (options?.includeClosed) params.set("include_closed", "true");
     const q = params.toString() ? `?${params.toString()}` : "";
     const { data } = await api.get<unknown>(`${BASE}/availabilities${q}`);
     return unwrapArray<CachedAvailability>(data, `${BASE}/availabilities`);

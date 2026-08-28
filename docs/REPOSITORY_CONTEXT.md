@@ -483,6 +483,11 @@ window ID and clear it to restore the provider/operatory standing rules. It must
 not create or alter the underlying window: Tracker remains the source of truth
 for its date, time, provider, and operatory.
 
+GoTracker can also return derived closed periods when Nexus requests them. They
+are the gaps between open Tracker windows (including a positively stated
+00:00–24:00 fully closed day), have no writable working-window ID, and are
+shown read-only so staff can distinguish a closed chair from a booked one.
+
 GoTracker Reasons are Tracker-native, read-only scheduling references (the
 equivalent of NexHealth EMR descriptors). They are synchronized into the shared
 reference cache and shown on the Reasons setup page. A Synchronizer-owned
