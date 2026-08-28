@@ -486,7 +486,10 @@ for its date, time, provider, and operatory.
 GoTracker can also return derived closed periods when Nexus requests them. They
 are the gaps between open Tracker windows (including a positively stated
 00:00–24:00 fully closed day), have no writable working-window ID, and are
-shown read-only so staff can distinguish a closed chair from a booked one.
+shown read-only in both the schedule list and calendar so staff can distinguish
+a closed chair from a booked one. Calendar closed spans are a separate visual
+layer: they are never merged with open windows, never open the linking drawer,
+and never affect open-time, working-window, or unlinked-window counts.
 
 GoTracker Reasons are Tracker-native, read-only scheduling references (the
 equivalent of NexHealth EMR descriptors). They are synchronized into the shared

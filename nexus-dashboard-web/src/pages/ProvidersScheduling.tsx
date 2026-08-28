@@ -910,6 +910,7 @@ export default function ProvidersScheduling() {
                     operatories={operatories}
                     appointmentTypes={appointmentTypes}
                     canManage={canManage}
+                    pmsSource={pmsSource}
                     timezone={selectedLocation?.timezone ?? undefined}
                 />
             ) : (

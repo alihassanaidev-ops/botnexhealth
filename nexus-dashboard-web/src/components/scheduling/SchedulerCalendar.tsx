@@ -76,12 +76,13 @@ function mergeBands(items: { _s: number; _e: number; av: CachedAvailability }[])
 type Col = { key: string; name: string; sub: string | null; dup: boolean; date: string; isToday: boolean; colorIdx: number }
 
 export default function SchedulerCalendar({
-    locationId, operatories, appointmentTypes, canManage, timezone,
+    locationId, operatories, appointmentTypes, canManage, pmsSource, timezone,
 }: {
     locationId?: string
     operatories: CachedOperatory[]
     appointmentTypes: CachedAppointmentType[]
     canManage: boolean
+    pmsSource?: string | null
     timezone?: string
 }) {
     const tz = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -113,12 +114,12 @@ export default function SchedulerCalendar({
         if (!locationId) return
         let cancelled = false
         setLoading(true); setError(null)
-        listAvailabilities(locationId)
+        listAvailabilities(locationId, undefined, { includeClosed: pmsSource === "gotracker" })
             .then((data) => { if (!cancelled) setWindows(data) })
             .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load schedule") })
             .finally(() => { if (!cancelled) setLoading(false) })
         return () => { cancelled = true }
-    }, [locationId])
+    }, [locationId, pmsSource])
 
     const operatoryName = useMemo(() => new Map(operatories.map((o) => [o.source_id, o.name])), [operatories])
     // While the fetch is in flight there are no windows to inspect, so trust the
@@ -250,6 +251,7 @@ export default function SchedulerCalendar({
     const overview = useMemo(() => {
         const byKey = new Map<string, { _s: number; _e: number; av: CachedAvailability }[]>()
         for (const w of visibleWindows) {
+            if (w.status === "closed") continue
             const k = resourceKeyOf(w)
             const arr = byKey.get(k) || []
             arr.push({ _s: toMin(w.begin_time)!, _e: toMin(w.end_time)!, av: w })
@@ -259,17 +261,21 @@ export default function SchedulerCalendar({
         for (const arr of byKey.values()) for (const b of mergeBands(arr)) openMin += b.eMin - b.sMin
         return {
             openMin,
-            windows: visibleWindows.length,
+            windows: visibleWindows.filter((w) => w.status !== "closed").length,
             resources: byKey.size,
-            unlinked: visibleWindows.filter((w) => !isLinked(w)).length,
+            unlinked: visibleWindows.filter((w) => w.status !== "closed" && !isLinked(w)).length,
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [visibleWindows, effectiveGroupBy])
 
-    function openWindow(av: CachedAvailability) { setSelected(av); setEditTypeIds(av.appointment_type_ids || []) }
+    function openWindow(av: CachedAvailability) {
+        if (av.status === "closed") return
+        setSelected(av)
+        setEditTypeIds(av.appointment_type_ids || [])
+    }
 
     async function saveLinks() {
-        if (!selected || !canManage) return
+        if (!selected || !canManage || selected.status === "closed") return
         setSaving(true)
         try {
             const updated = await updateAvailability(selected.source_id, { appointment_type_ids: editTypeIds }, locationId)
@@ -309,7 +315,9 @@ export default function SchedulerCalendar({
     }, [monthAnchor])
     const shiftMonth = (delta: number) => setMonthAnchor(ymd(monthCells.y, monthCells.mo + delta, 1))
 
-    const NoteBanner = "Working windows (chair open) — not booked appointments."
+    const NoteBanner = pmsSource === "gotracker"
+        ? "Open windows are bookable hours; closed periods are derived and read-only."
+        : "Working windows (chair open) — not booked appointments."
 
     return (
         <div className="flex flex-col gap-4 xl:flex-row">
@@ -410,6 +418,12 @@ export default function SchedulerCalendar({
                                 </div>
                                 {columns.map((c) => {
                                     const items = columnWindows(c)
+                                    // GoTracker's closed periods are computed gaps between
+                                    // PMS-owned open windows. Keep them out of the merge/split
+                                    // algorithm so a 09:00 boundary does not turn a closed gap
+                                    // plus an open window into one misleading tile.
+                                    const closedPeriods = items.filter((av) => av.status === "closed")
+                                    const openWindows = items.filter((av) => av.status !== "closed")
                                     const isNowCol = showNow && (viewMode === "day" ? c.isToday : c.date === clinicToday)
                                     return (
                                         <div key={c.key} className={`relative border-l ${c.isToday && viewMode === "week" ? "bg-primary/[0.03]" : ""}`} style={{ height: totalH, ...(gridTemplate ? {} : { width: COL_W }) }}>
@@ -425,8 +439,24 @@ export default function SchedulerCalendar({
                                             {items.length === 0 && (
                                                 <div className="absolute inset-0 flex items-start justify-center pt-6 text-[11px] text-muted-foreground/40">—</div>
                                             )}
+                                            {closedPeriods.map((period) => {
+                                                const start = toMin(period.begin_time)!
+                                                const end = toMin(period.end_time)!
+                                                return (
+                                                    <div
+                                                        key={period.id}
+                                                        className="pointer-events-none absolute z-0 overflow-hidden rounded-[10px] border border-dashed border-slate-500/35 bg-slate-500/[0.08] px-2 py-1.5 text-left text-slate-500 dark:text-slate-400"
+                                                        style={{ top: (start - minMin) * PX_MIN + 1, height: (end - start) * PX_MIN - 3, left: 4, right: 4 }}
+                                                        title="Closed period derived from the gaps between PMS working windows — read-only"
+                                                    >
+                                                        <div className="font-mono text-[10.5px] font-semibold">{to12(period.begin_time!)} – {to12(period.end_time!)}</div>
+                                                        <div className="truncate text-[12px] font-medium">Closed</div>
+                                                        <div className="truncate text-[11px]">Read-only</div>
+                                                    </div>
+                                                )
+                                            })}
                                             {overlap === "merge"
-                                                ? mergeBands(items.map((av) => ({ _s: toMin(av.begin_time)!, _e: toMin(av.end_time)!, av }))).map((b, i) => {
+                                                ? mergeBands(openWindows.map((av) => ({ _s: toMin(av.begin_time)!, _e: toMin(av.end_time)!, av }))).map((b, i) => {
                                                     const unlinkedN = b.members.filter((m) => !isLinked(m)).length
                                                     const has = unlinkedN > 0
                                                     const single = b.members.length === 1 ? b.members[0] : null
@@ -437,7 +467,7 @@ export default function SchedulerCalendar({
                                                     }
                                                     return (
                                                         <button key={i} onClick={() => single ? openWindow(single) : setSelected({ ...b.members[0], __band: b } as never)}
-                                                            className="absolute overflow-hidden rounded-[10px] px-2 py-1.5 text-left shadow-sm transition-shadow hover:shadow-md"
+                                                            className="absolute z-10 overflow-hidden rounded-[10px] px-2 py-1.5 text-left shadow-sm transition-shadow hover:shadow-md"
                                                             style={{ top: (b.sMin - minMin) * PX_MIN + 1, height: (b.eMin - b.sMin) * PX_MIN - 3, left: 4, right: 4, ...linkedStyle }}>
                                                             <div className="font-mono text-[10.5px] font-semibold" style={{ color: single ? timeColor(single) : (has ? "hsl(var(--muted-foreground))" : "color-mix(in srgb, hsl(var(--primary)) 62%, hsl(var(--foreground)))") }}>
                                                                 {to12(fromMin(b.sMin))} – {to12(fromMin(b.eMin))}
@@ -451,12 +481,12 @@ export default function SchedulerCalendar({
                                                         </button>
                                                     )
                                                 })
-                                                : assignLanes(items.map((av) => ({ ...av, _s: toMin(av.begin_time)!, _e: toMin(av.end_time)! }))).map((w) => {
+                                                : assignLanes(openWindows.map((av) => ({ ...av, _s: toMin(av.begin_time)!, _e: toMin(av.end_time)! }))).map((w) => {
                                                     const wPct = 100 / w._lanes
                                                     const short = (w._e - w._s) * PX_MIN < 34
                                                     return (
                                                         <button key={w.id + w._lane} onClick={() => openWindow(w)}
-                                                            className="absolute overflow-hidden rounded-[10px] px-2 py-1 text-left shadow-sm transition-shadow hover:shadow-md"
+                                                            className="absolute z-10 overflow-hidden rounded-[10px] px-2 py-1 text-left shadow-sm transition-shadow hover:shadow-md"
                                                             style={{ top: (w._s - minMin) * PX_MIN + 1, height: (w._e - w._s) * PX_MIN - 3, left: `calc(${w._lane * wPct}% + 3px)`, width: `calc(${wPct}% - 6px)`, ...tileStyle(w) }}>
                                                             <div className="truncate font-mono text-[10px] font-semibold" style={{ color: timeColor(w) }}>{to12(w.begin_time!)}</div>
                                                             {!short && <div className="truncate text-[11.5px] font-medium text-foreground">{labelFor(w)}</div>}
