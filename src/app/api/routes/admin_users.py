@@ -1,8 +1,9 @@
 """Super-admin user management.
 
 A first-class replacement for the one-off ``delete_user_and_location`` script:
-list/search every user across the platform and remove (soft-delete) or reinvite
-any of them. "Remove" sets ``deleted_at`` / ``is_active=False`` via
+list/search every user across the platform, invite/edit institution admins and
+location admins, and remove (soft-delete) or reinvite users. "Remove" sets
+``deleted_at`` / ``is_active=False`` via
 ``User.mark_deleted()`` — the partial unique index on ``users(email) WHERE
 deleted_at IS NULL`` frees the email for re-invite, and active-user listings
 (``list_locations``, invite uniqueness checks) already filter
@@ -97,6 +98,32 @@ class InviteInstitutionUserResponse(BaseModel):
     role: str
     institution_id: str
     invite_status: str
+
+
+class UpdateInstitutionAdminRequest(BaseModel):
+    email: str
+    institution_id: str
+    role: str
+    location_id: str | None = None
+
+
+class UpdateInstitutionAdminResponse(BaseModel):
+    message: str
+    user_id: str
+    email: str
+    role: str
+    institution_id: str
+    location_id: str | None
+
+
+def _normalize_admin_email(email: str) -> str:
+    normalized = UserInviteService.normalize_email(email)
+    if not normalized or "@" not in normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A valid email address is required",
+        )
+    return normalized
 
 
 @router.get("", response_model=AdminUserListResponse)
@@ -313,6 +340,148 @@ async def reinvite_user(
     return UserActionResponse(message="Invite re-sent", user_id=user_id)
 
 
+@router.patch("/{user_id}", response_model=UpdateInstitutionAdminResponse)
+async def update_institution_admin(
+    user_id: str,
+    body: UpdateInstitutionAdminRequest,
+    current_admin: Annotated[User, Depends(get_current_admin)],
+):
+    """Edit an institution admin or location admin and their tenant scope.
+
+    The target and requested role are deliberately limited to the two admin
+    roles managed by this screen. Institution admins are institution-wide and
+    therefore cannot retain a location pin; location admins must be pinned to a
+    location belonging to the selected institution.
+    """
+    email = _normalize_admin_email(body.email)
+    role = body.role.strip().upper()
+    editable_roles = {
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+    }
+
+    if role not in editable_roles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="role must be INSTITUTION_ADMIN or LOCATION_ADMIN",
+        )
+    if role == UserRole.LOCATION_ADMIN.value and not body.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="location_id is required for a location admin",
+        )
+    if role == UserRole.INSTITUTION_ADMIN.value and body.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="location_id must not be set for an institution admin",
+        )
+
+    async with get_db_session() as session:
+        target = await _load_actionable_user(session, user_id, current_admin)
+        if target.role not in editable_roles:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only institution admins and location admins can be edited",
+            )
+
+        institution = (
+            await session.execute(
+                select(Institution).where(Institution.id == body.institution_id)
+            )
+        ).scalar_one_or_none()
+        if institution is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Institution not found",
+            )
+
+        existing = (
+            await session.execute(
+                select(User).where(
+                    User.email == email,
+                    User.id != user_id,
+                    User.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A user with this email already exists",
+            )
+
+        if body.location_id is not None:
+            location = (
+                await session.execute(
+                    select(InstitutionLocation).where(
+                        InstitutionLocation.id == body.location_id,
+                        InstitutionLocation.institution_id == body.institution_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if location is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="location_id does not belong to this institution",
+                )
+
+        previous = {
+            "email": target.email,
+            "role": target.role,
+            "institution_id": str(target.institution_id) if target.institution_id else None,
+            "location_id": str(target.location_id) if target.location_id else None,
+        }
+        email_changed = target.email != email
+        target.email = email
+        target.role = role
+        target.institution_id = body.institution_id
+        target.location_id = body.location_id
+        target.group_id = None
+
+        # A pending invite sent to the old address is no longer useful. Rotate
+        # it and send the replacement to the edited address.
+        if email_changed and target.invite_status == InviteStatus.PENDING.value:
+            invite_service = UserInviteService(session)
+            try:
+                await invite_service.reinvite_user(target)
+            except Exception as e:
+                logger.error("Admin user edit reinvite failed: %s", safe_error_summary(e))
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to update and re-invite user",
+                )
+
+        await session.flush()
+
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.USER_UPDATE,
+        target_resource=f"user:{user_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_admin.role,
+            "admin_id": str(current_admin.id),
+            "target_user_id": user_id,
+            "previous": previous,
+            "email": email,
+            "target_role": role,
+            "institution_id": body.institution_id,
+            "location_id": body.location_id,
+        },
+        institution_id=body.institution_id,
+        user_id=str(current_admin.id),
+        location_id=body.location_id,
+    )
+    return UpdateInstitutionAdminResponse(
+        message="User updated",
+        user_id=user_id,
+        email=email,
+        role=role,
+        institution_id=body.institution_id,
+        location_id=body.location_id,
+    )
+
+
 @router.post("/invite", response_model=InviteInstitutionUserResponse)
 async def invite_institution_user(
     body: InviteInstitutionUserRequest,
@@ -324,7 +493,7 @@ async def invite_institution_user(
     from the dashboard — e.g. a second institution admin when the clinic's own
     admin can't send the invite themselves. Never provisions a SUPER_ADMIN.
     """
-    email = UserInviteService.normalize_email(body.email)
+    email = _normalize_admin_email(body.email)
     role = body.role.strip().upper()
 
     if role not in _INVITABLE_ROLES:

@@ -10,11 +10,19 @@ import type {
     SendSmsResponse,
     OutboundVoiceProfile,
     InstitutionProvisioningStatus,
+    Location,
 } from "@/types"
 import type { AuditLogPaginatedResponse } from "./tenant-api"
 
 export async function listInstitutionsDetailed(): Promise<InstitutionDetail[]> {
     const { data } = await api.get<InstitutionDetail[]>("/admin/institutions")
+    return data
+}
+
+export async function listAdminInstitutionLocations(institutionSlug: string): Promise<Location[]> {
+    const { data } = await api.get<Location[]>(
+        `/admin/institutions/${institutionSlug}/locations?include_inactive=true`,
+    )
     return data
 }
 
@@ -249,4 +257,38 @@ export async function removeAdminUser(userId: string): Promise<void> {
 
 export async function reinviteAdminUser(userId: string): Promise<void> {
     await api.post(`/admin/users/${userId}/reinvite`)
+}
+
+export type AdminManagedRole = "INSTITUTION_ADMIN" | "LOCATION_ADMIN"
+
+export interface AdminUserWritePayload {
+    email: string
+    role: AdminManagedRole
+    institution_id: string
+    location_id?: string
+}
+
+export interface AdminUserMutationResponse {
+    message: string
+    user_id: string
+    email: string
+    role: AdminManagedRole
+    institution_id: string
+    location_id?: string | null
+    invite_status?: string
+}
+
+export async function inviteAdminUser(
+    payload: AdminUserWritePayload,
+): Promise<AdminUserMutationResponse> {
+    const { data } = await api.post<AdminUserMutationResponse>("/admin/users/invite", payload)
+    return data
+}
+
+export async function updateAdminUser(
+    userId: string,
+    payload: AdminUserWritePayload,
+): Promise<AdminUserMutationResponse> {
+    const { data } = await api.patch<AdminUserMutationResponse>(`/admin/users/${userId}`, payload)
+    return data
 }

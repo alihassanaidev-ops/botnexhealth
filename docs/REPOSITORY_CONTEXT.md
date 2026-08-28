@@ -158,6 +158,14 @@ contact in the institution. Visibility is granted per-contact via the
 step up from "any portal user + location pin" to "institution_admin only"
 depending on sensitivity — check the per-route `dependencies=` when editing it.
 
+The super-admin user directory (`/admin/users`) is also the cross-tenant
+onboarding surface for institution and location admins. An institution admin is
+assigned an `institution_id` with no location pin; a location admin is assigned
+both an `institution_id` and one `location_id` that must belong to that
+institution. Super admins can edit those assignments later from the same page;
+the API revalidates the location/institution relationship on both invite and
+edit.
+
 ---
 
 ## 4. The voice agent: Retell
