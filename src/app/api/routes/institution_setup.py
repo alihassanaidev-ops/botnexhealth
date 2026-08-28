@@ -558,6 +558,9 @@ class CreateAppointmentTypeRequest(BaseModel):
     name: str
     duration_minutes: int
     descriptor_ids: list[str] = []
+    # GoTracker's equivalent of an EMR descriptor. At most one may be linked
+    # because its appointment write accepts a single native reason.
+    reason_ids: list[str] = []
     provider_ids: list[str] = []
     operatory_ids: list[str] = []
     bookable_online: bool | None = None
@@ -567,6 +570,7 @@ class UpdateAppointmentTypeRequest(BaseModel):
     name: str | None = None
     duration_minutes: int | None = None
     descriptor_ids: list[str] | None = None
+    reason_ids: list[str] | None = None
     provider_ids: list[str] | None = None
     operatory_ids: list[str] | None = None
     bookable_online: bool | None = None
@@ -858,6 +862,8 @@ async def create_appointment_type(
             raise HTTPException(400, "This PMS does not support creating appointment types")
         if adapter.source == "gotracker" and not req.provider_ids:
             raise HTTPException(400, "GoTracker appointment types require at least one provider")
+        if adapter.source == "gotracker" and len(req.reason_ids) > 1:
+            raise HTTPException(400, "GoTracker appointment types can link to only one reason")
         if req.operatory_ids:
             await _ensure_operatory_ids_visible(
                 session,
@@ -869,7 +875,7 @@ async def create_appointment_type(
         result = await adapter.create_appointment_type(
             name=req.name,
             duration_minutes=req.duration_minutes,
-            descriptor_ids=req.descriptor_ids,
+            descriptor_ids=req.reason_ids if adapter.source == "gotracker" else req.descriptor_ids,
             provider_ids=req.provider_ids,
             operatory_ids=req.operatory_ids,
             bookable_online=req.bookable_online,
@@ -937,6 +943,7 @@ async def update_appointment_type(
         req.name is None
         and req.duration_minutes is None
         and req.descriptor_ids is None
+        and req.reason_ids is None
         and req.provider_ids is None
         and req.operatory_ids is None
         and req.bookable_online is None
@@ -951,6 +958,8 @@ async def update_appointment_type(
             raise HTTPException(400, "This PMS does not support updating appointment types")
         if adapter.source == "gotracker" and req.provider_ids == []:
             raise HTTPException(400, "GoTracker appointment types require at least one provider")
+        if adapter.source == "gotracker" and req.reason_ids is not None and len(req.reason_ids) > 1:
+            raise HTTPException(400, "GoTracker appointment types can link to only one reason")
         if req.operatory_ids:
             await _ensure_operatory_ids_visible(
                 session,
@@ -963,7 +972,7 @@ async def update_appointment_type(
             appointment_type_id=source_id,
             name=req.name,
             duration_minutes=req.duration_minutes,
-            descriptor_ids=req.descriptor_ids,
+            descriptor_ids=req.reason_ids if adapter.source == "gotracker" else req.descriptor_ids,
             provider_ids=req.provider_ids,
             operatory_ids=req.operatory_ids,
             bookable_online=req.bookable_online,
@@ -1152,6 +1161,31 @@ async def list_descriptors(
             .order_by(InstitutionDescriptor.name)
         )
         return [CachedDescriptorResponse.model_validate(d) for d in result.scalars().all()]
+
+
+@router.get("/reasons", response_model=list[CachedDescriptorResponse])
+async def list_reasons(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
+):
+    """List cached Tracker-native reasons for a GoTracker location."""
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
+        if adapter.source != "gotracker":
+            raise HTTPException(400, "Reasons are available only for GoTracker locations")
+        result = await session.execute(
+            select(InstitutionDescriptor)
+            .where(
+                InstitutionDescriptor.institution_id == institution.id,
+                InstitutionDescriptor.location_id == location.id,
+                InstitutionDescriptor.source == "gotracker",
+                InstitutionDescriptor.descriptor_type == "GoTracker Reason",
+                InstitutionDescriptor.is_active.is_(True),
+            )
+            .order_by(InstitutionDescriptor.name)
+        )
+        return [CachedDescriptorResponse.model_validate(reason) for reason in result.scalars().all()]
 
 
 # ── Availabilities (fetched LIVE from PMS — too volatile for cache) ───────

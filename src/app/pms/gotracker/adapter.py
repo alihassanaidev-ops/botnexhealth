@@ -206,7 +206,26 @@ class GoTrackerAdapter(
         return [mappers.to_appointment_type(item) for item in data]
 
     async def list_pms_descriptors(self) -> list[dict]:
-        return []
+        """Expose Tracker reasons through Nexus's generic read-only cache."""
+        raw = await self._client.request("GET", "/api/reasons")
+        rows = raw.get("data") if isinstance(raw.get("data"), list) else []
+        return [
+            {
+                "id": _first(row, "id", "ReasonId", "reason_id"),
+                "name": str(_first(row, "name", "Name") or ""),
+                "descriptor_type": "GoTracker Reason",
+                "code": _first(row, "code", "Code"),
+                "active": bool(
+                    _first(row, "active", "is_active", "IsActive")
+                    if _first(row, "active", "is_active", "IsActive") is not None
+                    else True
+                ),
+                "minutes": _first(row, "minutes", "Minutes"),
+                "is_recall": bool(_first(row, "is_recall", "IsRecall")),
+            }
+            for row in rows
+            if isinstance(row, dict)
+        ]
 
     async def create_appointment_type(
         self,
@@ -218,13 +237,15 @@ class GoTrackerAdapter(
         operatory_ids: list[str] | None = None,
         bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
-        del descriptor_ids
+        if len(descriptor_ids) > 1:
+            raise ValueError("GoTracker appointment types can link to only one reason.")
         body = {
             "name": name,
             "minutes": duration_minutes,
             "bookable_online": True if bookable_online is None else bookable_online,
             "provider_ids": _strip_ids(provider_ids),
             "operatory_ids": _strip_ids(operatory_ids),
+            "reason_ids": _strip_ids(descriptor_ids),
         }
         raw = await self._client.request("POST", "/api/appointment_types", json=body)
         return mappers.to_appointment_type(_data_object(raw))
@@ -239,7 +260,6 @@ class GoTrackerAdapter(
         operatory_ids: list[str] | None = None,
         bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
-        del descriptor_ids
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name
@@ -247,6 +267,10 @@ class GoTrackerAdapter(
             body["minutes"] = duration_minutes
         if bookable_online is not None:
             body["bookable_online"] = bookable_online
+        if descriptor_ids is not None:
+            if len(descriptor_ids) > 1:
+                raise ValueError("GoTracker appointment types can link to only one reason.")
+            body["reason_ids"] = _strip_ids(descriptor_ids)
         if provider_ids is not None:
             body["provider_ids"] = _strip_ids(provider_ids)
         if operatory_ids is not None:

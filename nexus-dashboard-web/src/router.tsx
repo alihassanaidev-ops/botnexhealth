@@ -20,6 +20,7 @@ const SetupOverview = lazy(() => import("./pages/SetupOverview"));
 const Institutions = lazy(() => import("./pages/Tenants"));
 const InstitutionDetailPage = lazy(() => import("./pages/TenantDetail"));
 const AppointmentTypes = lazy(() => import("./pages/AppointmentTypes"));
+const Reasons = lazy(() => import("./pages/Reasons"));
 const ProvidersScheduling = lazy(() => import("./pages/ProvidersScheduling"));
 const Operatories = lazy(() => import("./pages/Operatories"));
 const Calls = lazy(() => import("./pages/Calls"));
@@ -241,6 +242,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <PmsGuard><S><AppointmentTypes /></S></PmsGuard>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "setup/reasons",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <PmsGuard><S><Reasons /></S></PmsGuard>
                             </RoleGuard>
                         ),
                     },

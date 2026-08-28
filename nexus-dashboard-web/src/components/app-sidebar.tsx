@@ -225,6 +225,11 @@ const navSetup: NavItemDef[] = [
         icon: CalendarCheck,
     },
     {
+        title: "Reasons",
+        url: "/setup/reasons",
+        icon: Tag,
+    },
+    {
         title: "Providers & Scheduling",
         url: "/setup/providers",
         icon: UserCog,
@@ -271,7 +276,7 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { user } = useAuth();
-    const { hasPms } = useInstitution();
+    const { hasPms, pmsType } = useInstitution();
     const location = useLocation();
 
     const isAdmin = user?.role === "SUPER_ADMIN";
@@ -288,9 +293,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 : user?.role === "LOCATION_ADMIN"
                     ? locationAdminNav
                     : staffNav;
+    const pmsSetupNav = pmsType === "gotracker"
+        ? navSetup
+        : navSetup.filter((item) => item.url !== "/setup/reasons")
     const setupNav = user?.role === "STAFF"
-        ? navSetup.filter((item) => item.url !== "/setup" && item.url !== "/setup/audit-logs")
-        : navSetup;
+        ? pmsSetupNav.filter((item) => item.url !== "/setup" && item.url !== "/setup/audit-logs")
+        : pmsSetupNav;
 
     return (
         <Sidebar

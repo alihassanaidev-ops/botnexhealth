@@ -123,6 +123,14 @@ def to_appointment_type(raw: dict[str, Any]) -> UniversalAppointmentType:
                 for item in raw.get("operatory_ids") or raw.get("OperatoryIds") or []
                 if item is not None
             ],
+            # Reasons are Tracker-native labels.  Keep their unprefixed IDs so
+            # they line up with the cached reason rows (like NexHealth
+            # descriptor IDs do today).
+            "reason_ids": [
+                str(item)
+                for item in raw.get("reason_ids") or raw.get("ReasonIds") or []
+                if item is not None
+            ],
             "bookable_online": _first(raw, "bookable_online", "BookableOnline", default=True),
         },
     )

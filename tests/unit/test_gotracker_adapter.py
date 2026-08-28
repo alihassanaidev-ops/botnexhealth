@@ -185,6 +185,7 @@ def test_gotracker_appointment_type_metadata_is_prefixed_for_ui() -> None:
         "gotracker_appointment_type_id": 9,
         "provider_ids": ["gt-2", "gt-3"],
         "operatory_ids": ["gt-4"],
+        "reason_ids": [],
         "bookable_online": True,
     }
 
@@ -616,6 +617,7 @@ async def test_create_appointment_type_uses_gotracker_body() -> None:
                 "minutes": 60,
                 "provider_ids": [2, 3],
                 "operatory_ids": [4],
+                "reason_ids": [6],
                 "bookable_online": True,
             },
         }
@@ -625,7 +627,7 @@ async def test_create_appointment_type_uses_gotracker_body() -> None:
     result = await adapter.create_appointment_type(
         name="Adult Recall",
         duration_minutes=60,
-        descriptor_ids=["ignored"],
+        descriptor_ids=["6"],
         provider_ids=["gt-2", "3"],
         operatory_ids=["gt-4"],
     )
@@ -640,10 +642,12 @@ async def test_create_appointment_type_uses_gotracker_body() -> None:
             "bookable_online": True,
             "provider_ids": ["2", "3"],
             "operatory_ids": ["4"],
+            "reason_ids": ["6"],
         },
     }
     assert result.id == "gt-9"
     assert result.source_metadata["provider_ids"] == ["gt-2", "gt-3"]
+    assert result.source_metadata["reason_ids"] == ["6"]
 
 
 @pytest.mark.asyncio
@@ -658,6 +662,7 @@ async def test_update_appointment_type_uses_gotracker_body() -> None:
                 "minutes": 75,
                 "provider_ids": [2],
                 "operatory_ids": [],
+                "reason_ids": [6],
                 "bookable_online": False,
             },
         }
@@ -667,6 +672,7 @@ async def test_update_appointment_type_uses_gotracker_body() -> None:
     result = await adapter.update_appointment_type(
         "gt-9",
         duration_minutes=75,
+        descriptor_ids=["6"],
         provider_ids=["gt-2"],
         operatory_ids=[],
         bookable_online=False,
@@ -679,12 +685,54 @@ async def test_update_appointment_type_uses_gotracker_body() -> None:
         "json": {
             "minutes": 75,
             "bookable_online": False,
+            "reason_ids": ["6"],
             "provider_ids": ["2"],
             "operatory_ids": [],
         },
     }
     assert result.duration_minutes == 75
     assert result.source_metadata["bookable_online"] is False
+    assert result.source_metadata["reason_ids"] == ["6"]
+
+
+@pytest.mark.asyncio
+async def test_list_pms_descriptors_reads_gotracker_reasons() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {
+                    "id": 6,
+                    "name": "Bridge prep",
+                    "code": None,
+                    "minutes": 90,
+                    "is_recall": False,
+                    "active": True,
+                }
+            ],
+        }
+    )
+
+    reasons = await _adapter(client).list_pms_descriptors()
+
+    assert client.calls[0] == {
+        "method": "GET",
+        "path": "/api/reasons",
+        "params": {},
+        "json": None,
+    }
+    assert reasons == [
+        {
+            "id": 6,
+            "name": "Bridge prep",
+            "descriptor_type": "GoTracker Reason",
+            "code": None,
+            "active": True,
+            "minutes": 90,
+            "is_recall": False,
+        }
+    ]
 
 
 @pytest.mark.asyncio

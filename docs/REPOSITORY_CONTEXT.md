@@ -483,6 +483,13 @@ window ID and clear it to restore the provider/operatory standing rules. It must
 not create or alter the underlying window: Tracker remains the source of truth
 for its date, time, provider, and operatory.
 
+GoTracker Reasons are Tracker-native, read-only scheduling references (the
+equivalent of NexHealth EMR descriptors). They are synchronized into the shared
+reference cache and shown on the Reasons setup page. A Synchronizer-owned
+GoTracker appointment type may link to **at most one** reason, matching the
+single native reason accepted by a GoTracker appointment write; NexHealth keeps
+its independent multi-descriptor appointment-type mapping.
+
 ---
 
 ## 6. Twilio & phone numbers

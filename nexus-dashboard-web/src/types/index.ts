@@ -202,6 +202,7 @@ export interface CachedAppointmentType {
     source_metadata: {
         nh_appt_type_id?: number;
         descriptor_ids?: string[];
+        reason_ids?: string[];
         gotracker_appointment_type_id?: number | string;
         provider_ids?: string[];
         operatory_ids?: string[];

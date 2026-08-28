@@ -86,6 +86,7 @@ export async function createAppointmentType(
         name: string;
         duration_minutes: number;
         descriptor_ids?: string[];
+        reason_ids?: string[];
         provider_ids?: string[];
         operatory_ids?: string[];
         bookable_online?: boolean;
@@ -112,6 +113,7 @@ export async function updateAppointmentType(
         name?: string;
         duration_minutes?: number;
         descriptor_ids?: string[];
+        reason_ids?: string[];
         provider_ids?: string[];
         operatory_ids?: string[];
         bookable_online?: boolean;
@@ -156,6 +158,12 @@ export async function updateOperatory(
 export async function listDescriptors(locationId?: string): Promise<CachedDescriptor[]> {
     const { data } = await api.get<unknown>(`${BASE}/descriptors${qs(locationId)}`);
     return unwrapArray<CachedDescriptor>(data, `${BASE}/descriptors`);
+}
+
+/** GoTracker-native reasons, cached during the normal practice sync. */
+export async function listReasons(locationId?: string): Promise<CachedDescriptor[]> {
+    const { data } = await api.get<unknown>(`${BASE}/reasons${qs(locationId)}`);
+    return unwrapArray<CachedDescriptor>(data, `${BASE}/reasons`);
 }
 
 // ── Availabilities ──────────────────────────────────────────────────────
