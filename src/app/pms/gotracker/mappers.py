@@ -40,7 +40,9 @@ def to_patient(raw: dict[str, Any]) -> UniversalPatient:
         last_name=str(last_name),
         email=_first(raw, "Email", "email"),
         phone=_first(raw, "Phone", "phone", "PhoneNumber", "phone_number", "CellPhone"),
-        date_of_birth=_first(raw, "DateOfBirth", "DOB", "date_of_birth"),
+        date_of_birth=_first(
+            raw, "BirthDate", "DateOfBirth", "DOB", "date_of_birth"
+        ),
         extra={"raw": _minimum_extra(raw)},
     )
 
