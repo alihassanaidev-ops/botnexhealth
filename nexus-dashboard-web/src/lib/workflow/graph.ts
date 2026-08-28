@@ -696,6 +696,12 @@ export function createTrigger(type: TriggerType): WorkflowTrigger {
                 tokens: [],
                 campaign_goal: "inbound_sms_followup",
             }
+        case "email_reply":
+            return {
+                type,
+                tokens: [],
+                campaign_goal: null,
+            }
     }
 }
 

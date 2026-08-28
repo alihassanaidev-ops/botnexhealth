@@ -18,14 +18,21 @@ if TYPE_CHECKING:
     from src.app.models.contact import Contact
     from src.app.models.institution_location import InstitutionLocation
 
+# Every trigger type in ``definition_schema.WorkflowTrigger`` must appear here.
+# ``fields_for`` filters on membership, so a trigger missing from this Literal
+# resolves to an EMPTY catalog: no insert-field menu in the builder, and a
+# ``merge_field_unavailable_for_trigger`` warning on every token in the workflow.
+# ``test_merge_field_catalog_coverage`` enforces the correspondence.
 WorkflowTriggerType = Literal[
     "appointment_offset",
+    "appointment_state_changed",
     "recall_scan",
     "manual",
     "bulk_import",
     "callback_requested",
     "patient_status_changed",
     "sms_reply",
+    "email_reply",
 ]
 MergeChannel = Literal["sms", "email", "voice"]
 MergeAvailability = Literal["required_context", "optional_context", "derived"]
@@ -34,13 +41,25 @@ MergeFieldSource = Literal["contact", "location", "context", "derived"]
 
 ALL_TRIGGERS: tuple[WorkflowTriggerType, ...] = (
     "appointment_offset",
+    "appointment_state_changed",
     "recall_scan",
     "manual",
     "bulk_import",
     "callback_requested",
     "patient_status_changed",
     "sms_reply",
+    "email_reply",
 )
+
+# Triggers whose run context carries an appointment. ``appointment_state_changed``
+# is the GoTracker/NexHealth appointment-state trigger and carries the richest
+# appointment context of all three, so it belongs here.
+APPOINTMENT_TRIGGERS: tuple[WorkflowTriggerType, ...] = (
+    "appointment_offset",
+    "appointment_state_changed",
+    "patient_status_changed",
+)
+
 ALL_CHANNELS: tuple[MergeChannel, ...] = ("sms", "email", "voice")
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -407,7 +426,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.start_time",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_appointment_date,
     ),
     MergeFieldSpec(
@@ -421,7 +440,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.start_time",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_appointment_time,
     ),
     MergeFieldSpec(
@@ -435,7 +454,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.start_time",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_appointment_datetime,
     ),
     MergeFieldSpec(
@@ -449,7 +468,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.reason",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("appointment_reason"),
     ),
     MergeFieldSpec(
@@ -463,7 +482,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.status",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("appointment_status"),
     ),
     MergeFieldSpec(
@@ -477,7 +496,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.status_id",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("appointment_status_id"),
     ),
     MergeFieldSpec(
@@ -491,7 +510,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.duration",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("appointment_duration"),
     ),
     MergeFieldSpec(
@@ -505,7 +524,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.provider_id",),
         phi_level="low",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("provider_id"),
     ),
     MergeFieldSpec(
@@ -519,7 +538,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.schedule_column_id",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("schedule_column_id"),
     ),
     MergeFieldSpec(
@@ -533,7 +552,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.booked_user_id",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("booked_user_id"),
     ),
     MergeFieldSpec(
@@ -547,7 +566,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.booked_timestamp",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("booked_timestamp"),
     ),
     MergeFieldSpec(
@@ -561,7 +580,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("appointment.created_machine_name",),
         phi_level="none",
         channels=ALL_CHANNELS,
-        triggers=("appointment_offset", "patient_status_changed"),
+        triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("created_machine_name"),
     ),
     MergeFieldSpec(
@@ -804,6 +823,39 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         channels=ALL_CHANNELS,
         triggers=("sms_reply",),
         resolve=_context_field("inbound_sms_message_id"),
+    ),
+    # Email counterparts. The inbound-email resume path writes these two keys
+    # into run context (`tasks/inbound_email.py`), so they are what an
+    # email-reply workflow can actually address. The message body is not
+    # exposed: unlike an SMS reply it can be arbitrarily long and quote prior
+    # correspondence, so it is not a safe merge value for outbound copy.
+    MergeFieldSpec(
+        name="email_reply_intent",
+        label="Email reply intent",
+        description="The classifier result for the inbound patient email.",
+        sample="reschedule_request",
+        group="email_reply",
+        source="context",
+        availability="required_context",
+        requires=("email_reply_intent",),
+        phi_level="none",
+        channels=ALL_CHANNELS,
+        triggers=("email_reply",),
+        resolve=_context_field("email_reply_intent"),
+    ),
+    MergeFieldSpec(
+        name="email_reply_message_id",
+        label="Inbound email message ID",
+        description="The internal inbound email record id.",
+        sample="inbound-email-1",
+        group="email_reply",
+        source="context",
+        availability="required_context",
+        requires=("email_reply_message_id",),
+        phi_level="none",
+        channels=ALL_CHANNELS,
+        triggers=("email_reply",),
+        resolve=_context_field("email_reply_message_id"),
     ),
 )
 

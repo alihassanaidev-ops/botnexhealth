@@ -124,47 +124,51 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
         switch (node.type) {
             case "wait": {
                 refError(node, node.next_node_id, "Wait step")
-                if (node.wait_for.type === "sms_reply") {
-                    const windowSeconds = node.wait_for.response_window_seconds ?? 259200
+                const waitFor = node.wait_for
+                if (waitFor.type === "sms_reply" || waitFor.type === "email_reply") {
+                    const isSms = waitFor.type === "sms_reply"
+                    const channel = isSms ? "SMS" : "Email"
+                    const windowSeconds =
+                        waitFor.response_window_seconds ?? (isSms ? 259200 : 604800)
                     if (!Number.isFinite(windowSeconds) || windowSeconds < 60 || windowSeconds > 2592000) {
                         issues.push({
                             node_id: node.id,
                             severity: "error",
-                            message: "SMS reply response window must be between 60 seconds and 30 days.",
+                            message: `${channel} reply response window must be between 60 seconds and 30 days.`,
                         })
                     }
-                    for (const mapping of node.wait_for.response_mappings ?? []) {
+                    for (const mapping of waitFor.response_mappings ?? []) {
                         if (!mapping.tokens?.length) {
                             issues.push({
                                 node_id: node.id,
                                 severity: "warning",
-                                message: "SMS response mapping has no tokens.",
+                                message: `${channel} response mapping has no tokens.`,
                             })
                         }
                     }
-                } else if (node.wait_for.delay.delay_type === "duration") {
-                    if (node.wait_for.delay.duration_seconds < 0) {
+                } else if (waitFor.delay.delay_type === "duration") {
+                    if (waitFor.delay.duration_seconds < 0) {
                         issues.push({
                             node_id: node.id,
                             severity: "error",
                             message: "Wait duration cannot be negative.",
                         })
-                    } else if (node.wait_for.delay.duration_seconds === 0) {
+                    } else if (waitFor.delay.duration_seconds === 0) {
                         issues.push({
                             node_id: node.id,
                             severity: "warning",
                             message: "Wait duration is zero — the step will not pause.",
                         })
                     }
-                } else if (node.wait_for.delay.delay_type === "calendar" && !HHMM_RE.test(node.wait_for.delay.time_of_day)) {
+                } else if (waitFor.delay.delay_type === "calendar" && !HHMM_RE.test(waitFor.delay.time_of_day)) {
                     issues.push({
                         node_id: node.id,
                         severity: "error",
-                        message: `Send time "${node.wait_for.delay.time_of_day}" is not a valid HH:MM time.`,
+                        message: `Send time "${waitFor.delay.time_of_day}" is not a valid HH:MM time.`,
                     })
                 } else if (
-                    node.wait_for.delay.delay_type === "appointment_relative" &&
-                    !Number.isFinite(node.wait_for.delay.offset_seconds)
+                    waitFor.delay.delay_type === "appointment_relative" &&
+                    !Number.isFinite(waitFor.delay.offset_seconds)
                 ) {
                     issues.push({
                         node_id: node.id,

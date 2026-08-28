@@ -377,10 +377,45 @@ available.
 
 Current schema version `1.0` supports triggers such as `appointment_offset`,
 `appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
-`callback_requested`, `patient_status_changed`, and `sms_reply`; node types
-include `wait`, `drip`, `send_sms`, `send_voice`, `send_email`,
-`retell_sms_conversation`, `update_patient_status`,
+`callback_requested`, `patient_status_changed`, `sms_reply`, and `email_reply`;
+node types include `wait`, `drip`, `send_sms`, `send_voice`, `send_email`,
+`retell_sms_conversation`, `update_patient_status`, `update_appointment`,
 `update_gotracker_appointment`, `json_mapper`, `llm`, `condition`, and `exit`.
+
+Two of those triggers are accepted by the schema but are **not offered in the
+builder**, because nothing enrols from them yet: `bulk_import` has no import
+route, and `email_reply` has no trigger service. (The email *wait* node is fully
+wired and is a separate feature.) `update_gotracker_appointment` is likewise kept
+for already-published definitions but removed from the palette — new workflows
+should use the PMS-neutral `update_appointment`. The excluded set lives in
+`UNAVAILABLE_TRIGGER_TYPES` in `nexus-dashboard-web/src/lib/workflow/catalog.ts`,
+and `tests/unit/test_workflow_schema_frontend_parity.py` fails if the builder's
+TypeScript model drifts from `definition_schema.py` in either direction.
+
+### Trigger location scoping
+
+Trigger matching is location-scoped through
+`src/app/services/automation/trigger_lookup.py`, which every trigger service uses:
+a workflow with `location_id IS NULL` is institution-wide and matches any
+location, and a workflow bound to a location matches only that location (an event
+whose location cannot be resolved therefore matches institution-wide workflows
+only). This applies to the appointment-offset, appointment-state, recall,
+callback, patient-status and SMS-reply paths, and to the recall scanner's
+per-location loop. Before this was centralised, only the SMS reply path honoured
+it, so an event at one location could enrol a workflow belonging to another
+location in the same institution and contact the patient with the wrong clinic's
+voice profile, sending number and hours.
+
+### PMS appointment status catalog
+
+GoTracker's appointment dispositions are defined once in
+`src/app/pms/gotracker/statuses.py` — id, stable key, label, PMS-neutral
+`semantics`, and whether Nexus may write the disposition back. The catalog is
+served at `GET /automation/workflows/pms-appointment-statuses` and consumed by the
+builder, so labels are not duplicated in the frontend. `NON_ATTENDING_STATUS_IDS`
+and the webhook route's status labelling both derive from it. Note that the
+`writable` flag is not yet verified against the installed Synchronizer build and
+currently reports every status as writable, which preserves prior behaviour.
 
 `send_sms` is run-scoped and only sends the message. The node does **not** carry
 an arbitrary recipient number; it sends to the workflow run's `Contact.phone`

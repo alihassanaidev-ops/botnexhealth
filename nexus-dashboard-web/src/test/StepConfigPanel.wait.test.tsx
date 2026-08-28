@@ -79,6 +79,31 @@ describe("StepConfigPanel appointment-relative wait", () => {
         )
     })
 
+    it("switches the same Wait node to email reply mode", async () => {
+        // The backend has executed email-reply waits end-to-end for a while, but
+        // the mode was absent from the TypeScript union so the builder could not
+        // reach it.
+        const user = userEvent.setup()
+        const onNodeChange = vi.fn()
+
+        render(<WaitPanelHarness onNodeChange={onNodeChange} />)
+
+        await user.click(screen.getAllByRole("combobox")[0])
+        await user.click(await screen.findByRole("option", { name: "Email reply" }))
+
+        expect(onNodeChange).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                type: "wait",
+                id: "wait-1",
+                wait_for: expect.objectContaining({
+                    type: "email_reply",
+                    // A week, not SMS's three days.
+                    response_window_seconds: 604800,
+                }),
+            }),
+        )
+    })
+
     it("edits deterministic SMS replies without exposing response mapping JSON", async () => {
         const user = userEvent.setup()
         const onNodeChange = vi.fn()

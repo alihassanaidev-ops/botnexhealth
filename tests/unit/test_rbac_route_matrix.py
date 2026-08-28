@@ -311,6 +311,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "PATCH /api/compliance/quiet-hours/exceptions/{exception_id}",
         "DELETE /api/compliance/quiet-hours/exceptions/{exception_id}",
         "GET /api/automation/workflows/node-capabilities",
+        "GET /api/automation/workflows/pms-appointment-statuses",
         "POST /api/automation/workflows",
         "POST /api/automation/workflows/draft",
         "GET /api/automation/workflows",
