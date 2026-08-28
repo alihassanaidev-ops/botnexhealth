@@ -110,11 +110,17 @@ function smartEdge(edge: Omit<FlowEdge, "type"> & { type?: FlowEdge["type"] }): 
     const handle = edge.sourceHandle
     const isFalse = handle === "false"
     const isTrue = handle === "true"
-    const isBranch = isFalse || isTrue
+    const caseIndex = switchCaseIndex(handle ?? undefined)
+    const isDefault = handle === SWITCH_DEFAULT_HANDLE
+    const isBranch = isFalse || isTrue || caseIndex !== null || isDefault
+    // Stagger branch offsets so a switch with several ports does not draw its
+    // edges on top of one another.
+    const branchOffset =
+        caseIndex !== null ? 20 + caseIndex * 6 : isDefault ? 34 : isFalse ? 30 : 22
     return {
         type: "step",
         pathOptions: {
-            offset: isBranch ? (isFalse ? 30 : 22) : 14,
+            offset: isBranch ? branchOffset : 14,
         },
         interactionWidth: 18,
         style: EDGE_STYLE,
@@ -132,11 +138,29 @@ function smartEdge(edge: Omit<FlowEdge, "type"> & { type?: FlowEdge["type"] }): 
 // ---------------------------------------------------------------------------
 interface Outgoing {
     targetId: string
-    handle?: "true" | "false"
+    /**
+     * Source handle id. `true`/`false` for a condition; `case-<n>` / `default`
+     * for a switch, whose port count varies with the authored cases.
+     */
+    handle?: string
     label?: string
 }
 
 /** The forward pointer(s) a node declares (empty targets included so danglers show). */
+export const SWITCH_DEFAULT_HANDLE = "default"
+
+/** Stable source-handle id for the nth switch case. */
+export function switchCaseHandle(index: number): string {
+    return `case-${index}`
+}
+
+/** The case index a switch handle refers to, or null for the default port. */
+export function switchCaseIndex(handle: string | undefined): number | null {
+    if (!handle || !handle.startsWith("case-")) return null
+    const index = Number(handle.slice("case-".length))
+    return Number.isInteger(index) && index >= 0 ? index : null
+}
+
 export function outgoing(node: WorkflowNode): Outgoing[] {
     switch (node.type) {
         case "wait":
@@ -157,6 +181,16 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
             return [
                 { targetId: node.true_next_node_id, handle: "true", label: "Yes" },
                 { targetId: node.false_next_node_id, handle: "false", label: "No" },
+            ]
+        case "switch":
+            return [
+                ...node.cases.map((c, index) => ({
+                    targetId: c.next_node_id,
+                    // Index, not label, so renaming a case does not orphan its edge.
+                    handle: switchCaseHandle(index),
+                    label: c.label,
+                })),
+                { targetId: node.default_next_node_id, handle: SWITCH_DEFAULT_HANDLE, label: "Otherwise" },
             ]
         case "exit":
             return []
@@ -313,7 +347,8 @@ export function definitionToFlow(def: WorkflowDefinition): {
 // ---------------------------------------------------------------------------
 interface ParentRef {
     parentId: string
-    handle?: "true" | "false"
+    /** Matches `Outgoing.handle`: condition ports plus variable switch ports. */
+    handle?: string
 }
 
 function allGraphIds(def: WorkflowDefinition): string[] {
@@ -440,6 +475,20 @@ export function genId(type: NodeType, existing: Iterable<string>): string {
 
 export function createNode(type: NodeType, id: string): WorkflowNode {
     switch (type) {
+        case "switch":
+            return {
+                type,
+                id,
+                subject: "",
+                cases: [
+                    {
+                        label: "Case 1",
+                        filter: { kind: "rule", field: "", op: "eq", value: "" },
+                        next_node_id: "",
+                    },
+                ],
+                default_next_node_id: "",
+            }
         case "wait":
             return {
                 type,
@@ -745,6 +794,15 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
         .filter((n) => n.id !== id)
         .map((n): WorkflowNode => {
             switch (n.type) {
+                case "switch":
+                    return {
+                        ...n,
+                        cases: n.cases.map((c) => ({
+                            ...c,
+                            next_node_id: repoint(c.next_node_id),
+                        })),
+                        default_next_node_id: repoint(n.default_next_node_id),
+                    }
                 case "wait":
                 case "drip":
                 case "send_sms":
@@ -793,12 +851,25 @@ export function connectNodes(
     def: WorkflowDefinition,
     sourceId: string,
     targetId: string,
-    handle?: "true" | "false",
+    handle?: string,
 ): WorkflowDefinition {
     if (sourceId === TRIGGER_NODE_ID) return setEntry(def, targetId)
     const node = def.nodes.find((n) => n.id === sourceId)
     if (!node) return def
     switch (node.type) {
+        case "switch": {
+            const caseIndex = switchCaseIndex(handle)
+            const updated: WorkflowNode =
+                caseIndex !== null && caseIndex < node.cases.length
+                    ? {
+                        ...node,
+                        cases: node.cases.map((c, index) =>
+                            index === caseIndex ? { ...c, next_node_id: targetId } : c,
+                        ),
+                    }
+                    : { ...node, default_next_node_id: targetId }
+            return { ...def, nodes: def.nodes.map((n) => (n.id === sourceId ? updated : n)) }
+        }
         case "wait":
         case "drip":
         case "send_sms":

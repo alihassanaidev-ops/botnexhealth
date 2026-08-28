@@ -395,7 +395,7 @@ describe("workflow graph — voice outcome branch helper", () => {
         expect(VOICE_OUTCOME_BRANCH_VALUES).toContain("booked")
         expect(voice?.type === "send_voice" && voice.wait_for_outcome).toBe(true)
         expect(voice?.type === "send_voice" && voice.next_node_id).toBe(condition?.id)
-        expect(condition?.type === "condition" && condition.rules[0]).toMatchObject({
+        expect(condition?.type === "condition" && condition.rules?.[0]).toMatchObject({
             field: "call_outcome",
             op: "eq",
             value: "booked",

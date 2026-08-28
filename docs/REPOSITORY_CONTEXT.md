@@ -380,7 +380,8 @@ Current schema version `1.0` supports triggers such as `appointment_offset`,
 `callback_requested`, `patient_status_changed`, `sms_reply`, and `email_reply`;
 node types include `wait`, `drip`, `send_sms`, `send_voice`, `send_email`,
 `retell_sms_conversation`, `update_patient_status`, `update_appointment`,
-`update_gotracker_appointment`, `json_mapper`, `llm`, `condition`, and `exit`.
+`update_gotracker_appointment`, `json_mapper`, `llm`, `condition`, `switch`, and
+`exit`.
 
 Two of those triggers are accepted by the schema but are **not offered in the
 builder**, because nothing enrols from them yet: `bulk_import` has no import
@@ -391,6 +392,53 @@ should use the PMS-neutral `update_appointment`. The excluded set lives in
 `UNAVAILABLE_TRIGGER_TYPES` in `nexus-dashboard-web/src/lib/workflow/catalog.ts`,
 and `tests/unit/test_workflow_schema_frontend_parity.py` fails if the builder's
 TypeScript model drifts from `definition_schema.py` in either direction.
+
+### Filter expressions
+
+`src/app/services/automation/filter_expression.py` defines one nested boolean
+filter language shared by trigger eligibility, condition nodes and switch cases.
+An expression is a tree of `{kind: "group", op: and|or|not, children}` and
+`{kind: "rule", field, op, value}`, with roughly thirty operators covering
+equality, membership, text, numeric comparison, relative time (`before`,
+`after`, `within`, `older_than`), presence, arrays, and field-to-field
+comparison. The builder renders it with one recursive component
+(`components/workflow/FilterEditor.tsx`), so a new operator is added in
+`filter-ops.ts` once rather than in each screen.
+
+Two evaluation rules matter. Comparisons coerce across wire types, because
+webhook context delivers numbers as strings and datetimes as ISO text; a value
+that cannot be coerced yields `False` rather than raising, so a bad filter never
+aborts a run. And a missing field never matches anything except the presence
+operators, so "the data never arrived" cannot read as "the value did not match".
+Date-only values and naive datetimes resolve in the location timezone.
+
+The legacy `ConditionNode` shape (`logic` + `rules`) is deliberately **not**
+up-converted. Its equality is exact where the DSL coerces, so rewriting
+published rules could change how a live campaign branches; old definitions keep
+the original evaluator and the builder offers an explicit opt-in conversion.
+
+### Multi-way branching
+
+The `switch` node routes to the first of up to twenty labelled cases whose
+filter matches, falling back to a required `default_next_node_id`. Its ports are
+variable-count, which `node_registry.py` now models through `outgoing_list_fields`
+— graph validation reports a mis-wired branch as `cases[2].next_node_id` rather
+than blaming the node as a whole.
+
+### Trigger eligibility filters
+
+Every trigger accepts an optional `filter`, evaluated against the event context
+*before* a run is created (`services/automation/trigger_filter.py`). Deciding
+eligibility there rather than in an opening condition node is what stops
+ineligible subjects writing a run, a step execution and analytics rows only to
+exit at node one; `trigger_appointment_workflows` reports the saving as
+`skipped_filter`. A filter that cannot be evaluated is treated as not matching,
+because the safe direction on malformed input is to contact fewer people.
+
+The surgery pre-appointment template uses both: its eligibility moved onto the
+trigger, and each call attempt's six chained conditions became one switch on
+`call_outcome`. The definition went from 48 nodes to 31, and from 22 condition
+nodes to 3.
 
 ### Trigger location scoping
 
