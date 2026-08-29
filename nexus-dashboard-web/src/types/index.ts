@@ -368,6 +368,7 @@ export interface CallRecord {
     scrubbed_summary?: string | null;
     patient_sentiment: string | null;
     next_action: string | null;
+    requested_availability?: string | null;
     /** Appointment type booked during the call, if any. */
     booked_appointment_type_name?: string | null;
     is_new_patient: boolean;
@@ -376,6 +377,7 @@ export interface CallRecord {
     call_date: string | null;
     call_time: string | null;
     call_duration_seconds: number | null;
+    disconnection_reason?: string | null;
     callback_resolved: boolean;
     created_at: string;
     contact: ContactSummary | null;
@@ -618,6 +620,9 @@ export interface RangeMetrics {
     end_date: string;
     total_calls: number;
     appointments_booked: number;
+    needs_booking?: number;
+    needs_callback?: number;
+    emergency?: number;
     new_patients: number;
     booking_rate: number;
     avg_call_duration_seconds: number;
@@ -629,6 +634,9 @@ export interface DashboardSummary {
     callback_queue: CallbackQueueItem[];
     as_of: string;
     appointments_booked_month?: number;
+    needs_booking_month?: number;
+    needs_callback_month?: number;
+    emergency_month?: number;
     new_patients_month?: number;
     booking_rate_month?: number;
     avg_call_duration_seconds?: number;

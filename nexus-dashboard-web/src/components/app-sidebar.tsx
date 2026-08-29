@@ -280,11 +280,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const location = useLocation();
 
     const isAdmin = user?.role === "SUPER_ADMIN";
+    const isNoPmsLocationAdmin = user?.role === "LOCATION_ADMIN" && !hasPms;
     const isInstitution =
         user?.role === "INSTITUTION_ADMIN" ||
         user?.role === "LOCATION_ADMIN" ||
         user?.role === "STAFF";
-    const mainNav = isAdmin
+    const roleMainNav = isAdmin
         ? adminNav
         : user?.role === "INSTITUTION_ADMIN"
             ? institutionAdminNav
@@ -293,6 +294,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 : user?.role === "LOCATION_ADMIN"
                     ? locationAdminNav
                     : staffNav;
+    const mainNav = isNoPmsLocationAdmin
+        ? roleMainNav.filter((item) => item.url !== "/institution-admin/appointment-sync")
+        : roleMainNav;
     const pmsSetupNav = pmsType === "gotracker"
         ? navSetup
         : navSetup.filter((item) => item.url !== "/setup/reasons")
@@ -384,17 +388,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname === "/institution-admin/email-templates"}
                                     />
                                 )}
-                                {/* Every role reaches the inbox; the API narrows what each
-                                    one sees, and gives group admins figures rather than
-                                    patient conversations. */}
-                                <NavItem
-                                    item={{
-                                        title: "Inbox",
-                                        url: "/inbox",
-                                        icon: InboxIcon,
-                                    }}
-                                    isActive={location.pathname.startsWith("/inbox")}
-                                />
+                                {!isNoPmsLocationAdmin && (
+                                    <NavItem
+                                        item={{
+                                            title: "Inbox",
+                                            url: "/inbox",
+                                            icon: InboxIcon,
+                                        }}
+                                        isActive={location.pathname.startsWith("/inbox")}
+                                    />
+                                )}
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{

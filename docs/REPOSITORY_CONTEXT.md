@@ -256,7 +256,9 @@ binding is strictly **1 Retell agent ↔ 1 InstitutionLocation**.
 After the call, Retell posts a `call_analyzed` webhook → the request thread only
 verifies the signature, claims an idempotency row, and enqueues a Celery task
 (<100 ms response). The worker runs the post-call pipeline. Full lifecycle is in
-ARCHITECTURE.md §Call lifecycle.
+ARCHITECTURE.md §Call lifecycle. The persisted `Call` row includes Retell's
+top-level `disconnection_reason` and no-PMS requested availability; configured
+call custom fields can also source values from Retell `custom_analysis_data`.
 
 ### 4.4 Appointment booking flow (voice-agent orchestration)
 

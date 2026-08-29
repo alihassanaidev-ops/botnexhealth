@@ -68,6 +68,7 @@ class CallRecord(BaseModel):
     scrubbed_summary: str | None = None
     patient_sentiment: str | None
     next_action: str | None
+    requested_availability: str | None = None
     is_new_patient: bool
     is_complaint: bool
     is_insurance_billing: bool
@@ -76,6 +77,7 @@ class CallRecord(BaseModel):
     call_date: date | None
     call_time: str | None
     call_duration_seconds: int | None
+    disconnection_reason: str | None = None
     callback_resolved: bool
     created_at: str
     contact: ContactSummary | None
@@ -230,6 +232,7 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         scrubbed_summary=mask_brackets(getattr(call, "scrubbed_summary", None)),
         patient_sentiment=call.patient_sentiment,
         next_action=call.next_action,
+        requested_availability=call.requested_availability,
         is_new_patient=call.is_new_patient,
         is_complaint=call.is_complaint,
         is_insurance_billing=call.is_insurance_billing,
@@ -237,6 +240,7 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         call_date=call.call_date,
         call_time=str(call.call_time) if call.call_time else None,
         call_duration_seconds=call.call_duration_seconds,
+        disconnection_reason=call.disconnection_reason,
         callback_resolved=call.callback_resolved,
         created_at=call.created_at.isoformat(),
         contact=contact_out,

@@ -5,6 +5,7 @@ import DashboardWrapper from "./components/DashboardWrapper";
 import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
 import PmsGuard from "./components/PmsGuard";
+import NoPmsLocationAdminGuard from "./components/NoPmsLocationAdminGuard";
 import AppLayout from "./components/AppLayout";
 import RouteError from "./components/RouteError";
 import BrandLoader from "@/components/BrandLoader";
@@ -157,7 +158,7 @@ export const router = createBrowserRouter([
                         path: "inbox",
                         element: (
                             <RoleGuard allowed={["SUPER_ADMIN", "GROUP_ADMIN", "INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <S><Inbox /></S>
+                                <NoPmsLocationAdminGuard><S><Inbox /></S></NoPmsLocationAdminGuard>
                             </RoleGuard>
                         ),
                     },

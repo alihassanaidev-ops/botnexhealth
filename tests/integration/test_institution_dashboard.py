@@ -218,12 +218,18 @@ async def test_get_dashboard_summary_combines_rollup_and_today_live(async_client
             all_time_total=41,
             new_patients_month=2,
             appointments_booked_month=4,
+            needs_booking_month=3,
+            needs_callback_month=2,
+            emergency_month=1,
             all_time_duration=4100,  # 100s avg × 41 calls
         )
 
         # Today's live KPI components (1 booked, 1 new, 360s of talk time).
         today_kpi_row_result = _row_result(
             today_appointments_booked=1,
+            today_needs_booking=1,
+            today_needs_callback=0,
+            today_emergency=1,
             today_new_patients=1,
             today_duration=360,
         )
@@ -244,8 +250,13 @@ async def test_get_dashboard_summary_combines_rollup_and_today_live(async_client
                     call_duration_seconds=120,
                     summary="Follow up about insurance",
                     next_action="Call back this afternoon",
+                    booked_appointment_type_name=None,
                 ),
-                SimpleNamespace(full_name="Sarah Loomer"),
+                SimpleNamespace(
+                    full_name="Sarah Loomer",
+                    phone=None,
+                    phone_encrypted=None,
+                ),
             ),
         ]
 
@@ -275,6 +286,9 @@ async def test_get_dashboard_summary_combines_rollup_and_today_live(async_client
     assert payload["tag_counts"][0]["tag"] == "appointment_booked"
     # KPI cards: rollup + today overlay, scoped by extra_conditions.
     assert payload["appointments_booked_month"] == 5    # 4 rollup + 1 today
+    assert payload["needs_booking_month"] == 4           # 3 rollup + 1 today
+    assert payload["needs_callback_month"] == 2          # 2 rollup + 0 today
+    assert payload["emergency_month"] == 2               # 1 rollup + 1 today
     assert payload["new_patients_month"] == 3            # 2 rollup + 1 today
     assert payload["booking_rate_month"] == round(5 / 14 * 100, 2)
     # avg = (4100 rollup + 360 today) / 44 all-time calls
@@ -288,6 +302,9 @@ async def test_get_dashboard_summary_combines_rollup_and_today_live(async_client
             "call_duration_seconds": 120,
             "summary": "Follow up about insurance",
             "next_action": "Call back this afternoon",
+            "booked_appointment_type_name": None,
+            "phone_masked": None,
+            "phone_reveal_available": False,
         }
     ]
     assert mock_session.execute.await_count == 5
@@ -345,10 +362,16 @@ async def test_summary_scopes_staff_by_call_location_id_not_agent_used(
             all_time_total=9,
             new_patients_month=0,
             appointments_booked_month=0,
+            needs_booking_month=0,
+            needs_callback_month=0,
+            emergency_month=0,
             all_time_duration=0,
         )
         today_kpi_row_result = _row_result(
             today_appointments_booked=0,
+            today_needs_booking=0,
+            today_needs_callback=0,
+            today_emergency=0,
             today_new_patients=0,
             today_duration=0,
         )
@@ -537,10 +560,14 @@ async def test_summary_tag_counts_scoped_to_month_to_date(async_client: AsyncCli
         today_count_result.scalar_one.return_value = 0
         rollup_volume = _row_result(
             week_total=0, month_total=0, all_time_total=0,
-            new_patients_month=0, appointments_booked_month=0, all_time_duration=0,
+            new_patients_month=0, appointments_booked_month=0,
+            needs_booking_month=0, needs_callback_month=0, emergency_month=0,
+            all_time_duration=0,
         )
         today_kpi = _row_result(
-            today_appointments_booked=0, today_new_patients=0, today_duration=0,
+            today_appointments_booked=0, today_needs_booking=0,
+            today_needs_callback=0, today_emergency=0,
+            today_new_patients=0, today_duration=0,
         )
         tag_rows_result = MagicMock()
         tag_rows_result.all.return_value = []
