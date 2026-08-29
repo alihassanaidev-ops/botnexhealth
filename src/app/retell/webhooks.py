@@ -107,6 +107,68 @@ def _nopms_applicable_alerts(db_call) -> list[str]:  # noqa: ANN001
 
 
 
+async def _queue_nopms_staff_sms(session, *, institution, location, db_call) -> int:  # noqa: ANN001
+    """Fan the staff SMS alerts out to their subscribers. Returns the count queued.
+
+    Runs on ``call_analyzed`` rather than ``call_ended`` because the alert set
+    is derived from ``call_status`` / ``call_tags``, and those are written by
+    the post-call pipeline this event drives. On ``call_ended`` the Call row
+    does not exist yet, so every alert was silently skipped.
+    """
+    if institution.has_pms or location is None or not location.twilio_from_number:
+        return 0
+
+    from src.app.services.sms_notification_recipients import (
+        resolve_sms_notification_recipients,
+    )
+    from src.app.services.sms_template_service import SmsTemplateService
+    from src.app.tasks.sms import enqueue_auto_sms
+
+    alert_vars = _nopms_alert_variables(location_name=location.name, db_call=db_call)
+    sms_svc = SmsTemplateService(session)
+    queued = 0
+
+    for alert_type in _nopms_applicable_alerts(db_call):
+        subscribed = await resolve_sms_notification_recipients(
+            session,
+            institution_id=str(institution.id),
+            notification_type=alert_type,
+            location_id=str(location.id),
+        )
+        if not subscribed:
+            continue
+        # Staff alert wording is an editable template, same as the staff
+        # emails. An inactive template mutes that alert without unsubscribing
+        # anyone.
+        alert_template = await sms_svc.get_template_by_type(institution.id, alert_type)
+        if not alert_template or not alert_template.is_active:
+            logger.info(
+                "Staff SMS skipped, template inactive: type=%s institution_hash=%s",
+                alert_type,
+                hash_for_logging(str(institution.id)),
+            )
+            continue
+        body = SmsTemplateService.render(alert_template.body, alert_vars)
+        for phone in subscribed:
+            enqueue_auto_sms(
+                from_number=location.twilio_from_number,
+                to_number=phone,
+                body=body,
+                institution_location_id=str(location.id),
+                patient_contact_id=None,
+                call_id=str(db_call.id),
+            )
+            queued += 1
+
+    logger.info(
+        "Staff SMS alerts queued: call_hash=%s location_hash=%s queued=%d",
+        hash_for_logging(str(db_call.id)),
+        hash_for_logging(str(location.id)),
+        queued,
+    )
+    return queued
+
+
 # ============================================================================
 # Pydantic Models for Retell call_analyzed webhook
 # ============================================================================
@@ -457,8 +519,6 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
     body: str | None = None
     patient_phone: str | None = None
     db_call_for_sms = None
-    # (phone, body) pairs — one per subscribed recipient per applicable alert.
-    staff_sms_sends: list[tuple[str, str]] = []
     skip_reason: str | None = None
 
     try:
@@ -485,43 +545,6 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
                         )
                     )
                 ).scalar_one_or_none()
-                # Staff alerts fan out independently of the patient
-                # acknowledgement: a recipient receives an alert type only if
-                # subscribed to it, and each type has its own trigger.
-                if db_call is not None and location.twilio_from_number:
-                    db_call_for_sms = db_call
-                    from src.app.services.sms_notification_recipients import (
-                        resolve_sms_notification_recipients,
-                    )
-
-                    alert_vars = _nopms_alert_variables(
-                        location_name=location.name, db_call=db_call
-                    )
-                    sms_svc = SmsTemplateService(session)
-                    for alert_type in _nopms_applicable_alerts(db_call):
-                        subscribed = await resolve_sms_notification_recipients(
-                            session,
-                            institution_id=str(institution.id),
-                            notification_type=alert_type,
-                            location_id=str(location.id),
-                        )
-                        if not subscribed:
-                            continue
-                        # Staff alert wording is an editable template, same as
-                        # the staff emails. An inactive template mutes that
-                        # alert without unsubscribing anyone.
-                        alert_template = await sms_svc.get_template_by_type(
-                            institution.id, alert_type
-                        )
-                        if not alert_template or not alert_template.is_active:
-                            continue
-                        alert_body = SmsTemplateService.render(
-                            alert_template.body, alert_vars
-                        )
-                        staff_sms_sends.extend(
-                            (phone, alert_body) for phone in subscribed
-                        )
-
                 if (
                     db_call is None
                     or (db_call.call_status or "") != CallStatus.NEEDS_BOOKING.value
@@ -652,7 +675,6 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
         from src.app.tasks.sms import enqueue_auto_sms
 
         queued_patient = False
-        queued_staff = 0
         if body and patient_phone and not skip_reason:
             enqueue_auto_sms(
                 from_number=location.twilio_from_number,  # type: ignore[arg-type]
@@ -672,28 +694,15 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
             )
             queued_patient = True
 
-        if not institution.has_pms and staff_sms_sends:
-            for recipient, body_text in staff_sms_sends:
-                enqueue_auto_sms(
-                    from_number=location.twilio_from_number,  # type: ignore[arg-type]
-                    to_number=recipient,
-                    body=body_text,
-                    institution_location_id=str(location.id),
-                    patient_contact_id=None,
-                    call_id=(
-                        str(db_call_for_sms.id)
-                        if db_call_for_sms is not None
-                        else None
-                    ),
-                )
-                queued_staff += 1
     except Exception as exc:
         await _finish(
             "FAILED", institution_id=str(institution.id), error=safe_error_summary(exc)
         )
         raise
 
-    if not queued_patient and queued_staff == 0:
+    # Staff alerts are dispatched from call_analyzed, so this only reports
+    # the patient acknowledgement.
+    if not queued_patient:
         await _finish("COMPLETED", institution_id=str(institution.id))
         logger.info(
             "call_ended confirmation SMS skipped: call_hash=%s reason=%s",
@@ -704,11 +713,10 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
 
     await _finish("COMPLETED", institution_id=str(institution.id))
     logger.info(
-        "call_ended confirmation SMS enqueued: call_hash=%s to_hash=%s location_hash=%s staff_recipients=%d",
+        "call_ended confirmation SMS enqueued: call_hash=%s to_hash=%s location_hash=%s",
         hash_for_logging(call_id),
         hash_for_logging(patient_phone),
         hash_for_logging(str(location.id)),
-        queued_staff,
     )
     return {"status": "queued", "call_id": hash_for_logging(call_id)}
 
@@ -999,6 +1007,22 @@ async def process_retell_call_analyzed_event(
                     "Failed to enqueue call email notification: call_hash=%s error=%s",
                     hash_for_logging(event.call.call_id),
                     safe_error_summary(email_enqueue_err),
+                )
+
+            # ── Staff SMS alerts: same lifecycle point as the staff email,
+            #    so the call classification they key off is already written. ──
+            try:
+                await _queue_nopms_staff_sms(
+                    session,
+                    institution=institution,
+                    location=location,
+                    db_call=saved_call,
+                )
+            except Exception as sms_enqueue_err:
+                logger.error(
+                    "Failed to enqueue staff SMS alerts: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(sms_enqueue_err),
                 )
 
             # ── In-app notification: enqueue after DB commit (durable via Celery) ──

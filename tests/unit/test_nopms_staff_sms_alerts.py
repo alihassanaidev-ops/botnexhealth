@@ -106,3 +106,42 @@ class TestVariablesCarryNoPhi:
 
     def test_unknown_duration_does_not_render_zero(self):
         assert variables(call_duration_seconds=None)["duration"] == "unknown"
+
+
+class TestDispatchLifecycle:
+    """Staff alerts must run on ``call_analyzed``, not ``call_ended``.
+
+    The alert set is derived from ``call_status`` / ``call_tags``, and those are
+    written by the post-call pipeline that ``call_analyzed`` drives. Retell
+    delivers ``call_ended`` first — with the Call row not yet created — so
+    dispatching there skipped every alert silently.
+    """
+
+    def test_dispatch_helper_is_called_from_the_analyzed_pipeline(self):
+        import inspect
+
+        from src.app.retell import webhooks
+
+        source = inspect.getsource(webhooks.process_retell_call_analyzed_event)
+        assert "_queue_nopms_staff_sms" in source
+
+    def test_call_ended_no_longer_dispatches_staff_alerts(self):
+        import inspect
+
+        from src.app.retell import webhooks
+
+        source = inspect.getsource(webhooks)
+        ended = source[source.index("async def process_retell_call_ended_event"):]
+        ended = ended[: ended.index("async def process_retell_call_analyzed_event")] \
+            if "async def process_retell_call_analyzed_event" in ended else ended
+        assert "_queue_nopms_staff_sms" not in ended
+
+    def test_helper_short_circuits_for_pms_tenants(self):
+        """Every change in this area is no-PMS only."""
+        import inspect
+
+        from src.app.retell.webhooks import _queue_nopms_staff_sms
+
+        source = inspect.getsource(_queue_nopms_staff_sms)
+        assert "institution.has_pms" in source
+        assert "return 0" in source
