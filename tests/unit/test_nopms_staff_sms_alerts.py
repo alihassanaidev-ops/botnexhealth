@@ -123,7 +123,7 @@ class TestDispatchLifecycle:
         from src.app.retell import webhooks
 
         source = inspect.getsource(webhooks.process_retell_call_analyzed_event)
-        assert "_queue_nopms_staff_sms" in source
+        assert "_resolve_nopms_staff_sms" in source
 
     def test_call_ended_no_longer_dispatches_staff_alerts(self):
         import inspect
@@ -134,14 +134,49 @@ class TestDispatchLifecycle:
         ended = source[source.index("async def process_retell_call_ended_event"):]
         ended = ended[: ended.index("async def process_retell_call_analyzed_event")] \
             if "async def process_retell_call_analyzed_event" in ended else ended
-        assert "_queue_nopms_staff_sms" not in ended
+        assert "_resolve_nopms_staff_sms" not in ended
 
     def test_helper_short_circuits_for_pms_tenants(self):
         """Every change in this area is no-PMS only."""
         import inspect
 
-        from src.app.retell.webhooks import _queue_nopms_staff_sms
+        from src.app.retell.webhooks import _resolve_nopms_staff_sms
 
-        source = inspect.getsource(_queue_nopms_staff_sms)
+        source = inspect.getsource(_resolve_nopms_staff_sms)
         assert "institution.has_pms" in source
-        assert "return 0" in source
+        assert "return []" in source
+
+
+class TestResolvesInsideTransaction:
+    """The RLS context is applied per connection. After ``session.commit()`` a
+    different pooled connection can serve the next query with no context set,
+    and row-level security then hides every recipient — the resolver returns
+    nothing and no alert is sent. So the read must happen before the commit."""
+
+    def test_resolution_precedes_the_commit(self):
+        import inspect
+
+        from src.app.retell import webhooks
+
+        source = inspect.getsource(webhooks.process_retell_call_analyzed_event)
+        resolve_at = source.index("_resolve_nopms_staff_sms(")
+        commit_at = source.index("await session.commit()")
+        assert resolve_at < commit_at, "recipients must be read inside the transaction"
+
+    def test_send_happens_after_the_commit(self):
+        import inspect
+
+        from src.app.retell import webhooks
+
+        source = inspect.getsource(webhooks.process_retell_call_analyzed_event)
+        commit_at = source.index("await session.commit()")
+        send_at = source.index("staff_sms_pending:", commit_at)
+        assert send_at > commit_at, "never text about a call that rolled back"
+
+    def test_resolver_does_not_enqueue(self):
+        """Separation is the whole point — resolving must have no side effect."""
+        import inspect
+
+        from src.app.retell.webhooks import _resolve_nopms_staff_sms
+
+        assert "enqueue_auto_sms" not in inspect.getsource(_resolve_nopms_staff_sms)
