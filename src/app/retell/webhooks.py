@@ -107,26 +107,33 @@ def _nopms_applicable_alerts(db_call) -> list[str]:  # noqa: ANN001
 
 
 
-async def _queue_nopms_staff_sms(session, *, institution, location, db_call) -> int:  # noqa: ANN001
-    """Fan the staff SMS alerts out to their subscribers. Returns the count queued.
+async def _resolve_nopms_staff_sms(
+    session, *, institution, location, db_call
+) -> list[tuple[str, str]]:  # noqa: ANN001
+    """Resolve the staff SMS alerts to send, as ``(phone, body)`` pairs.
+
+    Must be called INSIDE the transaction that owns the RLS context. The
+    context is applied per-connection, so after ``session.commit()`` a
+    different pooled connection can serve the next query with no context set —
+    row-level security then hides every recipient and this silently resolves
+    to nothing. Sending is done by the caller after the commit.
 
     Runs on ``call_analyzed`` rather than ``call_ended`` because the alert set
-    is derived from ``call_status`` / ``call_tags``, and those are written by
-    the post-call pipeline this event drives. On ``call_ended`` the Call row
-    does not exist yet, so every alert was silently skipped.
+    is derived from ``call_status`` / ``call_tags``, which the post-call
+    pipeline behind this event writes; on ``call_ended`` the Call row does not
+    exist yet.
     """
     if institution.has_pms or location is None or not location.twilio_from_number:
-        return 0
+        return []
 
     from src.app.services.sms_notification_recipients import (
         resolve_sms_notification_recipients,
     )
     from src.app.services.sms_template_service import SmsTemplateService
-    from src.app.tasks.sms import enqueue_auto_sms
 
     alert_vars = _nopms_alert_variables(location_name=location.name, db_call=db_call)
     sms_svc = SmsTemplateService(session)
-    queued = 0
+    pending: list[tuple[str, str]] = []
 
     for alert_type in _nopms_applicable_alerts(db_call):
         subscribed = await resolve_sms_notification_recipients(
@@ -149,24 +156,16 @@ async def _queue_nopms_staff_sms(session, *, institution, location, db_call) -> 
             )
             continue
         body = SmsTemplateService.render(alert_template.body, alert_vars)
-        for phone in subscribed:
-            enqueue_auto_sms(
-                from_number=location.twilio_from_number,
-                to_number=phone,
-                body=body,
-                institution_location_id=str(location.id),
-                patient_contact_id=None,
-                call_id=str(db_call.id),
-            )
-            queued += 1
+        pending.extend((phone, body) for phone in subscribed)
 
     logger.info(
-        "Staff SMS alerts queued: call_hash=%s location_hash=%s queued=%d",
+        "Staff SMS alerts resolved: call_hash=%s location_hash=%s alerts=%d recipients=%d",
         hash_for_logging(str(db_call.id)),
         hash_for_logging(str(location.id)),
-        queued,
+        len(_nopms_applicable_alerts(db_call)),
+        len(pending),
     )
-    return queued
+    return pending
 
 
 # ============================================================================
@@ -824,6 +823,22 @@ async def process_retell_call_analyzed_event(
                 )
 
                 # Commit the transaction so contacts and calls are saved!
+                # Resolve inside the transaction — see _resolve_nopms_staff_sms.
+                staff_sms_pending: list[tuple[str, str]] = []
+                try:
+                    staff_sms_pending = await _resolve_nopms_staff_sms(
+                        session,
+                        institution=institution,
+                        location=location,
+                        db_call=saved_call,
+                    )
+                except Exception as sms_resolve_err:
+                    logger.error(
+                        "Failed to resolve staff SMS alerts: call_hash=%s error=%s",
+                        hash_for_logging(event.call.call_id),
+                        safe_error_summary(sms_resolve_err),
+                    )
+
                 await session.commit()
 
             # ── Recording upload: enqueue S3 upload after DB commit ──
@@ -872,15 +887,27 @@ async def process_retell_call_analyzed_event(
                     safe_error_summary(email_enqueue_err),
                 )
 
-            # ── Staff SMS alerts: same lifecycle point as the staff email,
-            #    so the call classification they key off is already written. ──
+            # ── Staff SMS alerts: resolved before the commit (the RLS
+            #    context lives on the connection the transaction holds), sent
+            #    after it, so nothing is texted about a call that rolled back. ──
             try:
-                await _queue_nopms_staff_sms(
-                    session,
-                    institution=institution,
-                    location=location,
-                    db_call=saved_call,
-                )
+                from src.app.tasks.sms import enqueue_auto_sms
+
+                for _phone, _body in staff_sms_pending:
+                    enqueue_auto_sms(
+                        from_number=location.twilio_from_number,
+                        to_number=_phone,
+                        body=_body,
+                        institution_location_id=str(location.id),
+                        patient_contact_id=None,
+                        call_id=str(saved_call.id),
+                    )
+                if staff_sms_pending:
+                    logger.info(
+                        "Staff SMS alerts queued: call_hash=%s queued=%d",
+                        hash_for_logging(event.call.call_id),
+                        len(staff_sms_pending),
+                    )
             except Exception as sms_enqueue_err:
                 logger.error(
                     "Failed to enqueue staff SMS alerts: call_hash=%s error=%s",
