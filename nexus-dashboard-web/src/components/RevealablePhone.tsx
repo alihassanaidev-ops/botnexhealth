@@ -10,6 +10,8 @@ interface RevealablePhoneProps {
     callId: string
     masked: string | null
     available: boolean
+    /** True when `masked` already holds the full number — hides the Reveal link. */
+    revealed?: boolean
     className?: string
     /**
      * Audited reveal call. Defaults to the calls endpoint; the Patients page
@@ -23,7 +25,7 @@ interface RevealablePhoneProps {
  * the audited reveal endpoint and shows the full number. Stops row-click
  * propagation so it works inside clickable table rows.
  */
-export function RevealablePhone({ callId, masked, available, className, revealFn }: RevealablePhoneProps) {
+export function RevealablePhone({ callId, masked, available, revealed = false, className, revealFn }: RevealablePhoneProps) {
     const [full, setFull] = useState<string | null>(null)
     const [loading, setLoading] = useState(false)
 
@@ -49,7 +51,7 @@ export function RevealablePhone({ callId, masked, available, className, revealFn
         <span className={cn("inline-flex items-center gap-1.5", className)}>
             <Phone className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="font-mono tabular-nums">{full ?? masked}</span>
-            {!full && (
+            {!full && !revealed && (
                 <button
                     type="button"
                     onClick={handleReveal}

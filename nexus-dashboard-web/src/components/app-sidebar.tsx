@@ -388,6 +388,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname === "/institution-admin/email-templates"}
                                     />
                                 )}
+                                {/* Patient SMS acknowledgements only exist for
+                                    no-PMS clinics — nothing is booked to confirm. */}
+                                {user?.role === "INSTITUTION_ADMIN" && !hasPms && (
+                                    <NavItem
+                                        item={{
+                                            title: "SMS Templates",
+                                            url: "/institution-admin/sms-templates",
+                                            icon: MessageSquare,
+                                        }}
+                                        isActive={location.pathname === "/institution-admin/sms-templates"}
+                                    />
+                                )}
                                 {!isNoPmsLocationAdmin && (
                                     <NavItem
                                         item={{
@@ -426,6 +438,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     }}
                                     isActive={location.pathname === "/notification-preferences"}
                                 />
+                                {!hasPms && (user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN") && (
+                                    <NavItem
+                                        item={{
+                                            title: "SMS Preferences",
+                                            url: "/sms-preferences",
+                                            icon: MessageSquare,
+                                        }}
+                                        isActive={location.pathname === "/sms-preferences"}
+                                    />
+                                )}
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{

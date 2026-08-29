@@ -69,11 +69,13 @@ import {
     SentimentBadge,
     StatusBadge,
     StatusSelect,
+    NoPmsTriageDetails,
 } from "@/components/calls/shared"
 import { formatDateTime, formatDuration, getInitials } from "@/components/calls/format"
 import { listWorkflowStatuses, assignCallStatus } from "@/lib/workflow-status-api"
 import { STATUS_OPTIONS, DIRECTION_OPTIONS } from "@/lib/constants"
 import { cn } from "@/lib/utils"
+import { useInstitution } from "@/context/InstitutionContext"
 import type { CallRecord, CallDetail, CallsListResponse, WorkflowStatus } from "@/types"
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -260,6 +262,8 @@ interface CallDetailProps {
 }
 
 function CallDetailDialog({ callId, statuses, onClose, onResolved }: CallDetailProps) {
+    const { hasPms, pmsType, isLoading: institutionLoading } = useInstitution()
+    const isNoPms = !institutionLoading && (pmsType === "none" || !hasPms)
     const [detail, setDetail] = useState<CallDetail | null>(null)
     const [loading, setLoading] = useState(false)
     const [resolving, setResolving] = useState(false)
@@ -348,18 +352,28 @@ function CallDetailDialog({ callId, statuses, onClose, onResolved }: CallDetailP
                                     callId={detail.id}
                                     masked={detail.phone_masked}
                                     available={detail.phone_reveal_available}
+                                    revealed={detail.phone_revealed}
                                     className="mt-1 text-sm"
                                 />
                             )}
                         </div>
 
-                        {/* Tags */}
-                        <div className="flex flex-wrap gap-1.5">
-                            {detail.call_tags.length > 0
-                                ? detail.call_tags.map((t) => <TagBadge key={t} tag={t} />)
-                                : <span className="text-xs text-muted-foreground">No tags</span>
-                            }
+                        {/* Sentiment and tags each get a label above their
+                            values, matching the other fields in this dialog —
+                            an unlabelled "Neutral" badge read as a tag. */}
+                        <div>
+                            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Sentiment</p>
                             <SentimentBadge sentiment={detail.patient_sentiment} />
+                        </div>
+
+                        <div>
+                            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Tags</p>
+                            <div className="flex flex-wrap gap-1.5">
+                                {detail.call_tags.length > 0
+                                    ? detail.call_tags.map((t) => <TagBadge key={t} tag={t} />)
+                                    : <span className="text-xs text-muted-foreground">No tags</span>
+                                }
+                            </div>
                         </div>
 
                         {/* Workflow status (human-assigned) */}
@@ -391,6 +405,9 @@ function CallDetailDialog({ callId, statuses, onClose, onResolved }: CallDetailP
                                 <p className="font-medium mt-0.5">{formatDuration(detail.call_duration_seconds)}</p>
                             </div>
                         </div>
+
+                        {/* No-PMS triage variables — mirrors the conversations panel */}
+                        {isNoPms && <NoPmsTriageDetails detail={detail} />}
 
                         {/* Summary */}
                         {detail.summary && (
@@ -489,13 +506,13 @@ export default function Calls() {
         searchParams.get("detail")
     )
     const [viewMode, setViewMode] = useState<ViewMode>(
-        searchParams.get("view") === "conversation" ? "conversation" : "table"
+        searchParams.get("view") === "table" ? "table" : "conversation"
     )
 
     function changeView(mode: ViewMode) {
         setViewMode(mode)
         setSearchParams((prev) => {
-            if (mode === "conversation") prev.set("view", "conversation")
+            if (mode === "table") prev.set("view", "table")
             else prev.delete("view")
             return prev
         }, { replace: true })

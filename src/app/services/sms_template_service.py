@@ -43,10 +43,36 @@ TEMPLATE_VARIABLES: dict[str, list[dict[str, str]]] = {
     # acknowledgement. No booked date/provider/service (nothing is booked). The
     # message goes only to the patient's own phone, so addressing them by name
     # is fine; availability is the window they requested (non-identifying).
-    SmsTemplateType.APPOINTMENT_REQUEST.value: [
+    SmsTemplateType.PATIENT_APPOINTMENT_REQUEST.value: [
         {"key": "patient_name", "label": "Patient Name", "sample": "Jane Doe"},
         {"key": "location_name", "label": "Clinic / Location Name", "sample": "Downtown Dental"},
         {"key": "availability", "label": "Requested Availability", "sample": "Tomorrow after 3 PM"},
+    ],
+    # ── Staff notifications ───────────────────────────────────────────────
+    # Deliberately no patient_name and no date_of_birth: these text the
+    # clinic's own staff numbers, so they stay PHI-free and carry triage
+    # metadata plus a dashboard link, matching the staff email templates.
+    SmsTemplateType.CALL_SUMMARY.value: [
+        {"key": "location_name", "label": "Clinic / Location Name", "sample": "Downtown Dental"},
+        {"key": "call_status", "label": "Call Status", "sample": "Needs Booking"},
+        {"key": "duration", "label": "Call Duration", "sample": "2m 22s"},
+        {"key": "sentiment", "label": "Caller Sentiment", "sample": "Neutral"},
+        {"key": "dashboard_link", "label": "Dashboard Link", "sample": "https://app.example.com/calls"},
+    ],
+    SmsTemplateType.URGENT_ALERT.value: [
+        {"key": "location_name", "label": "Clinic / Location Name", "sample": "Downtown Dental"},
+        {"key": "urgency", "label": "Emergency or Complaint", "sample": "Emergency"},
+        {"key": "availability", "label": "Requested Availability", "sample": "Tomorrow after 3 PM"},
+        {"key": "new_patient", "label": "New Patient?", "sample": "Yes"},
+        {"key": "dashboard_link", "label": "Dashboard Link", "sample": "https://app.example.com/calls"},
+    ],
+    SmsTemplateType.APPOINTMENT_REQUEST.value: [
+        {"key": "location_name", "label": "Clinic / Location Name", "sample": "Downtown Dental"},
+        {"key": "call_status", "label": "Call Status", "sample": "Needs Booking"},
+        {"key": "availability", "label": "Requested Availability", "sample": "Tomorrow after 3 PM"},
+        {"key": "new_patient", "label": "New Patient?", "sample": "Yes"},
+        {"key": "emergency", "label": "Emergency?", "sample": "No"},
+        {"key": "dashboard_link", "label": "Dashboard Link", "sample": "https://app.example.com/calls"},
     ],
 }
 
@@ -73,8 +99,8 @@ SMS_DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             "Please call us if you need to reschedule."
         ),
     },
-    SmsTemplateType.APPOINTMENT_REQUEST.value: {
-        "name": "Appointment Request Received",
+    SmsTemplateType.PATIENT_APPOINTMENT_REQUEST.value: {
+        "name": "Patient Appointment Request Received",
         # No-PMS acknowledgement — nothing is booked yet; our team confirms.
         "body": (
             "Hi {{ patient_name }}, thanks for contacting {{ location_name }}. "
@@ -83,6 +109,32 @@ SMS_DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
             " for {{ availability }}{% endif %}"
             " and our team will call you back shortly to confirm. "
             "Please call us if you have any questions."
+        ),
+    },
+    SmsTemplateType.CALL_SUMMARY.value: {
+        "name": "Standard Call Summary",
+        "body": (
+            "Call handled at {{ location_name }}. "
+            "Status: {{ call_status }}. Duration: {{ duration }}. "
+            "Sentiment: {{ sentiment }}."
+            "{% if dashboard_link %} Call details: {{ dashboard_link }}{% endif %}"
+        ),
+    },
+    SmsTemplateType.URGENT_ALERT.value: {
+        "name": "Urgent Call Alert",
+        "body": (
+            "URGENT: {{ urgency }} call at {{ location_name }}. "
+            "Availability: {{ availability }}. New patient: {{ new_patient }}."
+            "{% if dashboard_link %} Call details: {{ dashboard_link }}{% endif %}"
+        ),
+    },
+    SmsTemplateType.APPOINTMENT_REQUEST.value: {
+        "name": "Appointment Request",
+        "body": (
+            "New appointment request at {{ location_name }}. "
+            "Status: {{ call_status }}. Availability: {{ availability }}. "
+            "New patient: {{ new_patient }}. Emergency: {{ emergency }}."
+            "{% if dashboard_link %} Call details: {{ dashboard_link }}{% endif %}"
         ),
     },
 }
