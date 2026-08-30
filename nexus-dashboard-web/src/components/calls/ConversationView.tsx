@@ -7,6 +7,7 @@
  * (see ./shared). No PHI is shown until explicitly revealed.
  */
 
+import { NoPmsTriageDetails } from "@/components/calls/shared"
 import { useEffect, useRef, useState } from "react"
 import {
     ArrowLeft,
@@ -31,7 +32,7 @@ import { useInstitution } from "@/context/InstitutionContext"
 import { getCall, resolveCallback } from "@/lib/calls-api"
 import { assignCallStatus } from "@/lib/workflow-status-api"
 import { cn } from "@/lib/utils"
-import type { CallDetail, CustomFieldValue, WorkflowStatus, WorkflowStatusRef } from "@/types"
+import type { CallDetail, WorkflowStatus, WorkflowStatusRef } from "@/types"
 import {
     CustomFieldsSection,
     RecordingSection,
@@ -215,68 +216,6 @@ function DetailField({ label, children }: { label: string; children: React.React
         <div>
             <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
             {children}
-        </div>
-    )
-}
-
-function normalizeFieldKey(value: string): string {
-    return value.toLowerCase().replace(/[^a-z0-9]/g, "")
-}
-
-function findCustomFieldValue(fields: CustomFieldValue[], candidates: string[]): string | null {
-    const normalizedCandidates = new Set(candidates.map(normalizeFieldKey))
-    const field = fields.find((candidate) => (
-        normalizedCandidates.has(normalizeFieldKey(candidate.field_key))
-        || normalizedCandidates.has(normalizeFieldKey(candidate.field_name))
-    ))
-    const value = field?.value?.trim()
-    if (!value || ["none", "n/a", "null"].includes(value.toLowerCase())) return null
-    return value
-}
-
-function formatBoolean(value: boolean): string {
-    return value ? "True" : "False"
-}
-
-function formatReason(value: string | null | undefined): string {
-    if (!value) return "—"
-    return value
-        .replace(/[_-]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .replace(/^\w/, (c) => c.toUpperCase())
-}
-
-function NoPmsTriageDetails({ detail }: { detail: CallDetail }) {
-    const customAvailability = findCustomFieldValue(
-        detail.custom_fields,
-        ["availability", "Availability", "Availability "],
-    )
-    const availability = detail.requested_availability?.trim() || customAvailability
-    const customEmergency = findCustomFieldValue(
-        detail.custom_fields,
-        ["emergency", "Emergency", "is_emergency"],
-    )
-    const isEmergency = customEmergency
-        ? ["true", "yes", "1", "y"].includes(customEmergency.toLowerCase())
-        : detail.call_tags.includes("emergency")
-
-    return (
-        <div className="space-y-3 rounded-lg border bg-muted p-3">
-            <DetailField label="Availability variable">
-                <p className="text-xs font-medium leading-relaxed">{availability ?? "—"}</p>
-            </DetailField>
-            <div className="grid grid-cols-2 gap-3">
-                <DetailField label="Emergency variable">
-                    <p className="text-xs font-medium">{formatBoolean(isEmergency)}</p>
-                </DetailField>
-                <DetailField label="New patient">
-                    <p className="text-xs font-medium">{formatBoolean(detail.is_new_patient)}</p>
-                </DetailField>
-            </div>
-            <DetailField label="Disconnected reason">
-                <p className="text-xs font-medium">{formatReason(detail.disconnection_reason)}</p>
-            </DetailField>
         </div>
     )
 }
@@ -531,6 +470,7 @@ function CenterPane({
                                 callId={detail.id}
                                 masked={detail.phone_masked}
                                 available={detail.phone_reveal_available}
+                                revealed={detail.phone_revealed}
                                 className="text-xs"
                             />
                         ) : (

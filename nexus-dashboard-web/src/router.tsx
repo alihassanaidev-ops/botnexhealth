@@ -5,6 +5,7 @@ import DashboardWrapper from "./components/DashboardWrapper";
 import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
 import PmsGuard from "./components/PmsGuard";
+import NoPmsGuard from "./components/NoPmsGuard";
 import AppLayout from "./components/AppLayout";
 import RouteError from "./components/RouteError";
 import BrandLoader from "@/components/BrandLoader";
@@ -36,6 +37,8 @@ const WorkflowStatuses = lazy(() => import("./pages/WorkflowStatuses"));
 const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
+const SmsPreferences = lazy(() => import("./pages/SmsPreferences"));
+const SmsTemplates = lazy(() => import("./pages/SmsTemplates"));
 const Security = lazy(() => import("./pages/Security"));
 const Patients = lazy(() => import("./pages/Patients"));
 const GroupDashboard = lazy(() => import("./pages/GroupDashboard"));
@@ -121,10 +124,29 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
+                        // SMS templates are patient-facing acknowledgements that
+                        // only no-PMS clinics send, so the page is guarded on both
+                        // the role and the tenant type.
+                        path: "institution-admin/sms-templates",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <NoPmsGuard><S><SmsTemplates /></S></NoPmsGuard>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
                         path: "notification-preferences",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <S><NotificationPreferences /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "sms-preferences",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <NoPmsGuard><S><SmsPreferences /></S></NoPmsGuard>
                             </RoleGuard>
                         ),
                     },

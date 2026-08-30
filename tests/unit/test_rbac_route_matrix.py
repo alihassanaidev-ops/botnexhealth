@@ -247,6 +247,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/statuses",
         "PATCH /api/institution/statuses/{status_id}",
         "DELETE /api/institution/statuses/{status_id}",
+        "GET /api/institution/sms-notification-recipients",
+        "POST /api/institution/sms-notification-recipients",
+        "PUT /api/institution/sms-notification-recipients/{recipient_id}",
+        "DELETE /api/institution/sms-notification-recipients/{recipient_id}",
     ),
     INSTITUTION_OR_LOCATION_USER: (
         "GET /api/v1/pms/patients",

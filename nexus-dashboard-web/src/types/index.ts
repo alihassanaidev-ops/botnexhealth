@@ -259,6 +259,8 @@ export interface ContactSummary {
     full_name: string | null;
     first_name: string | null;
     last_name: string | null;
+    /** ISO date. Only present on unredacted responses — same gate as full_name. */
+    date_of_birth?: string | null;
 }
 
 /** A tenant-defined workflow status definition (managed in settings). */
@@ -308,6 +310,8 @@ export interface CallRecord {
     /** Callback number masked to the last 4 digits; full value via revealPhone(). */
     phone_masked: string | null;
     phone_reveal_available: boolean;
+    /** True when phone_masked already holds the full number — render it plainly. */
+    phone_revealed?: boolean;
 }
 
 export interface CustomFieldValue {
@@ -363,6 +367,11 @@ export interface CallDetail extends CallRecord {
      *  bracket placeholders masked to *****; the raw variants come from the
      *  audited reveal endpoints. Null/absent when Retell redaction is off. */
     scrubbed_transcript?: TranscriptTurn[] | null;
+    /** False when scrubbed_transcript holds the raw, unmasked turns
+     *  (no-PMS location admins) — the redacted-view banner is hidden. */
+    transcript_redacted?: boolean;
+    /** Playable recording URL served inline (no-PMS location admins). */
+    recording_url?: string | null;
     scrubbed_recording_url?: string | null;
     custom_fields: CustomFieldValue[];
 }
