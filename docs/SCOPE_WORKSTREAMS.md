@@ -25,6 +25,14 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 
 ---
 
+## Delivered so far
+
+| Item | Workstream | Commit | Notes |
+|---|---|---|---|
+| **32** · Record who changed a campaign | Security, audit & RBAC | `7572ca4` | 15 `CAMPAIGN_*` action types, 18 endpoints decorated, static coverage test. Four of five acceptance criteria met in full; compliance-setting audit is reserved for Item 20 (no such endpoint exists yet) |
+
+---
+
 ## Three codebases, not one
 
 This is the first thing to get straight, because roughly a fifth of the backlog cannot be written on
@@ -149,7 +157,7 @@ Nothing here is user-visible. All of it decides how the system behaves on a bad 
 | # | Item | Size | Notes |
 |---|---|---|---|
 | **40** | Respond to penetration-test findings | 2d | Unknown until the test runs. Agree intake and tracking **before** it starts |
-| **32** | Record who changed a campaign | 1d | ~45 campaign operations with **zero** audit coverage today. Publishing switches on contact with real patients and leaves no record of who did it |
+| **32** ✅ | Record who changed a campaign — **done, `7572ca4`** | 1d | Was the only privileged area with zero audit coverage. 18 state-changing endpoints now audited with durable records; enrolment and template instantiation were gaps the doc did not name |
 | **33** | Permissions for high-consequence actions | 0.5d | Four permissions. Gate write-replay and conflict-resolution *above* ordinary campaign editing |
 | **34** | Record what caused each write to a practice's records | 0.5d | Trace identifier exists but never reaches the queued write. This is what makes a duplicate-booking investigation possible |
 | **39** | Privacy and audit review | 1d | A review pass, not a feature. Would not pass today — run it *after* 32, 33 and 34 |
