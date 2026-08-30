@@ -54,6 +54,9 @@ class RangeMetrics(BaseModel):
     end_date: date
     total_calls: int
     appointments_booked: int
+    needs_booking: int = 0
+    needs_callback: int = 0
+    emergency: int = 0
     new_patients: int
     booking_rate: float
     avg_call_duration_seconds: float
@@ -91,6 +94,9 @@ class DashboardSummary(BaseModel):
     # users see real numbers instead of the previous frontend-hardcoded
     # zeroes when /dashboard/aggregate was the only KPI source.
     appointments_booked_month: int = 0
+    needs_booking_month: int = 0
+    needs_callback_month: int = 0
+    emergency_month: int = 0
     new_patients_month: int = 0
     booking_rate_month: float = 0.0
     avg_call_duration_seconds: float = 0.0
@@ -245,14 +251,22 @@ def _resolve_window(
 
 
 _APPT_BOOKED = CallStatus.APPOINTMENT_BOOKED.value
+_NEEDS_BOOKING = CallStatus.NEEDS_BOOKING.value
+_NEEDS_CALLBACK = CallStatus.NEEDS_CALLBACK.value
+_EMERGENCY = CallStatus.EMERGENCY.value
+
+
+def _status_count_from_jsonb(status: str):
+    """``tag_counts ->> status`` cast to int, NULL-safe."""
+    return func.coalesce(
+        func.cast(CallMetricsDaily.tag_counts.op("->>")(status), Integer),
+        0,
+    )
 
 
 def _appt_booked_from_jsonb():
     """``tag_counts ->> 'appointment_booked'`` cast to int, NULL-safe."""
-    return func.coalesce(
-        func.cast(CallMetricsDaily.tag_counts.op("->>")(_APPT_BOOKED), Integer),
-        0,
-    )
+    return _status_count_from_jsonb(_APPT_BOOKED)
 
 
 async def _range_rollup_kpis(session, *, institution_id, start, end_cap, location_filter):
@@ -270,6 +284,9 @@ async def _range_rollup_kpis(session, *, institution_id, start, end_cap, locatio
                 func.coalesce(func.sum(CallMetricsDaily.total_calls), 0).label("total_calls"),
                 func.coalesce(func.sum(CallMetricsDaily.new_patient_calls), 0).label("new_patients"),
                 func.coalesce(func.sum(_appt_booked_from_jsonb()), 0).label("appointments"),
+                func.coalesce(func.sum(_status_count_from_jsonb(_NEEDS_BOOKING)), 0).label("needs_booking"),
+                func.coalesce(func.sum(_status_count_from_jsonb(_NEEDS_CALLBACK)), 0).label("needs_callback"),
+                func.coalesce(func.sum(_status_count_from_jsonb(_EMERGENCY)), 0).label("emergency"),
                 func.coalesce(func.sum(CallMetricsDaily.total_duration_seconds), 0).label("duration"),
             ).where(*filters)
         )
@@ -288,6 +305,24 @@ async def _today_live_kpis(session, *, institution_id, today, extra_conditions):
                     ),
                     0,
                 ).label("today_appointments_booked"),
+                func.coalesce(
+                    func.sum(
+                        case((Call.call_status == _NEEDS_BOOKING, 1), else_=0)
+                    ),
+                    0,
+                ).label("today_needs_booking"),
+                func.coalesce(
+                    func.sum(
+                        case((Call.call_status == _NEEDS_CALLBACK, 1), else_=0)
+                    ),
+                    0,
+                ).label("today_needs_callback"),
+                func.coalesce(
+                    func.sum(
+                        case((Call.call_status == _EMERGENCY, 1), else_=0)
+                    ),
+                    0,
+                ).label("today_emergency"),
                 func.coalesce(
                     func.sum(case((Call.is_new_patient.is_(True), 1), else_=0)),
                     0,
@@ -531,21 +566,49 @@ async def _load_rollup_volume_metrics(
                         case(
                             (
                                 CallMetricsDaily.call_date >= month_start,
-                                func.coalesce(
-                                    func.cast(
-                                        CallMetricsDaily.tag_counts.op("->>")(
-                                            CallStatus.APPOINTMENT_BOOKED.value
-                                        ),
-                                        Integer,
-                                    ),
-                                    0,
-                                ),
+                                _appt_booked_from_jsonb(),
                             ),
                             else_=0,
                         )
                     ),
                     0,
                 ).label("appointments_booked_month"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                CallMetricsDaily.call_date >= month_start,
+                                _status_count_from_jsonb(_NEEDS_BOOKING),
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("needs_booking_month"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                CallMetricsDaily.call_date >= month_start,
+                                _status_count_from_jsonb(_NEEDS_CALLBACK),
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("needs_callback_month"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                CallMetricsDaily.call_date >= month_start,
+                                _status_count_from_jsonb(_EMERGENCY),
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("emergency_month"),
                 func.coalesce(
                     func.sum(CallMetricsDaily.total_duration_seconds), 0
                 ).label("all_time_duration"),
@@ -1276,6 +1339,42 @@ async def get_dashboard_summary(
                         0,
                     ).label("today_appointments_booked"),
                     func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Call.call_status == CallStatus.NEEDS_BOOKING.value,
+                                    1,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("today_needs_booking"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Call.call_status == CallStatus.NEEDS_CALLBACK.value,
+                                    1,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("today_needs_callback"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    Call.call_status == CallStatus.EMERGENCY.value,
+                                    1,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("today_emergency"),
+                    func.coalesce(
                         func.sum(case((Call.is_new_patient.is_(True), 1), else_=0)),
                         0,
                     ).label("today_new_patients"),
@@ -1371,6 +1470,15 @@ async def get_dashboard_summary(
         appointments_booked_month = int(rollup_row.appointments_booked_month or 0) + int(
             today_kpi_row.today_appointments_booked or 0
         )
+        needs_booking_month = int(rollup_row.needs_booking_month or 0) + int(
+            today_kpi_row.today_needs_booking or 0
+        )
+        needs_callback_month = int(rollup_row.needs_callback_month or 0) + int(
+            today_kpi_row.today_needs_callback or 0
+        )
+        emergency_month = int(rollup_row.emergency_month or 0) + int(
+            today_kpi_row.today_emergency or 0
+        )
         new_patients_month = int(rollup_row.new_patients_month or 0) + int(
             today_kpi_row.today_new_patients or 0
         )
@@ -1411,6 +1519,9 @@ async def get_dashboard_summary(
             )
             r_calls = int(range_row.total_calls or 0)
             r_appts = int(range_row.appointments or 0)
+            r_needs_booking = int(range_row.needs_booking or 0)
+            r_needs_callback = int(range_row.needs_callback or 0)
+            r_emergency = int(range_row.emergency or 0)
             r_new = int(range_row.new_patients or 0)
             r_duration = int(range_row.duration or 0)
             if r_include_today:
@@ -1422,6 +1533,9 @@ async def get_dashboard_summary(
                 )
                 r_calls += int(r_today.today_count or 0)
                 r_appts += int(r_today.today_appointments_booked or 0)
+                r_needs_booking += int(r_today.today_needs_booking or 0)
+                r_needs_callback += int(r_today.today_needs_callback or 0)
+                r_emergency += int(r_today.today_emergency or 0)
                 r_new += int(r_today.today_new_patients or 0)
                 r_duration += int(r_today.today_duration or 0)
             range_metrics = RangeMetrics(
@@ -1429,6 +1543,9 @@ async def get_dashboard_summary(
                 end_date=r_end,
                 total_calls=r_calls,
                 appointments_booked=r_appts,
+                needs_booking=r_needs_booking,
+                needs_callback=r_needs_callback,
+                emergency=r_emergency,
                 new_patients=r_new,
                 booking_rate=round((r_appts / r_calls) * 100, 2) if r_calls else 0.0,
                 avg_call_duration_seconds=round(r_duration / r_calls, 2) if r_calls else 0.0,
@@ -1455,6 +1572,9 @@ async def get_dashboard_summary(
             callback_queue=callback_queue,
             as_of=now.isoformat(),
             appointments_booked_month=appointments_booked_month,
+            needs_booking_month=needs_booking_month,
+            needs_callback_month=needs_callback_month,
+            emergency_month=emergency_month,
             new_patients_month=new_patients_month,
             booking_rate_month=booking_rate_month,
             avg_call_duration_seconds=avg_call_duration_seconds,

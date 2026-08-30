@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -20,6 +21,22 @@ logger = logging.getLogger(__name__)
 
 # Values to treat as absent / not collected
 _SKIP_VALUES = frozenset({"None", "N/A", "n/a", "null", ""})
+
+
+def _normalize_retell_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", key.lower())
+
+
+def _lookup_retell_value(source: dict[str, Any], key: str | None) -> Any:
+    if not source or not key:
+        return None
+    if key in source:
+        return source[key]
+    normalized_key = _normalize_retell_key(key)
+    for candidate_key, value in source.items():
+        if _normalize_retell_key(str(candidate_key)) == normalized_key:
+            return value
+    return None
 
 
 class CustomFieldService:
@@ -193,9 +210,9 @@ class CustomFieldService:
             )
             fallback = source_dicts.get(fallback_key, {})
 
-            raw = primary.get(defn.retell_source_key)
+            raw = _lookup_retell_value(primary, defn.retell_source_key)
             if raw is None:
-                raw = fallback.get(defn.retell_source_key)
+                raw = _lookup_retell_value(fallback, defn.retell_source_key)
             if raw is None:
                 continue
 
