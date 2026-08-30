@@ -424,7 +424,14 @@ class WorkflowStepDispatcher:
                 # urgent one until the next permitted window.
                 if _is_patient_directed(node):
                     gate_result = await self.gate.check(
-                        run, node.type, content_class=content_class
+                        run,
+                        node.type,
+                        content_class=content_class,
+                        continue_after_response=(
+                            definition.compliance.continue_after_response
+                            if definition.compliance
+                            else False
+                        ),
                     )
                 else:
                     gate_result = GateResult(action="allow", reason="non_patient_recipient")

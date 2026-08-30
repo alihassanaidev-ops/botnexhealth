@@ -40,6 +40,8 @@ class ComplianceGate(Protocol):
         now: Optional evaluation time (for quiet-hours), defaults to now.
         content_class: Optional workflow content class (transactional_care / recall /
             sales / marketing) — selects the required consent basis.
+        continue_after_response: Opt out of the engine's rule that a patient who has
+            answered receives no further sends on any channel during this run.
 
     Returns:
         GateResult with action "allow", "block", or "hold".
@@ -52,6 +54,7 @@ class ComplianceGate(Protocol):
         *,
         now: datetime | None = None,
         content_class: str | None = None,
+        continue_after_response: bool = False,
     ) -> GateResult: ...
 
 
@@ -65,5 +68,6 @@ class NoOpComplianceGate:
         *,
         now: datetime | None = None,
         content_class: str | None = None,
+        continue_after_response: bool = False,
     ) -> GateResult:
         return GateResult(action="allow")

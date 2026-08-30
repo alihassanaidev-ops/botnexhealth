@@ -931,6 +931,12 @@ class ComplianceMetadata(BaseModel):
     content_class: Literal["transactional_care", "recall", "sales", "marketing"] | None = None
     # Whether send steps require a recorded consent record on the channel.
     consent_required: bool = True
+    # Once a patient responds, the engine stops the rest of this run's sends on
+    # every channel, whether or not the campaign drew a branch for it — a patient
+    # who confirms by text must not then be called an hour later by a step that
+    # was already scheduled. Set this only for a campaign whose follow-up after a
+    # response is deliberate.
+    continue_after_response: bool = False
 
 
 class NodeLayout(BaseModel):

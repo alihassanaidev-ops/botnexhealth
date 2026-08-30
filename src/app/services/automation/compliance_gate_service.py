@@ -20,6 +20,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.automation_workflow import AutomationWorkflowRun
+from src.app.models.campaign_response import CampaignResponseEvent
 from src.app.models.contact import Contact
 from src.app.models.outbound_halt import OutboundEmergencyHalt
 from src.app.models.sms_consent import ConsentBasis, ConsentChannel, ConsentRecord, ConsentStatus
@@ -67,6 +68,7 @@ class ComplianceGateService:
         *,
         now: datetime | None = None,
         content_class: str | None = None,
+        continue_after_response: bool = False,
     ) -> GateResult:
         """Run all compliance checks in priority order.
 
@@ -81,7 +83,20 @@ class ComplianceGateService:
             )
             return GateResult(action="block", reason="emergency_halt")
 
-        # 2. Quiet hours — defer to the next permitted send window (never drop)
+        # 2. Already answered — stop the rest of this run's outreach, on every
+        # channel. Checked before quiet hours because there is nothing to defer:
+        # holding a message until morning that must never be sent only delays it.
+        # This is enforced by the engine rather than left to the campaign author
+        # drawing a branch, because the failure is silent when they forget and it
+        # is the most common complaint about automated outreach.
+        if not continue_after_response and await self._has_responded(run):
+            logger.info(
+                "compliance gate: blocked patient_responded institution=%s run=%s",
+                run.institution_id, run.id,
+            )
+            return GateResult(action="block", reason="patient_responded")
+
+        # 3. Quiet hours — defer to the next permitted send window (never drop)
         if run.location_id:
             quiet = QuietHoursService(self.session)
             if await quiet.is_quiet_hours(run.location_id, now=now):
@@ -98,7 +113,7 @@ class ComplianceGateService:
                 )
                 return GateResult(action="hold", reason="quiet_hours", retry_at=retry_at)
 
-        # 3. Contact required for consent checks
+        # 4. Contact required for consent checks
         if run.contact_id is None:
             logger.warning(
                 "compliance gate: blocked no_contact institution=%s run=%s",
@@ -150,6 +165,15 @@ class ComplianceGateService:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    async def _has_responded(self, run: AutomationWorkflowRun) -> bool:
+        """Has this patient answered at any point during this run, on any channel?"""
+        result = await self.session.execute(
+            select(CampaignResponseEvent.id)
+            .where(CampaignResponseEvent.workflow_run_id == str(run.id))
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def _active_halt(self, institution_id: str) -> bool:
         result = await self.session.execute(
