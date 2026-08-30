@@ -150,7 +150,17 @@ class SmsNodeExecutor:
 
             if sms_log.status != SmsStatus.FAILED.value:
                 await CampaignConversationService(self.session).mark_message_seen(thread)
-                await self.runtime.complete_step(step, result_code="sent")
+                # Carry the provider's message id so the delivery receipt, which
+                # arrives minutes later on a webhook, can find this attempt.
+                await self.runtime.complete_step(
+                    step,
+                    result_code="sent",
+                    result_metadata=(
+                        {"message_sid": sms_log.message_sid}
+                        if sms_log.message_sid
+                        else None
+                    ),
+                )
                 return node.next_node_id
 
             outcome = _classify(sms_log)

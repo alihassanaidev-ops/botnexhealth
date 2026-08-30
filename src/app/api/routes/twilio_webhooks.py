@@ -15,6 +15,9 @@ from src.app.database import get_system_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_consent import ConsentSource
+from src.app.services.automation.delivery_receipt_service import (
+    apply_sms_delivery_receipt,
+)
 from src.app.services.audit import log_audit
 from src.app.services.automation.sms_opt_out_workflow_service import (
     SmsOptOutWorkflowService,
@@ -422,6 +425,16 @@ async def sms_status(request: Request) -> dict[str, str]:
             idempotency_key=f"sms:{message_sid}",
             workflow_run_id=str(row.workflow_run_id) if row.workflow_run_id else None,
             workflow_id=str(row.workflow_id) if row.workflow_id else None,
+        )
+    # Feed the result back into the campaign that sent it. Without this a
+    # message the carrier dropped still counts as a successful contact.
+    if row.workflow_run_id and row.institution_id:
+        await apply_sms_delivery_receipt(
+            institution_id=str(row.institution_id),
+            workflow_run_id=str(row.workflow_run_id),
+            message_sid=message_sid,
+            provider_status=provider_status,
+            provider_error=provider_error,
         )
     return {"status": "updated"}
 
