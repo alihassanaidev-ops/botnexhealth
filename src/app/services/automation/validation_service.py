@@ -27,6 +27,8 @@ from typing import Literal, Protocol
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.app.config import settings
+from src.app.services.automation.campaign_action_links import PLACEHOLDER_ACTIONS
 from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
@@ -154,6 +156,7 @@ class WorkflowValidationService:
         # them in this workflow builder validation path.
         # issues += self._consent_and_content(definition)
         issues += self._merge_field_issues(definition)
+        issues += self._action_link_issues(definition)
         issues += await self._email_template_issues(
             definition, institution_id=institution_id
         )
@@ -427,6 +430,40 @@ class WorkflowValidationService:
                     code="consent_required",
                 )
             )
+        return issues
+
+    @staticmethod
+    def _action_link_issues(definition: WorkflowDefinition) -> list[ValidationIssue]:
+        """Block publishing a message whose link cannot be generated.
+
+        These placeholders sat in templates for a long time with nothing
+        producing a value, so the message went out with the link missing. Links
+        are generated now, but they are only reachable if the deployment knows
+        its own public address — without that they would point at a default host
+        and quietly 404 for the patient.
+        """
+        if settings.public_base_url:
+            return []
+        issues: list[ValidationIssue] = []
+        for node in definition.nodes:
+            for field_path, template in _node_templates(node):
+                for token in _extract_token_names(template):
+                    if token not in PLACEHOLDER_ACTIONS:
+                        continue
+                    issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            message=(
+                                f"'{{{{{token}}}}}' cannot be generated: this "
+                                "deployment has no public base URL configured, so "
+                                "the link would not resolve for the patient."
+                            ),
+                            node_id=getattr(node, "id", None),
+                            field_path=[field_path],
+                            code="action_link_unavailable",
+                            fix="Set public_base_url, or remove the link from this message.",
+                        )
+                    )
         return issues
 
     @staticmethod

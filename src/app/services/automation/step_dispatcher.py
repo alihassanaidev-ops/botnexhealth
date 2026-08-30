@@ -22,11 +22,13 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.app.config import settings
 from src.app.models.automation_workflow import (
     AutomationWorkflowDripState,
     AutomationWorkflowRun,
 )
 from src.app.models.institution_location import InstitutionLocation
+from src.app.services.automation.campaign_action_links import build_run_links
 from src.app.services.automation.definition_schema import (
     AppointmentRelativeDelay,
     CalendarDelay,
@@ -149,6 +151,7 @@ class WorkflowStepDispatcher:
         """Advance run from current_step_id (or entry node) until wait or exit."""
         now = now or datetime.now(tz=timezone.utc)
         context = {**(run.trigger_metadata or {}), **(context or {})}
+        _inject_action_links(run, context)
         self.runtime.set_trace_context(context)
         node_map = {n.id: n for n in definition.nodes}
         current_node_id = run.current_step_id or definition.entry_node_id
@@ -1489,6 +1492,27 @@ class WorkflowStepDispatcher:
             source=ConsentSource.SYSTEM,
             reason="workflow_do_not_call_requested",
         )
+
+
+def _inject_action_links(run: AutomationWorkflowRun, context: dict) -> None:
+    """Put this run's booking / confirmation / reschedule links into context.
+
+    Done once per advance, before any node executes, so the links are present for
+    every step whose message needs one — the placeholders have always existed and
+    templates already use them, but nothing produced a value, so those messages
+    would reach a patient with the link missing.
+
+    Never overwrites a link already supplied by the trigger: a real booking flow
+    that carries its own URLs stays authoritative.
+    """
+    booking = context.get("booking")
+    if not isinstance(booking, dict):
+        booking = {}
+        context["booking"] = booking
+    for placeholder, url in build_run_links(
+        str(run.id), settings.public_base_url
+    ).items():
+        booking.setdefault(placeholder, url)
 
 
 def _evaluate_condition(node: ConditionNode, context: dict) -> bool:
