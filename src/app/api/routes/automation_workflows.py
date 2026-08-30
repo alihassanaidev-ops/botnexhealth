@@ -25,7 +25,9 @@ from src.app.models.automation_workflow import (
 from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_halt import OutboundEmergencyHalt
+from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.user import User
+from src.app.services.audit_decorator import audit
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
 from src.app.services.automation.channel_readiness import ChannelReadinessService
@@ -679,6 +681,11 @@ def _issue_from_pydantic_error(
 
 
 @router.post("", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
+@audit(
+    AuditAction.CAMPAIGN_CREATE,
+    resource=lambda *args, **kwargs: f"campaign:new:{getattr(kwargs.get('data'), 'name', 'unnamed')}",
+    actor=AuditActor.ADMIN,
+)
 async def create_workflow(
     data: WorkflowCreateRequest,
     current_user: _InstitutionAdmin,
@@ -692,6 +699,11 @@ async def create_workflow(
 
 
 @router.post("/draft", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
+@audit(
+    AuditAction.CAMPAIGN_CREATE,
+    resource=lambda *args, **kwargs: f"campaign:new:{getattr(kwargs.get('data'), 'name', 'unnamed')}",
+    actor=AuditActor.ADMIN,
+)
 async def create_draft_workflow(
     data: WorkflowDraftCreateRequest,
     current_user: _InstitutionAdmin,
@@ -1027,6 +1039,11 @@ class OutboundHaltRequest(BaseModel):
     response_model=OutboundHaltResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@audit(
+    AuditAction.CAMPAIGN_EMERGENCY_HALT,
+    resource=lambda *args, **kwargs: "campaign:outbound-halt",
+    actor=AuditActor.ADMIN,
+)
 async def activate_outbound_halt(
     data: OutboundHaltRequest,
     current_user: _InstitutionAdmin,
@@ -1089,6 +1106,11 @@ async def activate_outbound_halt(
 
 
 @router.delete("/outbound-halt", response_model=OutboundHaltResponse)
+@audit(
+    AuditAction.CAMPAIGN_HALT_RELEASE,
+    resource=lambda *args, **kwargs: "campaign:outbound-halt",
+    actor=AuditActor.ADMIN,
+)
 async def release_outbound_halt(
     current_user: _InstitutionAdmin,
 ) -> OutboundHaltResponse:
@@ -1235,6 +1257,11 @@ async def get_audience_definition(
 
 
 @router.put("/{workflow_id}/audience", response_model=AudienceDefinitionResponse)
+@audit(
+    AuditAction.CAMPAIGN_AUDIENCE_UPDATE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:audience",
+    actor=AuditActor.ADMIN,
+)
 async def put_audience_definition(
     workflow_id: str,
     data: AudienceDefinitionRequest,
@@ -1266,6 +1293,11 @@ async def put_audience_definition(
 
 
 @router.post("/{workflow_id}/audience/preview", response_model=AudiencePreviewResponse)
+@audit(
+    AuditAction.CAMPAIGN_AUDIENCE_PREVIEW,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:audience-preview",
+    actor=AuditActor.ADMIN,
+)
 async def preview_audience(
     workflow_id: str,
     data: AudiencePreviewRequest,
@@ -1294,6 +1326,11 @@ async def preview_audience(
     "/{workflow_id}/audience/enroll",
     response_model=AudienceEnrollResponse,
     status_code=status.HTTP_202_ACCEPTED,
+)
+@audit(
+    AuditAction.CAMPAIGN_ENROLL,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:audience-enroll",
+    actor=AuditActor.ADMIN,
 )
 async def enroll_audience(
     workflow_id: str,
@@ -1386,6 +1423,11 @@ async def list_workflow_versions(
 
 
 @router.patch("/{workflow_id}", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_UPDATE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
 async def update_workflow(
     workflow_id: str,
     data: WorkflowUpdateRequest,
@@ -1410,6 +1452,11 @@ async def update_workflow(
 
 
 @router.post("/{workflow_id}/publish", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_PUBLISH,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
 async def publish_workflow(
     workflow_id: str,
     current_user: _InstitutionAdmin,
@@ -1430,6 +1477,11 @@ async def publish_workflow(
 
 
 @router.post("/{workflow_id}/pause", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_PAUSE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
 async def pause_workflow(
     workflow_id: str,
     current_user: _InstitutionAdmin,
@@ -1443,6 +1495,11 @@ async def pause_workflow(
 
 
 @router.post("/{workflow_id}/resume", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_RESUME,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
 async def resume_workflow(
     workflow_id: str,
     current_user: _InstitutionAdmin,
@@ -1469,6 +1526,11 @@ async def resume_workflow(
 
 
 @router.post("/{workflow_id}/archive", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_ARCHIVE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
 async def archive_workflow(
     workflow_id: str,
     current_user: _InstitutionAdmin,
@@ -1482,6 +1544,11 @@ async def archive_workflow(
 
 
 @router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT)
+@audit(
+    AuditAction.CAMPAIGN_DELETE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
 async def delete_workflow(
     workflow_id: str,
     current_user: _InstitutionAdmin,
@@ -1502,6 +1569,11 @@ async def delete_workflow(
     "/{workflow_id}/enroll",
     response_model=WorkflowRunResponse,
     status_code=status.HTTP_201_CREATED,
+)
+@audit(
+    AuditAction.CAMPAIGN_ENROLL,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:enroll",
+    actor=AuditActor.ADMIN,
 )
 async def enroll_in_workflow(
     workflow_id: str,
@@ -1713,6 +1785,11 @@ async def get_run_timeline(
 
 
 @router.post("/{workflow_id}/runs/{run_id}/cancel", response_model=WorkflowRunResponse)
+@audit(
+    AuditAction.CAMPAIGN_RUN_CANCEL,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:run:{kwargs.get('run_id')}",
+    actor=AuditActor.ADMIN,
+)
 async def cancel_run(
     workflow_id: str,
     run_id: str,
@@ -1760,6 +1837,11 @@ class BulkEnrollResponse(BaseModel):
     "/{workflow_id}/bulk-enroll",
     response_model=BulkEnrollResponse,
     status_code=status.HTTP_202_ACCEPTED,
+)
+@audit(
+    AuditAction.CAMPAIGN_BULK_ENROLL,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:bulk-enroll",
+    actor=AuditActor.ADMIN,
 )
 async def bulk_enroll(
     workflow_id: str,
@@ -1824,6 +1906,11 @@ class WorkflowHaltResponse(BaseModel):
 
 
 @router.post("/{workflow_id}/emergency-halt", response_model=WorkflowHaltResponse)
+@audit(
+    AuditAction.CAMPAIGN_EMERGENCY_HALT,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:emergency-halt",
+    actor=AuditActor.ADMIN,
+)
 async def emergency_halt_workflow(
     workflow_id: str,
     current_user: _InstitutionAdmin,

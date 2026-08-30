@@ -41,6 +41,22 @@ DURABLE_AUDIT_ACTIONS: frozenset[str] = frozenset({
     AuditAction.VIEW_FULL_PHONE.value,
     AuditAction.VIEW_SMS_BODY.value,
     AuditAction.VIEW_CUSTOM_PHI_FIELD.value,
+    # Campaign state changes: publishing or enrolling starts automated contact
+    # with real patients, so the record must be durable before we return.
+    AuditAction.CAMPAIGN_CREATE.value,
+    AuditAction.CAMPAIGN_UPDATE.value,
+    AuditAction.CAMPAIGN_DELETE.value,
+    AuditAction.CAMPAIGN_PUBLISH.value,
+    AuditAction.CAMPAIGN_PAUSE.value,
+    AuditAction.CAMPAIGN_RESUME.value,
+    AuditAction.CAMPAIGN_ARCHIVE.value,
+    AuditAction.CAMPAIGN_AUDIENCE_UPDATE.value,
+    AuditAction.CAMPAIGN_ENROLL.value,
+    AuditAction.CAMPAIGN_BULK_ENROLL.value,
+    AuditAction.CAMPAIGN_RUN_CANCEL.value,
+    AuditAction.CAMPAIGN_EMERGENCY_HALT.value,
+    AuditAction.CAMPAIGN_HALT_RELEASE.value,
+    AuditAction.CAMPAIGN_COMPLIANCE_UPDATE.value,
 })
 
 logger = logging.getLogger(__name__)

@@ -17,7 +17,9 @@ from src.app.api.routes.automation_workflows import WorkflowResponse
 from src.app.database import get_db_session
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
+from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.user import User, UserRole
+from src.app.services.audit_decorator import audit
 from src.app.services.automation.campaign_templates import (
     CampaignTemplate,
     get_template,
@@ -160,6 +162,11 @@ async def get_campaign_template(
     "/{template_id}/instantiate",
     response_model=WorkflowResponse,
     status_code=status.HTTP_201_CREATED,
+)
+@audit(
+    AuditAction.CAMPAIGN_CREATE,
+    resource=lambda *args, **kwargs: f"campaign:from-template:{kwargs.get('template_id')}",
+    actor=AuditActor.ADMIN,
 )
 async def instantiate_template(
     template_id: str,
