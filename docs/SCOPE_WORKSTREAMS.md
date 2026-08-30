@@ -30,6 +30,7 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | Item | Workstream | Commit | Notes |
 |---|---|---|---|
 | **32** · Record who changed a campaign | Security, audit & RBAC | `7572ca4` | 15 `CAMPAIGN_*` action types, 18 endpoints decorated, static coverage test. Four of five acceptance criteria met in full; compliance-setting audit is reserved for Item 20 (no such endpoint exists yet) |
+| **4** · Report pending honestly — *Platform half* | GoTracker booking safety | `0d096f2` | `BookingWriteStatus` + `write_status` on `BookingResult`; GoTracker defaults to pending instead of scheduled; message follows status. Cloud Service half and run-history visibility (Item 11) still outstanding |
 
 ---
 
