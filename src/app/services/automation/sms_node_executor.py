@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,9 +14,38 @@ from src.app.services.automation.definition_schema import SendSmsNode
 from src.app.services.automation.campaign_conversation_service import CampaignConversationService
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.template_renderer import render_sms_body
+from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.services.sms_service import SmsService
 
 logger = logging.getLogger(__name__)
+
+#: Matches the email node's ladder so both channels behave the same way.
+_RETRY_BACKOFF_SECONDS = 2
+
+# Outcome of one send attempt, decided from the provider status SmsService
+# already records. Three ways, not two, for the same reason voice calls are
+# classified three ways: a network timeout is genuinely ambiguous, because the
+# message may have reached Twilio before the response was lost. Retrying that
+# case is how you text a patient twice, so we deliberately do not.
+_RETRY_SAFE = "retry_safe"
+_AMBIGUOUS = "ambiguous"
+_PERMANENT = "permanent"
+
+
+def _classify(log: SmsHistoryLog) -> str:
+    """Decide whether this failed attempt may be retried.
+
+    ``provider_status`` is written by SmsService as ``retryable:<code>`` when
+    Twilio itself rejected the request (429 or 5xx — nothing was sent, so a
+    retry is safe), ``retryable:network`` when the request never completed
+    (ambiguous), and ``failed:*`` for a rejection that will repeat forever.
+    """
+    status = (log.provider_status or "").strip().lower()
+    if status == "retryable:network":
+        return _AMBIGUOUS
+    if status.startswith("retryable:"):
+        return _RETRY_SAFE
+    return _PERMANENT
 
 
 class SmsNodeExecutor:
@@ -85,28 +115,61 @@ class SmsNodeExecutor:
         body = render_sms_body(node.body_template, contact, location, context)
 
         # --- Send ---
-        try:
-            sms_service = SmsService(self.session)
-            await sms_service.send_sms(
-                from_number=from_number,
-                to_number=to_number,
-                body=body,
-                institution_location_id=str(run.location_id),
-                patient_contact_id=str(run.contact_id),
-                workflow_run_id=str(run.id),
-                workflow_id=str(run.workflow_id),
-                conversation_thread_id=str(thread.id),
-                include_opt_out_footer=node.include_opt_out_footer,
-            )
-            await CampaignConversationService(self.session).mark_message_seen(thread)
-        except Exception as exc:
-            logger.error(
-                "send_sms failed: institution=%s run=%s node=%s error=%s",
-                run.institution_id, run.id, node.id, exc,
-            )
-            await self.runtime.fail_step(step, result_code="send_failed")
-            await self.runtime.fail_run(run, reason=f"send_sms error: {type(exc).__name__}")
-            return node.next_node_id
+        # SmsService does not raise on a provider failure: it records the
+        # outcome on the history row and returns it. Ignoring that return value
+        # is what let a failed send be recorded as a delivered one.
+        sms_service = SmsService(self.session)
+        attempts = max(1, node.max_attempts)
+        outcome = _PERMANENT
 
-        await self.runtime.complete_step(step, result_code="sent")
+        for attempt in range(1, attempts + 1):
+            try:
+                sms_log = await sms_service.send_sms(
+                    from_number=from_number,
+                    to_number=to_number,
+                    body=body,
+                    institution_location_id=str(run.location_id),
+                    patient_contact_id=str(run.contact_id),
+                    workflow_run_id=str(run.id),
+                    workflow_id=str(run.workflow_id),
+                    conversation_thread_id=str(thread.id),
+                    include_opt_out_footer=node.include_opt_out_footer,
+                )
+            except Exception as exc:
+                # Configuration problems only — SmsService raises before it
+                # reaches Twilio, so nothing was sent and nothing is ambiguous.
+                logger.error(
+                    "send_sms failed: institution=%s run=%s node=%s error=%s",
+                    run.institution_id, run.id, node.id, exc,
+                )
+                await self.runtime.fail_step(step, result_code="send_failed")
+                await self.runtime.fail_run(
+                    run, reason=f"send_sms error: {type(exc).__name__}"
+                )
+                return node.next_node_id
+
+            if sms_log.status != SmsStatus.FAILED.value:
+                await CampaignConversationService(self.session).mark_message_seen(thread)
+                await self.runtime.complete_step(step, result_code="sent")
+                return node.next_node_id
+
+            outcome = _classify(sms_log)
+            logger.warning(
+                "send_sms attempt %d/%d failed: institution=%s run=%s node=%s "
+                "provider_status=%s outcome=%s",
+                attempt, attempts, run.institution_id, run.id, node.id,
+                sms_log.provider_status, outcome,
+            )
+            if outcome is not _RETRY_SAFE:
+                break
+            if attempt < attempts:
+                await asyncio.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+
+        result_code = {
+            _AMBIGUOUS: "send_failed_ambiguous",
+            _PERMANENT: "send_failed_permanent",
+        }.get(outcome, "send_failed_retries_exhausted")
+
+        await self.runtime.fail_step(step, result_code=result_code)
+        await self.runtime.fail_run(run, reason=f"send_sms: {result_code}")
         return node.next_node_id

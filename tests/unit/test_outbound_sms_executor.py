@@ -281,3 +281,102 @@ def test_executor_fails_run_on_twilio_error():
     runtime.fail_step.assert_called_once()
     runtime.fail_run.assert_called_once()
     assert "send_sms error" in _fail_run_reason(runtime)
+
+
+# ---------------------------------------------------------------------------
+# Item 14 — retry, classification, and never texting a patient twice
+# ---------------------------------------------------------------------------
+
+
+def _sent_log():
+    from src.app.models.sms_history_log import SmsStatus
+    return MagicMock(status=SmsStatus.SENT.value, provider_status="queued")
+
+
+def _failed_log(provider_status):
+    from src.app.models.sms_history_log import SmsStatus
+    return MagicMock(status=SmsStatus.FAILED.value, provider_status=provider_status)
+
+
+def _run_with_sends(node, *logs):
+    """Drive the executor with a scripted sequence of send_sms outcomes."""
+    executor, runtime = _make_executor(contact=_make_contact(), location=_make_location())
+    thread = MagicMock(id="thread-1")
+    with patch(
+        "src.app.services.automation.sms_node_executor.SmsService"
+    ) as MockSms, patch(
+        "src.app.services.automation.sms_node_executor.CampaignConversationService"
+    ) as MockThreads, patch(
+        "src.app.services.automation.sms_node_executor.asyncio.sleep", new=AsyncMock()
+    ):
+        MockThreads.return_value.open_sms_thread = AsyncMock(return_value=thread)
+        MockThreads.return_value.mark_message_seen = AsyncMock()
+        instance = MockSms.return_value
+        instance.send_sms = AsyncMock(side_effect=list(logs))
+        asyncio.run(executor.execute(_make_run(), node, {}))
+    return runtime, instance
+
+
+def _result_code(runtime) -> str:
+    return runtime.fail_step.call_args.kwargs.get("result_code", "")
+
+
+def test_provider_failure_is_no_longer_recorded_as_sent():
+    """The regression this item exists to close.
+
+    SmsService swallows provider errors and returns a FAILED row rather than
+    raising. The executor ignored that return value, so a message that never
+    left Twilio was completed as "sent" and the campaign moved on.
+    """
+    runtime, _ = _run_with_sends(_make_node(), _failed_log("failed:21610"))
+    runtime.complete_step.assert_not_called()
+    runtime.fail_step.assert_called_once()
+    assert _result_code(runtime) == "send_failed_permanent"
+
+
+def test_permanent_failure_is_not_retried():
+    node = _make_node()
+    node.max_attempts = 3
+    _runtime, instance = _run_with_sends(node, _failed_log("failed:21610"))
+    assert instance.send_sms.await_count == 1, "a rejected number will reject again"
+
+
+def test_retryable_rejection_is_retried_then_succeeds():
+    node = _make_node()
+    node.max_attempts = 3
+    runtime, instance = _run_with_sends(
+        node, _failed_log("retryable:503"), _sent_log()
+    )
+    assert instance.send_sms.await_count == 2
+    runtime.complete_step.assert_called_once()
+    assert runtime.complete_step.call_args.kwargs.get("result_code") == "sent"
+    runtime.fail_run.assert_not_called()
+
+
+def test_retryable_rejection_exhausts_attempts():
+    node = _make_node()
+    node.max_attempts = 3
+    runtime, instance = _run_with_sends(
+        node, _failed_log("retryable:429"), _failed_log("retryable:429"),
+        _failed_log("retryable:429"),
+    )
+    assert instance.send_sms.await_count == 3
+    assert _result_code(runtime) == "send_failed_retries_exhausted"
+
+
+def test_ambiguous_network_failure_is_never_retried():
+    """A lost response may mean the text went out. Retrying sends it twice.
+
+    Same reasoning the voice path already applies to its ambiguous class.
+    """
+    node = _make_node()
+    node.max_attempts = 3
+    runtime, instance = _run_with_sends(node, _failed_log("retryable:network"))
+    assert instance.send_sms.await_count == 1, "must not risk a second text"
+    assert _result_code(runtime) == "send_failed_ambiguous"
+
+
+def test_default_max_attempts_sends_once():
+    """max_attempts defaults to 1, so existing campaigns are unchanged."""
+    _runtime, instance = _run_with_sends(_make_node(), _failed_log("retryable:503"))
+    assert instance.send_sms.await_count == 1

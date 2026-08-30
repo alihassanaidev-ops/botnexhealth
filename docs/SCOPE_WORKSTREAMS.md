@@ -129,7 +129,7 @@ explicit per-workflow declaration.**
 | # | Item | Size | Notes |
 |---|---|---|---|
 | **28** | Financials — charges, claims, payments, balances | 4d | **Largest data family in the scope.** Zero implementation today. Most sensitive data in the product — build the allow-listing *before* the retrieval |
-| **25** | Patient Communication — notes, documents, recalls | 3d | 1 of 7 record types built. **Highest-value item in Part 4** — Item 22's recall quality depends on it. Build this family first. Decisions F and G |
+| **25** ⏸ | Patient Communication — notes, documents, recalls — **DEFERRED 2026-08-30** | 3d | 1 of 7 record types built. **Highest-value item in Part 4** — Item 22's recall quality depends on it. Build this family first. Decisions F and G |
 | **27** | Insurance — plans and coverage | 2d | Live hand-maintained data in production that the voice agent reads right now. **The migration must not lose it.** Decision H |
 | **31** | Working Hours — reconcile the two sources | 1d | Detect divergence and surface it. Never auto-adopt either source — it would silently change what the agent offers on live clinics |
 | **26** | Procedures — visit and treatment history | 1d | Currently a 5-entry extract on a legacy interface version. Unusable for recall targeting |
