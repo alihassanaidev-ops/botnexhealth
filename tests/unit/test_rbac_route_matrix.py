@@ -120,6 +120,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/setup/appointment-types",
         "GET /api/institution/setup/operatories",
         "GET /api/institution/setup/descriptors",
+        "GET /api/institution/setup/reasons",
         "GET /api/institution/setup/availabilities",
         "GET /api/institution/setup/operating-hours",
         "GET /api/institution/setup/breaks",
@@ -299,6 +300,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/location/audit-logs",
     ),
     INSTITUTION_OR_LOCATION_ADMIN: (
+        "DELETE /api/institution/setup/availabilities/{source_id}/override",
         "GET /api/automation/workflows/merge-fields",
         "GET /api/automation/workflows/llm-models",
         "GET /api/automation/workflows/{workflow_id}/launch-checklist",
