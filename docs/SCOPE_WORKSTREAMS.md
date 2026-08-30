@@ -59,7 +59,7 @@ patients told "confirmed" for appointments the practice will never see.
 | **3** | Prevent the same booking being written twice | 1d | Connector + Cloud Service | Deterministic idempotency key derived from booking content, stored in the practice DB. Root cause of the duplicate-booking class |
 | **1** | Check the clinic's schedule before writing | 1.5d | Connector | Slot free / patient resolves / not already there — same connection, back to back, no long lock |
 | **2** | A conflict outcome for writes that must not proceed | 1.5d | Cloud Service + Ops UI + **Platform mirror** | Conflict must be terminal, never retried. Platform side is ours |
-| **4** | Tell the caller when a booking is not yet real | 0.5d | Cloud Service API + **Platform** | **Platform half lands FIRST** — the doc is explicit. Blocked on Decision B |
+| **4** ◐ | Tell the caller when a booking is not yet real — **Platform half done, `0d096f2`** | 0.5d | Cloud Service API + ~~Platform~~ | Ours landed first, as the doc requires. Remaining: the Cloud Service must emit `write_status`, and run-history visibility arrives with Item 11 |
 | **5** | Recover in-flight writes after Connector restart | 0.5d | Connector | Blocked on Decision I (internal). Encrypt anything stored on the clinic machine |
 
 **Our slice:** Items 2 and 4 have real Platform work — mirroring the conflict state and handling
