@@ -32,6 +32,7 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **32** · Record who changed a campaign | Security, audit & RBAC | `7572ca4` | 15 `CAMPAIGN_*` action types, 18 endpoints decorated, static coverage test. Four of five acceptance criteria met in full; compliance-setting audit is reserved for Item 20 (no such endpoint exists yet) |
 | **14** · Retry text messages | Campaign engine core | `7116457` | Found worse than documented: `SmsService` never raises, and the executor discarded its return value, so a Twilio rejection was recorded as a delivered contact. Three-way classification — the ambiguous network case is deliberately not retried, since Twilio's Create Message has no idempotency key |
 | **15** · Delivery results into campaigns | Campaign engine core | `cc3f28a` | Step records the provider message id in `result_metadata`; terminal receipts mark `sent:delivered` / `sent:undelivered`. Branching on delivery failure deferred — the run has usually advanced past the step by then |
+| **16** · Cross-channel suppression | Campaign engine core | `46a3a9f` | Moved from "how the campaign was drawn" to an engine rule in the compliance gate, checked before quiet hours. Opt-out via `ComplianceMetadata.continue_after_response`. Verified safe for both live campaigns — they hold only a voice attempt ladder, no post-response sends |
 | **4** · Report pending honestly — *Platform half* | GoTracker booking safety | `0d096f2` | `BookingWriteStatus` + `write_status` on `BookingResult`; GoTracker defaults to pending instead of scheduled; message follows status. Cloud Service half and run-history visibility (Item 11) still outstanding |
 
 ---
@@ -97,7 +98,7 @@ Where the silent failures live. Everything here is in this repo.
 | **12** | Generate booking, confirmation and reschedule links | 3d | **Currently unsafe.** Six templates already use the placeholder; nothing generates the value. Needs signed, expiring, per-run links plus patient-facing pages |
 | **14** ✅ | Retry text messages — **done, `7116457`** | 0.5d | Email already does this correctly — copy it. Must ship *with* the provider idempotency key or retries become duplicates |
 | **15** ◐ | Delivery results into campaigns — **done bar branching, `cc3f28a`** | 0.5d | Receipts arrive and feed billing, but never reach the campaign. Undelivered currently counts as contacted |
-| **16** | Stop contacting a patient on other channels once they reply | 0.5d | Today this is a property of how two campaigns were drawn, not an engine guarantee |
+| **16** ✅ | Cross-channel suppression — **done, `46a3a9f`** | 0.5d | Today this is a property of how two campaigns were drawn, not an engine guarantee |
 | **21** | A store for inbound enquiries | 0.5d | Blocks Item 24 entirely. Needs RLS isolation + idempotent intake key + encryption at the same standard as patient contacts |
 | **13** | Enforce readiness checks when a campaign is published | 0.5d | The real check exists; the publish path calls a placeholder that deliberately does nothing. Sequence *after* 11 and 12 |
 | **30** | Block campaigns that need data a clinic cannot provide | 0.5d | Flip warn → refuse, treat unknown as unavailable |
