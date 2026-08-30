@@ -10,11 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
+from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.services.automation.definition_schema import SendSmsNode
 from src.app.services.automation.campaign_conversation_service import CampaignConversationService
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.template_renderer import render_sms_body
-from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.services.sms_service import SmsService
 
 logger = logging.getLogger(__name__)
