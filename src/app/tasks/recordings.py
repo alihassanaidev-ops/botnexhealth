@@ -10,8 +10,11 @@ import httpx
 from src.app.config import settings
 from src.app.services.event_bus import publish_event
 from src.app.services.retention_policy import (
+    S3_RETENTION_TAG_KEY,
     S3_SHORT_RECORDING_TAGGING,
+    RetentionClass,
     default_recording_retain_until,
+    retention_profile_for,
     utc_now,
 )
 from src.app.services.sms_privacy import hash_for_logging
@@ -94,6 +97,7 @@ async def _upload_recording_async(
         is_database_initialized,
     )
     from src.app.models.call import Call
+    from src.app.models.institution import Institution
     from sqlalchemy import select
 
     if not is_database_initialized():
@@ -114,11 +118,41 @@ async def _upload_recording_async(
         ).scalar_one_or_none()
 
         if call:
+            # Honor the clinic's retention override — without it this reset
+            # would clobber the webhook-time window back to the 90-day
+            # default for clinics that keep recordings as part of the record.
+            institution = (
+                await session.execute(
+                    select(Institution).where(Institution.id == institution_id)
+                )
+            ).scalar_one_or_none()
+            profile = retention_profile_for(institution) if institution else None
             call.recording_url = s3_url
             call.recording_retain_until = default_recording_retain_until(
-                call.created_at or utc_now()
+                call.created_at or utc_now(),
+                days=profile.recording_days if profile else None,
             )
             await session.commit()
+
+            # Clinics whose recording window exceeds the short default keep
+            # the audio as part of the medical record: move the object to the
+            # long-lived S3 class (IA→Deep Archive tiering, clinical-record
+            # expiry) instead of the 90-day short_recording lifecycle. Raising
+            # here retries the whole (idempotent) task rather than silently
+            # leaving a record-class recording on the short deletion clock.
+            if profile and profile.recording_days > settings.retention_recording_days:
+                s3.put_object_tagging(
+                    Bucket=settings.aws_s3_bucket_name,
+                    Key=key,
+                    Tagging={
+                        "TagSet": [
+                            {
+                                "Key": S3_RETENTION_TAG_KEY,
+                                "Value": RetentionClass.CLINICAL_RECORDING.value,
+                            }
+                        ]
+                    },
+                )
 
     logger.info(
         "Recording uploaded to S3: call_hash=%s institution_hash=%s size=%d bytes",
