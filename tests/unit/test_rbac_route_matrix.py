@@ -39,6 +39,10 @@ ACTIVE_USER = "get_current_active_user"
 
 ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
     PUBLIC: (
+        # Patient-facing campaign action link. Authenticated by a signed,
+        # run-scoped, expiring token in the URL rather than a session — the
+        # patient opens it straight from a text message, with no login.
+        "GET /api/campaigns/link/{action}",
         "GET /livez",
         "GET /readyz",
         "POST /api/auth/login",
