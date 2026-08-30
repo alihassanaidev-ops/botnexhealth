@@ -456,7 +456,8 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
                         skip_reason = "no_patient_phone"
                     else:
                         template = await SmsTemplateService(session).get_template_by_type(
-                            institution.id, SmsTemplateType.APPOINTMENT_REQUEST.value
+                            institution.id,
+                            SmsTemplateType.PATIENT_APPOINTMENT_REQUEST.value,
                         )
                         if not template or not template.is_active:
                             skip_reason = "template_inactive"
