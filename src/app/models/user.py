@@ -11,11 +11,16 @@ from datetime import datetime, timezone
 from enum import Enum
 from uuid import uuid4
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.app.database import Base
+
+if TYPE_CHECKING:
+    from src.app.models.user_location import UserLocation
 
 
 class UserRole(str, Enum):
@@ -201,6 +206,31 @@ class User(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False
     )
+
+    # Additional location assignments beyond the primary ``location_id``.
+    # ``selectin`` keeps every code path that loads a User (auth deps, Celery)
+    # able to read ``allowed_location_ids`` without an explicit eager-load;
+    # the extra query is one indexed SELECT and only location-scoped users
+    # with multi-location grants have any rows.
+    extra_locations: Mapped[list["UserLocation"]] = relationship(
+        "UserLocation",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    @property
+    def allowed_location_ids(self) -> set[str]:
+        """Every location this user may act on: primary + extra assignments.
+
+        Institution admins are not location-scoped and return an empty set —
+        callers must keep resolving their scope from the request, exactly as
+        before.
+        """
+        ids = {str(ul.location_id) for ul in (self.extra_locations or [])}
+        if self.location_id:
+            ids.add(str(self.location_id))
+        return ids
 
     def is_locked(self) -> bool:
         """Return True if the account lockout is currently active."""

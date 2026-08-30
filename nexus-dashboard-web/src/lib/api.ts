@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getActiveLocationScope } from "@/lib/location-scope";
 import {
     clearAccessToken,
     getAccessToken,
@@ -70,12 +71,26 @@ async function getRefreshedToken(): Promise<string> {
     return refreshPromise;
 }
 
-// Request interceptor — attach backend JWT
+// Request interceptor — attach backend JWT and, for multi-location
+// location-scoped users, the active location (see lib/location-scope.ts).
 api.interceptors.request.use(
     (config) => {
         const token = getAccessToken();
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
+        }
+        const activeLocation = getActiveLocationScope();
+        if (activeLocation) {
+            const url = String(config.url ?? "");
+            const params = (config.params ?? {}) as Record<string, unknown>;
+            const alreadyScoped =
+                "location_id" in params ||
+                "location_slug" in params ||
+                url.includes("location_id=") ||
+                url.includes("location_slug=");
+            if (!alreadyScoped && !url.startsWith("/auth")) {
+                config.params = { ...params, location_id: activeLocation };
+            }
         }
         return config;
     },

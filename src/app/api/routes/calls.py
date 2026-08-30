@@ -19,6 +19,7 @@ from sqlalchemy import desc, func, nullslast, or_, select
 from sqlalchemy.orm import selectinload
 
 from src.app.api.deps import get_current_active_user
+from src.app.api.deps_scope import bind_active_location_in_session
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
@@ -301,6 +302,40 @@ def _location_scope_id(current_user: User) -> str | None:
     return str(current_user.location_id)
 
 
+async def _activate_location_scope(
+    session,
+    current_user: User,
+    requested_location_id: str | None = None,
+) -> str | None:
+    """Resolve and activate the location a calls request operates on.
+
+    LOCATION_ADMIN / STAFF: the requested location when given (validated
+    against their assigned set), else their primary — and the choice is bound
+    into the RLS context of the open session, since multi-location users
+    authenticate pinned to the primary. Institution admins pass through
+    (optional filter, no pinning).
+    """
+    if current_user.role not in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+        return str(requested_location_id) if requested_location_id else None
+    if not current_user.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location assignment required",
+        )
+    effective = (
+        str(requested_location_id)
+        if requested_location_id
+        else str(current_user.location_id)
+    )
+    if effective not in current_user.allowed_location_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized for this location",
+        )
+    await bind_active_location_in_session(session, current_user, effective)
+    return effective
+
+
 # Back-compat shim: callbacks.py imports this name. Keep it as a sync helper
 # returning the location_id (string) — callers should pair with
 # `Call.location_id == <id>`, not `Call.agent_used == <id>`.
@@ -339,6 +374,7 @@ async def _get_scoped_call(
     current_user: User,
     *,
     audit_on_miss: AuditAction | None = None,
+    requested_location_id: str | None = None,
 ) -> Call:
     """Load a call the current institution/location user is allowed to access."""
     if not current_user.institution_id:
@@ -350,8 +386,13 @@ async def _get_scoped_call(
         Call.id == call_id,
         Call.institution_id == current_user.institution_id,
     ]
-    location_id = _location_scope_id(current_user)
-    if location_id:
+    location_id = await _activate_location_scope(
+        session, current_user, requested_location_id
+    )
+    if location_id and current_user.role in (
+        UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
+    ):
         conditions.append(Call.location_id == location_id)
 
     call = (
@@ -500,6 +541,9 @@ async def list_calls(
     ),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
+    # Location to operate on. Institution admins: optional filter. Location
+    # users: must be one of their assigned locations (defaults to primary).
+    location_id: str | None = Query(None),
 ) -> CallsListResponse:
     """
     List calls for the authenticated institution.
@@ -523,9 +567,11 @@ async def list_calls(
 
     async with get_db_session() as session:
         conditions = [Call.institution_id == current_user.institution_id]
-        location_agent_id = await _location_agent_filter(session, current_user)
-        if location_agent_id:
-            conditions.append(Call.location_id == location_agent_id)
+        scoped_location_id = await _activate_location_scope(
+            session, current_user, location_id
+        )
+        if scoped_location_id:
+            conditions.append(Call.location_id == scoped_location_id)
 
         # Tag filtering: each tag must appear in call_tags (or match call_status)
         for tag in active_tags:
@@ -637,6 +683,7 @@ async def get_call(
     request: Request,
     call_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
 ) -> CallDetail:
     """
     Get the PHI-minimized detail for a single call.
@@ -651,7 +698,9 @@ async def get_call(
         )
 
     async with get_db_session() as session:
-        call = await _get_scoped_call(session, call_id, current_user)
+        call = await _get_scoped_call(
+            session, call_id, current_user, requested_location_id=location_id
+        )
 
         # Load custom field values
         cf_svc = CustomFieldService(session)
@@ -722,6 +771,7 @@ async def reveal_transcript(
     request: Request,
     call_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
 ) -> TranscriptRevealResponse:
     """Reveal the structured transcript and audit the access.
 
@@ -739,6 +789,7 @@ async def reveal_transcript(
             call_id,
             current_user,
             audit_on_miss=AuditAction.VIEW_FULL_TRANSCRIPT,
+            requested_location_id=location_id,
         )
         async with _phi_reveal_audit_for_call(
             current_user,
@@ -758,6 +809,7 @@ async def reveal_recording(
     request: Request,
     call_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
 ) -> RecordingRevealResponse:
     """Reveal a time-limited call recording URL for a scoped clinic user and audit it."""
     _ensure_phi_reveal_allowed(
@@ -771,6 +823,7 @@ async def reveal_recording(
             call_id,
             current_user,
             audit_on_miss=AuditAction.VIEW_CALL_RECORDING,
+            requested_location_id=location_id,
         )
         async with _phi_reveal_audit_for_call(
             current_user,
@@ -798,6 +851,7 @@ async def reveal_phone(
     request: Request,
     call_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
 ) -> PhoneRevealResponse:
     """Reveal the caller's full phone number for a scoped clinic user and audit it.
 
@@ -816,6 +870,7 @@ async def reveal_phone(
             call_id,
             current_user,
             audit_on_miss=AuditAction.VIEW_FULL_PHONE,
+            requested_location_id=location_id,
         )
         async with _phi_reveal_audit_for_call(
             current_user,
@@ -839,6 +894,7 @@ async def reveal_custom_phi_field(
     call_id: str,
     field_key: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
 ) -> CustomFieldRevealResponse:
     """Reveal a single PHI custom field for a scoped clinic user and audit it."""
     _ensure_phi_reveal_allowed(
@@ -852,6 +908,7 @@ async def reveal_custom_phi_field(
             call_id,
             current_user,
             audit_on_miss=AuditAction.VIEW_CUSTOM_PHI_FIELD,
+            requested_location_id=location_id,
         )
 
         cf_svc = CustomFieldService(session)
@@ -896,6 +953,7 @@ async def resolve_callback(
     call_id: str,
     body: ResolveCallbackRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
 ) -> CallRecord:
     """
     Mark a callback call as resolved and optionally record a resolution note.
@@ -912,9 +970,14 @@ async def resolve_callback(
             Call.id == call_id,
             Call.institution_id == current_user.institution_id,
         ]
-        location_agent_id = await _location_agent_filter(session, current_user)
-        if location_agent_id:
-            conditions.append(Call.location_id == location_agent_id)
+        scoped_location_id = await _activate_location_scope(
+            session, current_user, location_id
+        )
+        if scoped_location_id and current_user.role in (
+            UserRole.LOCATION_ADMIN.value,
+            UserRole.STAFF.value,
+        ):
+            conditions.append(Call.location_id == scoped_location_id)
 
         call = (
             await session.execute(
@@ -979,6 +1042,7 @@ async def assign_workflow_status(
     call_id: str,
     body: AssignStatusRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
 ) -> CallRecord:
     """Assign (or clear) the human workflow status on a call.
 
@@ -994,9 +1058,14 @@ async def assign_workflow_status(
             Call.id == call_id,
             Call.institution_id == current_user.institution_id,
         ]
-        location_agent_id = await _location_agent_filter(session, current_user)
-        if location_agent_id:
-            conditions.append(Call.location_id == location_agent_id)
+        scoped_location_id = await _activate_location_scope(
+            session, current_user, location_id
+        )
+        if scoped_location_id and current_user.role in (
+            UserRole.LOCATION_ADMIN.value,
+            UserRole.STAFF.value,
+        ):
+            conditions.append(Call.location_id == scoped_location_id)
 
         call = (
             await session.execute(

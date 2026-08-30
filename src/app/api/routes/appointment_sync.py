@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc, func, nullslast, or_, select
 
 from src.app.api.deps import get_current_institution_or_location_user
+from src.app.api.deps_scope import bind_active_location
 from src.app.api.routes.calls import _location_scope_id
 from src.app.database import get_db_session
 from src.app.models.appointment_working_set import AppointmentWorkingSet
@@ -66,7 +67,19 @@ async def list_appointment_sync_status(
 
     institution_id = str(current_user.institution_id)
     scoped_location_id = _location_scope_id(current_user)
-    effective_location_id = scoped_location_id or location_id
+    if scoped_location_id:
+        # Location-scoped user: the requested location must be one of their
+        # assigned set (defaults to primary), and the choice is bound into
+        # the RLS context before the session below opens.
+        effective_location_id = str(location_id) if location_id else scoped_location_id
+        if effective_location_id not in current_user.allowed_location_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized for this location",
+            )
+        bind_active_location(current_user, effective_location_id)
+    else:
+        effective_location_id = location_id
 
     conditions = [AppointmentWorkingSet.institution_id == institution_id]
     if effective_location_id:

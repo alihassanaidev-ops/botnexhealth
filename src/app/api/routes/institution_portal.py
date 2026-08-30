@@ -43,6 +43,9 @@ class InstitutionPortalMeResponse(BaseModel):
     role: str
     institution_id: str | None
     location_id: str | None
+    # Every location a location-scoped user may act on (primary + extra
+    # user_locations assignments). Empty for institution-wide roles.
+    location_ids: list[str] = []
     # PMS integration mode for this tenant. The frontend gates Practice Setup
     # nav/routes on has_pms (no-PMS tenants are call-intelligence-only).
     pms_type: str = "nexhealth"
@@ -170,6 +173,12 @@ class InstitutionUserInviteRequest(BaseModel):
     location_slug: str | None = Field(
         None, description="Required for LOCATION_ADMIN and STAFF"
     )
+    # Optional multi-location assignment. When given, the first slug is the
+    # primary location and the rest become extra user_locations grants;
+    # ``location_slug`` remains supported for single-location invites.
+    location_slugs: list[str] | None = Field(
+        None, description="Multiple locations for LOCATION_ADMIN / STAFF"
+    )
 
 
 class InstitutionUserRowResponse(BaseModel):
@@ -181,6 +190,10 @@ class InstitutionUserRowResponse(BaseModel):
     institution_id: str | None
     location_id: str | None
     location_name: str | None
+    # Multi-location assignment (primary first). Singular fields above stay
+    # for backward compatibility.
+    location_ids: list[str] = []
+    location_names: list[str] = []
 
 
 class UserActionResponse(BaseModel):
@@ -275,6 +288,7 @@ async def get_my_institution_config(
         role=current_user.role,
         institution_id=current_user.institution_id,
         location_id=current_user.location_id,
+        location_ids=sorted(current_user.allowed_location_ids),
         pms_type=getattr(institution, "pms_type", "nexhealth") or "nexhealth",
         has_pms=getattr(institution, "has_pms", True),
     )
@@ -310,18 +324,26 @@ async def list_portal_locations(
             )
         from src.app.models.institution_location import InstitutionLocation
 
+        # All assigned locations (primary + user_locations grants), primary
+        # first so single-location behavior is unchanged.
         loc_result = await session.execute(
             select(InstitutionLocation).where(
-                InstitutionLocation.id == current_user.location_id,
+                InstitutionLocation.id.in_(current_user.allowed_location_ids),
                 InstitutionLocation.institution_id == current_user.institution_id,
             )
         )
-        location = loc_result.scalar_one_or_none()
-        if not location:
+        locations = sorted(
+            loc_result.scalars().all(),
+            key=lambda loc: (
+                str(loc.id) != str(current_user.location_id),
+                loc.name or "",
+            ),
+        )
+        if not locations:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
-        return [InstitutionLocationLiteResponse.from_model(location)]
+        return [InstitutionLocationLiteResponse.from_model(loc) for loc in locations]
 
 
 @router.get(
@@ -629,8 +651,9 @@ async def list_transfer_numbers(
                     detail="Location-scoped account is missing location assignment",
                 )
             stmt = stmt.where(
-                InstitutionLocationTransferNumber.location_id
-                == str(current_user.location_id)
+                InstitutionLocationTransferNumber.location_id.in_(
+                    current_user.allowed_location_ids
+                )
             )
 
         rows = (
@@ -953,14 +976,26 @@ async def list_institution_users(
             .all()
         )
 
-        location_ids = [u.location_id for u in users if u.location_id]
+        # Primary location plus any extra user_locations assignments.
+        assigned_by_user: dict[str, list[str]] = {}
+        all_location_ids: set[str] = set()
+        for u in users:
+            ordered: list[str] = []
+            if u.location_id:
+                ordered.append(str(u.location_id))
+            for ul in u.extra_locations or []:
+                if str(ul.location_id) not in ordered:
+                    ordered.append(str(ul.location_id))
+            assigned_by_user[str(u.id)] = ordered
+            all_location_ids.update(ordered)
+
         location_name_by_id: dict[str, str] = {}
-        if location_ids:
+        if all_location_ids:
             location_rows = (
                 (
                     await session.execute(
                         select(InstitutionLocation).where(
-                            InstitutionLocation.id.in_(location_ids)
+                            InstitutionLocation.id.in_(all_location_ids)
                         )
                     )
                 )
@@ -983,6 +1018,12 @@ async def list_institution_users(
                 location_name=location_name_by_id.get(str(user.location_id))
                 if user.location_id
                 else None,
+                location_ids=assigned_by_user.get(str(user.id), []),
+                location_names=[
+                    location_name_by_id[lid]
+                    for lid in assigned_by_user.get(str(user.id), [])
+                    if lid in location_name_by_id
+                ],
             )
             for user in users
         ]
@@ -1024,26 +1065,41 @@ async def invite_institution_user(
             )
 
         location_id: str | None = None
+        extra_location_ids: list[str] = []
         if role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
-            if not data.location_slug:
+            # Accept either the legacy single slug or the multi-location list
+            # (first slug = primary, rest = extra assignments).
+            slugs = [s for s in (data.location_slugs or []) if s]
+            if not slugs and data.location_slug:
+                slugs = [data.location_slug]
+            if not slugs:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=f"location_slug is required for {role}",
                 )
-            location = (
-                await session.execute(
-                    select(InstitutionLocation).where(
-                        InstitutionLocation.slug == data.location_slug,
-                        InstitutionLocation.institution_id
-                        == current_user.institution_id,
+            seen: list[str] = []
+            for slug in slugs:
+                if slug in seen:
+                    continue
+                seen.append(slug)
+                location = (
+                    await session.execute(
+                        select(InstitutionLocation).where(
+                            InstitutionLocation.slug == slug,
+                            InstitutionLocation.institution_id
+                            == current_user.institution_id,
+                        )
                     )
-                )
-            ).scalar_one_or_none()
-            if not location:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
-                )
-            location_id = str(location.id)
+                ).scalar_one_or_none()
+                if not location:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Location not found: {slug}",
+                    )
+                if location_id is None:
+                    location_id = str(location.id)
+                else:
+                    extra_location_ids.append(str(location.id))
 
         invite_service = UserInviteService(session)
         try:
@@ -1052,6 +1108,7 @@ async def invite_institution_user(
                 institution_id=current_user.institution_id,
                 role=role,
                 location_id=location_id,
+                extra_location_ids=extra_location_ids,
             )
         except Exception:
             raise HTTPException(
@@ -1071,7 +1128,9 @@ async def invite_institution_user(
             "created_role": role,
             "institution_id": current_user.institution_id,
             "location_slug": data.location_slug,
+            "location_slugs": data.location_slugs,
             "location_id": location_id,
+            "extra_location_ids": extra_location_ids or None,
         },
         institution_id=current_user.institution_id,
     )
@@ -1136,6 +1195,117 @@ async def deactivate_institution_user(
         user_id=str(current_user.id),
     )
     return UserActionResponse(message="User deactivated", user_id=user_id)
+
+
+class UserLocationsUpdateRequest(BaseModel):
+    location_slugs: list[str] = Field(
+        ..., min_length=1, description="Assigned locations; first is primary"
+    )
+
+
+@router.put("/users/{user_id}/locations", response_model=UserActionResponse)
+async def update_institution_user_locations(
+    user_id: str,
+    data: UserLocationsUpdateRequest,
+    current_user: Annotated[User, Depends(get_current_institution_admin)],
+):
+    """Replace a location-scoped user's location assignments.
+
+    The first slug becomes the primary (``users.location_id``); the rest are
+    extra ``user_locations`` grants. Only LOCATION_ADMIN / STAFF accounts
+    carry location assignments.
+    """
+    if not current_user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
+
+    async with get_db_session() as session:
+        target = (
+            await session.execute(
+                select(User).where(
+                    User.id == user_id,
+                    User.institution_id == current_user.institution_id,
+                    User.deleted_at.is_(None),
+                    User.role.in_(
+                        [UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value]
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
+        if not target:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
+
+        from src.app.models.institution_location import InstitutionLocation
+        from src.app.models.user_location import UserLocation
+
+        resolved: list[str] = []
+        for slug in data.location_slugs:
+            if not slug:
+                continue
+            location = (
+                await session.execute(
+                    select(InstitutionLocation).where(
+                        InstitutionLocation.slug == slug,
+                        InstitutionLocation.institution_id
+                        == current_user.institution_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if not location:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Location not found: {slug}",
+                )
+            if str(location.id) not in resolved:
+                resolved.append(str(location.id))
+        if not resolved:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="At least one location is required",
+            )
+
+        target.location_id = resolved[0]
+        existing = (
+            (
+                await session.execute(
+                    select(UserLocation).where(UserLocation.user_id == target.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        wanted_extra = set(resolved[1:])
+        for row in existing:
+            if str(row.location_id) not in wanted_extra:
+                await session.delete(row)
+            else:
+                wanted_extra.discard(str(row.location_id))
+        for extra_id in wanted_extra:
+            session.add(
+                UserLocation(
+                    user_id=target.id,
+                    institution_id=str(current_user.institution_id),
+                    location_id=extra_id,
+                )
+            )
+
+    await log_audit(
+        actor=AuditActor.ADMIN,
+        action=AuditAction.USER_UPDATE,
+        target_resource=f"user:{user_id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "actor_role": current_user.role,
+            "institution_id": current_user.institution_id,
+            "location_ids": resolved,
+        },
+        institution_id=current_user.institution_id,
+        user_id=str(current_user.id),
+    )
+    return UserActionResponse(message="Locations updated", user_id=user_id)
 
 
 @router.post("/users/{user_id}/reinvite", response_model=UserActionResponse)

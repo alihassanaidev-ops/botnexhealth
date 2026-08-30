@@ -13,6 +13,7 @@ from src.app.api.deps import (
     get_current_institution_or_location_admin,
     get_current_institution_user,
 )
+from src.app.api.deps_scope import bind_active_location_in_session
 from src.app.api.routes.automation_workflows import WorkflowResponse
 from src.app.database import get_db_session
 from src.app.models.institution import Institution
@@ -256,11 +257,12 @@ async def _resolve_institution_location(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Location-scoped user missing location assignment",
             )
-        if str(location_id) != str(user.location_id):
+        if str(location_id) not in user.allowed_location_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot access another location",
             )
+        await bind_active_location_in_session(session, user, str(location_id))
 
     institution = (
         await session.execute(

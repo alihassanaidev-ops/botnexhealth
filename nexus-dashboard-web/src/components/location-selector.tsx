@@ -1,9 +1,10 @@
 /**
- * Dropdown for institution admins to switch the active location.
+ * Dropdown to switch the active location.
  *
- * Hidden entirely for users that can't switch (LOCATION_ADMIN, STAFF —
- * the backend pins them to user.location_id) and for institutions with
- * a single active location (no switching to do).
+ * Shown to institution admins (all active locations) and to LOCATION_ADMIN /
+ * STAFF accounts assigned more than one location (their assigned set, primary
+ * first). Hidden for single-location users — the backend pins them to
+ * user.location_id and there is nothing to switch.
  */
 
 import {

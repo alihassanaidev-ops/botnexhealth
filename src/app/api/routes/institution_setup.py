@@ -22,6 +22,7 @@ from src.app.api.deps import (
     get_current_active_user,
     get_current_institution_or_location_admin,
 )
+from src.app.api.deps_scope import bind_active_location_in_session
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution import Institution
@@ -70,13 +71,17 @@ async def _resolve_institution_location(
     if not institution:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Institution not found")
 
-    # Location-scoped users are hard-limited to their own location.
+    # Location-scoped users are limited to their assigned locations (the
+    # primary plus any user_locations grants); the primary is the default
+    # when the request names none. The validated choice is pushed into the
+    # RLS context — including this open session — so row filters follow it.
     if user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
         if not user.location_id:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Location-scoped user missing location assignment")
-        if location_id and str(location_id) != str(user.location_id):
+        if location_id and str(location_id) not in user.allowed_location_ids:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot access another location")
-        location_id = str(user.location_id)
+        location_id = str(location_id) if location_id else str(user.location_id)
+        await bind_active_location_in_session(session, user, location_id)
 
     if location_id:
         location = (
@@ -703,22 +708,31 @@ async def list_institution_locations(
         if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
             if not current_user.location_id:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "Location-scoped user missing location assignment")
+            # All assigned locations (primary + user_locations grants),
+            # primary first — the frontend selector defaults to the first row.
             result = await session.execute(
                 select(InstitutionLocation).where(
-                    InstitutionLocation.id == current_user.location_id,
+                    InstitutionLocation.id.in_(current_user.allowed_location_ids),
                     InstitutionLocation.institution_id == current_user.institution_id,
                     InstitutionLocation.is_active.is_(True),
                 )
             )
-        else:
-            result = await session.execute(
-                select(InstitutionLocation)
-                .where(
-                    InstitutionLocation.institution_id == current_user.institution_id,
-                    InstitutionLocation.is_active.is_(True),
-                )
-                .order_by(InstitutionLocation.name)
+            locations = sorted(
+                result.scalars().all(),
+                key=lambda loc: (
+                    str(loc.id) != str(current_user.location_id),
+                    loc.name or "",
+                ),
             )
+            return [LocationInfoResponse.model_validate(loc) for loc in locations]
+        result = await session.execute(
+            select(InstitutionLocation)
+            .where(
+                InstitutionLocation.institution_id == current_user.institution_id,
+                InstitutionLocation.is_active.is_(True),
+            )
+            .order_by(InstitutionLocation.name)
+        )
         return [LocationInfoResponse.model_validate(loc) for loc in result.scalars().all()]
 
 

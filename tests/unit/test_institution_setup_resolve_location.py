@@ -168,6 +168,7 @@ async def test_staff_user_is_pinned_to_their_location_even_without_query_param()
         role=UserRole.STAFF.value,
         institution_id="inst-1",
         location_id="loc-1",
+        allowed_location_ids={"loc-1"},
     )
     session = _FakeSession(
         institution=institution,
@@ -189,6 +190,7 @@ async def test_staff_cannot_query_another_location():
         role=UserRole.STAFF.value,
         institution_id="inst-1",
         location_id="loc-1",
+        allowed_location_ids={"loc-1"},
     )
     session = _FakeSession(institution=institution)
 

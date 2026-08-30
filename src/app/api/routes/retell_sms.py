@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from src.app.api.deps import get_current_active_user, get_current_admin
+from src.app.api.deps_scope import bind_active_location
 from src.app.database import get_db_session
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.retell_sms import RetellSmsChatProfile
@@ -153,7 +154,7 @@ async def list_profiles(
         not is_super_admin
         and current_user.location_id is not None
         and location_id is not None
-        and str(current_user.location_id) != location_id
+        and location_id not in current_user.allowed_location_ids
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -163,8 +164,10 @@ async def list_profiles(
     effective_location_id = (
         location_id
         if is_super_admin or current_user.location_id is None
-        else str(current_user.location_id)
+        else (location_id or str(current_user.location_id))
     )
+    if not is_super_admin and current_user.location_id is not None:
+        bind_active_location(current_user, str(effective_location_id))
     async with get_db_session() as session:
         query = select(RetellSmsChatProfile)
         if not is_super_admin:

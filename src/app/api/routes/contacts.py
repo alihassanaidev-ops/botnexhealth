@@ -29,9 +29,9 @@ from src.app.api.deps import (
     get_current_institution_or_location_admin,
 )
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
+from src.app.api.deps_scope import bind_active_location_in_session
 from src.app.api.routes.calls import (
     _ensure_phi_reveal_allowed,
-    _location_scope_id,
     _tags_from_db,
 )
 from src.app.database import get_db_session
@@ -39,7 +39,7 @@ from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call import Call
 from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
-from src.app.models.user import User
+from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.sms_privacy import mask_phone
 
@@ -126,9 +126,40 @@ def _phone_fields(contact: Contact) -> tuple[str | None, bool]:
     return masked, available
 
 
-async def _location_contact_ids_subq(current_user: User):
+async def _activate_contacts_location(
+    session,
+    current_user: User,
+    requested: str | None = None,
+) -> str | None:
+    """Effective location for a location-scoped contacts request.
+
+    Validates a requested location against the user's assigned set (defaults
+    to their primary) and binds it into the open session's RLS context, so
+    both the ContactLocationAccess filters below and the row policies follow
+    the location the user is acting on. Returns None for institution roles.
+    """
+    if current_user.role not in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+        return None
+    if not current_user.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location assignment required",
+        )
+    effective = str(requested) if requested else str(current_user.location_id)
+    if effective not in current_user.allowed_location_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized for this location",
+        )
+    await bind_active_location_in_session(session, current_user, effective)
+    return effective
+
+
+async def _location_contact_ids_subq(
+    session, current_user: User, requested: str | None = None
+):
     """Subquery of contact_ids visible to a location-scoped user, or None."""
-    loc_id = _location_scope_id(current_user)
+    loc_id = await _activate_contacts_location(session, current_user, requested)
     if not loc_id:
         return None
     return select(ContactLocationAccess.contact_id).where(
@@ -142,10 +173,15 @@ async def _scoped_contact(
     current_user: User,
     *,
     with_calls: bool = False,
+    requested_location_id: str | None = None,
 ) -> Contact:
     """Load a contact the current institution/location user may access."""
     if not current_user.institution_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
+
+    loc_id = await _activate_contacts_location(
+        session, current_user, requested_location_id
+    )
 
     stmt = select(Contact).where(
         Contact.id == contact_id,
@@ -157,7 +193,6 @@ async def _scoped_contact(
     if not contact:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
 
-    loc_id = _location_scope_id(current_user)
     if loc_id:
         has_access = (
             await session.execute(
@@ -188,6 +223,7 @@ async def list_contacts(
         pattern=r"^[^%_]*$",
         description="Filter by patient name (partial, case-insensitive). Wildcards not allowed.",
     ),
+    location_id: str | None = Query(None),
 ) -> ContactsListResponse:
     """List patients (primary contacts) for the authenticated institution.
 
@@ -230,7 +266,7 @@ async def list_contacts(
             # Primary contacts only — aliases roll up into their primary.
             Contact.merged_into_id.is_(None),
         ]
-        loc_subq = await _location_contact_ids_subq(current_user)
+        loc_subq = await _location_contact_ids_subq(session, current_user, location_id)
         if loc_subq is not None:
             base_filters.append(Contact.id.in_(loc_subq))
         if search:
@@ -282,10 +318,19 @@ async def list_contacts(
 # ── Patient detail ────────────────────────────────────────────────────────────
 
 
-async def _load_contact_detail(contact_id: str, current_user: User) -> ContactDetail:
+async def _load_contact_detail(
+    contact_id: str,
+    current_user: User,
+    requested_location_id: str | None = None,
+) -> ContactDetail:
     """Build the ContactDetail for a scoped contact (shared by GET + merge/unmerge)."""
     async with get_db_session() as session:
-        contact = await _scoped_contact(session, contact_id, current_user)
+        contact = await _scoped_contact(
+            session,
+            contact_id,
+            current_user,
+            requested_location_id=requested_location_id,
+        )
 
         aliases = (
             (
@@ -360,9 +405,10 @@ async def get_contact(
     request: Request,
     contact_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
 ) -> ContactDetail:
     """Patient detail: identity, linked aliases, and the union of their calls."""
-    return await _load_contact_detail(contact_id, current_user)
+    return await _load_contact_detail(contact_id, current_user, location_id)
 
 
 # ── Reveal phone (audited) ────────────────────────────────────────────────────
@@ -374,6 +420,7 @@ async def reveal_contact_phone(
     request: Request,
     contact_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = Query(None),
 ) -> PhoneRevealResponse:
     """Reveal a patient's full phone number for a scoped clinic user, audited.
 
@@ -386,7 +433,9 @@ async def reveal_contact_phone(
         target_resource=f"contact:{contact_id}/phone",
     )
     async with get_db_session() as session:
-        contact = await _scoped_contact(session, contact_id, current_user)
+        contact = await _scoped_contact(
+            session, contact_id, current_user, requested_location_id=location_id
+        )
         async with phi_reveal_audit(
             actor=AuditActor.ADMIN,
             action=AuditAction.VIEW_FULL_PHONE,
@@ -409,6 +458,7 @@ async def merge_contact(
     contact_id: str,
     body: MergeRequest,
     current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
 ) -> ContactDetail:
     """Merge ``alias_id`` into the primary contact ``contact_id``.
 
@@ -421,8 +471,12 @@ async def merge_contact(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot merge a contact into itself")
 
     async with get_db_session() as session:
-        primary = await _scoped_contact(session, contact_id, current_user)
-        alias = await _scoped_contact(session, body.alias_id, current_user)
+        primary = await _scoped_contact(
+            session, contact_id, current_user, requested_location_id=location_id
+        )
+        alias = await _scoped_contact(
+            session, body.alias_id, current_user, requested_location_id=location_id
+        )
 
         if primary.merged_into_id is not None:
             raise HTTPException(
@@ -459,7 +513,7 @@ async def merge_contact(
         location_id=current_user.location_id,
     )
 
-    return await _load_contact_detail(contact_id, current_user)
+    return await _load_contact_detail(contact_id, current_user, location_id)
 
 
 @router.post("/{contact_id}/unmerge", response_model=ContactDetail)
@@ -469,12 +523,17 @@ async def unmerge_contact(
     contact_id: str,
     body: MergeRequest,
     current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
 ) -> ContactDetail:
     """Detach ``alias_id`` from the primary ``contact_id``; it becomes standalone again."""
     async with get_db_session() as session:
         # Scope both so cross-institution ids can't be probed.
-        await _scoped_contact(session, contact_id, current_user)
-        alias = await _scoped_contact(session, body.alias_id, current_user)
+        await _scoped_contact(
+            session, contact_id, current_user, requested_location_id=location_id
+        )
+        alias = await _scoped_contact(
+            session, body.alias_id, current_user, requested_location_id=location_id
+        )
 
         if alias.merged_into_id != contact_id:
             raise HTTPException(
@@ -495,4 +554,4 @@ async def unmerge_contact(
         location_id=current_user.location_id,
     )
 
-    return await _load_contact_detail(contact_id, current_user)
+    return await _load_contact_detail(contact_id, current_user, location_id)

@@ -101,18 +101,23 @@ async def _require_no_pms(institution_id: str) -> None:
 def _manageable_scope(user: User) -> list:
     """Extra WHERE clauses limiting which recipients a user may modify."""
     if user.role == UserRole.LOCATION_ADMIN.value:
-        return [ExternalSmsNotificationRecipient.location_id == str(user.location_id)]
+        return [
+            ExternalSmsNotificationRecipient.location_id.in_(
+                user.allowed_location_ids
+            )
+        ]
     return []
 
 
 def _scope_location_id(user: User, requested: str | None) -> str | None:
     """Resolve the location a recipient belongs to.
 
-    A LOCATION_ADMIN may only manage recipients for their own location, so
-    their choice is ignored and forced to it. An INSTITUTION_ADMIN may pick any
+    A LOCATION_ADMIN may only manage recipients for locations they're
+    assigned to: a requested location is validated against that set, and
+    omitting it falls back to their primary. An INSTITUTION_ADMIN may pick any
     location, or omit it for an institution-wide recipient. This matches how
     staff email recipients scope: institution admins see everything, location
-    users only their own site.
+    users only their own sites.
     """
     if user.role == UserRole.LOCATION_ADMIN.value:
         if not user.location_id:
@@ -120,6 +125,13 @@ def _scope_location_id(user: User, requested: str | None) -> str | None:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Location admin has no location assigned",
             )
+        if requested:
+            if str(requested) not in user.allowed_location_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized for this location",
+                )
+            return str(requested)
         return str(user.location_id)
     return requested
 
@@ -149,8 +161,9 @@ async def list_sms_notification_recipients(
             conditions.append(
                 or_(
                     ExternalSmsNotificationRecipient.location_id.is_(None),
-                    ExternalSmsNotificationRecipient.location_id
-                    == str(current_user.location_id),
+                    ExternalSmsNotificationRecipient.location_id.in_(
+                        current_user.allowed_location_ids
+                    ),
                 )
             )
         result = await session.execute(

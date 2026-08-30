@@ -90,13 +90,22 @@ async def get_institution_pms(
         if not current_user.location_id:
             raise HTTPException(status_code=403, detail="Location-scoped account is missing location assignment")
 
-        user_location_id = str(current_user.location_id)
-        if scoped_location_id and scoped_location_id != user_location_id:
+        # Multi-location accounts: any assigned location is fair game; the
+        # primary remains the default when the request names none. The
+        # validated choice is re-bound into the RLS context so row filters
+        # follow it (auth pinned the session to the primary).
+        allowed = current_user.allowed_location_ids
+        if scoped_location_id and scoped_location_id not in allowed:
             raise HTTPException(status_code=403, detail="Not authorized for this location")
-        if path_location_id and path_location_id != user_location_id:
+        if path_location_id and path_location_id not in allowed:
             raise HTTPException(status_code=403, detail="Not authorized for this location")
 
-        scoped_location_id = user_location_id
+        scoped_location_id = (
+            path_location_id or scoped_location_id or str(current_user.location_id)
+        )
+        from src.app.api.deps_scope import bind_active_location
+
+        bind_active_location(current_user, scoped_location_id, request)
     elif not scoped_location_id and path_location_id:
         scoped_location_id = path_location_id
 

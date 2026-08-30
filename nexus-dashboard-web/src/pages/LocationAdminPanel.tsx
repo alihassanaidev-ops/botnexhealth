@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useAuth } from "@/context/AuthContext"
+import { useSelectedLocationId } from "@/context/LocationContext"
 import { useCooldown } from "@/hooks/use-cooldown"
 import {
     deactivateLocationUser,
@@ -34,6 +35,10 @@ export default function LocationAdminPanel() {
     const [staffUsers, setStaffUsers] = useState<InstitutionUserRow[]>([])
     const [actingUserId, setActingUserId] = useState<string | null>(null)
     const inviteCooldown = useCooldown(INVITE_COOLDOWN_SECONDS)
+    // Multi-location admins follow the sidebar's active location; the
+    // backend returns assigned locations primary-first, so the fallback is
+    // the primary (identical to the old single-location behavior).
+    const selectedLocationId = useSelectedLocationId()
 
     async function loadData() {
         setLoading(true)
@@ -42,7 +47,8 @@ export default function LocationAdminPanel() {
                 listInstitutionPortalLocations(),
                 listLocationUsers(),
             ])
-            const assigned = locations[0] ?? null
+            const assigned =
+                locations.find((l) => l.id === selectedLocationId) ?? locations[0] ?? null
             setLocation(assigned)
             setTimezone(assigned?.timezone || "UTC")
             setStaffUsers(users)
@@ -56,7 +62,8 @@ export default function LocationAdminPanel() {
 
     useEffect(() => {
         void loadData()
-    }, [])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedLocationId])
 
     async function handleInvite() {
         if (!location || !email.trim()) return

@@ -37,6 +37,7 @@ import {
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
+import { useLocationContext } from "@/context/LocationContext"
 
 type NavItemDef = { title: string; url: string; icon: React.ElementType; exact?: boolean }
 
@@ -277,6 +278,9 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { user } = useAuth();
     const { hasPms, pmsType } = useInstitution();
+    // Institution admins always see the Active Location group; location-scoped
+    // users see it only when assigned more than one location.
+    const { canSwitch: canSwitchLocation } = useLocationContext();
     const location = useLocation();
 
     const isAdmin = user?.role === "SUPER_ADMIN";
@@ -311,7 +315,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             {...props}
         >
             <SidebarContent className="pt-2">
-                {user?.role === "INSTITUTION_ADMIN" && (
+                {canSwitchLocation && (
                     <SidebarGroup className="pt-2">
                         <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
                             Active Location

@@ -15,6 +15,8 @@ def _user(role: str, *, institution_id: str | None = None, location_id: str | No
         role=role,
         institution_id=institution_id,
         location_id=location_id,
+        # Mirrors User.allowed_location_ids (primary + user_locations grants).
+        allowed_location_ids={str(location_id)} if location_id else set(),
     )
 
 

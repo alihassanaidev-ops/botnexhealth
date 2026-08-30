@@ -5,6 +5,15 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -17,6 +26,7 @@ import {
     listInstitutionUsers,
     reinviteInstitutionUser,
     inviteInstitutionUser,
+    updateInstitutionUserLocations,
     type InstitutionPortalLocation,
     type InstitutionUserRow,
 } from "@/lib/institution-portal-api"
@@ -33,8 +43,13 @@ export default function InstitutionUserManagement() {
     const [inviteEmail, setInviteEmail] = useState("")
     const [inviteRole, setInviteRole] = useState<InstitutionInviteRole>("LOCATION_ADMIN")
     const [inviteLocationSlug, setInviteLocationSlug] = useState("")
+    const [inviteExtraLocationSlugs, setInviteExtraLocationSlugs] = useState<string[]>([])
     const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
     const [users, setUsers] = useState<InstitutionUserRow[]>([])
+    const [editingUser, setEditingUser] = useState<InstitutionUserRow | null>(null)
+    const [editorPrimarySlug, setEditorPrimarySlug] = useState("")
+    const [editorExtraSlugs, setEditorExtraSlugs] = useState<string[]>([])
+    const [savingLocations, setSavingLocations] = useState(false)
     const inviteCooldown = useCooldown(INVITE_COOLDOWN_SECONDS)
     const reinviteCooldowns = useCooldownMap(INVITE_COOLDOWN_SECONDS)
 
@@ -70,14 +85,20 @@ export default function InstitutionUserManagement() {
 
         setInvitingUser(true)
         try {
+            const extraSlugs = inviteExtraLocationSlugs.filter((s) => s !== inviteLocationSlug)
             await inviteInstitutionUser({
                 email: inviteEmail.trim(),
                 role: inviteRole,
                 location_slug: inviteRole !== "INSTITUTION_ADMIN" ? inviteLocationSlug : undefined,
+                location_slugs:
+                    inviteRole !== "INSTITUTION_ADMIN" && extraSlugs.length > 0
+                        ? [inviteLocationSlug, ...extraSlugs]
+                        : undefined,
             })
             toast.success("Invite sent")
             inviteCooldown.start()
             setInviteEmail("")
+            setInviteExtraLocationSlugs([])
             setUsers(await listInstitutionUsers())
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
@@ -99,6 +120,33 @@ export default function InstitutionUserManagement() {
             toast.error(error?.response?.data?.detail || "Failed to deactivate user")
         } finally {
             setActingUserId(null)
+        }
+    }
+
+    function openLocationsEditor(target: InstitutionUserRow) {
+        const slugById = new Map(locations.map((l) => [l.id, l.slug]))
+        const assigned = (target.location_ids ?? (target.location_id ? [target.location_id] : []))
+            .map((id) => slugById.get(id))
+            .filter((slug): slug is string => Boolean(slug))
+        setEditorPrimarySlug(assigned[0] ?? "")
+        setEditorExtraSlugs(assigned.slice(1))
+        setEditingUser(target)
+    }
+
+    async function handleSaveLocations() {
+        if (!editingUser || !editorPrimarySlug) return
+        setSavingLocations(true)
+        try {
+            const extras = editorExtraSlugs.filter((s) => s !== editorPrimarySlug)
+            await updateInstitutionUserLocations(editingUser.id, [editorPrimarySlug, ...extras])
+            toast.success("Locations updated")
+            setEditingUser(null)
+            setUsers(await listInstitutionUsers())
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error?.response?.data?.detail || "Failed to update locations")
+        } finally {
+            setSavingLocations(false)
         }
     }
 
@@ -194,6 +242,36 @@ export default function InstitutionUserManagement() {
                         </div>
                     </div>
 
+                    {inviteRole !== "INSTITUTION_ADMIN" && locations.length > 1 && (
+                        <div>
+                            <Label className="text-xs text-muted-foreground">
+                                Additional locations (optional — lets one account work across offices)
+                            </Label>
+                            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2">
+                                {locations
+                                    .filter((location) => location.slug !== inviteLocationSlug)
+                                    .map((location) => (
+                                        <label
+                                            key={location.id}
+                                            className="flex items-center gap-2 text-sm"
+                                        >
+                                            <Checkbox
+                                                checked={inviteExtraLocationSlugs.includes(location.slug)}
+                                                onCheckedChange={(checked) =>
+                                                    setInviteExtraLocationSlugs((prev) =>
+                                                        checked
+                                                            ? [...prev, location.slug]
+                                                            : prev.filter((s) => s !== location.slug)
+                                                    )
+                                                }
+                                            />
+                                            {location.name}
+                                        </label>
+                                    ))}
+                            </div>
+                        </div>
+                    )}
+
                     <Button
                         onClick={handleInviteUser}
                         disabled={invitingUser || inviteCooldown.isActive || !inviteEmail.trim() || loading}
@@ -225,7 +303,11 @@ export default function InstitutionUserManagement() {
                                     <TableRow key={row.id}>
                                         <TableCell className="font-medium">{row.email}</TableCell>
                                         <TableCell>{formatRoleLabel(row.role)}</TableCell>
-                                        <TableCell>{row.location_name || "All Locations"}</TableCell>
+                                        <TableCell>
+                                            {row.location_names?.length
+                                                ? row.location_names.join(", ")
+                                                : row.location_name || "All Locations"}
+                                        </TableCell>
                                         <TableCell>
                                             {row.invite_status === "PENDING" ? (
                                                 <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-yellow-50 text-yellow-700 ring-yellow-600/20 dark:bg-yellow-900/20 dark:text-yellow-400 dark:ring-yellow-900/10">
@@ -243,6 +325,16 @@ export default function InstitutionUserManagement() {
                                         </TableCell>
                                         <TableCell className="text-right">
                                             <div className="flex justify-end gap-2">
+                                                {(row.role === "LOCATION_ADMIN" || row.role === "STAFF") && (
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        disabled={busy}
+                                                        onClick={() => openLocationsEditor(row)}
+                                                    >
+                                                        Locations
+                                                    </Button>
+                                                )}
                                                 <Button
                                                     variant="outline"
                                                     size="sm"
@@ -279,6 +371,69 @@ export default function InstitutionUserManagement() {
                     </Table>
                 </CardContent>
             </Card>
+
+            <Dialog open={editingUser !== null} onOpenChange={(open) => { if (!open) setEditingUser(null) }}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Assigned locations</DialogTitle>
+                        <DialogDescription>
+                            {editingUser?.email} — pick a primary location and any additional
+                            locations this account may work in. Multi-location users choose
+                            their active location from the sidebar after signing in.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                        <div>
+                            <Label>Primary location</Label>
+                            <Select value={editorPrimarySlug || undefined} onValueChange={setEditorPrimarySlug}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select primary location" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {locations.map((location) => (
+                                        <SelectItem key={location.id} value={location.slug}>
+                                            {location.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        {locations.length > 1 && (
+                            <div>
+                                <Label className="text-xs text-muted-foreground">Additional locations</Label>
+                                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2">
+                                    {locations
+                                        .filter((location) => location.slug !== editorPrimarySlug)
+                                        .map((location) => (
+                                            <label key={location.id} className="flex items-center gap-2 text-sm">
+                                                <Checkbox
+                                                    checked={editorExtraSlugs.includes(location.slug)}
+                                                    onCheckedChange={(checked) =>
+                                                        setEditorExtraSlugs((prev) =>
+                                                            checked
+                                                                ? [...prev, location.slug]
+                                                                : prev.filter((s) => s !== location.slug)
+                                                        )
+                                                    }
+                                                />
+                                                {location.name}
+                                            </label>
+                                        ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setEditingUser(null)} disabled={savingLocations}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleSaveLocations} disabled={savingLocations || !editorPrimarySlug}>
+                            {savingLocations ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                            Save
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

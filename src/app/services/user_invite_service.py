@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.config import settings
 from src.app.models.user import InviteStatus, User
+from src.app.models.user_location import UserLocation
 from src.app.services.auth_email_service import AuthEmailService
 from src.app.services.password_service import PasswordService
 from src.app.services.refresh_token_service import RefreshTokenService
@@ -42,11 +43,16 @@ class UserInviteService:
         role: str,
         institution_id: str | None,
         location_id: str | None = None,
+        extra_location_ids: list[str] | None = None,
         group_id: str | None = None,
         redirect_url: str | None = None,
         is_active: bool = True,
     ) -> User:
-        """Create a new pending user and send an invite email."""
+        """Create a new pending user and send an invite email.
+
+        ``location_id`` is the primary location; ``extra_location_ids`` grants
+        the account additional locations (multi-location users).
+        """
         user = User(
             id=str(uuid4()),
             email=self.normalize_email(email),
@@ -57,6 +63,16 @@ class UserInviteService:
             is_active=is_active,
         )
         self.session.add(user)
+        for extra_id in extra_location_ids or []:
+            if str(extra_id) == str(location_id):
+                continue
+            self.session.add(
+                UserLocation(
+                    user_id=user.id,
+                    institution_id=institution_id,
+                    location_id=str(extra_id),
+                )
+            )
         await self._prepare_and_send_invite(user=user, redirect_url=redirect_url)
         return user
 

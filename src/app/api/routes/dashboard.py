@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import Integer, and_, case, func, select
 
 from src.app.api.deps import get_current_active_user, get_current_institution_admin
+from src.app.api.deps_scope import bind_active_location_in_session
 from src.app.api.rate_limit import RATE_READ, limiter
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
@@ -467,6 +468,7 @@ async def _resolve_dashboard_scope(
     current_user: User,
     institution_id: str,
     location_slug: str | None,
+    location_id: str | None = None,
 ):
     extra_conditions = []
     rollup_location_id: str | None = None
@@ -474,15 +476,29 @@ async def _resolve_dashboard_scope(
     if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
         if not current_user.location_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No location assignment")
-        location_result = await session.execute(
-            select(InstitutionLocation).where(
-                InstitutionLocation.id == current_user.location_id,
-                InstitutionLocation.institution_id == institution_id,
+        # Requested slug or id (multi-location users switching sites), else
+        # primary.
+        if location_slug:
+            location_result = await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.slug == location_slug,
+                    InstitutionLocation.institution_id == institution_id,
+                )
             )
-        )
+        else:
+            location_result = await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.id
+                    == (str(location_id) if location_id else current_user.location_id),
+                    InstitutionLocation.institution_id == institution_id,
+                )
+            )
         location = location_result.scalar_one_or_none()
-        if not location:
+        if not location or str(location.id) not in current_user.allowed_location_ids:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid location scope")
+        await bind_active_location_in_session(
+            session, current_user, str(location.id)
+        )
         extra_conditions.append(Call.location_id == location.id)
         rollup_location_id = str(location.id)
     elif current_user.role == UserRole.INSTITUTION_ADMIN.value and location_slug:
@@ -842,6 +858,7 @@ async def _range_trend_metrics(
     current_user: User,
     institution_id: str,
     location_slug: str | None,
+    location_id: str | None = None,
     start_date: date | None,
     end_date: date | None,
     now: datetime,
@@ -869,6 +886,7 @@ async def _range_trend_metrics(
             current_user=current_user,
             institution_id=institution_id,
             location_slug=location_slug,
+            location_id=location_id,
         )
 
         bucket_expr = func.date_trunc(granularity, CallMetricsDaily.call_date)
@@ -947,6 +965,7 @@ async def get_dashboard_monthly_metrics(
     request: Request,
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_slug: str | None = Query(None),
+    location_id: str | None = Query(None),
     months: int = Query(6, ge=1, le=12),
     start_date: date | None = Query(None, description="Inclusive range start (YYYY-MM-DD)"),
     end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
@@ -973,6 +992,7 @@ async def get_dashboard_monthly_metrics(
             current_user=current_user,
             institution_id=institution_id,
             location_slug=location_slug,
+            location_id=location_id,
             start_date=start_date,
             end_date=end_date,
             now=now,
@@ -990,6 +1010,7 @@ async def get_dashboard_monthly_metrics(
             current_user=current_user,
             institution_id=institution_id,
             location_slug=location_slug,
+            location_id=location_id,
         )
 
         rollup_filters = [
@@ -1233,6 +1254,7 @@ async def get_dashboard_summary(
     request: Request,
     current_user: Annotated[User, Depends(get_current_active_user)],
     location_slug: str | None = Query(None),
+    location_id: str | None = Query(None),
     start_date: date | None = Query(None, description="Inclusive range start (YYYY-MM-DD)"),
     end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
 ) -> DashboardSummary:
@@ -1268,15 +1290,29 @@ async def get_dashboard_summary(
         if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
             if not current_user.location_id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No location assignment")
-            location_result = await session.execute(
-                select(InstitutionLocation).where(
-                    InstitutionLocation.id == current_user.location_id,
-                    InstitutionLocation.institution_id == institution_id,
+            # Requested slug or id (multi-location users switching sites),
+            # else primary.
+            if location_slug:
+                location_result = await session.execute(
+                    select(InstitutionLocation).where(
+                        InstitutionLocation.slug == location_slug,
+                        InstitutionLocation.institution_id == institution_id,
+                    )
                 )
-            )
+            else:
+                location_result = await session.execute(
+                    select(InstitutionLocation).where(
+                        InstitutionLocation.id
+                        == (str(location_id) if location_id else current_user.location_id),
+                        InstitutionLocation.institution_id == institution_id,
+                    )
+                )
             location = location_result.scalar_one_or_none()
-            if not location:
+            if not location or str(location.id) not in current_user.allowed_location_ids:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid location scope")
+            await bind_active_location_in_session(
+                session, current_user, str(location.id)
+            )
             extra_conditions.append(Call.location_id == location.id)
             rollup_location_id = str(location.id)
         elif current_user.role == UserRole.INSTITUTION_ADMIN.value and location_slug:

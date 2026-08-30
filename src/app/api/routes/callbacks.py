@@ -18,7 +18,11 @@ from sqlalchemy.orm import selectinload
 
 from src.app.api.deps import get_current_active_user
 from src.app.api.rate_limit import RATE_READ, limiter
-from src.app.api.routes.calls import ContactSummary, WorkflowStatusOut, _location_agent_filter
+from src.app.api.routes.calls import (
+    ContactSummary,
+    WorkflowStatusOut,
+    _activate_location_scope,
+)
 from src.app.services.sms_privacy import mask_phone
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
@@ -120,6 +124,7 @@ async def list_callbacks(
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
     sort: str = Query("oldest", description="Sort order: 'oldest' or 'newest'"),
+    location_id: str | None = Query(None),
 ) -> CallbacksListResponse:
     """
     List callback calls for the authenticated institution.
@@ -142,9 +147,11 @@ async def list_callbacks(
             ),
         ]
 
-        location_agent_id = await _location_agent_filter(session, current_user)
-        if location_agent_id:
-            conditions.append(Call.location_id == location_agent_id)
+        scoped_location_id = await _activate_location_scope(
+            session, current_user, location_id
+        )
+        if scoped_location_id:
+            conditions.append(Call.location_id == scoped_location_id)
 
         if resolved is not None:
             conditions.append(Call.callback_resolved.is_(resolved))

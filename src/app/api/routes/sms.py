@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from src.app.api.deps import get_current_admin, get_current_institution_or_location_user
+from src.app.api.deps_scope import bind_active_location
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.institution_location import InstitutionLocation
@@ -222,17 +223,19 @@ async def list_institution_sms_logs(
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
+    location_id: str | None = Query(None),
 ) -> SmsLogListResponse:
-    institution_id, location_id = _scope(current_user)
-    return await _list_sms_logs(page=page, size=size, institution_id=institution_id, location_id=location_id)
+    institution_id, scoped_location_id = _scope(current_user, location_id)
+    return await _list_sms_logs(page=page, size=size, institution_id=institution_id, location_id=scoped_location_id)
 
 
 @institution_router.get("/logs/{sms_id}", response_model=SmsLogResponse)
 async def get_institution_sms_log(
     sms_id: str,
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+    location_id: str | None = Query(None),
 ) -> SmsLogResponse:
-    row = await _get_scoped_sms_log(sms_id, current_user)
+    row = await _get_scoped_sms_log(sms_id, current_user, location_id)
     return _sms_log_response(row)
 
 
@@ -240,8 +243,9 @@ async def get_institution_sms_log(
 async def reveal_sms_phone(
     sms_id: str,
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+    location_id: str | None = Query(None),
 ) -> RevealResponse:
-    row = await _get_scoped_sms_log(sms_id, current_user)
+    row = await _get_scoped_sms_log(sms_id, current_user, location_id)
     async with _sms_reveal_audit(current_user, row, AuditAction.VIEW_FULL_PHONE):
         return RevealResponse(id=str(row.id), value=row.to_number or "")
 
@@ -250,8 +254,9 @@ async def reveal_sms_phone(
 async def reveal_sms_body(
     sms_id: str,
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+    location_id: str | None = Query(None),
 ) -> RevealResponse:
-    row = await _get_scoped_sms_log(sms_id, current_user)
+    row = await _get_scoped_sms_log(sms_id, current_user, location_id)
     async with _sms_reveal_audit(current_user, row, AuditAction.VIEW_SMS_BODY):
         return RevealResponse(id=str(row.id), value=row.body or "")
 
@@ -296,8 +301,12 @@ async def _list_sms_logs(
         )
 
 
-async def _get_scoped_sms_log(sms_id: str, current_user: User) -> SmsHistoryLog:
-    institution_id, location_id = _scope(current_user)
+async def _get_scoped_sms_log(
+    sms_id: str,
+    current_user: User,
+    requested_location_id: str | None = None,
+) -> SmsHistoryLog:
+    institution_id, location_id = _scope(current_user, requested_location_id)
     async with get_db_session() as session:
         stmt = (
             select(SmsHistoryLog)
@@ -312,14 +321,25 @@ async def _get_scoped_sms_log(sms_id: str, current_user: User) -> SmsHistoryLog:
         return row
 
 
-def _scope(user: User) -> tuple[str, str | None]:
+def _scope(user: User, requested_location_id: str | None = None) -> tuple[str, str | None]:
     if not user.institution_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Institution-scoped user required")
     if user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
         if not user.location_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Location-scoped user required")
-        return str(user.institution_id), str(user.location_id)
-    return str(user.institution_id), None
+        effective = (
+            str(requested_location_id)
+            if requested_location_id
+            else str(user.location_id)
+        )
+        if effective not in user.allowed_location_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized for this location",
+            )
+        bind_active_location(user, effective)
+        return str(user.institution_id), effective
+    return str(user.institution_id), requested_location_id
 
 
 def _sms_reveal_audit(user: User, row: SmsHistoryLog, action: AuditAction):

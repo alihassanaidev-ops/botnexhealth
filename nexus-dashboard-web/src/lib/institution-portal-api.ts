@@ -13,6 +13,9 @@ export interface InstitutionPortalMe {
     role: string
     institution_id: string | null
     location_id: string | null
+    // All locations a location-scoped user may act on (primary + extra
+    // assignments); empty for institution-wide roles.
+    location_ids?: string[]
     // PMS integration mode. has_pms === false for call-intelligence-only
     // tenants — the UI hides Practice Setup and surfaces the Patients page.
     pms_type?: string
@@ -86,6 +89,10 @@ export interface InstitutionUserRow {
     institution_id: string | null
     location_id: string | null
     location_name: string | null
+    // Multi-location assignment (primary first); singular fields above stay
+    // for backward compatibility.
+    location_ids?: string[]
+    location_names?: string[]
 }
 
 export async function getInstitutionPortalMe(): Promise<InstitutionPortalMe> {
@@ -208,8 +215,19 @@ export async function inviteInstitutionUser(payload: {
     email: string
     role: "INSTITUTION_ADMIN" | "LOCATION_ADMIN" | "STAFF"
     location_slug?: string
+    // Multi-location assignment: first slug is the primary location.
+    location_slugs?: string[]
 }): Promise<void> {
     await api.post("/institution/users/invite", payload)
+}
+
+export async function updateInstitutionUserLocations(
+    userId: string,
+    locationSlugs: string[],
+): Promise<void> {
+    await api.put(`/institution/users/${userId}/locations`, {
+        location_slugs: locationSlugs,
+    })
 }
 
 export async function inviteStaff(locSlug: string, email: string): Promise<void> {

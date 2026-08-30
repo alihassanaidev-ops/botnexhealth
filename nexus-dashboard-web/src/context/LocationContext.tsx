@@ -11,9 +11,13 @@
  * the descriptors and sync routes) silently 400'd.
  *
  * Behaviour by role (matches backend RBAC):
- *   - LOCATION_ADMIN / STAFF: backend hard-pins to user.location_id and
- *     403s any other id. Frontend mirrors the single allowed location
- *     and hides the selector.
+ *   - LOCATION_ADMIN / STAFF with ONE assigned location: backend pins to
+ *     user.location_id and 403s any other id. Frontend mirrors the single
+ *     allowed location and hides the selector.
+ *   - LOCATION_ADMIN / STAFF with MULTIPLE assigned locations: the
+ *     backend returns every assigned location (primary first) and accepts
+ *     any of them per-request, so these users get the same dropdown as an
+ *     INSTITUTION_ADMIN, limited to their assigned set.
  *   - INSTITUTION_ADMIN: shown a dropdown of every active location at
  *     this institution. Selection is persisted in localStorage so
  *     navigations and reloads land on the same clinic.
@@ -35,6 +39,7 @@ import {
     type ReactNode,
 } from "react"
 
+import { setActiveLocationScope } from "@/lib/location-scope"
 import { listLocations } from "@/lib/tenant-api"
 import type { LocationInfo } from "@/types"
 import { useAuth } from "@/context/AuthContext"
@@ -64,7 +69,12 @@ export function LocationProvider({ children }: { children: ReactNode }) {
         user?.role === "LOCATION_ADMIN" ||
         user?.role === "STAFF"
 
-    const canSwitch = user?.role === "INSTITUTION_ADMIN"
+    // Institution admins always switch; location-scoped users switch when
+    // they're assigned more than one location (the backend's locations list
+    // returns exactly their assigned set, primary first).
+    const canSwitch =
+        user?.role === "INSTITUTION_ADMIN" ||
+        (isInstitutionScoped && locations.length > 1)
 
     const loadLocations = useCallback(async () => {
         if (!isInstitutionScoped) {
@@ -77,11 +87,13 @@ export function LocationProvider({ children }: { children: ReactNode }) {
             const fetched = await listLocations()
             setLocations(fetched)
 
-            // Pick the canonical "current" location. For non-switchable
-            // roles the backend pins to user.location_id anyway; we just
-            // mirror that so API calls send the matching id (a noop for
-            // the backend, but cleaner than sending nothing).
-            const stored = canSwitch ? localStorage.getItem(STORAGE_KEY) : null
+            // Pick the canonical "current" location. A stored choice only
+            // matters when there's something to switch between; validation
+            // against the fetched set means a single-location user always
+            // lands on their own location regardless of stale storage.
+            const switchable =
+                user?.role === "INSTITUTION_ADMIN" || fetched.length > 1
+            const stored = switchable ? localStorage.getItem(STORAGE_KEY) : null
             const valid = (id: string | null) =>
                 Boolean(id) && fetched.some((l) => l.id === id)
             let next: string | null = null
@@ -91,7 +103,7 @@ export function LocationProvider({ children }: { children: ReactNode }) {
                 next = fetched[0].id
             }
             setSelectedLocationIdState(next)
-            if (canSwitch && next && next !== stored) {
+            if (switchable && next && next !== stored) {
                 localStorage.setItem(STORAGE_KEY, next)
             }
         } catch {
@@ -104,11 +116,23 @@ export function LocationProvider({ children }: { children: ReactNode }) {
         } finally {
             setIsLoading(false)
         }
-    }, [isInstitutionScoped, canSwitch])
+    }, [isInstitutionScoped, user?.role])
 
     useEffect(() => {
         loadLocations()
     }, [loadLocations])
+
+    // Publish the active location for the api client's request interceptor —
+    // only for location-scoped users with more than one assigned location
+    // (institution admins and single-location users keep untouched requests).
+    useEffect(() => {
+        const isLocationScoped =
+            user?.role === "LOCATION_ADMIN" || user?.role === "STAFF"
+        setActiveLocationScope(
+            isLocationScoped && locations.length > 1 ? selectedLocationId : null
+        )
+        return () => setActiveLocationScope(null)
+    }, [user?.role, locations, selectedLocationId])
 
     const setSelectedLocationId = useCallback(
         (id: string) => {

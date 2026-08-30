@@ -63,6 +63,8 @@ def _user(role: str = UserRole.INSTITUTION_ADMIN.value, *, location_id: str | No
         role=role,
         institution_id="11111111-1111-1111-1111-111111111111",
         location_id=location_id,
+        # Mirrors User.allowed_location_ids (primary + user_locations grants).
+        allowed_location_ids={str(location_id)} if location_id else set(),
     )
 
 
@@ -334,17 +336,21 @@ async def test_call_not_found_emits_failure_audit_for_phi_reveal(monkeypatch):
 
 
 async def _invoke_reveal_endpoint(endpoint: str, current_user):
+    # location_id is passed explicitly: calling the endpoint function outside
+    # FastAPI DI would otherwise leak the Query(None) default object.
     if endpoint == "transcript":
         return await _route_target(calls_routes.reveal_transcript)(
             request=object(),
             call_id="33333333-3333-3333-3333-333333333333",
             current_user=current_user,
+            location_id=None,
         )
     if endpoint == "recording":
         return await _route_target(calls_routes.reveal_recording)(
             request=object(),
             call_id="33333333-3333-3333-3333-333333333333",
             current_user=current_user,
+            location_id=None,
         )
     if endpoint == "custom-field":
         return await _route_target(calls_routes.reveal_custom_phi_field)(
@@ -352,6 +358,7 @@ async def _invoke_reveal_endpoint(endpoint: str, current_user):
             call_id="33333333-3333-3333-3333-333333333333",
             field_key="diagnosis_note",
             current_user=current_user,
+            location_id=None,
         )
     raise AssertionError(f"Unknown endpoint: {endpoint}")
 

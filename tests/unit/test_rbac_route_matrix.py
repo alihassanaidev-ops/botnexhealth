@@ -232,6 +232,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/users/invite",
         "POST /api/institution/users/{user_id}/deactivate",
         "POST /api/institution/users/{user_id}/reinvite",
+        "PUT /api/institution/users/{user_id}/locations",
         "POST /api/institution/locations/{loc_slug}/invite-location-admin",
         "GET /api/institution/billing-email",
         "PUT /api/institution/billing-email",

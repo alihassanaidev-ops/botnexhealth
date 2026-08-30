@@ -113,6 +113,7 @@ from src.app.models.external_notification_recipient import ExternalNotificationR
 from src.app.models.external_sms_notification_recipient import ExternalSmsNotificationRecipient
 from src.app.models.notification import Notification, NotificationType
 from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
+from src.app.models.user_location import UserLocation  # noqa: F401 — model registration
 from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
 from src.app.models.retell_function_invocation import (
     RetellFunctionInvocation,
