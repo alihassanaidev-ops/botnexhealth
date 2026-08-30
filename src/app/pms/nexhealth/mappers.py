@@ -7,6 +7,7 @@ from typing import Any
 
 from src.app.pms.models import (
     BookingResult,
+    BookingWriteStatus,
     UniversalAppointmentType,
     UniversalLocation,
     UniversalOperatory,
@@ -196,6 +197,13 @@ def to_booking_result(raw: dict, success: bool = True) -> BookingResult:
         id=_pid(appt.get("id")) if appt.get("id") else None,
         source="nexhealth",
         status="confirmed" if success else "error",
+        # NexHealth writes are synchronous: acceptance means it is in the
+        # practice's software already, unlike the GoTracker queue.
+        write_status=(
+            BookingWriteStatus.CONFIRMED.value
+            if success
+            else BookingWriteStatus.UNKNOWN.value
+        ),
         start=appt.get("start_time"),
         end=appt.get("end_time"),
         patient_id=_pid(appt.get("patient_id")) if appt.get("patient_id") else None,

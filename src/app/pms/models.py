@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from enum import Enum
+
 from pydantic import BaseModel, Field
 
 
@@ -102,11 +104,29 @@ class BookingRequest(BaseModel):
     note: str | None = None
 
 
+class BookingWriteStatus(str, Enum):
+    """Whether a booking has actually reached the practice's own software.
+
+    For NexHealth clinics the write is immediate, so an accepted booking is
+    CONFIRMED. For GoTracker clinics the Cloud Service queues the write until
+    the clinic's machine is reachable, so acceptance means only PENDING - the
+    appointment may still hit a conflict or exhaust its retries and never
+    arrive. Reporting PENDING as though it were CONFIRMED is what lets a
+    patient be told "you're booked" for an appointment the practice never sees.
+    """
+
+    CONFIRMED = "confirmed"
+    PENDING = "pending"
+    UNKNOWN = "unknown"
+
+
 class BookingResult(BaseModel):
     success: bool
     id: str | None = None
     source: str = ""
     status: str = ""  # "confirmed" | "pending" | "error"
+    # Distinct from `status`: has this reached the practice software yet?
+    write_status: str = BookingWriteStatus.UNKNOWN.value
     start: str | None = None
     end: str | None = None
     patient_id: str | None = None

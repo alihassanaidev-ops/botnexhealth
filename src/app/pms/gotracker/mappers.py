@@ -6,6 +6,7 @@ from typing import Any
 
 from src.app.pms.models import (
     BookingResult,
+    BookingWriteStatus,
     UniversalAppointmentType,
     UniversalLocation,
     UniversalOperatory,
@@ -185,23 +186,68 @@ def to_location(raw: dict[str, Any]) -> UniversalLocation:
     )
 
 
+#: What we tell a caller when the booking has not yet reached the practice.
+PENDING_WRITE_MESSAGE = (
+    "We're confirming this with the practice and will let you know."
+)
+CONFIRMED_WRITE_MESSAGE = "Appointment booked successfully."
+
+
+def _write_status(data: dict[str, Any], *, success: bool) -> str:
+    """Read the Cloud Service's write status, defaulting to PENDING.
+
+    The Cloud Service queues a booking until the clinic's machine is reachable,
+    so acceptance alone does not mean the appointment exists in the practice's
+    software. Until the response carries an explicit write status we must
+    assume the write has not landed - the old behaviour assumed the opposite
+    and reported every queued booking as though it were scheduled.
+    """
+    if not success:
+        return BookingWriteStatus.UNKNOWN.value
+    raw_status = _first(data, "write_status", "WriteStatus", "writeback_status")
+    if raw_status is None:
+        return BookingWriteStatus.PENDING.value
+    normalised = str(raw_status).strip().lower()
+    if normalised in {"confirmed", "written", "complete", "completed"}:
+        return BookingWriteStatus.CONFIRMED.value
+    if normalised in {"pending", "waiting", "queued", "accepted"}:
+        return BookingWriteStatus.PENDING.value
+    return BookingWriteStatus.UNKNOWN.value
+
+
 def to_booking_result(raw: dict[str, Any], *, success: bool = True) -> BookingResult:
     data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
     appointment_id = _first(data, "appointment_id", "AppointmentId", "id")
     start = _first(data, "start_time", "StartTime")
     end = _first(data, "end_time", "EndTime")
 
+    write_status = _write_status(data, success=success)
+    is_pending = write_status == BookingWriteStatus.PENDING.value
+
+    if success:
+        # An explicit appointment status from the practice wins; otherwise the
+        # booking is only as real as the write behind it.
+        reported = _first(data, "status", "Status")
+        status = str(reported) if reported is not None else (
+            BookingWriteStatus.PENDING.value if is_pending else "scheduled"
+        )
+        message = PENDING_WRITE_MESSAGE if is_pending else CONFIRMED_WRITE_MESSAGE
+    else:
+        status = "error"
+        message = ""
+
     return BookingResult(
         success=success,
         id=pid(appointment_id) if appointment_id is not None else None,
         source="gotracker",
-        status=str(_first(data, "status", "Status") or ("scheduled" if success else "error")),
+        status=status,
+        write_status=write_status,
         start=start,
         end=end,
         patient_id=_maybe_pid(data, "patient_id", "PatientId", "ContactId"),
         provider_id=_maybe_pid(data, "provider_id", "ProviderId"),
         appointment_type_id=_maybe_pid(data, "appointment_type_id", "AppointmentTypeId"),
-        message="Appointment booked successfully." if success else "",
+        message=message,
     )
 
 
