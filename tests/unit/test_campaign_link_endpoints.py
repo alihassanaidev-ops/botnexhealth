@@ -190,3 +190,36 @@ def test_recorded_channel_satisfies_the_database_constraint():
 
     assert used, "expected the route to record a channel"
     assert used <= allowed, f"{used - allowed} not permitted by the CHECK constraint"
+
+
+# ---------------------------------------------------------------------------
+# Through the real app, middleware included
+# ---------------------------------------------------------------------------
+
+
+def test_no_referrer_survives_the_middleware_stack():
+    """The tests above mount a bare router, so they never see the middleware.
+
+    SecurityHeadersMiddleware used to assign Referrer-Policy unconditionally,
+    which replaced this route's no-referrer with strict-origin-when-cross-origin
+    — a policy that still sends the full URL, token and all, to anything
+    same-origin on the page. Only a request through the real app catches that.
+    """
+    from src.app.main import app as real_app
+
+    with TestClient(real_app) as c:
+        resp = c.get("/api/campaigns/link/confirm?token=nonsense")
+
+    assert resp.headers["referrer-policy"] == "no-referrer"
+    assert "noindex" in resp.headers["x-robots-tag"]
+    assert "no-store" in resp.headers["cache-control"]
+
+
+def test_other_routes_keep_the_default_referrer_policy():
+    """Relaxing the middleware must not relax it for everything else."""
+    from src.app.main import app as real_app
+
+    with TestClient(real_app) as c:
+        resp = c.get("/livez")
+
+    assert resp.headers["referrer-policy"] == "strict-origin-when-cross-origin"
