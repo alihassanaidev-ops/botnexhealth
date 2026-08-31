@@ -122,3 +122,51 @@ export async function cancelAppointment(
     )
     return data
 }
+
+export type RegistrationDetails = {
+    clinic_name: string
+    first_name: string
+    last_name: string
+    email: string
+    phone: string
+    already_registered: boolean
+}
+
+/** The closed set the practice software accepts. */
+export const GENDERS = ["Female", "Male", "Other"] as const
+export type Gender = (typeof GENDERS)[number]
+
+export type RegistrationRequest = {
+    date_of_birth: string
+    gender: Gender
+    first_name?: string
+    last_name?: string
+    email?: string
+    phone?: string
+}
+
+export type RegisterOutcome = {
+    status: "registered" | "already_registered"
+}
+
+export async function fetchRegistrationDetails(
+    token: string,
+): Promise<RegistrationDetails> {
+    const { data } = await client.get<RegistrationDetails>(
+        "/campaigns/link/register/details",
+        { params: { token } },
+    )
+    return data
+}
+
+export async function registerPatient(
+    token: string,
+    body: RegistrationRequest,
+): Promise<RegisterOutcome> {
+    const { data } = await client.post<RegisterOutcome>(
+        "/campaigns/link/register",
+        body,
+        { params: { token } },
+    )
+    return data
+}

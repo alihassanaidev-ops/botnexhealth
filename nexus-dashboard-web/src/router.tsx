@@ -15,6 +15,7 @@ import BrandLoader from "@/components/BrandLoader";
 import Login from "./pages/Login";
 import BookingLink from "./pages/BookingLink";
 import CancelLink from "./pages/CancelLink";
+import RegisterPatient from "./pages/RegisterPatient";
 import SetPassword from "./pages/SetPassword";
 
 // All other pages — lazy loaded
@@ -83,6 +84,14 @@ export const router = createBrowserRouter([
         // times, and it must never act just because the link was opened.
         path: "/book/cancel",
         element: <CancelLink />,
+        errorElement: <RouteError />,
+    },
+    {
+        // Registering a lead as a patient. Public for the same reason as the
+        // pages above — opened straight from a message, no session — and kept
+        // outside AppLayout for the same one.
+        path: "/book/register",
+        element: <RegisterPatient />,
         errorElement: <RouteError />,
     },
     {
