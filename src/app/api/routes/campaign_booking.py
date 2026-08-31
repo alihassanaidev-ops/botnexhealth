@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from src.app.database import get_system_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.automation_workflow import AutomationWorkflowRun
-from src.app.models.campaign_response import CampaignResponseEvent
+from src.app.models.campaign_response import CampaignResponseEvent, CampaignStaffHandoff
 from src.app.models.contact import Contact
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
@@ -349,7 +349,45 @@ async def book_slot(
 
         patient_id = contact.nexhealth_patient_id
         if not patient_id:
-            # No record in the practice software to book against.
+            # Nothing in the practice software to book against — an enquiry who
+            # was never registered, or a record that has not synced. Returning
+            # an error and stopping would drop the patient silently: they wanted
+            # an appointment and nobody at the clinic would ever know. Record
+            # the intent and raise a handoff, the same as the landing page does
+            # for an action it cannot complete unattended.
+            event = CampaignResponseEvent(
+                id=str(uuid4()),
+                institution_id=str(run.institution_id),
+                location_id=str(run.location_id) if run.location_id else None,
+                workflow_id=str(run.workflow_id) if run.workflow_id else None,
+                workflow_run_id=str(run.id),
+                contact_id=str(run.contact_id) if run.contact_id else None,
+                channel="booking_link",
+                normalized_intent="requested_book",
+                source="campaign_booking_link",
+                source_event_id=f"link:{run.id}:requested_book",
+                confidence="deterministic",
+            )
+            session.add(event)
+            await session.flush()
+            session.add(
+                CampaignStaffHandoff(
+                    id=str(uuid4()),
+                    institution_id=event.institution_id,
+                    location_id=event.location_id,
+                    workflow_id=event.workflow_id,
+                    workflow_run_id=event.workflow_run_id,
+                    contact_id=event.contact_id,
+                    response_event_id=str(event.id),
+                    reason="patient_not_in_practice_software",
+                    status="open",
+                    summary=(
+                        "Patient chose a time from a booking link but has no "
+                        "record in the practice software."
+                    ),
+                )
+            )
+            await session.commit()
             return _json({"error": "handoff"}, 409)
 
         # Re-search and match. The client's start time selects a slot; it never

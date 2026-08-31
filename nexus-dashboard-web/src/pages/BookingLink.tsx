@@ -149,15 +149,29 @@ export default function BookingLink() {
             setOutcome(result.status === "pending" ? "pending" : "booked")
             setPhase("done")
         } catch (err: unknown) {
-            const status = (err as { response?: { status?: number } })?.response?.status
+            const response = (err as {
+                response?: { status?: number; data?: { error?: string; slots?: SlotOption[] } }
+            })?.response
+            const status = response?.status
+            const reason = response?.data?.error
+
+            if (status === 409 && reason === "handoff") {
+                // Not a race — there is no record in the practice software to
+                // book against. Telling them the time was taken would have them
+                // trying slot after slot forever. The clinic has been given a
+                // handoff, so a person will pick this up.
+                setOutcome("pending")
+                setPhase("done")
+                return
+            }
+
             if (status === 409) {
                 // Someone took it while they were deciding — most likely the
                 // clinic booking it over the phone, which goes through the same
                 // path. Re-offer rather than dead-end: the whole point is that
                 // they finish. The refusal carries the refreshed list, so this
                 // costs no second request and no second wait.
-                const fresh = (err as { response?: { data?: { slots?: SlotOption[] } } })
-                    ?.response?.data?.slots
+                const fresh = response?.data?.slots
                 setMessage("Sorry — that time has just been taken. Here are the latest times.")
                 setChosen(null)
                 if (fresh && data) {
