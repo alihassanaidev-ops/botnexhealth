@@ -34,6 +34,11 @@ from src.app.services.automation.retell_outbound_client import (
     RetellTransientError,
 )
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+from src.app.services.circuit_breaker import (
+    BreakerService,
+    NoOpCircuitBreaker,
+    ServiceBreaker,
+)
 from src.app.services.automation.voice_attempt_recorder import (
     claim_voice_attempt,
     mark_attempt_failed,
@@ -130,9 +135,11 @@ class VoiceNodeExecutor:
         self,
         session: AsyncSession,
         runtime: AutomationWorkflowRuntimeService,
+        breaker: ServiceBreaker | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime
+        self.breaker: ServiceBreaker = breaker or NoOpCircuitBreaker()
 
     async def execute(
         self,
@@ -402,6 +409,9 @@ class VoiceNodeExecutor:
                 metadata=metadata,
             )
         except RetellTransientError as exc:
+            await self.breaker.record_failure(
+                BreakerService.RETELL, str(run.location_id or run.institution_id)
+            )
             # Recoverable vendor blip. The POST did not succeed → mark the claim FAILED
             # (committed) so the V-6 retry sees no active claim and can re-dial. Then
             # retry via the Celery task until max_attempts, then give up.
@@ -426,6 +436,12 @@ class VoiceNodeExecutor:
             )
             raise  # propagate → Celery task retries with backoff
         except RetellAmbiguousError as exc:
+            # Counted against the breaker even though this call is never retried:
+            # a timeout is the clearest signal Retell is unwell, and the breaker
+            # is what stops the *next* run walking into the same wall.
+            await self.breaker.record_failure(
+                BreakerService.RETELL, str(run.location_id or run.institution_id)
+            )
             # Timeout/network (XC-1b): the call MAY have been placed but the response
             # was lost. Do NOT retry (no idempotency key → double-dial risk). Fail the
             # run, but leave the claim INITIATING (NOT failed) so a task redelivery is
@@ -467,6 +483,9 @@ class VoiceNodeExecutor:
         # (V-4) + store the retell_call_id on the step for webhook correlation. A crash
         # before the task commit leaves the claim INITIATING, which still blocks a
         # re-dial on redelivery (at-most-once). ---
+        await self.breaker.record_success(
+            BreakerService.RETELL, str(run.location_id or run.institution_id)
+        )
         await mark_attempt_placed(
             attempt, retell_call_id=result.call_id, awaiting_outcome=node.wait_for_outcome
         )

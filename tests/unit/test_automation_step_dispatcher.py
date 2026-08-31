@@ -48,6 +48,7 @@ from src.app.services.automation.step_dispatcher import (
 )
 from src.app.services.automation.llm_node_executor import execute_llm_node
 from src.app.services.automation.campaign_templates import TEMPLATES, instantiate_definition
+from src.app.services.circuit_breaker import BreakerDecision, BreakerState
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
 
@@ -1340,3 +1341,116 @@ def test_compute_due_at_context_anchor_interprets_naive_time_in_location_timezon
     )
 
     assert result == datetime(2026, 7, 2, 19, 0, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# advance() — service circuit breaker (Item 17)
+# ---------------------------------------------------------------------------
+
+
+class _StubBreaker:
+    """Breaker that answers however the test needs, and records what it saw."""
+
+    def __init__(self, decision: BreakerDecision) -> None:
+        self._decision = decision
+        self.asked: list[tuple[str, str]] = []
+
+    async def allow(self, service, scope_id) -> BreakerDecision:
+        self.asked.append((getattr(service, "value", service), scope_id))
+        return self._decision
+
+    async def record_failure(self, service, scope_id) -> BreakerState:
+        return BreakerState.CLOSED
+
+    async def record_success(self, service, scope_id) -> BreakerState:
+        return BreakerState.CLOSED
+
+
+def _sms_definition() -> WorkflowDefinition:
+    return _definition(
+        nodes=[
+            SendSmsNode(id="sms-1", body_template="Hi", next_node_id="exit-1"),
+            ExitNode(id="exit-1", outcome="sent"),
+        ],
+        entry="sms-1",
+    )
+
+
+def test_open_breaker_holds_the_send_instead_of_failing_the_run() -> None:
+    """A supplier outage must defer the work, never fail the campaign run."""
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    breaker = _StubBreaker(
+        BreakerDecision(False, BreakerState.OPEN, retry_after_seconds=45)
+    )
+    dispatcher = WorkflowStepDispatcher(session, rt, sched, breaker=breaker)
+
+    run = _make_run()
+    run.location_id = "loc-9"
+    result = asyncio.run(dispatcher.advance(run, _sms_definition(), context={}))
+
+    assert result.status == "waiting"
+    assert result.timer_id == "timer-1"
+    # Held, not dropped and not failed.
+    rt.wait_run.assert_awaited_once()
+    rt.fail_run.assert_not_awaited()
+    sched.create_timer.assert_awaited_once()
+
+
+def test_breaker_hold_schedules_the_retry_at_the_reported_time() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    breaker = _StubBreaker(
+        BreakerDecision(False, BreakerState.OPEN, retry_after_seconds=45)
+    )
+    dispatcher = WorkflowStepDispatcher(session, rt, sched, breaker=breaker)
+
+    run = _make_run()
+    run.location_id = "loc-9"
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    asyncio.run(dispatcher.advance(run, _sms_definition(), context={}, now=now))
+
+    due_at = sched.create_timer.await_args.kwargs["due_at"]
+    assert due_at == now + timedelta(seconds=45)
+
+
+def test_breaker_is_scoped_to_the_location_and_the_channel_provider() -> None:
+    """One clinic's failing provider must not hold another clinic's sends."""
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    breaker = _StubBreaker(BreakerDecision(True, BreakerState.CLOSED))
+    dispatcher = WorkflowStepDispatcher(session, rt, sched, breaker=breaker)
+
+    run = _make_run()
+    run.location_id = "loc-9"
+    asyncio.run(dispatcher.advance(run, _sms_definition(), context={}))
+
+    assert breaker.asked == [("twilio", "loc-9")]
+
+
+def test_closed_breaker_lets_the_send_through() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    breaker = _StubBreaker(BreakerDecision(True, BreakerState.CLOSED))
+    dispatcher = WorkflowStepDispatcher(session, rt, sched, breaker=breaker)
+
+    result = asyncio.run(dispatcher.advance(_make_run(), _sms_definition(), context={}))
+
+    assert result.status == "completed"
+    sched.create_timer.assert_not_awaited()
+
+
+def test_dispatcher_without_a_breaker_does_not_hold_anything() -> None:
+    """The default stub keeps the engine running where no store is wired."""
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    result = asyncio.run(dispatcher.advance(_make_run(), _sms_definition(), context={}))
+
+    assert result.status == "completed"
