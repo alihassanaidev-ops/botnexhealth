@@ -72,7 +72,7 @@ import {
     StatusSelect,
     NoPmsTriageDetails,
 } from "@/components/calls/shared"
-import { formatDateTime, formatDuration, getInitials } from "@/components/calls/format"
+import { callerLabel, formatDateTime, formatDuration, getInitials } from "@/components/calls/format"
 import { listWorkflowStatuses, assignCallStatus } from "@/lib/workflow-status-api"
 import { callStatusFilterOptions, DIRECTION_OPTIONS } from "@/lib/constants"
 import { cn } from "@/lib/utils"
@@ -742,6 +742,7 @@ export default function Calls() {
                     items={(data?.items ?? []).map((c) => ({
                         id: c.id,
                         name: c.contact?.full_name ?? null,
+                        phone: c.phone_masked,
                         date: c.call_date,
                         time: c.call_time,
                         summary: c.summary,
@@ -860,6 +861,9 @@ interface CallRowProps {
 
 function CallRow({ call, onClick }: CallRowProps) {
     const name = call.contact?.full_name
+    // Unnamed callers still have a number on the record — show it rather than
+    // a column of identical "Unknown caller" rows.
+    const caller = callerLabel(name, call.phone_masked)
     return (
         <TableRow
             className="cursor-pointer hover:bg-muted/50 transition-colors"
@@ -878,8 +882,14 @@ function CallRow({ call, onClick }: CallRowProps) {
                     )}
                     <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
-                            <span className={name ? "font-medium" : "italic text-muted-foreground"}>
-                                {name ?? "Unknown caller"}
+                            <span
+                                className={cn(
+                                    caller.kind === "name" && "font-medium",
+                                    caller.kind === "phone" && "font-medium tabular-nums",
+                                    caller.kind === "unknown" && "italic text-muted-foreground",
+                                )}
+                            >
+                                {caller.text}
                             </span>
                             {call.is_new_patient && (
                                 <UserPlus className="h-3.5 w-3.5 text-indigo-500 shrink-0" aria-label="New patient" />
