@@ -16,7 +16,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
+from uuid import uuid4
+
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
@@ -52,13 +55,15 @@ class CampaignEnquiry(Base):
     )
 
     id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, server_default=func.gen_random_uuid()
+        UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
     )
     institution_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("institutions.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=False),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
     )
     location_id: Mapped[str | None] = mapped_column(
-        String(36),
+        UUID(as_uuid=False),
         ForeignKey("institution_locations.id", ondelete="SET NULL"),
         nullable=True,
     )
@@ -83,10 +88,10 @@ class CampaignEnquiry(Base):
     #: Set once the enquiry is matched to someone already in the practice's
     #: records, so conversion never creates a duplicate patient.
     contact_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=False), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True
     )
     #: The campaign run handling this enquiry.
-    workflow_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    workflow_run_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)

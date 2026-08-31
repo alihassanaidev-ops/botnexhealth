@@ -117,7 +117,10 @@ class NexHealthWebhookShadowEvent(Base):
         nullable=False,
         default=NexHealthWebhookShadowParseStatus.PARSED.value,
         server_default=text("'parsed'"),
-        index=True,
+        # No index=True: it would auto-name itself
+        # ix_nexhealth_webhook_shadow_events_parse_status, colliding with the
+        # explicit composite index of that name in __table_args__, which already
+        # covers this column as its leading key.
     )
     parse_error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolution_status: Mapped[str] = mapped_column(
