@@ -33,27 +33,50 @@ const RANGE_OPTIONS = [
 
 type Phase = "loading" | "choosing" | "booking" | "done" | "error"
 
-/** Group slots by their local day so the list reads as a diary, not a dump. */
-function byDay(slots: SlotOption[], timeZone: string | undefined) {
-    const groups = new Map<string, SlotOption[]>()
-    for (const slot of slots) {
-        const day = new Date(slot.start).toLocaleDateString(undefined, {
-            weekday: "long",
-            month: "long",
-            day: "numeric",
-            timeZone,
-        })
-        groups.set(day, [...(groups.get(day) ?? []), slot])
+/**
+ * Times are rendered from the wall clock the practice software returns, not by
+ * converting into a configured timezone.
+ *
+ * The sandbox returns 08:00-07:00 for a location this database records as
+ * America/Chicago — converting would display 10:00 for a slot the clinic calls
+ * eight o'clock. The offset in the practice software's own response is the
+ * authority on what the clinic means, so the wall-clock part is read directly
+ * and never re-zoned.
+ */
+function wallClock(iso: string) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso)
+    if (!m) return { date: iso.slice(0, 10), hour: 0, minute: 0 }
+    return {
+        date: `${m[1]}-${m[2]}-${m[3]}`,
+        hour: Number(m[4]),
+        minute: Number(m[5]),
     }
-    return [...groups.entries()]
 }
 
-function timeLabel(iso: string, timeZone: string | undefined) {
-    return new Date(iso).toLocaleTimeString(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-        timeZone,
+function timeLabel(iso: string) {
+    const { hour, minute } = wallClock(iso)
+    const suffix = hour < 12 ? "am" : "pm"
+    const h12 = hour % 12 === 0 ? 12 : hour % 12
+    return `${h12}:${String(minute).padStart(2, "0")}${suffix}`
+}
+
+function dayLabel(isoDate: string) {
+    // Midday avoids the date shifting when the browser is behind UTC.
+    return new Date(`${isoDate}T12:00:00`).toLocaleDateString(undefined, {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
     })
+}
+
+/** Group slots by the clinic's own day so the list reads as a diary. */
+function byDay(slots: SlotOption[]) {
+    const groups = new Map<string, SlotOption[]>()
+    for (const slot of slots) {
+        const { date } = wallClock(slot.start)
+        groups.set(date, [...(groups.get(date) ?? []), slot])
+    }
+    return [...groups.entries()]
 }
 
 export default function BookingLink() {
@@ -69,6 +92,8 @@ export default function BookingLink() {
     const [rangeDays, setRangeDays] = useState(7)
     const [refreshing, setRefreshing] = useState(false)
     const [outcome, setOutcome] = useState<"booked" | "pending" | null>(null)
+    // What was actually booked, held so the confirmation can name it back.
+    const [confirmedSlot, setConfirmedSlot] = useState<SlotOption | null>(null)
     const [message, setMessage] = useState("")
 
     const linkAction = (action === "reschedule" ? "reschedule" : "book") as LinkAction
@@ -137,7 +162,7 @@ export default function BookingLink() {
     }, [linkAction, token, typeId, rangeDays])
 
     const days = useMemo(
-        () => byDay(data?.slots ?? [], data?.timezone ?? undefined),
+        () => byDay(data?.slots ?? []),
         [data],
     )
 
@@ -146,6 +171,7 @@ export default function BookingLink() {
         setPhase("booking")
         try {
             const result = await bookSlot(linkAction, token, chosen.start, typeId ?? undefined)
+            setConfirmedSlot(chosen)
             setOutcome(result.status === "pending" ? "pending" : "booked")
             setPhase("done")
         } catch (err: unknown) {
@@ -189,6 +215,7 @@ export default function BookingLink() {
     }
 
     const clinic = data?.clinic_name || "the clinic"
+    const chosenTypeName = types.find((t) => t.id === typeId)?.name ?? null
 
     return (
         <div className="min-h-screen bg-muted/30 px-4 py-8 flex justify-center">
@@ -224,7 +251,19 @@ export default function BookingLink() {
                             <p className="text-sm text-muted-foreground">{message}</p>
                         )}
 
-                        {(phase === "choosing" || phase === "booking") && (
+                        {phase === "booking" && (
+                            <div className="py-6 text-center space-y-3" aria-busy="true">
+                                <div className="h-8 w-8 mx-auto rounded-full border-2 border-muted border-t-primary animate-spin" />
+                                <p className="text-sm text-muted-foreground" role="status">
+                                    Booking {chosen ? timeLabel(chosen.start) : "your appointment"}…
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                    This can take a few seconds. Please don't close this page.
+                                </p>
+                            </div>
+                        )}
+
+                        {phase === "choosing" && (
                             <>
                                 {/* Filters first: the type changes how long the
                                     appointment needs to be, so it changes which
@@ -234,7 +273,6 @@ export default function BookingLink() {
                                         types={types}
                                         value={typeId}
                                         onChange={setTypeId}
-                                        disabled={phase === "booking"}
                                     />
                                     <div className="flex gap-2">
                                         {RANGE_OPTIONS.map((opt) => (
@@ -245,7 +283,6 @@ export default function BookingLink() {
                                                 variant={rangeDays === opt.days ? "default" : "outline"}
                                                 aria-pressed={rangeDays === opt.days}
                                                 className="flex-1 h-9"
-                                                disabled={phase === "booking"}
                                                 onClick={() => setRangeDays(opt.days)}
                                             >
                                                 {opt.label}
@@ -274,9 +311,9 @@ export default function BookingLink() {
                                     </p>
                                 ) : (
                                     days.map(([day, slots]) => (
-                                        <div key={day} className="space-y-2">
+                                        <div key={dayLabel(day)} className="space-y-2">
                                             <h2 className="text-sm font-medium text-muted-foreground">
-                                                {day}
+                                                {dayLabel(day)}
                                             </h2>
                                             <div className="grid grid-cols-3 gap-2">
                                                 {slots.map((slot) => {
@@ -294,7 +331,7 @@ export default function BookingLink() {
                                                                 setChosen(slot)
                                                             }}
                                                         >
-                                                            {timeLabel(slot.start, data?.timezone ?? undefined)}
+                                                            {timeLabel(slot.start)}
                                                         </Button>
                                                     )
                                                 })}
@@ -306,27 +343,45 @@ export default function BookingLink() {
                         )}
 
                         {phase === "done" && (
-                            <p className="text-sm text-muted-foreground">
-                                {outcome === "pending"
-                                    ? `We're confirming this with ${clinic} and will let you know shortly.`
-                                    : `Your appointment at ${clinic} is confirmed. See you then.`}
-                            </p>
+                            <div className="space-y-4">
+                                {confirmedSlot && (
+                                    <div className="rounded-md border bg-muted/40 p-4 space-y-1">
+                                        <p className="font-medium">
+                                            {dayLabel(wallClock(confirmedSlot.start).date)}
+                                        </p>
+                                        <p className="text-2xl font-semibold tracking-tight">
+                                            {timeLabel(confirmedSlot.start)}
+                                        </p>
+                                        {confirmedSlot.provider_name && (
+                                            <p className="text-sm text-muted-foreground">
+                                                with {confirmedSlot.provider_name}
+                                            </p>
+                                        )}
+                                        {chosenTypeName && (
+                                            <p className="text-sm text-muted-foreground">
+                                                {chosenTypeName}
+                                            </p>
+                                        )}
+                                        <p className="text-sm text-muted-foreground pt-1">{clinic}</p>
+                                    </div>
+                                )}
+                                <p className="text-sm text-muted-foreground">
+                                    {outcome === "pending"
+                                        ? `We're confirming this with ${clinic} and will let you know shortly.`
+                                        : "Your appointment is confirmed. See you then."}
+                                </p>
+                            </div>
                         )}
                     </CardContent>
                 </Card>
 
                 {/* The confirm step is pinned so it is reachable without scrolling
                     back up a long list of times on a phone. */}
-                {(phase === "choosing" || phase === "booking") && chosen && (
+                {phase === "choosing" && chosen && (
                     <div className="sticky bottom-4 mt-4">
-                        <Button
-                            className="w-full h-12 shadow-lg"
-                            disabled={phase === "booking"}
-                            onClick={confirm}
-                        >
-                            {phase === "booking"
-                                ? "Booking…"
-                                : `Confirm ${timeLabel(chosen.start, data?.timezone ?? undefined)}`}
+                        <Button className="w-full h-12 shadow-lg" onClick={confirm}>
+                            Confirm {timeLabel(chosen.start)}
+                            {chosen.provider_name ? ` with ${chosen.provider_name}` : ""}
                         </Button>
                     </div>
                 )}

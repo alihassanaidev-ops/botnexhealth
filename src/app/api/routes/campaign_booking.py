@@ -178,6 +178,20 @@ def _as_options(slots) -> list[dict]:
     ]
 
 
+async def _provider_names(adapter) -> dict[str, str]:
+    """Map provider id to display name.
+
+    The slot search returns provider ids but no names, and "who am I seeing?"
+    is a fair question when a patient is choosing a time.
+    """
+    try:
+        providers = await adapter.list_providers()
+    except Exception:
+        logger.warning("could not load provider names", exc_info=True)
+        return {}
+    return {p.id: (getattr(p, "name", "") or "") for p in providers}
+
+
 async def _search_slots(
     institution,
     location,
@@ -196,12 +210,17 @@ async def _search_slots(
     """
     adapter = await get_adapter_for_institution_location(institution, location)
     metadata = run.trigger_metadata or {}
+    names = await _provider_names(adapter)
     result = await adapter.find_available_slots(
         start_date=start_date or date.today().isoformat(),
         days=days or DEFAULT_DAYS,
         appointment_type_id=appointment_type_id or metadata.get("appointment_type_id"),
     )
-    return list(getattr(result, "slots", []) or [])
+    slots = list(getattr(result, "slots", []) or [])
+    for slot in slots:
+        if not getattr(slot, "provider_name", ""):
+            slot.provider_name = names.get(slot.provider_id, "")
+    return slots
 
 
 class AppointmentTypeOption(BaseModel):
