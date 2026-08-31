@@ -13,6 +13,7 @@ import BrandLoader from "@/components/BrandLoader";
 
 // Auth pages — eagerly loaded (small, needed immediately)
 import Login from "./pages/Login";
+import BookingLink from "./pages/BookingLink";
 import SetPassword from "./pages/SetPassword";
 
 // All other pages — lazy loaded
@@ -65,6 +66,16 @@ function S({ children }: { children: React.ReactNode }) {
 }
 
 export const router = createBrowserRouter([
+    {
+        // Patient-facing, opened from a text message. Deliberately outside
+        // AppLayout: those providers assume a signed-in user and would fire
+        // authenticated calls (and a redirect to /login) for someone who has no
+        // session and is not meant to have one. The signed token in the URL is
+        // the whole of the authentication here.
+        path: "/book/:action",
+        element: <BookingLink />,
+        errorElement: <RouteError />,
+    },
     {
         element: <AppLayout />,
         errorElement: <RouteError />,
