@@ -25,6 +25,7 @@ from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call import Call
 from src.app.models.contact import Contact
 from src.app.models.custom_field import EntityType
+from src.app.models.institution import Institution
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.custom_field_service import CustomFieldService
@@ -46,6 +47,9 @@ class ContactSummary(BaseModel):
     full_name: str | None
     first_name: str | None
     last_name: str | None
+    # DOB is a HIPAA §164.514(b)(2)(i)(C) identifier — served only on
+    # unredacted responses, same gate as the full name.
+    date_of_birth: str | None = None
 
 
 class WorkflowStatusOut(BaseModel):
@@ -68,6 +72,7 @@ class CallRecord(BaseModel):
     scrubbed_summary: str | None = None
     patient_sentiment: str | None
     next_action: str | None
+    requested_availability: str | None = None
     is_new_patient: bool
     is_complaint: bool
     is_insurance_billing: bool
@@ -76,6 +81,7 @@ class CallRecord(BaseModel):
     call_date: date | None
     call_time: str | None
     call_duration_seconds: int | None
+    disconnection_reason: str | None = None
     callback_resolved: bool
     created_at: str
     contact: ContactSummary | None
@@ -85,6 +91,9 @@ class CallRecord(BaseModel):
     # only via the audited POST /{call_id}/reveal/phone endpoint.
     phone_masked: str | None = None
     phone_reveal_available: bool = False
+    # True when phone_masked already holds the full number (no-PMS location
+    # admins), so the UI renders it plainly instead of offering a reveal.
+    phone_revealed: bool = False
 
 
 class CustomFieldValueOut(BaseModel):
@@ -113,6 +122,12 @@ class CallDetail(CallRecord):
     # audited reveal endpoints. NULL/absent when Retell redaction is off.
     scrubbed_transcript: list[dict] | None = None
     scrubbed_recording_url: str | None = None
+    # False when the served transcript is the raw, unmasked one (no-PMS
+    # location admins). The UI drops its "Redacted view" banner on False.
+    transcript_redacted: bool = True
+    # Playable recording URL served inline for no-PMS location admins. Every
+    # other caller still goes through POST /{id}/reveal/recording.
+    recording_url: str | None = None
     custom_fields: list[CustomFieldValueOut] = []
 
 
@@ -188,7 +203,9 @@ def _mask_full_name(full_name: str | None) -> str | None:
     return " ".join(_mask_name(part) for part in full_name.split())
 
 
-def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
+def _call_to_record(
+    call: Call, *, redact_phi: bool = True, expose_contact: bool = False
+) -> CallRecord:
     """Convert a Call ORM object to the API response model.
 
     Args:
@@ -196,6 +213,9 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
             (e.g. ``Sarah Loomer`` → ``S***h L****r``) so the list endpoint
             never exposes full PHI. The detail endpoint passes
             ``redact_phi=False`` for authorised roles.
+        expose_contact: When True, the caller's full phone number is served
+            inline instead of the masked form. Reserved for no-PMS location
+            admins — see ``_nopms_unredacted``.
     """
     contact_out: ContactSummary | None = None
     phone_masked: str | None = None
@@ -205,7 +225,9 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         # number is only ever served via the audited reveal endpoint.
         phone_reveal_available = call.contact.phone_encrypted is not None
         if phone_reveal_available:
-            phone_masked = mask_phone(call.contact.phone)
+            phone_masked = (
+                call.contact.phone if expose_contact else mask_phone(call.contact.phone)
+            )
         if redact_phi:
             contact_out = ContactSummary(
                 id=call.contact.id,
@@ -219,6 +241,7 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
                 full_name=call.contact.full_name,
                 first_name=call.contact.first_name,
                 last_name=call.contact.last_name,
+                date_of_birth=getattr(call.contact, "date_of_birth", None),
             )
     return CallRecord(
         id=call.id,
@@ -230,6 +253,7 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         scrubbed_summary=mask_brackets(getattr(call, "scrubbed_summary", None)),
         patient_sentiment=call.patient_sentiment,
         next_action=call.next_action,
+        requested_availability=call.requested_availability,
         is_new_patient=call.is_new_patient,
         is_complaint=call.is_complaint,
         is_insurance_billing=call.is_insurance_billing,
@@ -237,6 +261,7 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         call_date=call.call_date,
         call_time=str(call.call_time) if call.call_time else None,
         call_duration_seconds=call.call_duration_seconds,
+        disconnection_reason=call.disconnection_reason,
         callback_resolved=call.callback_resolved,
         created_at=call.created_at.isoformat(),
         contact=contact_out,
@@ -251,6 +276,7 @@ def _call_to_record(call: Call, *, redact_phi: bool = True) -> CallRecord:
         ),
         phone_masked=phone_masked,
         phone_reveal_available=phone_reveal_available,
+        phone_revealed=expose_contact and phone_reveal_available,
     )
 
 
@@ -281,6 +307,30 @@ def _location_scope_id(current_user: User) -> str | None:
 async def _location_agent_filter(session, current_user: User) -> str | None:  # noqa: ARG001
     """Deprecated alias — returns the location_id filter for LOCATION_ADMIN/STAFF."""
     return _location_scope_id(current_user)
+
+
+async def _nopms_unredacted(session, current_user: User) -> bool:
+    """Whether this user reads call content unmasked, inline.
+
+    No-PMS tenants have no practice-management system holding the chart, so
+    the dashboard *is* the record and the clinic's own LOCATION_ADMIN is its
+    primary operator. For them we skip name masking and serve the raw
+    transcript directly instead of the scrubbed preview.
+
+    PMS tenants (NexHealth / GoTracker) are unaffected and keep the audited
+    reveal flow, as do every other role — STAFF, INSTITUTION_ADMIN and the
+    platform-level SUPER_ADMIN.
+    """
+    if current_user.role != UserRole.LOCATION_ADMIN.value:
+        return False
+    if not current_user.institution_id:
+        return False
+    institution = (
+        await session.execute(
+            select(Institution).where(Institution.id == current_user.institution_id)
+        )
+    ).scalar_one_or_none()
+    return institution is not None and not institution.has_pms
 
 
 async def _get_scoped_call(
@@ -546,7 +596,11 @@ async def list_calls(
             .all()
         )
 
-        items = [_call_to_record(c, redact_phi=True) for c in rows]
+        unredacted = await _nopms_unredacted(session, current_user)
+        items = [
+            _call_to_record(c, redact_phi=not unredacted, expose_contact=unredacted)
+            for c in rows
+        ]
         response = CallsListResponse(
             total=total,
             limit=limit,
@@ -610,17 +664,36 @@ async def get_call(
 
         # SUPER_ADMIN is platform-level and not in the circle of care — redact PHI.
         # All other institution-scoped roles may view patient names for care operations.
+        unredacted = await _nopms_unredacted(session, current_user)
         redact = current_user.role == UserRole.SUPER_ADMIN.value
-        base = _call_to_record(call, redact_phi=redact)
+        base = _call_to_record(call, redact_phi=redact, expose_contact=unredacted)
+
+        # Masked scrubbed preview by default. No-PMS location admins get the
+        # decrypted raw turns inline — the reveal endpoint stays available and
+        # audited for everyone, this only changes what renders without it.
+        if unredacted:
+            transcript_turns = call.transcript_with_tool_calls
+        else:
+            transcript_turns = mask_transcript(
+                getattr(call, "scrubbed_transcript_with_tool_calls", None)
+            )
+
+        # Recordings live either in our S3 bucket (presign them) or, for
+        # backfilled calls, on the provider's CDN (serve the stored URL).
+        inline_recording: str | None = None
+        if unredacted and call.recording_url:
+            from src.app.tasks.recordings import generate_presigned_url
+
+            inline_recording = generate_presigned_url(call.recording_url) or call.recording_url
 
         response = CallDetail(
             **base.model_dump(),
             transcript_available=bool(call.transcript_with_tool_calls_encrypted),
             recording_available=bool(call.recording_url),
-            scrubbed_transcript=mask_transcript(
-                getattr(call, "scrubbed_transcript_with_tool_calls", None)
-            ),
+            scrubbed_transcript=transcript_turns,
             scrubbed_recording_url=getattr(call, "scrubbed_recording_url", None),
+            transcript_redacted=not unredacted,
+            recording_url=inline_recording,
             custom_fields=custom_fields,
         )
         log_audit_background(
@@ -634,6 +707,9 @@ async def get_call(
                 "institution_id": current_user.institution_id,
                 "location_id": current_user.location_id,
                 "contact_id": call.contact_id,
+                # Record when PHI was served inline rather than via a reveal,
+                # so the audit trail still shows who saw what.
+                "inline_phi": unredacted,
             },
             institution_id=current_user.institution_id,
         )

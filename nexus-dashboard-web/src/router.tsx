@@ -5,6 +5,8 @@ import DashboardWrapper from "./components/DashboardWrapper";
 import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
 import PmsGuard from "./components/PmsGuard";
+import NoPmsGuard from "./components/NoPmsGuard";
+import NoPmsLocationAdminGuard from "./components/NoPmsLocationAdminGuard";
 import AppLayout from "./components/AppLayout";
 import RouteError from "./components/RouteError";
 import BrandLoader from "@/components/BrandLoader";
@@ -41,6 +43,8 @@ const CampaignEmailTemplates = lazy(() => import("./pages/CampaignEmailTemplates
 const EmailSendingIdentity = lazy(() => import("./pages/EmailSendingIdentity"));
 const Inbox = lazy(() => import("./pages/Inbox"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
+const SmsPreferences = lazy(() => import("./pages/SmsPreferences"));
+const SmsTemplates = lazy(() => import("./pages/SmsTemplates"));
 const Security = lazy(() => import("./pages/Security"));
 const Patients = lazy(() => import("./pages/Patients"));
 const AppointmentSync = lazy(() => import("./pages/AppointmentSync"));
@@ -132,6 +136,17 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
+                        // SMS templates are patient-facing acknowledgements that
+                        // only no-PMS clinics send, so the page is guarded on both
+                        // the role and the tenant type.
+                        path: "institution-admin/sms-templates",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <NoPmsGuard><S><SmsTemplates /></S></NoPmsGuard>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
                         // A super admin administers any practice's templates and
                         // sending address; the page asks which practice, and the
                         // API refuses the request if one is not named.
@@ -157,7 +172,7 @@ export const router = createBrowserRouter([
                         path: "inbox",
                         element: (
                             <RoleGuard allowed={["SUPER_ADMIN", "GROUP_ADMIN", "INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <S><Inbox /></S>
+                                <NoPmsLocationAdminGuard><S><Inbox /></S></NoPmsLocationAdminGuard>
                             </RoleGuard>
                         ),
                     },
@@ -166,6 +181,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
                                 <S><NotificationPreferences /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "sms-preferences",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <NoPmsGuard><S><SmsPreferences /></S></NoPmsGuard>
                             </RoleGuard>
                         ),
                     },

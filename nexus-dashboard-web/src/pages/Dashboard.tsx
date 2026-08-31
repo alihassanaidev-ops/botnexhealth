@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/select"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
+import { useInstitution } from "@/context/InstitutionContext"
 import { useSSE } from "@/hooks/useSSE"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
 import { getInitials } from "@/components/calls/format"
@@ -69,15 +70,49 @@ function formatDuration(seconds: number | null): string {
 
 // ── Volume Card Configs ──────────────────────────────────────────────────────
 
+type RangeCardKey =
+    | "total_calls"
+    | "appointments_booked"
+    | "needs_booking"
+    | "needs_callback"
+    | "emergency"
+    | "new_patients"
+    | "booking_rate"
+
+type MonthlyMetricKey =
+    | "appointments_booked_month"
+    | "needs_booking_month"
+    | "needs_callback_month"
+    | "emergency_month"
+    | "new_patients_month"
+    | "booking_rate_month"
+    | "avg_call_duration_seconds"
+
+interface MetricCardConfig<TKey extends string> {
+    label: string
+    key: TKey
+    icon: React.ElementType
+    accentColor: string
+    glowRgb: string
+    suffix?: string
+}
+
 // Range-scoped cards — driven by the date-range picker, sourced from summary.range.
-const RANGE_CARD_CONFIG = [
+const RANGE_CARD_CONFIG: MetricCardConfig<RangeCardKey>[] = [
     { label: "Total Calls", key: "total_calls" as const, icon: Phone, accentColor: "violet", glowRgb: "139,92,246" },
     { label: "Appointments Booked", key: "appointments_booked" as const, icon: CalendarDays, accentColor: "emerald", glowRgb: "16,185,129" },
     { label: "New Patients", key: "new_patients" as const, icon: Users, accentColor: "sky", glowRgb: "14,165,233" },
     { label: "Booking Rate", key: "booking_rate" as const, icon: Percent, accentColor: "amber", glowRgb: "245,158,11", suffix: "%" },
 ]
 
-const METRIC_CARDS_CONFIG = [
+const NO_PMS_RANGE_CARD_CONFIG: MetricCardConfig<RangeCardKey>[] = [
+    { label: "Needs Booking", key: "needs_booking" as const, icon: CalendarDays, accentColor: "emerald", glowRgb: "16,185,129" },
+    { label: "Needs Callback", key: "needs_callback" as const, icon: Clock, accentColor: "amber", glowRgb: "245,158,11" },
+    { label: "Emergency", key: "emergency" as const, icon: AlertCircle, accentColor: "red", glowRgb: "239,68,68" },
+    { label: "New Patients", key: "new_patients" as const, icon: Users, accentColor: "sky", glowRgb: "14,165,233" },
+]
+
+const METRIC_CARDS_CONFIG: MetricCardConfig<MonthlyMetricKey>[] = [
     {
         label: "Appointments Booked",
         key: "appointments_booked_month" as const,
@@ -105,6 +140,37 @@ const METRIC_CARDS_CONFIG = [
         icon: Timer,
         accentColor: "violet",
         glowRgb: "139,92,246",
+    },
+]
+
+const NO_PMS_METRIC_CARDS_CONFIG: MetricCardConfig<MonthlyMetricKey>[] = [
+    {
+        label: "Needs Booking",
+        key: "needs_booking_month" as const,
+        icon: CalendarDays,
+        accentColor: "emerald",
+        glowRgb: "16,185,129",
+    },
+    {
+        label: "Needs Callback",
+        key: "needs_callback_month" as const,
+        icon: Clock,
+        accentColor: "amber",
+        glowRgb: "245,158,11",
+    },
+    {
+        label: "Emergency",
+        key: "emergency_month" as const,
+        icon: AlertCircle,
+        accentColor: "red",
+        glowRgb: "239,68,68",
+    },
+    {
+        label: "New Patients",
+        key: "new_patients_month" as const,
+        icon: Users,
+        accentColor: "sky",
+        glowRgb: "14,165,233",
     },
 ]
 
@@ -384,6 +450,7 @@ function TagBar({ tag, label, count, total, pct, colorClass, barColor }: TagBarP
 
 export default function Dashboard() {
     const { user } = useAuth()
+    const { hasPms, pmsType, isLoading: institutionLoading } = useInstitution()
     const { lastEvent } = useSSE()
     const [summary, setSummary] = useState<DashboardSummary | null>(null)
     const [loading, setLoading] = useState(true)
@@ -391,6 +458,9 @@ export default function Dashboard() {
     const [locations, setLocations] = useState<{ slug: string; name: string }[]>([])
     const [aggregateMetrics, setAggregateMetrics] = useState<{
         appointments_booked_month: number
+        needs_booking_month: number
+        needs_callback_month: number
+        emergency_month: number
         new_patients_month: number
         booking_rate_month: number
         avg_call_duration_seconds: number
@@ -412,6 +482,9 @@ export default function Dashboard() {
             // of the hardcoded zeroes that were here before.
             setAggregateMetrics({
                 appointments_booked_month: summaryData.appointments_booked_month ?? 0,
+                needs_booking_month: summaryData.needs_booking_month ?? 0,
+                needs_callback_month: summaryData.needs_callback_month ?? 0,
+                emergency_month: summaryData.emergency_month ?? 0,
                 new_patients_month: summaryData.new_patients_month ?? 0,
                 booking_rate_month: summaryData.booking_rate_month ?? 0,
                 avg_call_duration_seconds: summaryData.avg_call_duration_seconds ?? 0,
@@ -463,6 +536,12 @@ export default function Dashboard() {
     const hasCallbacks = callbackQueue.length > 0
 
     const totalTagCount = tagCounts.reduce((sum, tc) => sum + tc.count, 0)
+    const isNoPmsDashboard = !institutionLoading && (pmsType === "none" || !hasPms)
+    const rangeCardConfig = isNoPmsDashboard ? NO_PMS_RANGE_CARD_CONFIG : RANGE_CARD_CONFIG
+    const metricCardConfig = isNoPmsDashboard ? NO_PMS_METRIC_CARDS_CONFIG : METRIC_CARDS_CONFIG
+    const bookingQuickLink = isNoPmsDashboard
+        ? { label: "Needs Booking", tags: ["needs_booking"] }
+        : { label: "Booked Today", tags: ["appointment_booked"] }
 
     return (
         <div className="flex-1 min-h-screen bg-background animate-fade-in-up">
@@ -511,11 +590,11 @@ export default function Dashboard() {
 
                 {/* Range-scoped cards (driven by the date-range picker) */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    {RANGE_CARD_CONFIG.map(({ label, key, icon, accentColor, glowRgb, suffix }) => (
+                    {rangeCardConfig.map(({ label, key, icon, accentColor, glowRgb, suffix }) => (
                         <GlassCard
                             key={key}
                             label={label}
-                            value={summary?.range?.[key]}
+                            value={summary?.range?.[key] ?? 0}
                             icon={icon}
                             accentColor={accentColor}
                             glowRgb={glowRgb}
@@ -533,7 +612,7 @@ export default function Dashboard() {
                             <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/50">Monthly Metrics</span>
                         </div>
                         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                            {METRIC_CARDS_CONFIG.map(({ label, key, icon, accentColor, glowRgb }) => (
+                            {metricCardConfig.map(({ label, key, icon, accentColor, glowRgb }) => (
                                 <GlassCard
                                     key={key}
                                     label={label}
@@ -689,9 +768,9 @@ export default function Dashboard() {
                             <PhoneIncoming className="h-3.5 w-3.5" /> All Calls
                         </Button>
                     </Link>
-                    <Link to="/calls" state={{ tags: ["appointment_booked"] }}>
+                    <Link to="/calls" state={{ tags: bookingQuickLink.tags }}>
                         <Button variant="outline" size="sm" className="gap-2 h-8 text-xs">
-                            <PhoneOutgoing className="h-3.5 w-3.5" /> Booked Today
+                            <PhoneOutgoing className="h-3.5 w-3.5" /> {bookingQuickLink.label}
                         </Button>
                     </Link>
                 </div>

@@ -273,6 +273,9 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
     // reveal; the raw transcript is fetched only via the audited endpoint.
     const scrubbed = detail.scrubbed_transcript ?? null
     const hasScrubbed = !!scrubbed && scrubbed.length > 0
+    // The backend serves raw turns to no-PMS location admins; everyone else
+    // gets the masked preview. Don't label raw content "Redacted view".
+    const isRedacted = detail.transcript_redacted !== false
 
     if (!detail.transcript_available && !hasScrubbed) {
         if (!fill) return null
@@ -329,7 +332,7 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
     // Body: revealed raw wins; otherwise the scrubbed preview; otherwise the gate.
     const preview = hasScrubbed ? (
         <div className="flex flex-col">
-            {!turns && detail.transcript_available && (
+            {!turns && detail.transcript_available && isRedacted && (
                 <div className="flex items-center justify-between gap-2 border-b bg-muted/60 px-3 py-1.5">
                     <span className="text-[10px] text-muted-foreground">
                         Redacted view — PHI shown as *****
@@ -364,13 +367,14 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
 // ── Reveal-gated recording ──────────────────────────────────────────────────
 
 export function RecordingSection({ detail, compact = false }: { detail: CallDetail; compact?: boolean }) {
-    const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
+    // Served inline for no-PMS location admins; everyone else reveals it.
+    const [recordingUrl, setRecordingUrl] = useState<string | null>(detail.recording_url ?? null)
     const [revealing, setRevealing] = useState(false)
 
     useEffect(() => {
-        setRecordingUrl(null)
+        setRecordingUrl(detail.recording_url ?? null)
         setRevealing(false)
-    }, [detail.id])
+    }, [detail.id, detail.recording_url])
 
     if (!detail.recording_available && !recordingUrl) return null
 
@@ -421,6 +425,90 @@ export function RecordingSection({ detail, compact = false }: { detail: CallDeta
         <div>
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">Call Recording</p>
             <div className="rounded-lg border bg-muted p-3 flex items-center justify-center">{player}</div>
+        </div>
+    )
+}
+
+
+function DetailField({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+        <div>
+            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+            {children}
+        </div>
+    )
+}
+
+function normalizeFieldKey(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, "")
+}
+
+function findCustomFieldValue(fields: CustomFieldValue[], candidates: string[]): string | null {
+    const normalizedCandidates = new Set(candidates.map(normalizeFieldKey))
+    const field = fields.find((candidate) => (
+        normalizedCandidates.has(normalizeFieldKey(candidate.field_key))
+        || normalizedCandidates.has(normalizeFieldKey(candidate.field_name))
+    ))
+    const value = field?.value?.trim()
+    if (!value || ["none", "n/a", "null"].includes(value.toLowerCase())) return null
+    return value
+}
+
+function formatBoolean(value: boolean): string {
+    return value ? "True" : "False"
+}
+
+function formatDob(value: string | null | undefined): string {
+    if (!value) return "—"
+    const parsed = new Date(`${value}T00:00:00`)
+    if (Number.isNaN(parsed.getTime())) return value
+    return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+}
+
+function formatReason(value: string | null | undefined): string {
+    if (!value) return "—"
+    return value
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/^\w/, (c) => c.toUpperCase())
+}
+
+export function NoPmsTriageDetails({ detail }: { detail: CallDetail }) {
+    const customAvailability = findCustomFieldValue(
+        detail.custom_fields,
+        ["availability", "Availability", "Availability "],
+    )
+    const availability = detail.requested_availability?.trim() || customAvailability
+    const customEmergency = findCustomFieldValue(
+        detail.custom_fields,
+        ["emergency", "Emergency", "is_emergency"],
+    )
+    const isEmergency = customEmergency
+        ? ["true", "yes", "1", "y"].includes(customEmergency.toLowerCase())
+        : detail.call_tags.includes("emergency")
+
+    return (
+        <div className="space-y-3 rounded-lg border bg-muted p-3">
+            <DetailField label="Availability">
+                <p className="text-xs font-medium leading-relaxed">{availability ?? "—"}</p>
+            </DetailField>
+            <div className="grid grid-cols-2 gap-3">
+                <DetailField label="Emergency">
+                    <p className="text-xs font-medium">{formatBoolean(isEmergency)}</p>
+                </DetailField>
+                <DetailField label="New patient">
+                    <p className="text-xs font-medium">{formatBoolean(detail.is_new_patient)}</p>
+                </DetailField>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+                <DetailField label="Date of birth">
+                    <p className="text-xs font-medium">{formatDob(detail.contact?.date_of_birth)}</p>
+                </DetailField>
+                <DetailField label="Disconnected reason">
+                    <p className="text-xs font-medium">{formatReason(detail.disconnection_reason)}</p>
+                </DetailField>
+            </div>
         </div>
     )
 }

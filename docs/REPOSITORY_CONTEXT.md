@@ -256,7 +256,13 @@ binding is strictly **1 Retell agent ↔ 1 InstitutionLocation**.
 After the call, Retell posts a `call_analyzed` webhook → the request thread only
 verifies the signature, claims an idempotency row, and enqueues a Celery task
 (<100 ms response). The worker runs the post-call pipeline. Full lifecycle is in
-ARCHITECTURE.md §Call lifecycle.
+ARCHITECTURE.md §Call lifecycle. The persisted `Call` row includes Retell's
+top-level `disconnection_reason` and no-PMS requested availability; configured
+call custom fields can also source values from Retell `custom_analysis_data`.
+For no-PMS `needs_booking` calls, the call-ended SMS path still sends the
+patient-facing request-received acknowledgement when enabled, and additionally
+fans out a separate PHI-light staff SMS alert to active numbers configured in
+the no-PMS SMS Preferences page.
 
 ### 4.4 Appointment booking flow (voice-agent orchestration)
 
@@ -573,8 +579,11 @@ row (encrypted body, masked/hashed number), calls Twilio (offloaded via
 `asyncio.to_thread`), and updates status. Entry points: admin sync
 `POST /admin/twilio/send-sms` (audited) and the async `send_sms_message` Celery
 task (`tasks/sms.py`, 5 retries, exp backoff, dead-letters on exhaustion).
-Call-triggered auto-SMS is enqueued from the post-call pipeline only if a body +
-patient phone + `twilio_from_number` are all present.
+Call-triggered patient auto-SMS is enqueued from the post-call pipeline only if
+a body + patient phone + `twilio_from_number` are all present. No-PMS
+appointment-request staff SMS alerts use their own configured destination list
+(`external_sms_notification_recipients`) and never affect NexHealth/GoTracker
+confirmation SMS behavior.
 Outbound bodies preserve the rendered template text without automatically
 prepending the location name. Send SMS nodes default to appending `Reply STOP to
 opt out.` when equivalent case-insensitive copy is not already present; workflow

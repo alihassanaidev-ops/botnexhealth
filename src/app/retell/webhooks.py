@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from src.app.config import settings
 from src.app.retell.security import (
     get_retell_secret,
     get_signature_dependency,
@@ -36,10 +37,140 @@ router = APIRouter(prefix="/retell", tags=["Retell Webhooks"])
 verify_webhook_signature = get_signature_dependency(get_retell_secret)
 
 
+def _build_dashboard_link(call_row_id: str) -> str:
+    base = (settings.auth_frontend_base_url or "").rstrip("/")
+    if not base:
+        return ""
+    return f"{base}/calls?detail={call_row_id}"
+
+
+def _nopms_call_tags(db_call) -> set[str]:  # noqa: ANN001
+    """Normalized tag set for a call, including the primary status."""
+    tags = {
+        part.strip().lower()
+        for part in (db_call.call_tags or "").split(",")
+        if part.strip()
+    }
+    primary = (db_call.call_status or "").strip().lower()
+    if primary:
+        tags.add(primary)
+    return tags
+
+
+def _format_duration(seconds: int | None) -> str:
+    if not seconds:
+        return "unknown"
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}m {secs}s" if minutes else f"{secs}s"
+
+
+def _nopms_alert_variables(*, location_name: str, db_call) -> dict[str, str]:  # noqa: ANN001
+    """Render context for the staff SMS templates.
+
+    PHI-free by construction: triage metadata and a dashboard link only. These
+    text the clinic's own staff numbers, so no patient name or DOB is exposed
+    here — the variable set mirrors the staff email templates.
+    """
+    tags = _nopms_call_tags(db_call)
+    status = (db_call.call_status or "").strip().lower()
+    return {
+        "location_name": location_name,
+        "call_status": status.replace("_", " ").title() if status else "No Action Needed",
+        "duration": _format_duration(db_call.call_duration_seconds),
+        "sentiment": db_call.patient_sentiment or "Unknown",
+        "availability": db_call.requested_availability or "Not provided",
+        "new_patient": "Yes" if db_call.is_new_patient else "No",
+        "emergency": "Yes" if "emergency" in tags else "No",
+        "urgency": "Emergency" if "emergency" in tags else "Complaint",
+        "dashboard_link": _build_dashboard_link(str(db_call.id)) or "",
+    }
+
+
+def _nopms_applicable_alerts(db_call) -> list[str]:  # noqa: ANN001
+    """Which staff alert types this call triggers.
+
+    Appointment requests need a needs_booking classification, the urgent alert
+    fires on emergency/complaint, and the call summary fires on every call.
+    Whether a given number is subscribed to a type is a separate check.
+    """
+    from src.app.models.call import CallStatus
+    from src.app.models.external_sms_notification_recipient import StaffSmsAlertType
+
+    tags = _nopms_call_tags(db_call)
+    applicable: list[str] = []
+    if CallStatus.NEEDS_BOOKING.value in tags:
+        applicable.append(StaffSmsAlertType.APPOINTMENT_REQUEST.value)
+    if tags & {"emergency", "complaint"}:
+        applicable.append(StaffSmsAlertType.URGENT_ALERT.value)
+    applicable.append(StaffSmsAlertType.CALL_SUMMARY.value)
+    return applicable
+
+
+
+async def _resolve_nopms_staff_sms(
+    session, *, institution, location, db_call
+) -> list[tuple[str, str]]:  # noqa: ANN001
+    """Resolve the staff SMS alerts to send, as ``(phone, body)`` pairs.
+
+    Must be called INSIDE the transaction that owns the RLS context. The
+    context is applied per-connection, so after ``session.commit()`` a
+    different pooled connection can serve the next query with no context set —
+    row-level security then hides every recipient and this silently resolves
+    to nothing. Sending is done by the caller after the commit.
+
+    Runs on ``call_analyzed`` rather than ``call_ended`` because the alert set
+    is derived from ``call_status`` / ``call_tags``, which the post-call
+    pipeline behind this event writes; on ``call_ended`` the Call row does not
+    exist yet.
+    """
+    if institution.has_pms or location is None or not location.twilio_from_number:
+        return []
+
+    from src.app.services.sms_notification_recipients import (
+        resolve_sms_notification_recipients,
+    )
+    from src.app.services.sms_template_service import SmsTemplateService
+
+    alert_vars = _nopms_alert_variables(location_name=location.name, db_call=db_call)
+    sms_svc = SmsTemplateService(session)
+    pending: list[tuple[str, str]] = []
+
+    for alert_type in _nopms_applicable_alerts(db_call):
+        subscribed = await resolve_sms_notification_recipients(
+            session,
+            institution_id=str(institution.id),
+            notification_type=alert_type,
+            location_id=str(location.id),
+        )
+        if not subscribed:
+            continue
+        # Staff alert wording is an editable template, same as the staff
+        # emails. An inactive template mutes that alert without unsubscribing
+        # anyone.
+        alert_template = await sms_svc.get_template_by_type(institution.id, alert_type)
+        if not alert_template or not alert_template.is_active:
+            logger.info(
+                "Staff SMS skipped, template inactive: type=%s institution_hash=%s",
+                alert_type,
+                hash_for_logging(str(institution.id)),
+            )
+            continue
+        body = SmsTemplateService.render(alert_template.body, alert_vars)
+        pending.extend((phone, body) for phone in subscribed)
+
+    logger.info(
+        "Staff SMS alerts resolved: call_hash=%s location_hash=%s alerts=%d recipients=%d",
+        hash_for_logging(str(db_call.id)),
+        hash_for_logging(str(location.id)),
+        len(_nopms_applicable_alerts(db_call)),
+        len(pending),
+    )
+    return pending
+
+
 # ============================================================================
 # Pydantic Models for Retell call_analyzed webhook
 # ============================================================================
-
 
 class CallAnalysisData(BaseModel):
     """Analysis data extracted by Retell (raw; scrubbed variant used only as fallback)."""
@@ -386,6 +517,7 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
 
     body: str | None = None
     patient_phone: str | None = None
+    db_call_for_sms = None
     skip_reason: str | None = None
 
     try:
@@ -529,7 +661,7 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
         )
         raise
 
-    if skip_reason or not body or not patient_phone:
+    if institution.has_pms and (skip_reason or not body or not patient_phone):
         await _finish("COMPLETED", institution_id=str(institution.id))
         logger.info(
             "call_ended confirmation SMS skipped: call_hash=%s reason=%s",
@@ -541,17 +673,42 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
     try:
         from src.app.tasks.sms import enqueue_auto_sms
 
-        enqueue_auto_sms(
-            from_number=location.twilio_from_number,  # type: ignore[arg-type]
-            to_number=patient_phone,
-            body=body,
-            institution_location_id=str(location.id),
-        )
+        queued_patient = False
+        if body and patient_phone and not skip_reason:
+            enqueue_auto_sms(
+                from_number=location.twilio_from_number,  # type: ignore[arg-type]
+                to_number=patient_phone,
+                body=body,
+                institution_location_id=str(location.id),
+                patient_contact_id=(
+                    str(db_call_for_sms.contact_id)
+                    if db_call_for_sms is not None and db_call_for_sms.contact_id
+                    else None
+                ),
+                call_id=(
+                    str(db_call_for_sms.id)
+                    if db_call_for_sms is not None
+                    else None
+                ),
+            )
+            queued_patient = True
+
     except Exception as exc:
         await _finish(
             "FAILED", institution_id=str(institution.id), error=safe_error_summary(exc)
         )
         raise
+
+    # Staff alerts are dispatched from call_analyzed, so this only reports
+    # the patient acknowledgement.
+    if not queued_patient:
+        await _finish("COMPLETED", institution_id=str(institution.id))
+        logger.info(
+            "call_ended confirmation SMS skipped: call_hash=%s reason=%s",
+            hash_for_logging(call_id),
+            skip_reason or "no_body",
+        )
+        return {"status": "skipped", "reason": skip_reason or "no_body"}
 
     await _finish("COMPLETED", institution_id=str(institution.id))
     logger.info(
@@ -771,6 +928,22 @@ async def process_retell_call_analyzed_event(
                 )
 
                 # Commit the transaction so contacts and calls are saved!
+                # Resolve inside the transaction — see _resolve_nopms_staff_sms.
+                staff_sms_pending: list[tuple[str, str]] = []
+                try:
+                    staff_sms_pending = await _resolve_nopms_staff_sms(
+                        session,
+                        institution=institution,
+                        location=location,
+                        db_call=saved_call,
+                    )
+                except Exception as sms_resolve_err:
+                    logger.error(
+                        "Failed to resolve staff SMS alerts: call_hash=%s error=%s",
+                        hash_for_logging(event.call.call_id),
+                        safe_error_summary(sms_resolve_err),
+                    )
+
                 await session.commit()
 
             # ── Usage metering: record voice minutes after DB commit (Plan 11 M-1) ──
@@ -849,6 +1022,34 @@ async def process_retell_call_analyzed_event(
                     "Failed to enqueue call email notification: call_hash=%s error=%s",
                     hash_for_logging(event.call.call_id),
                     safe_error_summary(email_enqueue_err),
+                )
+
+            # ── Staff SMS alerts: resolved before the commit (the RLS
+            #    context lives on the connection the transaction holds), sent
+            #    after it, so nothing is texted about a call that rolled back. ──
+            try:
+                from src.app.tasks.sms import enqueue_auto_sms
+
+                for _phone, _body in staff_sms_pending:
+                    enqueue_auto_sms(
+                        from_number=location.twilio_from_number,
+                        to_number=_phone,
+                        body=_body,
+                        institution_location_id=str(location.id),
+                        patient_contact_id=None,
+                        call_id=str(saved_call.id),
+                    )
+                if staff_sms_pending:
+                    logger.info(
+                        "Staff SMS alerts queued: call_hash=%s queued=%d",
+                        hash_for_logging(event.call.call_id),
+                        len(staff_sms_pending),
+                    )
+            except Exception as sms_enqueue_err:
+                logger.error(
+                    "Failed to enqueue staff SMS alerts: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(sms_enqueue_err),
                 )
 
             # ── In-app notification: enqueue after DB commit (durable via Celery) ──

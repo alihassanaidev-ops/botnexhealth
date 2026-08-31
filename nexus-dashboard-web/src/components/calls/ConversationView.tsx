@@ -7,6 +7,7 @@
  * (see ./shared). No PHI is shown until explicitly revealed.
  */
 
+import { NoPmsTriageDetails } from "@/components/calls/shared"
 import { useEffect, useRef, useState } from "react"
 import {
     ArrowLeft,
@@ -27,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { RevealablePhone } from "@/components/RevealablePhone"
 import { toast } from "sonner"
+import { useInstitution } from "@/context/InstitutionContext"
 import { getCall, resolveCallback } from "@/lib/calls-api"
 import { assignCallStatus } from "@/lib/workflow-status-api"
 import { cn } from "@/lib/utils"
@@ -310,6 +312,9 @@ function DetailsContent({
     statuses: WorkflowStatus[]
     onResolved: () => void
 }) {
+    const { hasPms, pmsType, isLoading: institutionLoading } = useInstitution()
+    const isNoPms = !institutionLoading && (pmsType === "none" || !hasPms)
+
     return (
             <div className="space-y-4 p-4">
                 <div className="grid grid-cols-2 gap-3">
@@ -336,6 +341,8 @@ function DetailsContent({
                         )}
                     </div>
                 </DetailField>
+
+                {isNoPms && <NoPmsTriageDetails detail={detail} />}
 
                 {detail.booked_appointment_type_name && (
                     <DetailField label="Booked">
@@ -463,6 +470,7 @@ function CenterPane({
                                 callId={detail.id}
                                 masked={detail.phone_masked}
                                 available={detail.phone_reveal_available}
+                                revealed={detail.phone_revealed}
                                 className="text-xs"
                             />
                         ) : (

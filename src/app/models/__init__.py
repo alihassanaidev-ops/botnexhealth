@@ -111,6 +111,7 @@ from src.app.models.email_sending_identity import (  # noqa: F401 — model regi
 from src.app.models.email_template import EmailTemplate, EmailTemplateType
 from src.app.models.sms_template import SmsTemplate, SmsTemplateType
 from src.app.models.external_notification_recipient import ExternalNotificationRecipient
+from src.app.models.external_sms_notification_recipient import ExternalSmsNotificationRecipient
 from src.app.models.notification import Notification, NotificationType
 from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
 from src.app.models.retell_webhook_event import RetellWebhookEvent, RetellWebhookStatus
@@ -214,6 +215,7 @@ __all__ = [
     "SmsTemplate",
     "SmsTemplateType",
     "ExternalNotificationRecipient",
+    "ExternalSmsNotificationRecipient",
     "Notification",
     "NotificationType",
     "UserEmailNotificationPreference",

@@ -24,12 +24,23 @@ from src.app.database import Base
 class SmsTemplateType(str, Enum):
     """Types of SMS templates that map to patient-facing notification events."""
 
+    # ── Staff notifications ────────────────────────────────────────────────
+    # These mirror the staff EmailTemplateType values one-for-one, so the SMS
+    # and email template screens offer the same three notifications. They are
+    # texted to the clinic's own staff numbers, never to a patient, and are
+    # PHI-free: no patient name and no DOB (see TEMPLATE_VARIABLES).
+    CALL_SUMMARY = "call_summary"
+    URGENT_ALERT = "urgent_alert"
+    APPOINTMENT_REQUEST = "appointment_request"
+
+    # ── Patient-facing ─────────────────────────────────────────────────────
     # Confirmation texted to the patient once an appointment is booked on a call.
     APPOINTMENT_BOOKED = "appointment_booked"
-    # No-PMS ("none") variant: the AI can't truly book, so the patient is texted
-    # that their request was received and the office will confirm. Kept separate
-    # from APPOINTMENT_BOOKED so integrated confirmation SMS is untouched.
-    APPOINTMENT_REQUEST = "appointment_request"
+    # No-PMS variant: the AI can't truly book, so the patient is texted that
+    # their request was received and the office will confirm. Prefixed
+    # ``patient_`` to match EmailTemplateType.PATIENT_APPOINTMENT_CONFIRMATION
+    # and to free the bare ``appointment_request`` name for the staff alert.
+    PATIENT_APPOINTMENT_REQUEST = "patient_appointment_request"
 
 
 class SmsTemplate(Base):

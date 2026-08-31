@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import json
+import re
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -64,11 +65,57 @@ def _nonempty(value: str | None) -> str | None:
     return stripped
 
 
+def _nonempty_any(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _nonempty(str(value))
+
+
+def _norm_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", key.lower())
+
+
+def _pick_any(source: dict[str, Any], candidates: list[str]) -> Any:
+    if not source:
+        return None
+    canon = {_norm_key(str(k)): v for k, v in source.items()}
+    for candidate in candidates:
+        value = canon.get(_norm_key(candidate))
+        if value is not None:
+            return value
+    return None
+
+
+def _boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return text in {"true", "yes", "1", "y"}
+
+
+# DOB shapes Retell sends, in the order we try them. The dashed variants come
+# from agents whose extraction prompt asks for "month-DD-YYYY" (e.g. the no-PMS
+# receptionist, which emits "February-21-2001"); the comma variants come from
+# agents that ask for prose. Anything unparsed is dropped, so a missing format
+# here silently costs us the patient's DOB.
+_DOB_FORMATS = (
+    "%B-%d-%Y",   # February-21-2001
+    "%b-%d-%Y",   # Feb-21-2001
+    "%B %d, %Y",  # February 21, 2001
+    "%b %d, %Y",  # Feb 21, 2001
+    "%B %d %Y",   # February 21 2001
+    "%m/%d/%Y",   # 02/21/2001
+)
+
+
 def _parse_dob(raw: str | None) -> str | None:
     """Normalize DOB to ISO YYYY-MM-DD.
 
-    Handles both ISO format ("2001-02-02") and human-readable format
-    ("February 2, 2001") that Retell may send.
+    Accepts ISO ("2001-02-21") plus every human-readable shape in
+    ``_DOB_FORMATS``. Month names are matched case-insensitively — agents
+    routinely emit "february-21-2001".
     """
     if not raw:
         return None
@@ -81,12 +128,15 @@ def _parse_dob(raw: str | None) -> str | None:
         return raw
     except ValueError:
         pass
-    # Human-readable: "February 2, 2001" or "February 02, 2001"
-    for fmt in ("%B %d, %Y", "%b %d, %Y"):
-        try:
-            return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
+    # strptime matches month names case-insensitively already, but titlecasing
+    # keeps "FEBRUARY-21-2001" working across locales too.
+    candidates = (raw, raw.title())
+    for fmt in _DOB_FORMATS:
+        for candidate in candidates:
+            try:
+                return datetime.strptime(candidate, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
     # DOB is a HIPAA §164.514(b)(2)(i)(C) identifier — log only the keyed
     # hash and length so operators can correlate without seeing the value.
     logger.warning(
@@ -247,9 +297,39 @@ class PostCallService:
         patient_dob: str | None = (
             _parse_dob(dynamic_vars.get("date_of_birth"))
             or _parse_dob(dynamic_vars.get("dob"))
-            or _parse_dob(custom.get("Date of birth"))
+            # Key casing varies by agent ("Date of birth" / "Date Of Birth"),
+            # so match on the normalized key rather than an exact string.
+            or _parse_dob(
+                _nonempty_any(
+                    _pick_any(
+                        custom,
+                        ["Date of birth", "Date Of Birth", "date_of_birth", "dob"],
+                    )
+                )
+            )
         )
-        is_new_patient_flag: bool = bool(custom.get("New_patient", False))
+        is_new_patient_flag = _boolish(
+            _pick_any(
+                custom,
+                [
+                    "New_patient",
+                    "New Patient?",
+                    "New Patient",
+                    "new_patient",
+                    "is_new_patient",
+                ],
+            )
+        )
+        requested_availability = _nonempty_any(
+            _pick_any(
+                custom,
+                ["Availability", "availability", "preferred_time", "preferred_times"],
+            )
+            or _pick_any(
+                dynamic_vars,
+                ["availability", "preferred_time", "preferred_times"],
+            )
+        )
 
         # Extract NexHealth patient ID from webhook data
         pms_patient_id: str | None = self._extract_patient_id(custom, dynamic_vars)
@@ -391,6 +471,7 @@ class PostCallService:
             retell_call_id=webhook_call.call_id,
             call_direction=webhook_call.direction,
             agent_used=webhook_call.agent_id,
+            disconnection_reason=_nonempty(webhook_call.disconnection_reason),
             recording_url=webhook_call.recording_url,  # raw recording URL set in webhooks.py
             patient_sentiment=analysis_dict.get("user_sentiment"),
             call_status=primary_status,
@@ -400,6 +481,7 @@ class PostCallService:
                 if webhook_call.direction == "outbound"
                 else PatientStatus.NOT_CONTACTED.value
             ),
+            requested_availability=requested_availability,
             call_duration_seconds=(duration_ms // 1000) if duration_ms else None,
             is_new_patient=contact.is_new_patient if contact else is_new_patient_flag,
             is_complaint=primary_status == CallStatus.COMPLAINT.value

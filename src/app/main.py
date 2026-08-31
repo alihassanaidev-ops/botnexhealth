@@ -40,6 +40,7 @@ from src.app.api.routes.inbox import router as inbox_router
 from src.app.api.routes.sms_templates import router as sms_templates_router
 from src.app.api.routes.notification_preferences import router as notification_preferences_router
 from src.app.api.routes.notification_recipients import router as notification_recipients_router
+from src.app.api.routes.sms_notification_recipients import router as sms_notification_recipients_router
 from src.app.api.routes.sse import router as sse_router
 from src.app.api.routes.twilio import router as twilio_router
 from src.app.api.routes.twilio_webhooks import router as twilio_webhooks_router
@@ -292,6 +293,7 @@ def create_app() -> FastAPI:
     app.include_router(sms_templates_router, prefix="/api")
     app.include_router(notification_preferences_router, prefix="/api")
     app.include_router(notification_recipients_router, prefix="/api")
+    app.include_router(sms_notification_recipients_router, prefix="/api")
     app.include_router(sse_router, prefix="/api")
     app.include_router(twilio_router, prefix="/api")
     app.include_router(admin_sms_router, prefix="/api")

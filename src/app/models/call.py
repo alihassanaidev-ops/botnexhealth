@@ -158,6 +158,7 @@ class Call(Base):
     # Call metadata
     call_direction: Mapped[str | None] = mapped_column(String(20), nullable=True)
     agent_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    disconnection_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
     # Call content (AES-256-GCM encrypted — see encrypt_value/decrypt_value)
     # Retell's raw (unscrubbed) structured transcript is stored, protected by
@@ -217,6 +218,7 @@ class Call(Base):
     )
     patient_intent: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_availability: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Which appointment type (if any) was booked during this call. Populated
     # best-effort at post-call time from the book_appointment invocation; never
