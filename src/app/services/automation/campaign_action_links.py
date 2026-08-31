@@ -40,9 +40,13 @@ from src.app.services.sms_privacy import keyed_hash
 _TOKEN_PURPOSE = "campaign-action-link-v1"
 _SIG_LEN = 32  # hex chars
 
-#: The three actions a campaign message can link a patient to.
-ACTIONS = ("book", "confirm", "reschedule")
-Action = Literal["book", "confirm", "reschedule"]
+#: The actions a campaign message can link a patient to.
+#:
+#: ``cancel`` has no merge-field placeholder: it is reachable only from a link
+#: the platform generates deliberately, not from wording a campaign author can
+#: drop into a message by accident.
+ACTIONS = ("book", "confirm", "reschedule", "cancel")
+Action = Literal["book", "confirm", "reschedule", "cancel"]
 
 #: Maps the merge-field placeholder to the action its link performs.
 PLACEHOLDER_ACTIONS: dict[str, Action] = {

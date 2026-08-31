@@ -46,6 +46,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # The slot picker behind a booking link — same signed, run-scoped,
         # expiring token, and the patient still never logs in.
         "GET /api/campaigns/link/{action}/appointment-types",
+        # Cancelling is two-step on purpose: the GET only describes what would
+        # be cancelled, because link previews follow GETs. The POST does it.
+        "GET /api/campaigns/link/cancel/appointment",
+        "POST /api/campaigns/link/cancel/appointment",
         "GET /api/campaigns/link/{action}/slots",
         "POST /api/campaigns/link/{action}/slots",
         "GET /livez",

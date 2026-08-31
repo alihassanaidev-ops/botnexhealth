@@ -147,7 +147,7 @@ def _verify(action: str, token: str) -> tuple[str, str] | JSONResponse:
 
 
 #: What a completed action is recorded as, per action.
-COMPLETED_INTENT = {"book": "booked", "reschedule": "rescheduled"}
+COMPLETED_INTENT = {"book": "booked", "reschedule": "rescheduled", "cancel": "cancelled"}
 
 
 async def _already_booked(session, run_id: str, action: str = "book") -> bool:
@@ -227,6 +227,185 @@ async def _search_slots(
         if not getattr(slot, "provider_name", ""):
             slot.provider_name = names.get(slot.provider_id, "")
     return slots
+
+
+async def _describe_appointment(session, run) -> dict | None:
+    """What the patient is being asked to give up.
+
+    Prefers the appointment projection, which reflects the practice software
+    and stays right if the visit was moved after it was booked. Falls back to
+    what was recorded at booking time, because that projection is populated by
+    a sync that will not have run for an appointment made seconds ago.
+    """
+    from sqlalchemy import select
+
+    from src.app.models.appointment_working_set import AppointmentWorkingSet
+
+    raw_id = str(run.trigger_ref_id or "")
+    bare_id = raw_id.split("-", 1)[1] if raw_id.startswith("nh-") else raw_id
+
+    try:
+        row = (
+            await session.execute(
+                select(AppointmentWorkingSet)
+                .where(
+                    AppointmentWorkingSet.institution_id == str(run.institution_id),
+                    AppointmentWorkingSet.nexhealth_appointment_id.in_(
+                        [raw_id, bare_id]
+                    ),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    except Exception:
+        logger.warning("appointment lookup failed for run=%s", run.id, exc_info=True)
+        row = None
+
+    if row is not None and row.start_time is not None:
+        return {
+            "start": row.start_time.isoformat(),
+            "provider_name": "",
+            "reason": row.appointment_reason or "",
+        }
+
+    metadata = run.trigger_metadata or {}
+    if metadata.get("booked_start"):
+        return {
+            "start": metadata["booked_start"],
+            "provider_name": metadata.get("booked_provider_name", ""),
+            "reason": "",
+        }
+    return None
+
+
+@router.get("/cancel/appointment")
+async def cancellation_details(
+    token: str = Query(..., description="Signed per-run action token"),
+) -> JSONResponse:
+    """What the patient is about to cancel.
+
+    A read, never a write. Messaging apps and mail clients follow links to build
+    previews, so a GET that cancelled would cancel appointments nobody tapped.
+    The cancellation itself is the POST below.
+    """
+    verified = verify_action_token(token)
+    if verified == EXPIRED:
+        return _json({"error": "expired"}, 410)
+    if verified == INVALID:
+        return _json({"error": "invalid"}, 400)
+    run_id, token_action = verified  # type: ignore[misc]
+    if token_action != "cancel":
+        return _json({"error": "invalid"}, 400)
+
+    async with get_system_db_session(
+        "campaign_booking_link", external_id=run_id
+    ) as session:
+        run = await session.get(AutomationWorkflowRun, run_id)
+        if run is None:
+            return _json({"error": "gone"}, 410)
+        if await _already_booked(session, run_id, "cancel"):
+            return _json({"already_cancelled": True})
+        if not run.trigger_ref_id:
+            return _json({"error": "no_appointment"}, 409)
+        location = (
+            await session.get(InstitutionLocation, run.location_id)
+            if run.location_id
+            else None
+        )
+        appointment = await _describe_appointment(session, run)
+        return _json(
+            {
+                "already_cancelled": False,
+                "clinic_name": getattr(location, "name", "") or "",
+                "appointment": appointment,
+            }
+        )
+
+
+@router.post("/cancel/appointment")
+async def cancel_appointment_link(
+    request: Request,
+    token: str = Query(..., description="Signed per-run action token"),
+) -> JSONResponse:
+    """Cancel the appointment this run is about.
+
+    Deliberately a POST behind an explicit confirmation on the page. Cancelling
+    writes into a live schedule and cannot be undone by the patient, so it is
+    not something a link preview, a prefetch or a mistaken tap should be able to
+    do on its own.
+    """
+    verified = verify_action_token(token)
+    if verified == EXPIRED:
+        return _json({"error": "expired"}, 410)
+    if verified == INVALID:
+        return _json({"error": "invalid"}, 400)
+    run_id, token_action = verified  # type: ignore[misc]
+    if token_action != "cancel":
+        return _json({"error": "invalid"}, 400)
+
+    async with get_system_db_session(
+        "campaign_booking_link", external_id=run_id
+    ) as session:
+        run = await session.get(AutomationWorkflowRun, run_id)
+        if run is None:
+            return _json({"error": "gone"}, 410)
+        if await _already_booked(session, run_id, "cancel"):
+            # Tapping twice must not try to cancel an already-cancelled visit.
+            return _json({"status": "already_cancelled"})
+        if not run.trigger_ref_id:
+            return _json({"error": "no_appointment"}, 409)
+
+        institution = await session.get(Institution, run.institution_id)
+        location = (
+            await session.get(InstitutionLocation, run.location_id)
+            if run.location_id
+            else None
+        )
+        if institution is None or location is None:
+            return _json({"error": "unavailable"}, 503)
+
+        try:
+            adapter = await get_adapter_for_institution_location(institution, location)
+            result = await adapter.cancel_appointment(str(run.trigger_ref_id))
+        except Exception:
+            logger.exception("cancel failed for run=%s", run_id)
+            return _json({"error": "unavailable"}, 503)
+
+        if not getattr(result, "success", False):
+            return _json({"error": "could_not_cancel"}, 502)
+
+        session.add(
+            CampaignResponseEvent(
+                id=str(uuid4()),
+                institution_id=str(run.institution_id),
+                location_id=str(run.location_id) if run.location_id else None,
+                workflow_id=str(run.workflow_id) if run.workflow_id else None,
+                workflow_run_id=str(run.id),
+                contact_id=str(run.contact_id) if run.contact_id else None,
+                channel="booking_link",
+                normalized_intent="cancelled",
+                source="campaign_booking_link",
+                source_event_id=f"link:{run.id}:cancelled",
+                confidence="deterministic",
+            )
+        )
+        log_audit_background(
+            action=AuditAction.CANCEL_APPOINTMENT,
+            actor=AuditActor.API_CLIENT,
+            target_resource=f"campaign_run:{run.id}:link:cancel",
+            institution_id=str(run.institution_id),
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "source": "campaign_booking_link",
+                "ip_address": get_client_ip(
+                    forwarded_for=request.headers.get("x-forwarded-for"),
+                    direct_host=request.client.host if request.client else None,
+                ),
+            },
+        )
+        await session.commit()
+
+    return _json({"status": "cancelled"})
 
 
 class AppointmentTypeOption(BaseModel):
@@ -511,6 +690,21 @@ async def book_slot(
         pending = (
             getattr(result, "write_status", "") == BookingWriteStatus.PENDING.value
         )
+
+        # Record which appointment this run is now about. Confirm, reschedule
+        # and cancel all read this, so without it a patient who booked through
+        # the link could not afterwards change or cancel what they booked.
+        if getattr(result, "id", None):
+            run.trigger_ref_id = str(result.id)
+        # Keep enough to describe the appointment back to the patient. The
+        # appointment projection is the better source, but it is populated by a
+        # sync that has not necessarily run yet for something booked seconds ago.
+        run.trigger_metadata = {
+            **(run.trigger_metadata or {}),
+            "booked_start": chosen.start,
+            "booked_end": chosen.end,
+            "booked_provider_name": getattr(chosen, "provider_name", "") or "",
+        }
 
         session.add(
             CampaignResponseEvent(

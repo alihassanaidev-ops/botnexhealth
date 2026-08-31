@@ -90,3 +90,35 @@ export async function bookSlot(
     )
     return data
 }
+
+
+export type CancellationDetails = {
+    already_cancelled: boolean
+    clinic_name: string
+    appointment: {
+        start: string
+        provider_name: string
+        reason: string
+    } | null
+}
+
+export async function fetchCancellation(token: string): Promise<CancellationDetails> {
+    // A read. The cancellation itself is the POST below, because link previews
+    // follow GETs and would otherwise cancel appointments nobody tapped.
+    const { data } = await client.get<CancellationDetails>(
+        "/campaigns/link/cancel/appointment",
+        { params: { token } },
+    )
+    return data
+}
+
+export async function cancelAppointment(
+    token: string,
+): Promise<{ status: "cancelled" | "already_cancelled" }> {
+    const { data } = await client.post<{ status: "cancelled" | "already_cancelled" }>(
+        "/campaigns/link/cancel/appointment",
+        {},
+        { params: { token } },
+    )
+    return data
+}

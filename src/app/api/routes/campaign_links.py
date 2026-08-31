@@ -58,6 +58,9 @@ _CONFIRMED_TEXT = "Thank you — your appointment is confirmed."
 _HANDOFF_TEXT = (
     "Thanks — we've let the clinic know and someone will be in touch to arrange this."
 )
+_CANCEL_ON_PAGE_TEXT = (
+    "Open this link on your phone or computer to cancel your appointment."
+)
 _TROUBLE_TEXT = (
     "Sorry — we couldn't complete that just now. Please contact the clinic directly."
 )
@@ -109,6 +112,10 @@ async def follow_campaign_link(
 
         if action == "confirm":
             body, code = await _confirm(session, run, institution, location)
+        elif action == "cancel":
+            # Cancelling is handled on the page behind an explicit confirmation,
+            # never as a side effect of opening a link. Nothing happens here.
+            body, code = _CANCEL_ON_PAGE_TEXT, 200
         else:
             body, code = await _hand_to_staff(session, run, action)
 

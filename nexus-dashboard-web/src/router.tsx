@@ -14,6 +14,7 @@ import BrandLoader from "@/components/BrandLoader";
 // Auth pages — eagerly loaded (small, needed immediately)
 import Login from "./pages/Login";
 import BookingLink from "./pages/BookingLink";
+import CancelLink from "./pages/CancelLink";
 import SetPassword from "./pages/SetPassword";
 
 // All other pages — lazy loaded
@@ -74,6 +75,13 @@ export const router = createBrowserRouter([
         // the whole of the authentication here.
         path: "/book/:action",
         element: <BookingLink />,
+        errorElement: <RouteError />,
+    },
+    {
+        // Cancelling is its own page: it asks a question rather than offering
+        // times, and it must never act just because the link was opened.
+        path: "/book/cancel",
+        element: <CancelLink />,
         errorElement: <RouteError />,
     },
     {
