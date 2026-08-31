@@ -217,7 +217,12 @@ def redact_payload(payload: Any) -> Any:
     return "[redacted]"
 
 
-def prepare_outbound_sms_body(*, body: str, clinic_identity: str | None) -> str:
+def prepare_outbound_sms_body(
+    *,
+    body: str,
+    clinic_identity: str | None,
+    include_opt_out_footer: bool = True,
+) -> str:
     """Apply clinic identity and CASL opt-out copy to an outbound SMS body."""
     message = (body or "").strip()
     if not message:
@@ -228,7 +233,7 @@ def prepare_outbound_sms_body(*, body: str, clinic_identity: str | None) -> str:
     if not lower.startswith(f"{identity.lower()}:"):
         message = f"{identity}: {message}"
 
-    if "reply stop" not in message.lower() or "reply help" not in message.lower():
+    if include_opt_out_footer and "reply stop" not in message.lower():
         message = f"{message}\n{CASL_FOOTER}"
 
     if len(message) > MAX_SMS_BODY_LENGTH:
