@@ -590,9 +590,12 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
                     else None
                 ),
                 # No-PMS bodies come from the institution admin's editable SMS
-                # template and are sent verbatim; the PMS confirmation keeps the
-                # send-time CASL/TCPA footer.
+                # template and are sent verbatim — no location-name prefix in
+                # front, no CASL/TCPA footer underneath. The PMS confirmation
+                # keeps both: that clinic has no SMS template editor to set its
+                # own wording in.
                 include_opt_out_footer=institution.has_pms,
+                include_clinic_identity=institution.has_pms,
             )
             queued_patient = True
 
@@ -912,6 +915,7 @@ async def process_retell_call_analyzed_event(
                         # Staff alerts are no-PMS only and their wording is the
                         # institution admin's editable template — sent verbatim.
                         include_opt_out_footer=False,
+                        include_clinic_identity=False,
                     )
                 if staff_sms_pending:
                     logger.info(

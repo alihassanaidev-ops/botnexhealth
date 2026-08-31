@@ -220,18 +220,27 @@ def redact_payload(payload: Any) -> Any:
 def prepare_outbound_sms_body(
     *,
     body: str,
-    clinic_identity: str | None,
+    clinic_identity: str | None = None,
     include_opt_out_footer: bool = True,
+    include_clinic_identity: bool = True,
 ) -> str:
-    """Apply clinic identity and CASL opt-out copy to an outbound SMS body."""
+    """Apply clinic identity and CASL opt-out copy to an outbound SMS body.
+
+    Both additions default on, so every PMS send keeps the identity prefix and
+    the CASL footer it has always had. The no-PMS sends turn both off: their
+    wording belongs to the institution admin's editable SMS template, and the
+    template editor is the only place that copy should come from. Consent
+    checks and inbound-STOP suppression are unaffected by either flag.
+    """
     message = (body or "").strip()
     if not message:
         raise ValueError("SMS body is required")
 
-    identity = (clinic_identity or "Clinic").strip() or "Clinic"
-    lower = message.lower()
-    if not lower.startswith(f"{identity.lower()}:"):
-        message = f"{identity}: {message}"
+    if include_clinic_identity:
+        identity = (clinic_identity or "Clinic").strip() or "Clinic"
+        lower = message.lower()
+        if not lower.startswith(f"{identity.lower()}:"):
+            message = f"{identity}: {message}"
 
     if include_opt_out_footer and "reply stop" not in message.lower():
         message = f"{message}\n{CASL_FOOTER}"

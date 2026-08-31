@@ -61,6 +61,7 @@ class SmsService:
         patient_contact_id: str | None = None,
         call_id: str | None = None,
         include_opt_out_footer: bool = True,
+        include_clinic_identity: bool = True,
     ) -> SmsHistoryLog:
         """
         Send an SMS via Twilio and log the history in the database.
@@ -73,6 +74,7 @@ class SmsService:
             patient_contact_id: Optional ID of the Contact receiving this message.
             call_id: Optional associated Retell Call ID.
             include_opt_out_footer: Append the standard STOP copy when absent.
+            include_clinic_identity: Prefix the location name when absent.
 
         Returns:
             The SmsHistoryLog database record.
@@ -127,6 +129,7 @@ class SmsService:
                 body=body,
                 clinic_identity=location.name,
                 include_opt_out_footer=include_opt_out_footer,
+                include_clinic_identity=include_clinic_identity,
             )
         except SmsSendBlockedError as blocked:
             # Use the structured reason code only — never the stringified
