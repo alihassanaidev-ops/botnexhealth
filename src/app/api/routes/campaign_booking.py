@@ -258,6 +258,27 @@ async def book_slot(
             return _json({"error": "unavailable"}, 503)
 
         if not getattr(result, "success", False):
+            # Distinguish "someone took it" from "something broke", because the
+            # patient can act on the first and not the second. Both practice
+            # systems reject a taken slot, but as a generic failure: NexHealth
+            # re-validates immediately before writing, and the GoTracker cloud
+            # service checks working hours and existing appointments in one
+            # transaction so two bookings cannot collide.
+            #
+            # Rather than match on their error text, ask the question directly —
+            # is the slot still on offer? Gone means it was taken between our
+            # check and the write, which is a real race: the voice agent books
+            # through this same path, so a phone call can fill the slot while
+            # the patient is looking at it.
+            try:
+                fresh = await _search_slots(institution, location, run)
+                taken = not any(s.start == body.slot_start for s in fresh)
+            except Exception:
+                logger.exception("post-failure slot re-check failed run=%s", run_id)
+                taken = False
+
+            if taken:
+                return _json({"error": "slot_taken"}, 409)
             return _json({"error": "could_not_book"}, 502)
 
         pending = (

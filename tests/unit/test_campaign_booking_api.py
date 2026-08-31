@@ -86,9 +86,14 @@ def _ctx(*, run=None, contact_pms_id="pms-9", already_booked=False, slots=None,
             return False
 
     adapter = AsyncMock()
-    adapter.find_available_slots = AsyncMock(
-        return_value=MagicMock(slots=slots if slots is not None else [_slot()])
-    )
+    default = [_slot()] if slots is None else slots
+    if isinstance(default, list) and default and isinstance(default[0], list):
+        # a sequence of results, one per successive search
+        adapter.find_available_slots = AsyncMock(
+            side_effect=[MagicMock(slots=batch) for batch in default]
+        )
+    else:
+        adapter.find_available_slots = AsyncMock(return_value=MagicMock(slots=default))
     adapter.book_appointment = AsyncMock(
         return_value=MagicMock(success=book_success, write_status=write_status)
     )
@@ -234,3 +239,48 @@ class TestBooking:
         )
         assert r.status_code == 409
         assert r.json()["error"] == "handoff"
+
+
+class TestLosingTheSlotToSomeoneElse:
+    """The voice agent books through this same path, so a phone call can fill
+    the slot while the patient is looking at it."""
+
+    def test_a_slot_filled_between_the_check_and_the_write_re_offers(self, client):
+        """The practice software rejects it, and the slot is gone on re-search.
+
+        That is a race, not a fault: the patient can act on it, so they get a
+        409 the page turns into "pick another" rather than a dead end.
+        """
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(
+            book_success=False,
+            # first search offers it, post-failure search no longer does
+            slots=[[_slot()], []],
+        )
+        r = _call(
+            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        assert r.status_code == 409
+        assert r.json()["error"] == "slot_taken"
+
+    def test_a_genuine_failure_is_not_disguised_as_a_race(self, client):
+        """Still on offer after the failure, so something actually broke."""
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(book_success=False, slots=[[_slot()], [_slot()]])
+        r = _call(
+            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        assert r.status_code == 502
+        assert r.json()["error"] == "could_not_book"
+
+    def test_a_failed_re_check_does_not_claim_the_slot_was_taken(self, client):
+        """If we cannot tell, say the honest thing rather than guess."""
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(book_success=False, slots=[[_slot()]])  # second search raises
+        r = _call(
+            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        assert r.status_code == 502
