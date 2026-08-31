@@ -184,6 +184,19 @@ def _as_options(slots) -> list[dict]:
     ]
 
 
+def _duration_minutes(start: str, end: str | None) -> int | None:
+    """Minutes between two ISO timestamps, or None when it cannot be worked out."""
+    if not end:
+        return None
+    try:
+        started = datetime.fromisoformat(start)
+        finished = datetime.fromisoformat(end)
+    except ValueError:
+        return None
+    minutes = int((finished - started).total_seconds() // 60)
+    return minutes if minutes > 0 else None
+
+
 async def _provider_names(adapter) -> dict[str, str]:
     """Map provider id to display name.
 
@@ -206,6 +219,7 @@ async def _search_slots(
     appointment_type_id: str | None = None,
     start_date: str | None = None,
     days: int | None = None,
+    with_provider_names: bool = True,
 ) -> list:
     """Live availability for this run's clinic.
 
@@ -216,7 +230,9 @@ async def _search_slots(
     """
     adapter = await get_adapter_for_institution_location(institution, location)
     metadata = run.trigger_metadata or {}
-    names = await _provider_names(adapter)
+    # Names cost an extra call to the practice software and are only worth it
+    # where they are shown. The pre-booking re-check displays nothing.
+    names = await _provider_names(adapter) if with_provider_names else {}
     result = await adapter.find_available_slots(
         start_date=start_date or date.today().isoformat(),
         days=days or DEFAULT_DAYS,
@@ -603,6 +619,7 @@ async def book_slot(
                 location,
                 run,
                 appointment_type_id=body.appointment_type_id,
+                with_provider_names=False,
             )
         except Exception:
             logger.exception("slot re-check failed for run=%s", run_id)
@@ -622,6 +639,10 @@ async def book_slot(
             provider_id=chosen.provider_id,
             slot_start=chosen.start,
             slot_end=chosen.end,
+            # GoTracker reschedules by updating the appointment and takes the
+            # length as minutes, not as an end time. Without this a rescheduled
+            # visit can come back with no duration at all.
+            duration_min=_duration_minutes(chosen.start, chosen.end),
             operatory_id=getattr(chosen, "operatory_id", None),
             # The slot's own type when the practice software supplies one,
             # otherwise what the patient chose — never neither, or the

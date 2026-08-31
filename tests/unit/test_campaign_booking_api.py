@@ -399,3 +399,49 @@ class TestRescheduleMovesRatherThanRebooks:
         _s, _c, adapter, _b = ctx
         adapter.book_appointment.assert_awaited_once()
         adapter.reschedule_appointment_v2.assert_not_awaited()
+
+
+class TestWorksOnBothPracticeSystems:
+    def test_duration_is_supplied_for_gotracker_updates(self, client):
+        """GoTracker reschedules by updating the appointment and takes the
+        length in minutes, not an end time. Without it a rescheduled visit can
+        come back with no duration."""
+        token = make_action_token("run-1", "book")
+        ctx = _ctx()
+        _call(
+            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        _s, _c, adapter, _b = ctx
+        booking = adapter.book_appointment.await_args.args[0]
+        assert booking.duration_min == 30
+
+    def test_a_queued_gotracker_write_is_reported_as_pending(self, client):
+        """A GoTracker booking may sit in a queue for hours. The page must not
+        tell the patient the practice has it."""
+        token = make_action_token("run-1", "book")
+        r = _call(
+            client, "POST", f"/api/campaigns/link/book/slots?token={token}",
+            _ctx(write_status=BookingWriteStatus.PENDING.value),
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        assert r.json()["status"] == "pending"
+
+    def test_the_pre_booking_recheck_skips_provider_names(self, client):
+        """Names cost an extra call to the practice software and nothing on the
+        confirm path displays them."""
+        token = make_action_token("run-1", "book")
+        ctx = _ctx()
+        _call(
+            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        _s, _c, adapter, _b = ctx
+        adapter.list_providers.assert_not_awaited()
+
+    def test_listing_slots_does_resolve_names(self, client):
+        token = make_action_token("run-1", "book")
+        ctx = _ctx()
+        _call(client, "GET", f"/api/campaigns/link/book/slots?token={token}", ctx)
+        _s, _c, adapter, _b = ctx
+        adapter.list_providers.assert_awaited()
