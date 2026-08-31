@@ -43,7 +43,7 @@ import {
     StatusBadge,
     StatusSelect,
 } from "./shared"
-import { formatDateTime, formatDuration, formatListTimestamp, getInitials } from "./format"
+import { callerLabel, formatDateTime, formatDuration, formatListTimestamp, getInitials } from "./format"
 
 /**
  * Normalized list-rail item. Both the Calls (`CallRecord`) and Callbacks
@@ -55,6 +55,10 @@ export interface ConversationSummary {
     /** Call id — used to fetch the full detail. */
     id: string
     name: string | null
+    /** Caller's number as the list payload serves it — full for no-PMS location
+     *  admins, masked to the last four digits otherwise. Labels the row when
+     *  there is no name on the contact. */
+    phone?: string | null
     date: string | null
     time: string | null
     summary: string | null
@@ -133,6 +137,9 @@ function ConversationRow({
     onSelect: () => void
 }) {
     const name = item.name
+    // An unnamed caller is still identified by their number; "Unknown caller"
+    // is reserved for calls that carry neither.
+    const caller = callerLabel(name, item.phone)
     const tags = item.tags ?? []
     return (
         <button
@@ -149,8 +156,15 @@ function ConversationRow({
             <Avatar name={name} size="sm" />
             <div className="min-w-0 flex-1">
                 <div className="flex items-baseline justify-between gap-2">
-                    <span className={cn("truncate text-sm", name ? "font-medium" : "italic text-muted-foreground")}>
-                        {name ?? "Unknown caller"}
+                    <span
+                        className={cn(
+                            "truncate text-sm",
+                            caller.kind === "name" && "font-medium",
+                            caller.kind === "phone" && "font-medium tabular-nums",
+                            caller.kind === "unknown" && "italic text-muted-foreground",
+                        )}
+                    >
+                        {caller.text}
                     </span>
                     <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                         {formatListTimestamp(item.date, item.time)}

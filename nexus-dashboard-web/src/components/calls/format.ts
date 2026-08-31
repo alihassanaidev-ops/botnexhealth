@@ -36,6 +36,41 @@ export function formatListTimestamp(dateStr: string | null, timeStr: string | nu
     return `${datePart}, ${h12}:${m} ${ampm}`
 }
 
+/** How a caller should be labelled in a list.
+ *
+ *  `kind` drives the styling: a real name reads as a name, a phone number gets
+ *  tabular figures so a column of them lines up, and only a caller we can say
+ *  nothing at all about gets the muted italic placeholder. */
+export interface CallerLabel {
+    text: string
+    kind: "name" | "phone" | "unknown"
+}
+
+/** Label an unnamed caller by their number rather than "Unknown caller".
+ *
+ *  The list payload already carries the number — in full for no-PMS location
+ *  admins, masked to the last four digits for everyone else (see
+ *  `_call_to_record` in `src/app/api/routes/calls.py`). Falling back to it
+ *  means two unnamed callers are still telling apart, which "Unknown caller"
+ *  twice over never was. No reveal is triggered here: this renders only what
+ *  the response already contains. */
+export function callerLabel(
+    name: string | null | undefined,
+    phone: string | null | undefined,
+): CallerLabel {
+    const trimmedName = name?.trim()
+    if (trimmedName) return { text: trimmedName, kind: "name" }
+
+    // The backend's mask_phone() yields "Unknown" when there were no digits to
+    // mask — that is not a label worth showing in place of one.
+    const trimmedPhone = phone?.trim()
+    if (trimmedPhone && trimmedPhone.toLowerCase() !== "unknown") {
+        return { text: trimmedPhone, kind: "phone" }
+    }
+
+    return { text: "Unknown caller", kind: "unknown" }
+}
+
 /** "Ashley Bentley" → "AB"; single word → first two letters; empty → "?". */
 export function getInitials(name: string | null | undefined): string {
     const parts = (name ?? "").trim().split(/\s+/).filter(Boolean)
