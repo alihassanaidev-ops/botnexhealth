@@ -156,7 +156,8 @@ function TemplateEditor({
                         {(preview ?? body).length} characters &middot;{" "}
                         {segments} SMS segment{segments === 1 ? "" : "s"}
                         {segments > 1 && " — each segment is billed separately"}
-                        . An unsubscribe footer is appended automatically at send time.
+                        . This body is sent exactly as written — nothing is appended at
+                        send time, so include your own opt-out wording if you need it.
                     </p>
                 </div>
 

@@ -6,8 +6,13 @@ structured appointment data (provider name resolved from cached PMS providers,
 booking time, patient), NOT from Retell's free-text message.
 
 Autoescape is OFF here: an SMS is plain text, so HTML-escaping (``&`` → ``&amp;``)
-would be wrong. The clinic-identity prefix and CASL/TCPA opt-out footer are added
-downstream at send time by ``sms_privacy`` and are not part of the body.
+would be wrong.
+
+A rendered body is sent verbatim on the no-PMS paths (staff alerts and the
+patient request acknowledgement) — nothing is appended at send time, so the
+editor is the single source of truth for that copy. The PMS
+``appointment_booked`` confirmation is the one exception: it still gets the
+CASL/TCPA opt-out footer from ``sms_privacy``.
 """
 
 from __future__ import annotations
@@ -90,8 +95,7 @@ def get_sample_data(template_type: str) -> dict[str, str]:
 SMS_DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     SmsTemplateType.APPOINTMENT_BOOKED.value: {
         "name": "Appointment Booked Confirmation",
-        # No clinic name / opt-out here — sms_privacy prepends clinic identity
-        # and appends the CASL footer at send time.
+        # PMS-only path — the CASL footer is appended by sms_privacy at send time.
         "body": (
             "Hi {{ patient_name }}, your appointment is confirmed for "
             "{{ appointment_datetime }} with {{ appointment_provider }}"

@@ -32,6 +32,7 @@ async def _send_sms_async(
     institution_location_id: str,
     patient_contact_id: str | None,
     call_id: str | None,
+    include_opt_out_footer: bool = True,
 ) -> dict[str, Any]:
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is required to process SMS tasks")
@@ -53,6 +54,7 @@ async def _send_sms_async(
             institution_location_id=institution_location_id,
             patient_contact_id=patient_contact_id,
             call_id=call_id,
+            include_opt_out_footer=include_opt_out_footer,
         )
         await session.commit()
 
@@ -115,6 +117,7 @@ def send_sms_message(
     institution_location_id: str,
     patient_contact_id: str | None = None,
     call_id: str | None = None,
+    include_opt_out_footer: bool = True,
 ) -> None:
     payload = {
         "from_number": from_number,
@@ -123,6 +126,7 @@ def send_sms_message(
         "institution_location_id": institution_location_id,
         "patient_contact_id": patient_contact_id,
         "call_id": call_id,
+        "include_opt_out_footer": include_opt_out_footer,
     }
     try:
         result = asyncio.run(
@@ -133,6 +137,7 @@ def send_sms_message(
                 institution_location_id=institution_location_id,
                 patient_contact_id=patient_contact_id,
                 call_id=call_id,
+                include_opt_out_footer=include_opt_out_footer,
             )
         )
     except Exception as exc:
@@ -193,8 +198,15 @@ def enqueue_auto_sms(
     institution_location_id: str,
     patient_contact_id: str | None = None,
     call_id: str | None = None,
+    include_opt_out_footer: bool = True,
 ) -> None:
-    """Queue a call-triggered SMS for worker processing."""
+    """Queue a call-triggered SMS for worker processing.
+
+    ``include_opt_out_footer`` is False for the no-PMS sends whose wording is
+    owned end-to-end by the institution admin's editable SMS templates: what
+    the admin saves is exactly what the recipient receives, with no copy
+    appended underneath it at send time.
+    """
     if not settings.celery_broker_url:
         raise RuntimeError("CELERY_BROKER_URL is not set")
 
@@ -206,6 +218,7 @@ def enqueue_auto_sms(
             "institution_location_id": institution_location_id,
             "patient_contact_id": patient_contact_id,
             "call_id": call_id,
+            "include_opt_out_footer": include_opt_out_footer,
         },
         queue="notifications_default",
     )
