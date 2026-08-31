@@ -16,8 +16,12 @@ column is safe to add before or after the app rollout. Idempotent
 
 from alembic import op
 
+# Backported from production, where this sat on 20260720_call_scrubbed. Chained
+# onto staging's head instead: keeping production's parent leaves two heads, and
+# a forked history cannot be applied at all. The revision id is unchanged, so
+# production still recognises this as already applied and will not re-run it.
 revision = "20260819_provider_hidden"
-down_revision = "20260720_call_scrubbed"
+down_revision = "20260830_sms_staff_templates"
 branch_labels = None
 depends_on = None
 
