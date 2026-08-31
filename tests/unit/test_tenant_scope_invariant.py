@@ -47,8 +47,7 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # share the same Retell call_id, which Retell guarantees never happens.
     ("src/app/retell/idempotency.py", 96, "RetellFunctionInvocation"),
     ("src/app/retell/idempotency.py", 182, "RetellFunctionInvocation"),
-    ("src/app/retell/webhooks.py", 158, "RetellWebhookEvent"),
-    ("src/app/retell/webhooks.py", 220, "RetellWebhookEvent"),
+    ("src/app/retell/webhooks.py", 289, "RetellWebhookEvent"),
 
     # Twilio status callback identifies our row by message_sid (Twilio's
     # globally unique message id). Twilio doesn't know our institution_id.
