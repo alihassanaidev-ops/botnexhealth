@@ -37,7 +37,11 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **30** · Block unsupported campaigns | Campaign engine core | `d3c444b` | Doc said flip warn→refuse; instantiation already refused. Real gap: requirements lived on template metadata and never reached the definition, so publish never re-checked. Now carried and re-evaluated; unknown still counts as unavailable |
 | **13** · Enforce readiness at publish | Campaign engine core | `417bf54` | Doc was out of date — the publish path already ran the real readiness service, fail-closed. Real gap: SMS-not-provisioned was a *warning* while voice was an error, so a campaign published for a clinic with no Twilio sender and failed for every patient. Email's platform-address fallback stays a warning, since that mail does deliver |
 | **16** · Cross-channel suppression | Campaign engine core | `46a3a9f` + `fca9d07` | Moved from "how the campaign was drawn" to an engine rule in the compliance gate, checked before quiet hours. Opt-out moved to the send node (`send_after_response`) after `fca9d07` — on `ComplianceMetadata` it was dead, since `publish_version` strips that block. Verified safe for both live campaigns — they hold only a voice attempt ladder, no post-response sends |
-| **4** · Report pending honestly — *Platform half* | GoTracker booking safety | `0d096f2` | `BookingWriteStatus` + `write_status` on `BookingResult`; GoTracker defaults to pending instead of scheduled; message follows status. Cloud Service half and run-history visibility (Item 11) still outstanding |
+| **3** · Prevent the same booking being written twice | GoTracker booking safety | `e294420` | Connector asks the chart "did I already write this?" before every write, keyed on `CreatedUserId='ThirdPartyIntegrator'`. A retry returns the existing id and writes nothing. Root cause of the duplicate-booking class |
+| **1** · Check the clinic's schedule before writing | GoTracker booking safety | `b066a8d` | Patient-resolves + slot-free re-checked on the same connection immediately before the write. Cancelled statuses release their slot; touching boundaries are not overlaps |
+| **2** · A conflict outcome for writes | GoTracker booking safety | `4adc67c` | Third terminal status — never re-queued however many attempts remain. Own webhook action. Surfaced per-location on `/api/admin/sync_status` as `conflicts` / `failed` / `oldest_unwritten`. An admin can still re-queue deliberately |
+| **4** · Report pending honestly | GoTracker booking safety | `0d096f2` + `af01334` | Platform half landed first, as the doc requires. Booking response and appointment reads carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`; PMS-origin rows read as `written`. Run-history visibility still rides with Item 11 |
+| **5** · Recover in-flight writes after Connector restart | GoTracker booking safety | `305ed2d` | Item 3's read-back applied to patient creation too. No local state, so **Decision I fell away instead of being answered** — the decision log's recommendation was to avoid a durable local record, and that is what shipped |
 
 ---
 
@@ -71,21 +75,26 @@ this branch at all.
 # WS1 · GoTracker booking safety
 **5 items · ≈ 5 days · Cloud Service + Connector + Platform · TIER 0**
 
-The highest-priority group in the whole backlog, and the only one where the software can currently
+Was the highest-priority group in the whole backlog, and the only one where the software could
 cause real-world harm with no error to warn anyone: double-booked slots in a live practice, and
-patients told "confirmed" for appointments the practice will never see.
+patients told "confirmed" for appointments the practice will never see. Shipped as backend
+`20260831-af01334` on staging and production, agent `2.1.8` (staging 100%, production registered at
+0%); 386 backend and 157 agent tests at the close.
 
 | # | Item | Size | Owner | Notes |
 |---|---|---|---|---|
-| **3** | Prevent the same booking being written twice | 1d | Connector + Cloud Service | Deterministic idempotency key derived from booking content, stored in the practice DB. Root cause of the duplicate-booking class |
-| **1** | Check the clinic's schedule before writing | 1.5d | Connector | Slot free / patient resolves / not already there — same connection, back to back, no long lock |
-| **2** | A conflict outcome for writes that must not proceed | 1.5d | Cloud Service + Ops UI + **Platform mirror** | Conflict must be terminal, never retried. Platform side is ours |
-| **4** ◐ | Tell the caller when a booking is not yet real — **Platform half done, `0d096f2`** | 0.5d | Cloud Service API + ~~Platform~~ | Ours landed first, as the doc requires. Remaining: the Cloud Service must emit `write_status`, and run-history visibility arrives with Item 11 |
-| **5** | Recover in-flight writes after Connector restart | 0.5d | Connector | Blocked on Decision I (internal). Encrypt anything stored on the clinic machine |
+| **3** ✅ | Prevent the same booking being written twice — **done, `e294420`** | 1d | Connector + Cloud Service | Doc specified a deterministic key derived from booking content. What shipped reads back instead: the Connector asks the chart "did I already write this?", keyed on `CreatedUserId='ThirdPartyIntegrator'`, so a retry returns the existing id and writes nothing |
+| **1** ✅ | Check the clinic's schedule before writing — **done, `b066a8d`** | 1.5d | Connector | Patient-resolves + slot-free re-checked on the same connection immediately before the write. Cancelled statuses release their slot; touching boundaries are not overlaps |
+| **2** ✅ | A conflict outcome for writes that must not proceed — **done, `4adc67c`** | 1.5d | Cloud Service + Ops UI + **Platform mirror** | Terminal, never re-queued however many attempts remain, with its own webhook action. Surfaced per-location on `/api/admin/sync_status` as `conflicts` / `failed` / `oldest_unwritten`; an admin can still re-queue deliberately |
+| **4** ✅ | Tell the caller when a booking is not yet real — **done, `0d096f2` + `af01334`** | 0.5d | Cloud Service API + Platform | Ours landed first, as the doc requires. Booking response and appointment reads now carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`. PMS-origin rows read as `written`. **Remaining: run-history visibility, which arrives with Item 11** |
+| **5** ✅ | Recover in-flight writes after Connector restart — **done, `305ed2d`** | 0.5d | Connector | Doc expected a durable local record and Decision I to settle it. Items 3 and 5 converged on one mechanism instead — read back from the chart — so there is no local state, nothing to encrypt, and **Decision I never needed answering** |
 
-**Our slice:** Items 2 and 4 have real Platform work — mirroring the conflict state and handling
-`pending` as an outcome distinct from success and failure. Item 4's Platform half is the single
-best first task in the backlog.
+**What this closes and what it does not.** The double-booking and false-confirmation classes are
+both gone. Two things ride on elsewhere: **run-history visibility** for `pending` / `conflict`
+arrives with Item 11 in WS3, and **proof** — Items 41 and 42 are still the only end-to-end evidence
+the write path holds against a seeded practice database, and that sandbox does not exist yet. The
+protections ship with their own coverage; the write-path suite remains outstanding. Item 7 in WS2
+is now fully unblocked, since the conflict count it was waiting on shipped with Item 2.
 
 ---
 
