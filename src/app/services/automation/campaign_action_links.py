@@ -45,8 +45,12 @@ _SIG_LEN = 32  # hex chars
 #: ``cancel`` has no merge-field placeholder: it is reachable only from a link
 #: the platform generates deliberately, not from wording a campaign author can
 #: drop into a message by accident.
-ACTIONS = ("book", "confirm", "reschedule", "cancel")
-Action = Literal["book", "confirm", "reschedule", "cancel"]
+#: ``register`` converts a lead into a patient record. Like ``cancel`` it has no
+#: merge-field placeholder: creating a record in a clinic's practice software is
+#: deliberate, so the link is only ever issued by a ``patient_registration`` step,
+#: never by wording a campaign author typed.
+ACTIONS = ("book", "confirm", "reschedule", "cancel", "register")
+Action = Literal["book", "confirm", "reschedule", "cancel", "register"]
 
 #: Maps the merge-field placeholder to the action its link performs.
 PLACEHOLDER_ACTIONS: dict[str, Action] = {

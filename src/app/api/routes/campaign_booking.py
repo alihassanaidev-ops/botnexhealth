@@ -588,6 +588,72 @@ async def list_slots(
         )
 
 
+async def _send_booking_confirmation_email(
+    *,
+    session,
+    institution_id: str,
+    location,
+    contact,
+    adapter,
+    run_id: str,
+    appointment_start: str,
+    provider_name: str,
+    action: str,
+) -> None:
+    """Email the patient what they just booked. Best effort, never blocking.
+
+    Deliberately mirrors the voice agent's post-call confirmation rather than
+    inventing a second one: same template type, so a clinic edits its wording in
+    one place and both channels follow it, and the same gate on the clinic having
+    activated that template.
+
+    Two things differ from the call path, both improvements that come from this
+    being a link rather than a transcript. The time and provider are the values
+    the practice software actually wrote, not a phrase the agent heard
+    ("March 28th around 2:30pm"). And the address still comes from the PMS
+    record rather than anything typed into the page, so a booking made from a
+    forwarded link cannot redirect a patient's confirmation elsewhere.
+    """
+    from src.app.models.email_template import EmailTemplateType
+    from src.app.services.email_notification_service import EmailNotificationService
+    from src.app.services.email_template_service import EmailTemplateService
+
+    template_type = EmailTemplateType.PATIENT_APPOINTMENT_CONFIRMATION.value
+    template = await EmailTemplateService(session).get_template_by_type(
+        institution_id, template_type
+    )
+    if not template or not template.is_active:
+        return
+
+    pms_patient_id = getattr(contact, "nexhealth_patient_id", None)
+    if not pms_patient_id:
+        return
+    patient = await adapter.get_patient(str(pms_patient_id))
+    patient_email = (getattr(patient, "email", "") or "").strip()
+    if not patient_email:
+        return
+
+    pms_name = " ".join(
+        p for p in (getattr(patient, "first_name", ""), getattr(patient, "last_name", "")) if p
+    ).strip()
+    await EmailNotificationService().send_notification(
+        recipients=[patient_email],
+        payload={
+            "location_name": getattr(location, "name", "") or "",
+            "appointment_patient_name": pms_name or "there",
+            "appointment_datetime": appointment_start,
+            "appointment_provider": provider_name,
+            "appointment_service": "",
+        },
+        # Scoped to the run and the action, so reopening the link cannot send a
+        # second confirmation but a later reschedule still sends its own.
+        idempotency_key=f"campaign-link:{run_id}:{action}",
+        template_type=template_type,
+        institution_id=institution_id,
+        patient_facing=True,
+    )
+
+
 @router.post("/{action}/slots")
 async def book_slot(
     action: str,
@@ -828,6 +894,28 @@ async def book_slot(
             },
         )
         await session.commit()
+
+        # After the commit, and never allowed to undo it. A booking that
+        # succeeded must stay booked even if the mail provider is down; the
+        # patient still sees the confirmation on the page. Pending bookings send
+        # nothing — there is nothing confirmed to confirm yet.
+        if not pending:
+            try:
+                await _send_booking_confirmation_email(
+                    session=session,
+                    institution_id=str(run.institution_id),
+                    location=location,
+                    contact=contact,
+                    adapter=adapter,
+                    run_id=str(run.id),
+                    appointment_start=chosen.start,
+                    provider_name=getattr(chosen, "provider_name", "") or "",
+                    action=action,
+                )
+            except Exception:
+                logger.exception(
+                    "confirmation email failed after booking run=%s", run_id
+                )
 
     # "pending" is the GoTracker case: accepted, not yet in the practice
     # software. The page must not tell the patient it is confirmed.

@@ -179,6 +179,41 @@ class TestBooking:
         _session, _cm, adapter, _b = ctx
         adapter.book_appointment.assert_awaited_once()
 
+    def test_a_failing_confirmation_email_does_not_lose_the_booking(self, client):
+        """The appointment is written before the email is attempted, and the
+        email is explicitly not allowed to undo it. A mail outage must not make
+        a patient who booked believe they did not."""
+        token = make_action_token("run-1", "book")
+        ctx = _ctx()
+        with patch(
+            "src.app.api.routes.campaign_booking._send_booking_confirmation_email",
+            AsyncMock(side_effect=RuntimeError("smtp is down")),
+        ):
+            r = _call(
+                client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+                json={"slot_start": "2026-09-02T14:00:00Z"},
+            )
+        assert r.status_code == 200
+        assert r.json()["status"] == "booked"
+        _session, _cm, adapter, _b = ctx
+        adapter.book_appointment.assert_awaited_once()
+
+    def test_a_pending_write_sends_no_confirmation(self, client):
+        """Nothing is confirmed yet, so confirming it would be a lie."""
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(write_status=BookingWriteStatus.PENDING.value)
+        sender = AsyncMock()
+        with patch(
+            "src.app.api.routes.campaign_booking._send_booking_confirmation_email",
+            sender,
+        ):
+            r = _call(
+                client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+                json={"slot_start": "2026-09-02T14:00:00Z"},
+            )
+        assert r.json()["status"] == "pending"
+        sender.assert_not_awaited()
+
     def test_the_client_cannot_choose_the_booking_parameters(self, client):
         """It sends a start time; the server books the slot it found itself."""
         token = make_action_token("run-1", "book")

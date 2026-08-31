@@ -52,6 +52,13 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/campaigns/link/cancel/appointment",
         "GET /api/campaigns/link/{action}/slots",
         "POST /api/campaigns/link/{action}/slots",
+        # Lead-to-patient registration. Public for the same reason as the rest
+        # of this group — the patient arrives from a text with no login — but it
+        # is the only one that creates a record in the practice software, so the
+        # register token is issued solely by a patient_registration step and has
+        # no merge-field placeholder a campaign author could scatter into copy.
+        "GET /api/campaigns/link/register/details",
+        "POST /api/campaigns/link/register",
         "GET /livez",
         "GET /readyz",
         "POST /api/auth/login",
