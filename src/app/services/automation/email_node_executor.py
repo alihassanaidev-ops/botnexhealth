@@ -25,6 +25,11 @@ from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.definition_schema import SendEmailNode
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+from src.app.services.circuit_breaker import (
+    BreakerService,
+    NoOpCircuitBreaker,
+    ServiceBreaker,
+)
 from src.app.services.automation.template_renderer import build_merge_vars
 from src.app.services.email.identity_service import EmailIdentityService
 from src.app.services.email.reply_address import make_reply_address
@@ -89,9 +94,14 @@ class EmailNodeExecutor:
         self,
         session: AsyncSession,
         runtime: AutomationWorkflowRuntimeService,
+        breaker: ServiceBreaker | None = None,
+        # Accepted for the executor contract. The provider send rate is checked
+        # in the dispatcher before dispatch, so nothing is enforced here.
+        limits: object | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime
+        self.breaker: ServiceBreaker = breaker or NoOpCircuitBreaker()
 
     async def execute(
         self,
@@ -269,6 +279,7 @@ class EmailNodeExecutor:
 
         provider_message_id: str | None = None
         last_error: Exception | None = None
+        breaker_scope = str(run.location_id or run.institution_id)
         attempts = max(1, node.max_attempts)
 
         for attempt in range(1, attempts + 1):
@@ -276,6 +287,9 @@ class EmailNodeExecutor:
                 result = await sender.send(message)
                 provider_message_id = result.provider_message_id
                 last_error = None
+                await self.breaker.record_success(
+                    BreakerService.EMAIL, breaker_scope
+                )
                 break
 
             except EmailSendError as exc:
@@ -287,14 +301,21 @@ class EmailNodeExecutor:
                     run.id, node.id, exc.retryable, exc,
                 )
                 # A rejected address or malformed message will be rejected
-                # identically next time; retrying only burns sending quota.
+                # identically next time; retrying only burns sending quota — and
+                # it says nothing about the provider's health, so it must not
+                # count against the breaker either.
                 if not exc.retryable:
                     break
+                await self.breaker.record_failure(BreakerService.EMAIL, breaker_scope)
                 if attempt < attempts:
                     await asyncio.sleep(_RETRY_BACKOFF_SECONDS * attempt)
 
             except Exception as exc:  # noqa: BLE001 — reported below
                 last_error = exc
+                # Unclassified: a transport or client-library failure rather than
+                # a provider rejection. Treated as the provider's problem, since
+                # the alternative is a breaker that never opens for email.
+                await self.breaker.record_failure(BreakerService.EMAIL, breaker_scope)
                 logger.warning(
                     "send_email attempt %d/%d raised: institution=%s run=%s node=%s error=%s",
                     attempt, attempts, run.institution_id, run.id, node.id, exc,

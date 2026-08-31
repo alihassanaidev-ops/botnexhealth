@@ -488,6 +488,12 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 phone_country_code_enabled: false,
                 phone_country_region: "US",
                 wait_for_outcome: false,
+                // Item 19 defaults match what the engine did before the settings
+                // existed: no message left, and voicemail counts as an attempt.
+                leave_voicemail: false,
+                voicemail_consumes_attempt: true,
+                voice_attempt_allowance: 1,
+                max_dials: 5,
             }
         case "send_email":
             return {

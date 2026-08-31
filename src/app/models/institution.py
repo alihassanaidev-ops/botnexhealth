@@ -175,6 +175,10 @@ class Institution(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     location_limit: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
+    #: Per-clinic ceiling on simultaneous outbound calls (Item 18). NULL means
+    #: "use the platform default" rather than "no limit", so a clinic that has
+    #: never been tuned is still bounded.
+    outbound_call_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Optional DSO / practice-group umbrella. NULL for standalone institutions.
     # A GROUP_ADMIN gets read-only oversight across all institutions sharing a group_id.

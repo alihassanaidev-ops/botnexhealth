@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useSearchParams } from "react-router-dom"
 import {
     Phone,
@@ -61,6 +61,7 @@ import { toast } from "sonner"
 import { useSSE } from "@/hooks/useSSE"
 import { getCall, listCalls, resolveCallback } from "@/lib/calls-api"
 import { ConversationView } from "@/components/calls/ConversationView"
+import { CallNotesSection } from "@/components/calls/CallNotes"
 import {
     CustomFieldsSection,
     RecordingSection,
@@ -71,9 +72,9 @@ import {
     StatusSelect,
     NoPmsTriageDetails,
 } from "@/components/calls/shared"
-import { formatDateTime, formatDuration, getInitials } from "@/components/calls/format"
+import { callerLabel, formatDateTime, formatDuration, getInitials } from "@/components/calls/format"
 import { listWorkflowStatuses, assignCallStatus } from "@/lib/workflow-status-api"
-import { STATUS_OPTIONS, DIRECTION_OPTIONS } from "@/lib/constants"
+import { callStatusFilterOptions, DIRECTION_OPTIONS } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import { useInstitution } from "@/context/InstitutionContext"
 import type { CallRecord, CallDetail, CallsListResponse, WorkflowStatus } from "@/types"
@@ -141,7 +142,7 @@ function CallsFacetedFilter({
                 </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-[200px]" align="start">
-                <DropdownMenuLabel>Filter by status</DropdownMenuLabel>
+                <DropdownMenuLabel>Filter by {(title ?? "status").toLowerCase()}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {options.map((option) => {
                     const isSelected = selectedValues.has(option.value)
@@ -409,6 +410,10 @@ function CallDetailDialog({ callId, statuses, onClose, onResolved }: CallDetailP
                         {/* No-PMS triage variables — mirrors the conversations panel */}
                         {isNoPms && <NoPmsTriageDetails detail={detail} />}
 
+                        {/* Same notes thread the conversations panel shows, so
+                            the table view isn't a second-class detail surface. */}
+                        <CallNotesSection callId={detail.id} />
+
                         {/* Summary */}
                         {detail.summary && (
                             <div>
@@ -532,6 +537,15 @@ export default function Calls() {
     const [directionFilter, setDirectionFilter] = useState("")
     const [dateFrom, setDateFrom] = useState("")
     const [dateTo, setDateTo] = useState("")
+
+    // The Tags filter offers only the vocabulary this tenant's agent can emit —
+    // a PMS clinic never produces "Needs Booking", a no-PMS one never produces
+    // "Appointment Booked", so showing both halves gives a menu of dead options.
+    const { hasPms, pmsType, isLoading: institutionLoading } = useInstitution()
+    const tagOptions = useMemo(
+        () => callStatusFilterOptions(!institutionLoading && (pmsType === "none" || !hasPms)),
+        [hasPms, pmsType, institutionLoading],
+    )
 
     // Tenant-defined workflow statuses (for the filter + assign control).
     const [statuses, setStatuses] = useState<WorkflowStatus[]>([])
@@ -666,7 +680,7 @@ export default function Calls() {
                     </div>
                     <CallsFacetedFilter
                         title="Tags"
-                        options={STATUS_OPTIONS}
+                        options={tagOptions}
                         selectedValues={new Set(selectedTags)}
                         onSelectedChange={(s) => setSelectedTags(Array.from(s))}
                     />
@@ -728,6 +742,7 @@ export default function Calls() {
                     items={(data?.items ?? []).map((c) => ({
                         id: c.id,
                         name: c.contact?.full_name ?? null,
+                        phone: c.phone_masked,
                         date: c.call_date,
                         time: c.call_time,
                         summary: c.summary,
@@ -846,6 +861,9 @@ interface CallRowProps {
 
 function CallRow({ call, onClick }: CallRowProps) {
     const name = call.contact?.full_name
+    // Unnamed callers still have a number on the record — show it rather than
+    // a column of identical "Unknown caller" rows.
+    const caller = callerLabel(name, call.phone_masked)
     return (
         <TableRow
             className="cursor-pointer hover:bg-muted/50 transition-colors"
@@ -864,8 +882,14 @@ function CallRow({ call, onClick }: CallRowProps) {
                     )}
                     <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
-                            <span className={name ? "font-medium" : "italic text-muted-foreground"}>
-                                {name ?? "Unknown caller"}
+                            <span
+                                className={cn(
+                                    caller.kind === "name" && "font-medium",
+                                    caller.kind === "phone" && "font-medium tabular-nums",
+                                    caller.kind === "unknown" && "italic text-muted-foreground",
+                                )}
+                            >
+                                {caller.text}
                             </span>
                             {call.is_new_patient && (
                                 <UserPlus className="h-3.5 w-3.5 text-indigo-500 shrink-0" aria-label="New patient" />

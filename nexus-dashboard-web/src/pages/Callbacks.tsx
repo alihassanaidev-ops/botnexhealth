@@ -51,6 +51,7 @@ import { listCallbacks } from "@/lib/callbacks-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { listWorkflowStatuses } from "@/lib/workflow-status-api"
 import { ConversationView } from "@/components/calls/ConversationView"
+import { callerLabel } from "@/components/calls/format"
 import { cn } from "@/lib/utils"
 import type { CallbackListItem, CallbacksListResponse, WorkflowStatus } from "@/types"
 
@@ -168,6 +169,11 @@ interface ResolveDialogProps {
 }
 
 function ResolveDialog({ callbackItem, onClose, onResolved }: ResolveDialogProps) {
+    // Whose callback this is — by number when the contact has no name.
+    const resolveTarget = callerLabel(
+        callbackItem?.contact_name ?? callbackItem?.contact?.full_name,
+        callbackItem?.phone_masked,
+    )
     const [note, setNote] = useState("")
     const [resolving, setResolving] = useState(false)
 
@@ -201,8 +207,8 @@ function ResolveDialog({ callbackItem, onClose, onResolved }: ResolveDialogProps
                 </DialogHeader>
                 <div className="space-y-4">
                     <div className="rounded-lg border bg-muted p-3 text-sm space-y-1">
-                        <p className="font-medium">
-                            {callbackItem?.contact_name ?? callbackItem?.contact?.full_name ?? "Unknown caller"}
+                        <p className={cn("font-medium", resolveTarget.kind === "unknown" && "italic text-muted-foreground")}>
+                            {resolveTarget.text}
                         </p>
                         <p className="text-xs text-muted-foreground">
                             {formatDateTime(callbackItem?.call_date ?? null, callbackItem?.call_time ?? null)}
@@ -272,6 +278,10 @@ interface CallbackRowProps {
 }
 
 function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
+    const caller = callerLabel(
+        item.contact_name ?? item.contact?.full_name,
+        item.phone_masked,
+    )
     return (
         <TableRow className="cursor-pointer hover:bg-muted transition-colors" onClick={onClick}>
             <TableCell className="px-4">
@@ -283,8 +293,14 @@ function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
             </TableCell>
 
             <TableCell className="px-4">
-                <span className={item.contact_name || item.contact?.full_name ? "font-medium" : "text-muted-foreground"}>
-                    {item.contact_name ?? item.contact?.full_name ?? "Unknown"}
+                <span
+                    className={cn(
+                        caller.kind === "name" && "font-medium",
+                        caller.kind === "phone" && "font-medium tabular-nums",
+                        caller.kind === "unknown" && "text-muted-foreground",
+                    )}
+                >
+                    {caller.text}
                 </span>
                 {item.booked_appointment_type_name && (
                     <div className="mt-0.5">
@@ -574,6 +590,7 @@ export default function Callbacks() {
                     items={(data?.items ?? []).map((it) => ({
                         id: it.call_id,
                         name: it.contact_name ?? it.contact?.full_name ?? null,
+                        phone: it.phone_masked,
                         date: it.call_date,
                         time: it.call_time,
                         summary: it.summary,

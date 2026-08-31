@@ -8,7 +8,8 @@
  */
 
 import { NoPmsTriageDetails } from "@/components/calls/shared"
-import { useEffect, useRef, useState } from "react"
+import { CallNotesSection } from "@/components/calls/CallNotes"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
     ArrowLeft,
     CheckCircle2,
@@ -42,7 +43,7 @@ import {
     StatusBadge,
     StatusSelect,
 } from "./shared"
-import { formatDateTime, formatDuration, formatListTimestamp, getInitials } from "./format"
+import { callerLabel, formatDateTime, formatDuration, formatListTimestamp, getInitials } from "./format"
 
 /**
  * Normalized list-rail item. Both the Calls (`CallRecord`) and Callbacks
@@ -54,6 +55,10 @@ export interface ConversationSummary {
     /** Call id — used to fetch the full detail. */
     id: string
     name: string | null
+    /** Caller's number as the list payload serves it — full for no-PMS location
+     *  admins, masked to the last four digits otherwise. Labels the row when
+     *  there is no name on the contact. */
+    phone?: string | null
     date: string | null
     time: string | null
     summary: string | null
@@ -132,6 +137,9 @@ function ConversationRow({
     onSelect: () => void
 }) {
     const name = item.name
+    // An unnamed caller is still identified by their number; "Unknown caller"
+    // is reserved for calls that carry neither.
+    const caller = callerLabel(name, item.phone)
     const tags = item.tags ?? []
     return (
         <button
@@ -148,8 +156,15 @@ function ConversationRow({
             <Avatar name={name} size="sm" />
             <div className="min-w-0 flex-1">
                 <div className="flex items-baseline justify-between gap-2">
-                    <span className={cn("truncate text-sm", name ? "font-medium" : "italic text-muted-foreground")}>
-                        {name ?? "Unknown caller"}
+                    <span
+                        className={cn(
+                            "truncate text-sm",
+                            caller.kind === "name" && "font-medium",
+                            caller.kind === "phone" && "font-medium tabular-nums",
+                            caller.kind === "unknown" && "italic text-muted-foreground",
+                        )}
+                    >
+                        {caller.text}
                     </span>
                     <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                         {formatListTimestamp(item.date, item.time)}
@@ -344,6 +359,11 @@ function DetailsContent({
 
                 {isNoPms && <NoPmsTriageDetails detail={detail} />}
 
+                {/* Staff notes sit directly under the triage details for every
+                    tenant — NexHealth, GoTracker and no-PMS alike. Scoping is
+                    enforced server-side by the call's own institution/location. */}
+                <CallNotesSection callId={detail.id} />
+
                 {detail.booked_appointment_type_name && (
                     <DetailField label="Booked">
                         <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
@@ -508,6 +528,184 @@ function CenterPane({
     )
 }
 
+// ── Resizable panes ───────────────────────────────────────────────────────────
+//
+// The three columns are a flex row: the two rails carry an explicit width and
+// the centre takes what's left. The widths live in a CSS custom property rather
+// than an inline `width`, so they apply only inside the responsive utility that
+// reads them — below `md` the left rail is still full-width, and the details
+// rail still only exists at `xl`.
+
+const PANE_WIDTH_STORAGE_KEY = "conversation-view:pane-widths"
+
+/** Defaults match the fixed widths this layout used before it was resizable. */
+const DEFAULT_LIST_WIDTH = 320
+const DEFAULT_DETAILS_WIDTH = 288
+
+const MIN_LIST_WIDTH = 220
+const MAX_LIST_WIDTH = 560
+const MIN_DETAILS_WIDTH = 240
+const MAX_DETAILS_WIDTH = 560
+/** The transcript stops being readable below this, so a rail can't eat past it. */
+const MIN_CENTER_WIDTH = 360
+/** Both dividers are this wide; counted when working out the space left over. */
+const DIVIDER_WIDTH = 5
+
+/** Arrow-key step, so the dividers are usable without a pointer. */
+const NUDGE_STEP = 16
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.min(Math.max(value, min), max)
+}
+
+type PaneWidths = { list: number; details: number }
+
+function readStoredWidths(): PaneWidths {
+    const fallback = { list: DEFAULT_LIST_WIDTH, details: DEFAULT_DETAILS_WIDTH }
+    try {
+        const raw = window.localStorage.getItem(PANE_WIDTH_STORAGE_KEY)
+        if (!raw) return fallback
+        const parsed = JSON.parse(raw) as Partial<PaneWidths>
+        return {
+            list: Number.isFinite(parsed.list)
+                ? clamp(parsed.list as number, MIN_LIST_WIDTH, MAX_LIST_WIDTH)
+                : fallback.list,
+            details: Number.isFinite(parsed.details)
+                ? clamp(parsed.details as number, MIN_DETAILS_WIDTH, MAX_DETAILS_WIDTH)
+                : fallback.details,
+        }
+    } catch {
+        // Private-mode localStorage, or something else wrote the key.
+        return fallback
+    }
+}
+
+/** True at `xl`, the only width where the details rail is a third column.
+ *  The centre-pane budget depends on whether that column is on screen. */
+function useIsWideLayout(): boolean {
+    const query = "(min-width: 1280px)"
+    const [isWide, setIsWide] = useState(
+        () => typeof window !== "undefined" && window.matchMedia(query).matches,
+    )
+    useEffect(() => {
+        const mq = window.matchMedia(query)
+        const onChange = (e: MediaQueryListEvent) => setIsWide(e.matches)
+        mq.addEventListener("change", onChange)
+        return () => mq.removeEventListener("change", onChange)
+    }, [])
+    return isWide
+}
+
+/** A draggable divider between two panes.
+ *
+ *  Pointer capture keeps the drag alive when the cursor outruns the 5px strip,
+ *  which is most of the time. Double-click restores the default width and the
+ *  arrow keys nudge it, so this is not a pointer-only control. */
+function PaneDivider({
+    label,
+    width,
+    min,
+    max,
+    onDragTo,
+    onNudge,
+    onReset,
+    onCommit,
+    className,
+}: {
+    label: string
+    width: number
+    min: number
+    max: number
+    /** Absolute pointer position; the parent turns it into a width. */
+    onDragTo: (clientX: number) => void
+    onNudge: (deltaPx: number) => void
+    onReset: () => void
+    /** Drag finished — the parent persists at this point, not on every frame. */
+    onCommit: () => void
+    className?: string
+}) {
+    const [dragging, setDragging] = useState(false)
+
+    // While dragging, the pointer leaves the strip constantly. Setting these on
+    // the body keeps the resize cursor and stops the panes selecting text.
+    useEffect(() => {
+        if (!dragging) return
+        const { style } = document.body
+        const previousCursor = style.cursor
+        const previousSelect = style.userSelect
+        style.cursor = "col-resize"
+        style.userSelect = "none"
+        return () => {
+            style.cursor = previousCursor
+            style.userSelect = previousSelect
+        }
+    }, [dragging])
+
+    function endDrag(e: React.PointerEvent<HTMLDivElement>) {
+        if (!dragging) return
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId)
+        }
+        setDragging(false)
+        onCommit()
+    }
+
+    return (
+        <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={label}
+            aria-valuenow={Math.round(width)}
+            aria-valuemin={min}
+            aria-valuemax={max}
+            tabIndex={0}
+            onPointerDown={(e) => {
+                // Left button only; a right-click here should not start a drag.
+                if (e.button !== 0) return
+                e.preventDefault()
+                e.currentTarget.setPointerCapture(e.pointerId)
+                setDragging(true)
+            }}
+            onPointerMove={(e) => {
+                if (dragging) onDragTo(e.clientX)
+            }}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            onDoubleClick={onReset}
+            onKeyDown={(e) => {
+                if (e.key === "ArrowLeft") {
+                    e.preventDefault()
+                    onNudge(-NUDGE_STEP)
+                    onCommit()
+                } else if (e.key === "ArrowRight") {
+                    e.preventDefault()
+                    onNudge(NUDGE_STEP)
+                    onCommit()
+                } else if (e.key === "Home") {
+                    e.preventDefault()
+                    onReset()
+                }
+            }}
+            className={cn(
+                // 5px of grab area around a 1px line: wide enough to hit,
+                // narrow enough to still read as a divider.
+                "group relative z-10 flex w-[5px] shrink-0 cursor-col-resize touch-none select-none items-stretch",
+                "focus-visible:outline-none",
+                className,
+            )}
+        >
+            <div
+                className={cn(
+                    "pointer-events-none mx-auto h-full w-px transition-colors",
+                    dragging
+                        ? "w-0.5 bg-primary"
+                        : "bg-border group-hover:w-0.5 group-hover:bg-primary/60 group-focus-visible:w-0.5 group-focus-visible:bg-primary",
+                )}
+            />
+        </div>
+    )
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export function ConversationView({
@@ -576,12 +774,121 @@ export function ConversationView({
 
     const showDetailOnMobile = mobileDetailOpen
 
+    // ── Pane sizing ──────────────────────────────────────────────────────────
+    const containerRef = useRef<HTMLDivElement>(null)
+    const isWideLayout = useIsWideLayout()
+    const [paneWidths, setPaneWidths] = useState<PaneWidths>(readStoredWidths)
+
+    const persistWidths = useCallback(() => {
+        try {
+            window.localStorage.setItem(
+                PANE_WIDTH_STORAGE_KEY,
+                JSON.stringify(paneWidths),
+            )
+        } catch {
+            // Storage unavailable — the layout still works, it just won't stick.
+        }
+    }, [paneWidths])
+
+    /** Widest the list rail may get without starving the centre pane. The
+     *  details rail only counts against the budget where it is on screen. */
+    const listCeiling = useCallback(
+        (currentDetails: number) => {
+            const container = containerRef.current?.getBoundingClientRect().width
+            if (!container) return MAX_LIST_WIDTH
+            const reserved =
+                MIN_CENTER_WIDTH +
+                DIVIDER_WIDTH +
+                (isWideLayout ? currentDetails + DIVIDER_WIDTH : 0)
+            return Math.min(MAX_LIST_WIDTH, container - reserved)
+        },
+        [isWideLayout],
+    )
+
+    const detailsCeiling = useCallback((currentList: number) => {
+        const container = containerRef.current?.getBoundingClientRect().width
+        if (!container) return MAX_DETAILS_WIDTH
+        return Math.min(
+            MAX_DETAILS_WIDTH,
+            container - currentList - MIN_CENTER_WIDTH - DIVIDER_WIDTH * 2,
+        )
+    }, [])
+
+    const setListWidth = useCallback(
+        (next: number) => {
+            setPaneWidths((prev) => {
+                // Clamp low last so a cramped viewport still yields a usable
+                // rail rather than a ceiling below the minimum.
+                const list = clamp(
+                    Math.min(next, listCeiling(prev.details)),
+                    MIN_LIST_WIDTH,
+                    MAX_LIST_WIDTH,
+                )
+                // Same width → same object, so a pointermove that changes
+                // nothing costs no render and the resize observer can't loop.
+                return list === prev.list ? prev : { ...prev, list }
+            })
+        },
+        [listCeiling],
+    )
+
+    const setDetailsWidth = useCallback(
+        (next: number) => {
+            setPaneWidths((prev) => {
+                const details = clamp(
+                    Math.min(next, detailsCeiling(prev.list)),
+                    MIN_DETAILS_WIDTH,
+                    MAX_DETAILS_WIDTH,
+                )
+                return details === prev.details ? prev : { ...prev, details }
+            })
+        },
+        [detailsCeiling],
+    )
+
+    // A width that was fine on a wide window can starve the centre pane once
+    // the window shrinks, so re-apply the ceilings whenever the container
+    // changes size. The updater returns `prev` when nothing moved, so this
+    // cannot feed itself.
+    useEffect(() => {
+        const node = containerRef.current
+        if (!node) return
+        const observer = new ResizeObserver(() => {
+            setPaneWidths((prev) => {
+                const list = clamp(
+                    Math.min(prev.list, listCeiling(prev.details)),
+                    MIN_LIST_WIDTH,
+                    MAX_LIST_WIDTH,
+                )
+                const details = clamp(
+                    Math.min(prev.details, detailsCeiling(list)),
+                    MIN_DETAILS_WIDTH,
+                    MAX_DETAILS_WIDTH,
+                )
+                return list === prev.list && details === prev.details
+                    ? prev
+                    : { list, details }
+            })
+        })
+        observer.observe(node)
+        return () => observer.disconnect()
+    }, [listCeiling, detailsCeiling])
+
     return (
-        <div className="flex h-[calc(100vh-15rem)] min-h-[540px] overflow-hidden rounded-xl border bg-card shadow-sm">
+        <div
+            ref={containerRef}
+            style={
+                {
+                    "--pane-list-w": `${paneWidths.list}px`,
+                    "--pane-details-w": `${paneWidths.details}px`,
+                } as React.CSSProperties
+            }
+            className="flex h-[calc(100vh-15rem)] min-h-[540px] overflow-hidden rounded-xl border bg-card shadow-sm"
+        >
             {/* Left rail */}
             <div
                 className={cn(
-                    "w-full shrink-0 flex-col border-r border-border bg-card/40 md:flex md:w-[19rem] lg:w-[20rem]",
+                    "w-full shrink-0 flex-col bg-card/40 md:flex md:w-[var(--pane-list-w)]",
                     showDetailOnMobile ? "hidden md:flex" : "flex",
                 )}
             >
@@ -654,6 +961,22 @@ export function ConversationView({
                 )}
             </div>
 
+            {/* Only side-by-side from md up, so there is nothing to drag below it. */}
+            <PaneDivider
+                label="Resize conversation list"
+                width={paneWidths.list}
+                min={MIN_LIST_WIDTH}
+                max={MAX_LIST_WIDTH}
+                onDragTo={(clientX) => {
+                    const rect = containerRef.current?.getBoundingClientRect()
+                    if (rect) setListWidth(clientX - rect.left)
+                }}
+                onNudge={(delta) => setListWidth(paneWidths.list + delta)}
+                onReset={() => setListWidth(DEFAULT_LIST_WIDTH)}
+                onCommit={persistWidths}
+                className="hidden md:flex"
+            />
+
             {/* Center pane */}
             <div className={cn("min-w-0 flex-1 flex-col", showDetailOnMobile ? "flex" : "hidden md:flex")}>
                 <CenterPane
@@ -665,8 +988,25 @@ export function ConversationView({
                 />
             </div>
 
+            {/* The details rail only exists at xl, and so does its divider. */}
+            <PaneDivider
+                label="Resize details panel"
+                width={paneWidths.details}
+                min={MIN_DETAILS_WIDTH}
+                max={MAX_DETAILS_WIDTH}
+                onDragTo={(clientX) => {
+                    const rect = containerRef.current?.getBoundingClientRect()
+                    // Measured from the right edge — this rail grows leftwards.
+                    if (rect) setDetailsWidth(rect.right - clientX)
+                }}
+                onNudge={(delta) => setDetailsWidth(paneWidths.details - delta)}
+                onReset={() => setDetailsWidth(DEFAULT_DETAILS_WIDTH)}
+                onCommit={persistWidths}
+                className="hidden xl:flex"
+            />
+
             {/* Right details pane (xl and up) */}
-            <div className="hidden w-[18rem] shrink-0 flex-col border-l border-border bg-card/40 xl:flex">
+            <div className="hidden shrink-0 flex-col bg-card/40 xl:flex xl:w-[var(--pane-details-w)]">
                 <div className="flex shrink-0 items-center border-b border-border px-4 py-3 text-sm font-semibold">
                     Details
                 </div>

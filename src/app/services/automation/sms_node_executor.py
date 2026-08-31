@@ -15,6 +15,11 @@ from src.app.services.automation.definition_schema import SendSmsNode
 from src.app.services.automation.campaign_conversation_service import CampaignConversationService
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.template_renderer import render_sms_body
+from src.app.services.circuit_breaker import (
+    BreakerService,
+    NoOpCircuitBreaker,
+    ServiceBreaker,
+)
 from src.app.services.sms_service import SmsService
 
 logger = logging.getLogger(__name__)
@@ -53,9 +58,14 @@ class SmsNodeExecutor:
         self,
         session: AsyncSession,
         runtime: AutomationWorkflowRuntimeService,
+        breaker: ServiceBreaker | None = None,
+        # Accepted for the executor contract. The provider send rate is checked
+        # in the dispatcher before dispatch, so nothing is enforced here.
+        limits: object | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime
+        self.breaker: ServiceBreaker = breaker or NoOpCircuitBreaker()
 
     async def execute(
         self,
@@ -119,6 +129,7 @@ class SmsNodeExecutor:
         # outcome on the history row and returns it. Ignoring that return value
         # is what let a failed send be recorded as a delivered one.
         sms_service = SmsService(self.session)
+        breaker_scope = str(run.location_id or run.institution_id)
         attempts = max(1, node.max_attempts)
         outcome = _PERMANENT
 
@@ -149,6 +160,9 @@ class SmsNodeExecutor:
                 return node.next_node_id
 
             if sms_log.status != SmsStatus.FAILED.value:
+                await self.breaker.record_success(
+                    BreakerService.TWILIO, breaker_scope
+                )
                 await CampaignConversationService(self.session).mark_message_seen(thread)
                 # Carry the provider's message id so the delivery receipt, which
                 # arrives minutes later on a webhook, can find this attempt.
@@ -164,6 +178,14 @@ class SmsNodeExecutor:
                 return node.next_node_id
 
             outcome = _classify(sms_log)
+            if outcome is not _PERMANENT:
+                # Twilio rejected us (429/5xx) or the request never completed.
+                # A _PERMANENT rejection is this message being wrong — a bad
+                # number, an unreachable carrier — and says nothing about
+                # Twilio's health, so it must not trip the breaker.
+                await self.breaker.record_failure(
+                    BreakerService.TWILIO, breaker_scope
+                )
             logger.warning(
                 "send_sms attempt %d/%d failed: institution=%s run=%s node=%s "
                 "provider_status=%s outcome=%s",

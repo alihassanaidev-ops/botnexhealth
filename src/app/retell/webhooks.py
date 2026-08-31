@@ -478,8 +478,11 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
     ``appointment_booked`` SMS template, populated with the authoritative PMS
     booking (real provider name + slot time) resolved from the ``book_appointment``
     invocation — not Retell's free-text message. Only fires when an appointment
-    was actually booked during the call. Consent, suppression, and the
-    CASL/TCPA footer are enforced downstream by the SMS pipeline.
+    was actually booked during the call. Consent and suppression are enforced
+    downstream by the SMS pipeline, which also appends the CASL/TCPA footer to
+    this PMS confirmation. The no-PMS acknowledgement below opts out of that
+    footer: its wording is owned end-to-end by the institution admin's editable
+    SMS template.
     """
     event = RetellWebhookEvent.model_validate(payload)
     call = event.call
@@ -691,6 +694,10 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
                     if db_call_for_sms is not None
                     else None
                 ),
+                # No-PMS bodies come from the institution admin's editable SMS
+                # template and are sent verbatim; the PMS confirmation keeps the
+                # send-time CASL/TCPA footer.
+                include_opt_out_footer=institution.has_pms,
             )
             queued_patient = True
 
@@ -1039,6 +1046,9 @@ async def process_retell_call_analyzed_event(
                         institution_location_id=str(location.id),
                         patient_contact_id=None,
                         call_id=str(saved_call.id),
+                        # Staff alerts are no-PMS only and their wording is the
+                        # institution admin's editable template — sent verbatim.
+                        include_opt_out_footer=False,
                     )
                 if staff_sms_pending:
                     logger.info(

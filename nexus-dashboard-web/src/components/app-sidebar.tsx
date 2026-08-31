@@ -15,6 +15,7 @@ import {
     Users,
     Building2,
     CalendarCheck,
+    CalendarOff,
     CalendarClock,
     UserCog,
     Armchair,
@@ -139,6 +140,11 @@ const institutionAdminNav: NavItemDef[] = [
         title: "DNC Patients",
         url: "/institution-admin/do-not-contact",
         icon: ShieldOff,
+    },
+    {
+        title: "Quiet Hours",
+        url: "/institution-admin/quiet-hours-exceptions",
+        icon: CalendarOff,
     },
 ]
 

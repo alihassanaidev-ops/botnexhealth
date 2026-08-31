@@ -34,7 +34,18 @@ from src.app.services.automation.retell_outbound_client import (
     RetellTransientError,
 )
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+from src.app.models.institution import Institution
+from src.app.services.circuit_breaker import (
+    BreakerService,
+    NoOpCircuitBreaker,
+    ServiceBreaker,
+)
+from src.app.services.outbound_limits import (
+    NoOpOutboundLimiter,
+    OutboundLimiter,
+)
 from src.app.services.automation.voice_attempt_recorder import (
+    count_dials_for_node,
     claim_voice_attempt,
     mark_attempt_failed,
     mark_attempt_placed,
@@ -130,9 +141,26 @@ class VoiceNodeExecutor:
         self,
         session: AsyncSession,
         runtime: AutomationWorkflowRuntimeService,
+        breaker: ServiceBreaker | None = None,
+        limits: OutboundLimiter | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime
+        self.breaker: ServiceBreaker = breaker or NoOpCircuitBreaker()
+        self.limits: OutboundLimiter = limits or NoOpOutboundLimiter()
+
+    async def _call_ceiling(self, run) -> int | None:
+        """This clinic's simultaneous-call ceiling, or None for the default.
+
+        NULL on the institution means "use the platform default", not "no
+        limit" — an untuned clinic is still bounded.
+        """
+        institution = await self.session.get(Institution, run.institution_id)
+        return getattr(institution, "outbound_call_limit", None)
+
+    async def _release_slot(self, slot) -> None:
+        if slot is not None:
+            await self.limits.release_call_slot(slot)
 
     async def execute(
         self,
@@ -347,6 +375,41 @@ class VoiceNodeExecutor:
             )
             return node.next_node_id
 
+        # --- Attempt and dial ceilings (Item 19) ---
+        # Before the claim, so giving up here leaves nothing to unwind.
+        dials, counted = await count_dials_for_node(
+            self.session,
+            workflow_run_id=str(run.id),
+            step_id=node.id,
+            voicemail_consumes_attempt=node.voicemail_consumes_attempt,
+        )
+        if dials >= node.max_dials:
+            # The guard that makes "voicemail does not consume an attempt" safe:
+            # a number that is always voicemail stops here rather than being
+            # redialled for ever.
+            logger.info(
+                "send_voice dial cap reached: institution=%s run=%s node=%s "
+                "dials=%s cap=%s",
+                run.institution_id, run.id, node.id, dials, node.max_dials,
+            )
+            await self.runtime.complete_step(
+                step, result_code="dial_cap_reached", result_metadata=voice_metadata
+            )
+            return node.next_node_id
+        if counted >= node.voice_attempt_allowance:
+            logger.info(
+                "send_voice attempt allowance used: institution=%s run=%s node=%s "
+                "counted=%s allowance=%s",
+                run.institution_id, run.id, node.id,
+                counted, node.voice_attempt_allowance,
+            )
+            await self.runtime.complete_step(
+                step,
+                result_code="attempts_exhausted",
+                result_metadata=voice_metadata,
+            )
+            return node.next_node_id
+
         api_key = settings.retell_api_secret
         if not api_key:
             await self.runtime.fail_step(
@@ -371,6 +434,10 @@ class VoiceNodeExecutor:
             "user_number": to_number,
             "clinic_name": clinic_name or "",
             "compliance_disclosure": _ai_call_disclosure(clinic_name),
+            # Item 19. The agent script decides what to say; this tells it
+            # whether saying anything to a machine is wanted at all. A string
+            # because Retell's dynamic variables are substituted as text.
+            "leave_voicemail": "true" if node.leave_voicemail else "false",
         }
         metadata = {
             "workflow_run_id": str(run.id),
@@ -392,6 +459,31 @@ class VoiceNodeExecutor:
         )
         await self.session.commit()
 
+        # --- Concurrency ceiling (Item 18) ---
+        # After the claim rather than before it, so a refusal takes the same
+        # recovery path as a transient vendor error: release the claim so a
+        # later attempt can re-dial, then defer. Refusing before the claim would
+        # be simpler but would need a second, parallel unwind path.
+        ceiling = await self._call_ceiling(run)
+        limit_decision, call_slot = await self.limits.acquire_call_slot(
+            str(run.institution_id), ceiling=ceiling
+        )
+        if not limit_decision.allowed:
+            await mark_attempt_failed(
+                attempt, error_message=limit_decision.reason or "call_concurrency"
+            )
+            await self.session.commit()
+            due_at = datetime.now(tz=timezone.utc) + timedelta(
+                seconds=max(limit_decision.retry_after_seconds, 1)
+            )
+            logger.info(
+                "send_voice held at the concurrency ceiling: institution=%s "
+                "run=%s node=%s in_flight=%s due_at=%s",
+                run.institution_id, run.id, node.id,
+                limit_decision.in_flight, due_at,
+            )
+            return VoiceCooldownDeferred(step=step, due_at=due_at)
+
         # --- Place the call via the mockable client ---
         try:
             result = await RetellOutboundClient(api_key).create_phone_call(
@@ -402,6 +494,10 @@ class VoiceNodeExecutor:
                 metadata=metadata,
             )
         except RetellTransientError as exc:
+            await self._release_slot(call_slot)
+            await self.breaker.record_failure(
+                BreakerService.RETELL, str(run.location_id or run.institution_id)
+            )
             # Recoverable vendor blip. The POST did not succeed → mark the claim FAILED
             # (committed) so the V-6 retry sees no active claim and can re-dial. Then
             # retry via the Celery task until max_attempts, then give up.
@@ -426,6 +522,15 @@ class VoiceNodeExecutor:
             )
             raise  # propagate → Celery task retries with backoff
         except RetellAmbiguousError as exc:
+            # The slot is deliberately NOT released here. The call may have been
+            # placed, and handing back a slot for a live call is how a ceiling
+            # stops meaning anything. The lease expires on its own instead.
+            # Counted against the breaker even though this call is never retried:
+            # a timeout is the clearest signal Retell is unwell, and the breaker
+            # is what stops the *next* run walking into the same wall.
+            await self.breaker.record_failure(
+                BreakerService.RETELL, str(run.location_id or run.institution_id)
+            )
             # Timeout/network (XC-1b): the call MAY have been placed but the response
             # was lost. Do NOT retry (no idempotency key → double-dial risk). Fail the
             # run, but leave the claim INITIATING (NOT failed) so a task redelivery is
@@ -448,6 +553,7 @@ class VoiceNodeExecutor:
             )
             return node.next_node_id
         except (RetellPermanentError, Exception) as exc:  # noqa: BLE001
+            await self._release_slot(call_slot)
             logger.error(
                 "send_voice permanent failure: institution=%s run=%s node=%s error=%s",
                 run.institution_id, run.id, node.id, exc,
@@ -467,6 +573,13 @@ class VoiceNodeExecutor:
         # (V-4) + store the retell_call_id on the step for webhook correlation. A crash
         # before the task commit leaves the claim INITIATING, which still blocks a
         # re-dial on redelivery (at-most-once). ---
+        await self.breaker.record_success(
+            BreakerService.RETELL, str(run.location_id or run.institution_id)
+        )
+        if call_slot is not None and result.call_id:
+            await self.limits.rekey_call_slot(
+                str(run.institution_id), call_slot.token, result.call_id
+            )
         await mark_attempt_placed(
             attempt, retell_call_id=result.call_id, awaiting_outcome=node.wait_for_outcome
         )

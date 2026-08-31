@@ -40,8 +40,9 @@ async def test_publish_workflow_metrics_emits_all_signals(monkeypatch) -> None:
         assert region_name == "ca-central-1"
         return FakeCloudWatch()
 
-    # due_timer_backlog, stale_timers, active_runs, failed_runs, failed_steps
-    fake_session = _FakeSession([7, 2, 5, 3, 4])
+    # due_timer_backlog, stale_timers, active_runs, failed_runs, failed_steps,
+    # undeliverable
+    fake_session = _FakeSession([7, 2, 5, 3, 4, 6])
 
     @contextlib.asynccontextmanager
     async def fake_superadmin_session(external_id: str):
@@ -60,8 +61,9 @@ async def test_publish_workflow_metrics_emits_all_signals(monkeypatch) -> None:
 
     counts = await publish_workflow_metrics.publish_workflow_metrics()
 
-    assert fake_session.execute_calls == 5
+    assert fake_session.execute_calls == 6
     assert counts == {
+        "undeliverable": 6,
         "due_timer_backlog": 7,
         "stale_timers": 2,
         "active_runs": 5,
@@ -75,6 +77,9 @@ async def test_publish_workflow_metrics_emits_all_signals(monkeypatch) -> None:
         {"MetricName": "WorkflowActiveRuns", "Unit": "Count", "Value": 5},
         {"MetricName": "WorkflowFailedRuns", "Unit": "Count", "Value": 3},
         {"MetricName": "WorkflowFailedSteps", "Unit": "Count", "Value": 4},
+        # Item 35 alarms on this: events the engine could not deliver and
+        # nobody has replayed or discarded.
+        {"MetricName": "WorkflowUndeliverable", "Unit": "Count", "Value": 6},
     ]
 
 
@@ -82,7 +87,7 @@ async def test_publish_workflow_metrics_emits_all_signals(monkeypatch) -> None:
 async def test_publish_workflow_metrics_skips_cloudwatch_in_local_env(
     monkeypatch,
 ) -> None:
-    fake_session = _FakeSession([1, 0, 2, 0, 0])
+    fake_session = _FakeSession([1, 0, 2, 0, 0, 0])
 
     @contextlib.asynccontextmanager
     async def fake_superadmin_session(external_id: str):
@@ -101,8 +106,9 @@ async def test_publish_workflow_metrics_skips_cloudwatch_in_local_env(
 
     counts = await publish_workflow_metrics.publish_workflow_metrics()
 
-    assert fake_session.execute_calls == 5
+    assert fake_session.execute_calls == 6
     assert counts == {
+        "undeliverable": 0,
         "due_timer_backlog": 1,
         "stale_timers": 0,
         "active_runs": 2,

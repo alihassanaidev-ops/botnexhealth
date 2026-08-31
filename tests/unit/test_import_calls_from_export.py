@@ -297,3 +297,45 @@ class TestAvailability:
             "| Call Status | No Action Needed |\n"
         )
         assert call.availability is None
+
+
+class TestCallerNumber:
+    """The caller's number is the only identity an unnamed call has.
+
+    The dashboard reads the phone off ``call.contact``, so a call imported
+    without a contact renders as "Unknown caller" with no number at all — see
+    ``_get_or_create_contact``, which now links unnamed callers too.
+    """
+
+    def test_parsed_from_export(self, calls):
+        assert calls[0].from_number == "+15196976145"
+
+    @pytest.mark.parametrize(
+        "raw", ["Anonymous", "anonymous", "UNKNOWN", "Restricted", "Private", "Blocked"]
+    )
+    def test_withheld_caller_id_is_not_a_phone_number(self, raw):
+        """Retell writes a word, not a number, when caller ID is blocked.
+
+        Storing it would encrypt/hash a sentinel, collapsing every blocked-ID
+        caller onto one ``phone_hash`` and cross-matching them as one patient.
+        """
+        [call] = parse_markdown_export(
+            "### 1. `call_zzz`\n\n| Field | Value |\n|---|---|\n"
+            f"| **From** | {raw} |\n| **Direction** | inbound |\n\n"
+            "**Extracted Variables**\n\n| Variable | Value |\n|---|---|\n"
+            "| Call Status | No Action Needed |\n"
+        )
+        assert call.from_number is None
+
+    def test_missing_cell_is_none(self):
+        [call] = parse_markdown_export(
+            "### 1. `call_zzz`\n\n| Field | Value |\n|---|---|\n"
+            "| **Direction** | inbound |\n\n**Extracted Variables**\n\n"
+            "| Variable | Value |\n|---|---|\n| Call Status | No Action Needed |\n"
+        )
+        assert call.from_number is None
+
+    def test_unnamed_call_still_carries_a_number(self, calls):
+        """Call 2 has no name — the phone is what makes it identifiable."""
+        assert calls[1].full_name is None
+        assert calls[1].from_number == "+15197018627"

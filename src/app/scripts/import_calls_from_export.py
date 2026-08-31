@@ -16,7 +16,9 @@ Usage (dry run is the default — nothing is written without ``--commit``)::
     python -m src.app.scripts.import_calls_from_export ... --commit
 
 Idempotency: ``calls.retell_call_id`` is UNIQUE, and already-imported calls are
-skipped, so re-running is safe.
+skipped, so re-running is safe. Pass ``--relink-existing`` to also repair rows
+from an earlier run that landed with ``contact_id IS NULL`` — those render as
+"Unknown caller" with no phone number even though the export carries one.
 
 PHI note: this export is **not** PII-redacted — it carries real names, DOBs and
 phone numbers. The raw summary/transcript always go to the AES-256-GCM
@@ -70,6 +72,14 @@ _NULLISH = {
     "not mentioned", "not applicable", "not available", "not discussed",
 }
 
+# Retell reports a withheld caller ID as a literal word rather than a number.
+# These must never reach ``Contact.phone`` — encrypting/hashing them would make
+# every blocked-ID caller collide on one phone_hash.
+_ANONYMOUS_CALLER_IDS = {
+    "anonymous", "unknown", "restricted", "private", "blocked", "unavailable",
+    "withheld", "no caller id",
+}
+
 _MONTHS = {
     m.lower(): i
     for i, m in enumerate(
@@ -102,7 +112,11 @@ class ParsedCall:
 
     @property
     def from_number(self) -> str | None:
-        return _clean(self.meta.get("From"))
+        """The caller's number, or ``None`` when the caller ID was withheld."""
+        cleaned = _clean(self.meta.get("From"))
+        if cleaned and cleaned.lower() in _ANONYMOUS_CALLER_IDS:
+            return None
+        return cleaned
 
     @property
     def sentiment(self) -> str | None:
@@ -353,6 +367,9 @@ class ImportReport:
     skipped_existing: int = 0
     contacts_created: int = 0
     contacts_matched: int = 0
+    contacts_nameless: int = 0
+    unidentified_calls: int = 0
+    relinked: int = 0
     unmapped_status: int = 0
     custom_field_values: int = 0
     by_status: dict[str, int] = field(default_factory=dict)
@@ -362,8 +379,11 @@ class ImportReport:
             f"  parsed              {self.parsed}",
             f"  imported            {self.imported}",
             f"  skipped (existing)  {self.skipped_existing}",
+            f"  relinked (repair)   {self.relinked}",
             f"  contacts created    {self.contacts_created}",
+            f"    ...of those nameless (phone-only, unknown caller) {self.contacts_nameless}",
             f"  contacts matched    {self.contacts_matched}",
+            f"  unidentified calls  {self.unidentified_calls} (no name and no caller ID — left unlinked)",
             f"  custom field values {self.custom_field_values}",
             f"  unmapped status     {self.unmapped_status}",
             "  by primary status:",
@@ -417,13 +437,23 @@ async def _get_or_create_contact(
 
     Same rule as ``PostCallService`` — a shared phone with a different name
     (parent calling for a child) stays a separate contact.
+
+    A call with no name still gets a nameless contact carrying the phone, which
+    is what ``PostCallService`` does (it always constructs a ``Contact``). The
+    number is the only identity such a call has, and the dashboard reads the
+    caller's phone off ``call.contact`` — so leaving these unlinked is what made
+    imported unknown callers render with no number at all. Nameless contacts are
+    never reused: without a name we cannot tell two callers on one number apart,
+    the same reason production creates a fresh row each time.
     """
     phone, full_name = call.from_number, call.full_name
-    if not full_name:
-        return None  # unknown caller — the call stays unlinked, as in production
+    if not full_name and not phone:
+        # Withheld caller ID and no name — there is no identity to record.
+        report.unidentified_calls += 1
+        return None
 
     existing = None
-    if phone:
+    if phone and full_name:
         existing = (
             await session.execute(
                 select(Contact).where(
@@ -445,6 +475,8 @@ async def _get_or_create_contact(
         return contact
 
     report.contacts_created += 1
+    if not full_name:
+        report.contacts_nameless += 1
     contact = Contact(
         institution_id=institution_id,
         first_name=call.first_name,
@@ -471,31 +503,67 @@ async def import_calls(
     agent_id: str | None,
     encrypted_only: bool,
     resolve_callbacks: bool,
+    relink_existing: bool = False,
 ) -> ImportReport:
-    """Write the parsed export into the tenant. Caller controls the commit."""
+    """Write the parsed export into the tenant. Caller controls the commit.
+
+    ``relink_existing`` repairs rows written by an earlier run of this script,
+    which dropped the caller's phone whenever no name was captured. Those calls
+    are already present (so the normal path skips them), but carry
+    ``contact_id IS NULL`` and therefore render as an unknown caller with no
+    number. It only ever fills a NULL — an existing link is never rewritten.
+    """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     institution, location = await _resolve_target(session, institution_slug, location_slug)
     profile = retention_profile_for(institution)
     report = ImportReport(parsed=len(calls))
 
-    existing_ids = set(
-        (
+    existing_by_id: dict[str, Call] = {
+        row.retell_call_id: row
+        for row in (
             await session.execute(
-                select(Call.retell_call_id).where(
+                select(Call).where(
                     Call.retell_call_id.in_([c.retell_call_id for c in calls])
                 )
             )
         ).scalars().all()
-    )
-    if existing_ids:
-        logger.info("%d of %d calls already present — skipping", len(existing_ids), len(calls))
+    }
+    if existing_by_id:
+        logger.info(
+            "%d of %d calls already present — %s",
+            len(existing_by_id),
+            len(calls),
+            "checking each for a missing contact link" if relink_existing else "skipping",
+        )
 
     cf_service = CustomFieldService(session)
 
     for parsed in calls:
-        if parsed.retell_call_id in existing_ids:
+        if (already := existing_by_id.get(parsed.retell_call_id)) is not None:
             report.skipped_existing += 1
+            if relink_existing and already.contact_id is None:
+                repaired = await _get_or_create_contact(
+                    session,
+                    institution_id=institution.id,
+                    call=parsed,
+                    agent_id=agent_id,
+                    report=report,
+                )
+                if repaired is not None:
+                    already.contact_id = repaired.id
+                    await session.execute(
+                        pg_insert(ContactLocationAccess)
+                        .values(
+                            institution_id=institution.id,
+                            contact_id=repaired.id,
+                            location_id=already.location_id or location.id,
+                        )
+                        .on_conflict_do_nothing(
+                            index_elements=["contact_id", "location_id"]
+                        )
+                    )
+                    report.relinked += 1
             continue
 
         primary_status, all_tags = normalize_status(parsed.call_status_raw)
@@ -623,6 +691,12 @@ def _build_parser() -> argparse.ArgumentParser:
              "is stored outside the encrypted columns (list view shows '—')",
     )
     parser.add_argument(
+        "--relink-existing", action="store_true",
+        help="repair pass: for calls already imported with no contact, attach a "
+             "contact built from the export so the caller's phone number shows "
+             "in the dashboard. Fills NULL links only; never rewrites one.",
+    )
+    parser.add_argument(
         "--resolve-callbacks", action="store_true",
         help="mark imported needs_callback rows resolved so this historical "
              "backfill does not flood the Callback Queue",
@@ -658,6 +732,7 @@ async def run(args: argparse.Namespace) -> ImportReport:
                 agent_id=agent_id,
                 encrypted_only=args.encrypted_only,
                 resolve_callbacks=args.resolve_callbacks,
+                relink_existing=args.relink_existing,
             )
             if args.commit:
                 await session.commit()

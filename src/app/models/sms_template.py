@@ -3,9 +3,13 @@
 Mirrors :mod:`src.app.models.email_template` but for SMS: each institution can
 customize the body of the transactional texts we send to patients. Templates
 use Jinja2 syntax for variable substitution (e.g. {{ patient_name }},
-{{ appointment_provider }}). The clinic-identity prefix and the CASL/TCPA
-opt-out footer are applied downstream at send time by ``sms_privacy`` — they
-are NOT part of the editable body.
+{{ appointment_provider }}).
+
+The no-PMS sends these templates drive — the staff alerts and the patient
+``patient_appointment_request`` acknowledgement — go out exactly as saved: no
+opt-out footer is appended underneath them, because the wording is the
+institution admin's to own. Only the PMS ``appointment_booked`` confirmation
+still picks up the CASL/TCPA footer downstream in ``sms_privacy``.
 """
 
 from __future__ import annotations

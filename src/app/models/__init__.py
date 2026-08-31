@@ -18,6 +18,7 @@ from src.app.models.appointment_working_set import (  # noqa: F401 — model reg
     AppointmentWorkingSet,
 )
 from src.app.models.call import Call, CallDirection, CallStatus, PatientStatus
+from src.app.models.call_note import MAX_NOTE_LENGTH, CallNote
 from src.app.models.campaign_enquiry import CampaignEnquiry, EnquiryStatus
 from src.app.models.campaign_response import (  # noqa: F401 — model registration
     CampaignResponseEvent,
@@ -182,6 +183,8 @@ __all__ = [
     "Contact",
     "ContactLocationAccess",
     "Call",
+    "CallNote",
+    "MAX_NOTE_LENGTH",
     "CallStatus",
     "CallDirection",
     "PatientStatus",

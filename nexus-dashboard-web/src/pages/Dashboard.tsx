@@ -35,7 +35,8 @@ import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
 import { useSSE } from "@/hooks/useSSE"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
-import { getInitials } from "@/components/calls/format"
+import { callerLabel, getInitials } from "@/components/calls/format"
+import { cn } from "@/lib/utils"
 import { getDashboardSummary, getAggregateDashboard } from "@/lib/dashboard-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
@@ -314,6 +315,8 @@ interface QueueItemProps {
 }
 
 function QueueItem({ item, onResolved }: QueueItemProps) {
+    // Label an unnamed caller by their number instead of a row of placeholders.
+    const caller = callerLabel(item.contact_name, item.phone_masked)
     const [open, setOpen] = useState(false)
     const [note, setNote] = useState("")
     const [resolving, setResolving] = useState(false)
@@ -343,8 +346,14 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                         <div className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">?</div>
                     )}
                     <div className="min-w-0">
-                        <p className="font-medium text-sm truncate text-foreground">
-                            {item.contact_name ?? <span className="text-muted-foreground italic">Unknown caller</span>}
+                        <p
+                            className={cn(
+                                "truncate text-sm font-medium text-foreground",
+                                caller.kind === "phone" && "tabular-nums",
+                                caller.kind === "unknown" && "italic font-normal text-muted-foreground",
+                            )}
+                        >
+                            {caller.text}
                         </p>
                         <p className="text-xs text-muted-foreground/70 mt-0.5">
                             {formatDate(item.call_date)} · {formatTime(item.call_time)}

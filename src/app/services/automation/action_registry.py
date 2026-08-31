@@ -4,6 +4,9 @@ The dispatcher does not hardcode an ``if/isinstance`` chain for channel sends:
 send node types map to executor classes here, and the dispatcher resolves them
 via ``get_action_executor``. Each executor exposes
 ``async def execute(run, node, context) -> next_node_id``.
+
+Executors also accept the service circuit breaker (Item 17) so a channel can
+report its provider healthy or failing; it defaults to the no-op stub.
 """
 
 from __future__ import annotations
@@ -17,11 +20,17 @@ from src.app.services.automation.email_node_executor import EmailNodeExecutor
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.sms_node_executor import SmsNodeExecutor
 from src.app.services.automation.voice_node_executor import VoiceNodeExecutor
+from src.app.services.circuit_breaker import ServiceBreaker
+from src.app.services.outbound_limits import OutboundLimiter
 
 
 class ActionExecutor(Protocol):
     def __init__(
-        self, session: AsyncSession, runtime: AutomationWorkflowRuntimeService
+        self,
+        session: AsyncSession,
+        runtime: AutomationWorkflowRuntimeService,
+        breaker: ServiceBreaker | None = None,
+        limits: OutboundLimiter | None = None,
     ) -> None: ...
 
     async def execute(self, run: AutomationWorkflowRun, node: object, context: dict) -> str: ...

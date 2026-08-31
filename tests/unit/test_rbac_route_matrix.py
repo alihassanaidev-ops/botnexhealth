@@ -145,6 +145,14 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/calls/{call_id}/reveal/phone",
         "PATCH /api/institution/calls/{call_id}/resolve",
         "PATCH /api/institution/calls/{call_id}/status",
+        # Staff notes on a call. Any active institution user may read and post —
+        # triage is the point — and the handlers narrow further from there: the
+        # call's own institution/location scope decides which threads exist, the
+        # author alone may edit, and only the author or an admin may delete.
+        "GET /api/institution/calls/{call_id}/notes",
+        "POST /api/institution/calls/{call_id}/notes",
+        "PATCH /api/institution/calls/{call_id}/notes/{note_id}",
+        "DELETE /api/institution/calls/{call_id}/notes/{note_id}",
         "GET /api/institution/statuses",
         "GET /api/institution/contacts",
         "GET /api/institution/contacts/{contact_id}",
@@ -282,6 +290,13 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/institution/notification-recipients/{recipient_id}",
     ),
     INSTITUTION_USER: (
+        # Compliance settings: quiet-hours exceptions (Item 20). Same boundary
+        # as the campaign routes they govern — an institution user who can
+        # publish a campaign can set the window it sends in.
+        "GET /api/compliance/quiet-hours/exceptions",
+        "POST /api/compliance/quiet-hours/exceptions",
+        "PATCH /api/compliance/quiet-hours/exceptions/{exception_id}",
+        "DELETE /api/compliance/quiet-hours/exceptions/{exception_id}",
         "GET /api/automation/workflows/node-capabilities",
         "POST /api/automation/workflows",
         "POST /api/automation/workflows/draft",

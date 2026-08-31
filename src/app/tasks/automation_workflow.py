@@ -80,6 +80,31 @@ from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
 
+
+_OUTBOUND_LIMITS = None
+
+
+def _outbound_limits():
+    """One limiter per worker process, built on first use.
+
+    Module-level rather than per-call so the Redis connection is reused, and
+    lazy so importing this module does not require Redis to exist.
+    """
+    global _OUTBOUND_LIMITS
+    if _OUTBOUND_LIMITS is None:
+        from src.app.config import settings
+        from src.app.services.outbound_limits import OutboundLimits, SendProvider
+
+        _OUTBOUND_LIMITS = OutboundLimits(
+            call_concurrency=settings.outbound_call_concurrency_limit,
+            lease_seconds=settings.outbound_call_lease_seconds,
+            provider_per_minute={
+                SendProvider.TWILIO: settings.twilio_send_rate_per_minute,
+                SendProvider.EMAIL: settings.email_send_rate_per_minute,
+            },
+        )
+    return _OUTBOUND_LIMITS
+
 # The Chair Flow label GoTracker emits when a visit finishes, and which the
 # shipped post-op template triggers on. NexHealth has no completion event, so the
 # post-visit sweep writes this same label — one template definition then enrols on
@@ -2474,6 +2499,20 @@ async def _resume_voice_outcome_async(
             dial_outcome=dial_outcome,
             disconnection_reason=disconnection_reason,
         )
+
+        # The call is over, so give its concurrency slot back (Item 18). The
+        # slot was re-labelled to the call id when the call was placed, which is
+        # why the id is all this needs. Best-effort by design: if this never
+        # runs — a dropped webhook, a crash here — the lease expires by itself
+        # and the ceiling corrects without anyone noticing.
+        try:
+            await _outbound_limits().release_call_slot_by_token(
+                institution_id, retell_call_id
+            )
+        except Exception:  # noqa: BLE001 — never fail an outcome on this
+            logger.warning(
+                "could not release the call slot for call=%s", retell_call_id
+            )
 
         version = await session.get(AutomationWorkflowVersion, run.workflow_version_id)
         if version is None:

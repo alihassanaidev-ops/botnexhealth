@@ -39,6 +39,7 @@ const InstitutionUserManagement = lazy(() => import("./pages/InstitutionUserMana
 const InstitutionSettings = lazy(() => import("./pages/InstitutionSettings"));
 const WorkflowStatuses = lazy(() => import("./pages/WorkflowStatuses"));
 const DoNotContactAdmin = lazy(() => import("./pages/DoNotContactAdmin"));
+const QuietHoursExceptions = lazy(() => import("@/pages/QuietHoursExceptions"))
 const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const CampaignEmailTemplates = lazy(() => import("./pages/CampaignEmailTemplates"));
@@ -348,6 +349,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
                                 <S><WorkflowStatuses /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/quiet-hours-exceptions",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><QuietHoursExceptions /></S>
                             </RoleGuard>
                         ),
                     },

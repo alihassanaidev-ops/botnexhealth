@@ -188,6 +188,16 @@ export interface SendVoiceNode {
     phone_country_code_enabled?: boolean
     phone_country_region?: string | null
     wait_for_outcome?: boolean
+    /** Item 19. Whether the agent leaves a message on an answering machine. */
+    leave_voicemail?: boolean
+    /** Item 19. Whether reaching voicemail uses up one of the attempts below. */
+    voicemail_consumes_attempt?: boolean
+    /** Item 19. Counted attempts to reach the patient. Distinct from
+     *  `max_attempts`, which bounds retries after a transient vendor error. */
+    voice_attempt_allowance?: number
+    /** Item 19. Hard ceiling on dials whatever the outcome — what stops a
+     *  number that is always voicemail being redialled for ever. */
+    max_dials?: number
 }
 /** Who a `send_email` node addresses. Mirrors the backend `EmailRecipient`
  *  union in definition_schema.py. Omitted on definitions published before the
