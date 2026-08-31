@@ -157,6 +157,9 @@ class WorkflowValidationService:
         # issues += self._consent_and_content(definition)
         issues += self._merge_field_issues(definition)
         issues += self._action_link_issues(definition)
+        issues += await self._pms_capability_issues(
+            definition, institution_id=institution_id, location_id=location_id
+        )
         issues += await self._email_template_issues(
             definition, institution_id=institution_id
         )
@@ -431,6 +434,62 @@ class WorkflowValidationService:
                 )
             )
         return issues
+
+    async def _pms_capability_issues(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location_id: str | None,
+    ) -> list[ValidationIssue]:
+        """Refuse to publish a campaign the clinic's software cannot support.
+
+        Instantiating from a template already checks this, but the check has to
+        run again here: a clinic can change practice software after the campaign
+        was built, and a workflow assembled without a template was never checked
+        at all. An unknown capability counts as unavailable — the evaluation
+        already treats it that way, and guessing in the clinic's favour is how a
+        campaign gets published that silently does nothing.
+        """
+        requirements = list(definition.pms_capability_requirements or [])
+        if not requirements or location_id is None or self.session is None:
+            return []
+
+        from src.app.models.institution import Institution
+        from src.app.models.institution_location import InstitutionLocation
+        from src.app.services.automation.pms_capability_service import (
+            PmsCapabilityService,
+        )
+
+        location = await self.session.get(InstitutionLocation, location_id)
+        institution = await self.session.get(Institution, institution_id)
+        if location is None or institution is None:
+            return []
+
+        evaluation = await PmsCapabilityService(self.session).evaluate_location(
+            institution=institution, location=location, requirements=requirements
+        )
+        if evaluation.supported:
+            return []
+
+        unavailable = sorted(
+            set(evaluation.missing) | set(evaluation.partial) | set(evaluation.unknown)
+        )
+        return [
+            ValidationIssue(
+                severity="error",
+                code="unsupported_pms_capability",
+                message=(
+                    "This clinic's practice software cannot provide "
+                    f"{', '.join(unavailable)}, which this campaign needs. "
+                    + (evaluation.message or "")
+                ).strip(),
+                fix=(
+                    "Remove the steps that depend on it, or use a campaign that "
+                    "does not require it at this location."
+                ),
+            )
+        ]
 
     @staticmethod
     def _action_link_issues(definition: WorkflowDefinition) -> list[ValidationIssue]:

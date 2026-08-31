@@ -973,6 +973,11 @@ class WorkflowDefinition(BaseModel):
     entry_node_id: str
     nodes: list[WorkflowNode] = Field(min_length=1)
     compliance: ComplianceMetadata | None = None
+    # What this campaign needs the clinic's practice software to provide. Carried
+    # from the template it was built from so publishing can re-check it: a clinic
+    # can change practice software, and a workflow not built from a template
+    # would otherwise never be checked at all.
+    pms_capability_requirements: list[str] = Field(default_factory=list)
     # node_id -> {x, y}; presentational only, ignored by the runtime.
     layout: dict[str, NodeLayout] | None = None
 

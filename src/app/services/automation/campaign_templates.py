@@ -90,6 +90,11 @@ def instantiate_definition(
     # compatibility elsewhere, but never copy the legacy workflow-level block
     # into a newly instantiated outbound workflow.
     definition.pop("compliance", None)
+    # Unlike compliance, these travel with the workflow: publish re-checks them.
+    if template.metadata.pms_capability_requirements:
+        definition["pms_capability_requirements"] = list(
+            template.metadata.pms_capability_requirements
+        )
     setup_options = setup_options or {}
     requires_voice = any(
         node.get("type") == "send_voice"
