@@ -6,6 +6,7 @@ Uses mocked adapter + mocked DB session to test sync logic without a database.
 
 import pytest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
@@ -161,6 +162,49 @@ class TestSyncProviders:
         assert result.providers_synced == 0
         assert len(result.errors) == 1
         assert "Provider sync error" in result.errors[0]
+
+    @pytest.mark.asyncio
+    async def test_sync_does_not_unhide_a_hidden_provider(self):
+        """A sync must never clear is_hidden.
+
+        `is_active` is deliberately rewritten to True on every sync, so it means
+        "seen in the last sync". `is_hidden` is the operator's own choice and has
+        to survive, otherwise hiding a provider silently reverts the next time
+        the roster syncs.
+        """
+        adapter = _make_base_adapter()
+        adapter.list_providers.return_value = _sample_providers()
+
+        # An existing cached row the operator has hidden, and which the PMS is
+        # still returning.
+        existing = SimpleNamespace(
+            name=None,
+            first_name=None,
+            last_name=None,
+            specialty=None,
+            source=None,
+            is_active=False,
+            is_hidden=True,
+            synced_at=None,
+        )
+        session = AsyncMock()
+        session.execute = AsyncMock(
+            return_value=MagicMock(
+                scalar_one_or_none=MagicMock(return_value=existing)
+            )
+        )
+        session.add = MagicMock()
+
+        svc = SyncService(session)
+        now = datetime.now(timezone.utc)
+
+        await svc._sync_providers(
+            adapter, "t1", "l1", now, SyncResult(location_slug="test")
+        )
+
+        assert existing.is_hidden is True, "sync cleared the operator's hide flag"
+        # Contrast: is_active is reset, which is exactly why is_hidden is separate.
+        assert existing.is_active is True
 
 
 class TestSyncAppointmentTypes:

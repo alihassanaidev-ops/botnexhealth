@@ -62,6 +62,7 @@ export async function updateProvider(
         same_day_cutoff_time?: string | null;
         min_age?: number | null;
         max_age?: number | null;
+        is_hidden?: boolean;
     },
     locationId?: string
 ): Promise<CachedProvider> {

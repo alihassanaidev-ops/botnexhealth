@@ -190,6 +190,8 @@ export interface CachedProvider {
     last_name: string | null;
     specialty: string | null;
     is_active: boolean;
+    /** Operator-set: when true this provider is not offered by the voice agent. */
+    is_hidden: boolean;
     buffer_minutes: number;
     same_day_cutoff_time: string | null;
     min_age: number | null;
