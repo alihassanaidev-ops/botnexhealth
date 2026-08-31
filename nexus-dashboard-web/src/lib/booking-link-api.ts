@@ -31,6 +31,12 @@ export type BookOutcome = {
     start?: string
 }
 
+/** A 409 carries the refreshed list, so recovery costs no extra round trip. */
+export type SlotTakenError = {
+    error: "slot_taken"
+    slots: SlotOption[]
+}
+
 export type LinkAction = "book" | "reschedule"
 
 export async function fetchSlots(action: LinkAction, token: string): Promise<SlotsResponse> {

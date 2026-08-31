@@ -80,12 +80,17 @@ export default function BookingLink() {
             })
             .catch((err) => {
                 if (cancelled) return
-                // 410 is an expired link, which the patient can act on. Anything
-                // else tells them nothing useful, so it reads the same way.
+                const status = err?.response?.status
+                // Three different things, and the patient can act on each
+                // differently. Telling someone their link is broken when the
+                // clinic's system is simply unreachable sends them chasing a
+                // problem they cannot fix.
                 setMessage(
-                    err?.response?.status === 410
+                    status === 410
                         ? "This link has expired. Please contact the clinic and they'll help you."
-                        : "This link isn't valid. Please contact the clinic directly.",
+                        : status === 503
+                          ? "We can't load available times right now. Please try again shortly, or contact the clinic."
+                          : "This link isn't valid. Please contact the clinic directly.",
                 )
                 setPhase("error")
             })
@@ -109,12 +114,21 @@ export default function BookingLink() {
         } catch (err: unknown) {
             const status = (err as { response?: { status?: number } })?.response?.status
             if (status === 409) {
-                // Someone took it while they were deciding. Re-offer rather than
-                // dead-end: the whole point is that they finish.
-                setMessage("Sorry — that time has just been taken. Please pick another.")
+                // Someone took it while they were deciding — most likely the
+                // clinic booking it over the phone, which goes through the same
+                // path. Re-offer rather than dead-end: the whole point is that
+                // they finish. The refusal carries the refreshed list, so this
+                // costs no second request and no second wait.
+                const fresh = (err as { response?: { data?: { slots?: SlotOption[] } } })
+                    ?.response?.data?.slots
+                setMessage("Sorry — that time has just been taken. Here are the latest times.")
                 setChosen(null)
-                const refreshed = await fetchSlots(linkAction, token).catch(() => null)
-                if (refreshed) setData(refreshed)
+                if (fresh && data) {
+                    setData({ ...data, slots: fresh })
+                } else {
+                    const refreshed = await fetchSlots(linkAction, token).catch(() => null)
+                    if (refreshed) setData(refreshed)
+                }
                 setPhase("choosing")
                 return
             }

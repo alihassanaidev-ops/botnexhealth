@@ -122,6 +122,19 @@ async def _already_booked(session, run_id: str) -> bool:
     return result.scalar_one_or_none() is not None
 
 
+def _as_options(slots) -> list[dict]:
+    """Serialise slots for the wire. Nothing here identifies the patient."""
+    return [
+        SlotOption(
+            start=s.start,
+            end=s.end,
+            provider_id=s.provider_id,
+            provider_name=getattr(s, "provider_name", "") or "",
+        ).model_dump()
+        for s in slots
+    ]
+
+
 async def _search_slots(institution, location, run) -> list:
     """Live availability for this run's clinic."""
     adapter = await get_adapter_for_institution_location(institution, location)
@@ -172,15 +185,7 @@ async def list_slots(
 
         return _json(
             SlotsResponse(
-                slots=[
-                    SlotOption(
-                        start=s.start,
-                        end=s.end,
-                        provider_id=s.provider_id,
-                        provider_name=getattr(s, "provider_name", "") or "",
-                    )
-                    for s in slots
-                ],
+                slots=_as_options(slots),
                 clinic_name=getattr(location, "name", "") or "",
                 timezone=getattr(location, "timezone", None),
             ).model_dump()
@@ -239,7 +244,10 @@ async def book_slot(
 
         chosen = next((s for s in slots if s.start == body.slot_start), None)
         if chosen is None:
-            return _json({"error": "slot_taken"}, 409)
+            # Carry the current list back with the refusal. The page can re-offer
+            # immediately instead of making the patient wait through a second
+            # request, and load time is what loses them.
+            return _json({"error": "slot_taken", "slots": _as_options(slots)}, 409)
 
         try:
             adapter = await get_adapter_for_institution_location(institution, location)
@@ -278,7 +286,9 @@ async def book_slot(
                 taken = False
 
             if taken:
-                return _json({"error": "slot_taken"}, 409)
+                return _json(
+                    {"error": "slot_taken", "slots": _as_options(fresh)}, 409
+                )
             return _json({"error": "could_not_book"}, 502)
 
         pending = (
