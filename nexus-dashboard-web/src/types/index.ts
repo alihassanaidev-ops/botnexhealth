@@ -376,6 +376,32 @@ export interface CallDetail extends CallRecord {
     custom_fields: CustomFieldValue[];
 }
 
+/** One staff-authored note in a call's notes thread.
+ *
+ *  The body is PHI encrypted at rest server-side, but served inline to anyone
+ *  who can already open the call — the people reading it are the ones who
+ *  wrote it, so there is no reveal step. `can_edit`/`can_delete` are resolved
+ *  per-caller by the API so the client never reimplements the role rules. */
+export interface CallNote {
+    id: string;
+    call_id: string;
+    /** Snapshotted at write time — stays attributable if the user is removed. */
+    author_email: string;
+    author_user_id: string | null;
+    body: string;
+    created_at: string;
+    /** Set only when the body changed after posting; drives the "edited" marker. */
+    edited_at?: string | null;
+    can_edit: boolean;
+    can_delete: boolean;
+}
+
+export interface CallNotesResponse {
+    call_id: string;
+    total: number;
+    items: CallNote[];
+}
+
 export interface TranscriptRevealResponse {
     call_id: string;
     transcript_with_tool_calls: TranscriptTurn[] | null;

@@ -60,6 +60,11 @@ class AuditAction(str, Enum):
     VIEW_FULL_TRANSCRIPT = "VIEW_FULL_TRANSCRIPT"
     VIEW_CALL_RECORDING = "VIEW_CALL_RECORDING"
     VIEW_CUSTOM_PHI_FIELD = "VIEW_CUSTOM_PHI_FIELD"
+    # Staff-authored notes on a call. The body is free text staff typed, so
+    # it is assumed to carry PHI and every mutation is recorded.
+    CALL_NOTE_CREATE = "CALL_NOTE_CREATE"
+    CALL_NOTE_UPDATE = "CALL_NOTE_UPDATE"
+    CALL_NOTE_DELETE = "CALL_NOTE_DELETE"
     VIEW_DASHBOARD = "VIEW_DASHBOARD"
     VIEW_AUDIT_LOGS = "VIEW_AUDIT_LOGS"
 

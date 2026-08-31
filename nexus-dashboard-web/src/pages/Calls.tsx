@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useSearchParams } from "react-router-dom"
 import {
     Phone,
@@ -61,6 +61,7 @@ import { toast } from "sonner"
 import { useSSE } from "@/hooks/useSSE"
 import { getCall, listCalls, resolveCallback } from "@/lib/calls-api"
 import { ConversationView } from "@/components/calls/ConversationView"
+import { CallNotesSection } from "@/components/calls/CallNotes"
 import {
     CustomFieldsSection,
     RecordingSection,
@@ -73,7 +74,7 @@ import {
 } from "@/components/calls/shared"
 import { formatDateTime, formatDuration, getInitials } from "@/components/calls/format"
 import { listWorkflowStatuses, assignCallStatus } from "@/lib/workflow-status-api"
-import { STATUS_OPTIONS, DIRECTION_OPTIONS } from "@/lib/constants"
+import { callStatusFilterOptions, DIRECTION_OPTIONS } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import { useInstitution } from "@/context/InstitutionContext"
 import type { CallRecord, CallDetail, CallsListResponse, WorkflowStatus } from "@/types"
@@ -141,7 +142,7 @@ function CallsFacetedFilter({
                 </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-[200px]" align="start">
-                <DropdownMenuLabel>Filter by status</DropdownMenuLabel>
+                <DropdownMenuLabel>Filter by {(title ?? "status").toLowerCase()}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {options.map((option) => {
                     const isSelected = selectedValues.has(option.value)
@@ -409,6 +410,10 @@ function CallDetailDialog({ callId, statuses, onClose, onResolved }: CallDetailP
                         {/* No-PMS triage variables — mirrors the conversations panel */}
                         {isNoPms && <NoPmsTriageDetails detail={detail} />}
 
+                        {/* Same notes thread the conversations panel shows, so
+                            the table view isn't a second-class detail surface. */}
+                        <CallNotesSection callId={detail.id} />
+
                         {/* Summary */}
                         {detail.summary && (
                             <div>
@@ -532,6 +537,15 @@ export default function Calls() {
     const [directionFilter, setDirectionFilter] = useState("")
     const [dateFrom, setDateFrom] = useState("")
     const [dateTo, setDateTo] = useState("")
+
+    // The Tags filter offers only the vocabulary this tenant's agent can emit —
+    // a PMS clinic never produces "Needs Booking", a no-PMS one never produces
+    // "Appointment Booked", so showing both halves gives a menu of dead options.
+    const { hasPms, pmsType, isLoading: institutionLoading } = useInstitution()
+    const tagOptions = useMemo(
+        () => callStatusFilterOptions(!institutionLoading && (pmsType === "none" || !hasPms)),
+        [hasPms, pmsType, institutionLoading],
+    )
 
     // Tenant-defined workflow statuses (for the filter + assign control).
     const [statuses, setStatuses] = useState<WorkflowStatus[]>([])
@@ -666,7 +680,7 @@ export default function Calls() {
                     </div>
                     <CallsFacetedFilter
                         title="Tags"
-                        options={STATUS_OPTIONS}
+                        options={tagOptions}
                         selectedValues={new Set(selectedTags)}
                         onSelectedChange={(s) => setSelectedTags(Array.from(s))}
                     />
