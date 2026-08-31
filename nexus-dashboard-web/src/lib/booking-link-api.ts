@@ -39,10 +39,38 @@ export type SlotTakenError = {
 
 export type LinkAction = "book" | "reschedule"
 
-export async function fetchSlots(action: LinkAction, token: string): Promise<SlotsResponse> {
+export type AppointmentTypeOption = {
+    id: string
+    name: string
+    duration_minutes: number | null
+}
+
+export async function fetchAppointmentTypes(
+    action: LinkAction,
+    token: string,
+): Promise<AppointmentTypeOption[]> {
+    const { data } = await client.get<{ appointment_types: AppointmentTypeOption[] }>(
+        `/campaigns/link/${action}/appointment-types`,
+        { params: { token } },
+    )
+    return data.appointment_types
+}
+
+export async function fetchSlots(
+    action: LinkAction,
+    token: string,
+    opts: { appointmentTypeId?: string; startDate?: string; days?: number } = {},
+): Promise<SlotsResponse> {
     const { data } = await client.get<SlotsResponse>(
         `/campaigns/link/${action}/slots`,
-        { params: { token } },
+        {
+            params: {
+                token,
+                appointment_type_id: opts.appointmentTypeId || undefined,
+                start_date: opts.startDate || undefined,
+                days: opts.days,
+            },
+        },
     )
     return data
 }
@@ -51,12 +79,13 @@ export async function bookSlot(
     action: LinkAction,
     token: string,
     slotStart: string,
+    appointmentTypeId?: string,
 ): Promise<BookOutcome> {
     // Only the chosen start time is sent. The server re-checks availability and
     // books the slot it finds, so nothing here can widen what gets booked.
     const { data } = await client.post<BookOutcome>(
         `/campaigns/link/${action}/slots`,
-        { slot_start: slotStart },
+        { slot_start: slotStart, appointment_type_id: appointmentTypeId || null },
         { params: { token } },
     )
     return data

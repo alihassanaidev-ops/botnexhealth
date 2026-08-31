@@ -3,13 +3,23 @@ import { useParams, useSearchParams } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { AppointmentTypePicker } from "@/components/booking/AppointmentTypePicker"
 import {
     bookSlot,
+    fetchAppointmentTypes,
     fetchSlots,
+    type AppointmentTypeOption,
     type LinkAction,
     type SlotOption,
     type SlotsResponse,
 } from "@/lib/booking-link-api"
+
+/** How far ahead to look. A week is where most people plan a visit from. */
+const RANGE_OPTIONS = [
+    { days: 7, label: "Next 7 days" },
+    { days: 14, label: "Next 2 weeks" },
+    { days: 30, label: "Next month" },
+]
 
 /**
  * The page a patient lands on from a booking link in a text message.
@@ -54,11 +64,30 @@ export default function BookingLink() {
     const [phase, setPhase] = useState<Phase>("loading")
     const [data, setData] = useState<SlotsResponse | null>(null)
     const [chosen, setChosen] = useState<SlotOption | null>(null)
+    const [types, setTypes] = useState<AppointmentTypeOption[]>([])
+    const [typeId, setTypeId] = useState<string | null>(null)
+    const [rangeDays, setRangeDays] = useState(7)
+    const [refreshing, setRefreshing] = useState(false)
     const [outcome, setOutcome] = useState<"booked" | "pending" | null>(null)
     const [message, setMessage] = useState("")
 
     const linkAction = (action === "reschedule" ? "reschedule" : "book") as LinkAction
     const isReschedule = linkAction === "reschedule"
+
+    // Types are a property of the clinic, not of the filters — fetched once.
+    useEffect(() => {
+        if (!token) return
+        let cancelled = false
+        fetchAppointmentTypes(linkAction, token)
+            .then((t) => !cancelled && setTypes(t))
+            .catch(() => {
+                /* The picker simply stays on "any"; it is not worth an error
+                   screen when the patient can still book. */
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [linkAction, token])
 
     useEffect(() => {
         let cancelled = false
@@ -67,10 +96,17 @@ export default function BookingLink() {
             setPhase("error")
             return
         }
-        fetchSlots(linkAction, token)
+        // Re-running for a filter change must not blank the page — the patient
+        // keeps the times they are looking at until the new ones arrive.
+        setRefreshing(true)
+        fetchSlots(linkAction, token, {
+            appointmentTypeId: typeId ?? undefined,
+            days: rangeDays,
+        })
             .then((result) => {
                 if (cancelled) return
                 setData(result)
+                setChosen(null)
                 if (result.already_booked) {
                     setOutcome("booked")
                     setPhase("done")
@@ -94,10 +130,11 @@ export default function BookingLink() {
                 )
                 setPhase("error")
             })
+            .finally(() => !cancelled && setRefreshing(false))
         return () => {
             cancelled = true
         }
-    }, [linkAction, token])
+    }, [linkAction, token, typeId, rangeDays])
 
     const days = useMemo(
         () => byDay(data?.slots ?? [], data?.timezone ?? undefined),
@@ -108,7 +145,7 @@ export default function BookingLink() {
         if (!chosen) return
         setPhase("booking")
         try {
-            const result = await bookSlot(linkAction, token, chosen.start)
+            const result = await bookSlot(linkAction, token, chosen.start, typeId ?? undefined)
             setOutcome(result.status === "pending" ? "pending" : "booked")
             setPhase("done")
         } catch (err: unknown) {
@@ -175,16 +212,51 @@ export default function BookingLink() {
 
                         {(phase === "choosing" || phase === "booking") && (
                             <>
+                                {/* Filters first: the type changes how long the
+                                    appointment needs to be, so it changes which
+                                    times are even offerable. */}
+                                <div className="space-y-2">
+                                    <AppointmentTypePicker
+                                        types={types}
+                                        value={typeId}
+                                        onChange={setTypeId}
+                                        disabled={phase === "booking"}
+                                    />
+                                    <div className="flex gap-2">
+                                        {RANGE_OPTIONS.map((opt) => (
+                                            <Button
+                                                key={opt.days}
+                                                type="button"
+                                                size="sm"
+                                                variant={rangeDays === opt.days ? "default" : "outline"}
+                                                aria-pressed={rangeDays === opt.days}
+                                                className="flex-1 h-9"
+                                                disabled={phase === "booking"}
+                                                onClick={() => setRangeDays(opt.days)}
+                                            >
+                                                {opt.label}
+                                            </Button>
+                                        ))}
+                                    </div>
+                                </div>
+
                                 {message && (
                                     <p className="text-sm text-destructive" role="status">
                                         {message}
                                     </p>
                                 )}
 
-                                {days.length === 0 ? (
+                                {refreshing && (
+                                    <p className="text-sm text-muted-foreground" role="status">
+                                        Finding times…
+                                    </p>
+                                )}
+
+                                {!refreshing && days.length === 0 ? (
                                     <p className="text-sm text-muted-foreground">
-                                        There are no times available online at the moment. Please
-                                        contact {clinic} and they'll find one for you.
+                                        No times available for that choice. Try a longer date range
+                                        or a different appointment type — or contact {clinic} and
+                                        they'll find one for you.
                                     </p>
                                 ) : (
                                     days.map(([day, slots]) => (

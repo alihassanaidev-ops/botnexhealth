@@ -50,9 +50,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/campaigns/link", tags=["Campaign Links"])
 
-#: How far ahead to offer. Long enough to find something, short enough that the
-#: practice software is not asked for a huge range on every page load.
-SEARCH_DAYS = 21
+#: Default window. A week is enough to find something without asking the
+#: practice software for a month of availability on every page load.
+DEFAULT_DAYS = 7
+#: Ceiling on what a caller can ask for, so the window cannot be widened into a
+#: denial-of-service against the clinic's practice software.
+MAX_DAYS = 30
 
 #: Actions that may pick a slot. Confirming needs no slot.
 BOOKABLE_ACTIONS = ("book", "reschedule")
@@ -114,8 +117,11 @@ class SlotsResponse(BaseModel):
 
 
 class BookRequest(BaseModel):
-    #: The only thing taken from the client. Everything else is re-derived.
+    #: The two things taken from the client, and only these. The type decides
+    #: how long the appointment needs to be, so the re-check has to search with
+    #: it or a 45-minute root canal gets matched against a 30-minute opening.
     slot_start: str
+    appointment_type_id: str | None = None
 
 
 def _json(payload: dict, status_code: int = 200) -> JSONResponse:
@@ -172,22 +178,91 @@ def _as_options(slots) -> list[dict]:
     ]
 
 
-async def _search_slots(institution, location, run) -> list:
-    """Live availability for this run's clinic."""
+async def _search_slots(
+    institution,
+    location,
+    run,
+    *,
+    appointment_type_id: str | None = None,
+    start_date: str | None = None,
+    days: int | None = None,
+) -> list:
+    """Live availability for this run's clinic.
+
+    The appointment type matters to the practice software, not just to the
+    label: it decides how long the slot needs to be, so a 60-minute new-patient
+    exam and a 30-minute filling do not offer the same times. This is the same
+    argument the voice agent passes when it searches.
+    """
     adapter = await get_adapter_for_institution_location(institution, location)
     metadata = run.trigger_metadata or {}
     result = await adapter.find_available_slots(
-        start_date=date.today().isoformat(),
-        days=SEARCH_DAYS,
-        appointment_type_id=metadata.get("appointment_type_id"),
+        start_date=start_date or date.today().isoformat(),
+        days=days or DEFAULT_DAYS,
+        appointment_type_id=appointment_type_id or metadata.get("appointment_type_id"),
     )
     return list(getattr(result, "slots", []) or [])
+
+
+class AppointmentTypeOption(BaseModel):
+    id: str
+    name: str
+    duration_minutes: int | None = None
+
+
+@router.get("/{action}/appointment-types")
+async def list_appointment_types(
+    action: str,
+    token: str = Query(..., description="Signed per-run action token"),
+) -> JSONResponse:
+    """What the patient can book. Names the clinic already publishes."""
+    verified = _verify(action, token)
+    if isinstance(verified, JSONResponse):
+        return verified
+    run_id, _ = verified
+
+    async with get_system_db_session(
+        "campaign_booking_link", external_id=run_id
+    ) as session:
+        run = await session.get(AutomationWorkflowRun, run_id)
+        if run is None:
+            return _json({"error": "gone"}, 410)
+        institution = await session.get(Institution, run.institution_id)
+        location = (
+            await session.get(InstitutionLocation, run.location_id)
+            if run.location_id
+            else None
+        )
+        if institution is None or location is None:
+            return _json({"error": "unavailable"}, 503)
+        try:
+            adapter = await get_adapter_for_institution_location(institution, location)
+            types = await adapter.list_appointment_types()
+        except Exception:
+            logger.exception("appointment types failed for run=%s", run_id)
+            return _json({"error": "unavailable"}, 503)
+
+    return _json(
+        {
+            "appointment_types": [
+                AppointmentTypeOption(
+                    id=t.source_id or t.id,
+                    name=t.name,
+                    duration_minutes=getattr(t, "duration_minutes", None),
+                ).model_dump()
+                for t in types
+            ]
+        }
+    )
 
 
 @router.get("/{action}/slots")
 async def list_slots(
     action: str,
     token: str = Query(..., description="Signed per-run action token"),
+    appointment_type_id: str | None = Query(None),
+    start_date: str | None = Query(None, description="ISO date to search from"),
+    days: int = Query(DEFAULT_DAYS, ge=1, le=MAX_DAYS),
 ) -> JSONResponse:
     """Offer what the clinic actually has free, for this run's patient."""
     verified = _verify(action, token)
@@ -215,7 +290,14 @@ async def list_slots(
             return _json({"error": "unavailable"}, 503)
 
         try:
-            slots = await _search_slots(institution, location, run)
+            slots = await _search_slots(
+                institution,
+                location,
+                run,
+                appointment_type_id=appointment_type_id,
+                start_date=start_date,
+                days=days,
+            )
         except Exception:
             logger.exception("slot search failed for run=%s", run_id)
             return _json({"error": "unavailable"}, 503)
@@ -274,7 +356,12 @@ async def book_slot(
         # supplies one. A slot taken while the patient was deciding simply is
         # not in this list any more.
         try:
-            slots = await _search_slots(institution, location, run)
+            slots = await _search_slots(
+                institution,
+                location,
+                run,
+                appointment_type_id=body.appointment_type_id,
+            )
         except Exception:
             logger.exception("slot re-check failed for run=%s", run_id)
             return _json({"error": "unavailable"}, 503)
@@ -297,7 +384,13 @@ async def book_slot(
                     slot_start=chosen.start,
                     slot_end=chosen.end,
                     operatory_id=getattr(chosen, "operatory_id", None),
-                    appointment_type_id=getattr(chosen, "appointment_type_id", None),
+                    # The slot's own type when the practice software supplies
+                    # one, otherwise what the patient chose — never neither, or
+                    # the appointment is booked at the wrong length.
+                    appointment_type_id=(
+                        getattr(chosen, "appointment_type_id", None)
+                        or body.appointment_type_id
+                    ),
                 )
             )
         except Exception:
@@ -318,7 +411,12 @@ async def book_slot(
             # through this same path, so a phone call can fill the slot while
             # the patient is looking at it.
             try:
-                fresh = await _search_slots(institution, location, run)
+                fresh = await _search_slots(
+                    institution,
+                    location,
+                    run,
+                    appointment_type_id=body.appointment_type_id,
+                )
                 taken = not any(s.start == body.slot_start for s in fresh)
             except Exception:
                 logger.exception("post-failure slot re-check failed run=%s", run_id)
