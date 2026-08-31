@@ -476,6 +476,11 @@ class SendSmsNode(BaseModel):
     next_node_id: str
     include_opt_out_footer: bool = True
     respect_quiet_hours: bool = True
+    # Once a patient responds the engine stops the rest of this run's sends on
+    # every channel, whether or not the campaign drew a branch for it. Set this
+    # on a step whose send after a response is deliberate — an acknowledgement,
+    # say — rather than part of an attempt ladder.
+    send_after_response: bool = False
     max_attempts: int = Field(default=1, ge=1, le=3)
     expect_response: bool = False
     response_window_seconds: int = Field(default=259200, ge=60, le=2592000)
@@ -545,6 +550,11 @@ class SendVoiceNode(BaseModel):
     voice_profile_id: str | None = None
     next_node_id: str
     respect_quiet_hours: bool = True
+    # Once a patient responds the engine stops the rest of this run's sends on
+    # every channel, whether or not the campaign drew a branch for it. Set this
+    # on a step whose send after a response is deliberate — an acknowledgement,
+    # say — rather than part of an attempt ladder.
+    send_after_response: bool = False
     max_attempts: int = Field(default=1, ge=1, le=3)
     # Patient-level safety guard across workflow runs. Retries inside the same
     # run are allowed; this prevents a second appointment/campaign run from
@@ -663,6 +673,11 @@ class SendEmailNode(BaseModel):
     template_key: str | None = Field(default=None, max_length=80)
     next_node_id: str
     respect_quiet_hours: bool = True
+    # Once a patient responds the engine stops the rest of this run's sends on
+    # every channel, whether or not the campaign drew a branch for it. Set this
+    # on a step whose send after a response is deliberate — an acknowledgement,
+    # say — rather than part of an attempt ladder.
+    send_after_response: bool = False
     max_attempts: int = Field(default=1, ge=1, le=3)
     # Who receives this email. Defaults to the enrolled patient so definitions
     # published before this field existed keep their original behaviour.
@@ -931,12 +946,6 @@ class ComplianceMetadata(BaseModel):
     content_class: Literal["transactional_care", "recall", "sales", "marketing"] | None = None
     # Whether send steps require a recorded consent record on the channel.
     consent_required: bool = True
-    # Once a patient responds, the engine stops the rest of this run's sends on
-    # every channel, whether or not the campaign drew a branch for it — a patient
-    # who confirms by text must not then be called an hour later by a step that
-    # was already scheduled. Set this only for a campaign whose follow-up after a
-    # response is deliberate.
-    continue_after_response: bool = False
 
 
 class NodeLayout(BaseModel):

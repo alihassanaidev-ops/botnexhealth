@@ -430,10 +430,11 @@ class WorkflowStepDispatcher:
                         run,
                         node.type,
                         content_class=content_class,
-                        continue_after_response=(
-                            definition.compliance.continue_after_response
-                            if definition.compliance
-                            else False
+                        # Read from the node, not the workflow: publish_version
+                        # strips the workflow-level compliance block, so a flag
+                        # there would never reach the runtime.
+                        continue_after_response=getattr(
+                            node, "send_after_response", False
                         ),
                     )
                 else:

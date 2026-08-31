@@ -95,3 +95,60 @@ def test_response_is_checked_before_quiet_hours():
     assert result.action == "block"
     assert result.reason == "patient_responded"
     MockQuiet.return_value.is_quiet_hours.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# The opt-out has to survive publishing
+# ---------------------------------------------------------------------------
+
+
+def test_the_opt_out_survives_publish():
+    """publish_version strips the workflow-level compliance block.
+
+    The opt-out first lived on ComplianceMetadata, where it could never be
+    switched on: `definition.pop("compliance", None)` runs before the definition
+    is persisted, so `definition.compliance` is always None at runtime. It lives
+    on the send node instead, and this pins that down.
+    """
+    from src.app.services.automation.definition_schema import WorkflowDefinition
+
+    raw = {
+        "entry_node_id": "sms-1",
+        "trigger": {"type": "manual"},
+        "compliance": {"content_class": "recall"},
+        "nodes": [
+            {
+                "id": "sms-1",
+                "type": "send_sms",
+                "body_template": "Hi",
+                "next_node_id": "done",
+                "send_after_response": True,
+            },
+            {"id": "done", "type": "exit", "outcome": "done"},
+        ],
+    }
+
+    # What publish_version persists.
+    published = dict(raw)
+    published.pop("compliance", None)
+    definition = WorkflowDefinition.model_validate(published)
+
+    assert definition.compliance is None, "the workflow-level block does not survive"
+    node = next(n for n in definition.nodes if n.id == "sms-1")
+    assert node.send_after_response is True, "the node-level opt-out must survive"
+
+
+def test_send_nodes_default_to_being_suppressed():
+    """Protection is the default; opting out is the deliberate act."""
+    from src.app.services.automation.definition_schema import (
+        SendEmailNode,
+        SendSmsNode,
+        SendVoiceNode,
+    )
+
+    assert SendSmsNode(
+        id="a", body_template="x", next_node_id="b"
+    ).send_after_response is False
+    assert hasattr(SendVoiceNode, "model_fields")
+    assert "send_after_response" in SendVoiceNode.model_fields
+    assert "send_after_response" in SendEmailNode.model_fields
