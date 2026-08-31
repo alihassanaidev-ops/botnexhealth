@@ -3,8 +3,9 @@ SMS template routes — CRUD and preview for customizable patient text messages.
 
 Accessible to INSTITUTION_ADMIN users. Templates are scoped per institution and
 mirror the email-template editor. The rendered body is populated from
-authoritative structured appointment data at send time; the clinic-identity
-prefix and CASL/TCPA opt-out footer are applied downstream by ``sms_privacy``.
+authoritative structured appointment data at send time and, on the no-PMS
+paths these templates serve, is sent verbatim — no opt-out footer is appended
+downstream, so what an admin saves here is what the recipient receives.
 """
 
 from __future__ import annotations
