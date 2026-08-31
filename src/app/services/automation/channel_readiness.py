@@ -119,7 +119,14 @@ class ChannelReadinessService:
             for node in sms_nodes:
                 issues.append(
                     ValidationIssue(
-                        severity="warning",
+                        # An error, not advice. _sms_ready is false only after the
+                        # platform-credential fallback has already been tried, so
+                        # there is no sender to send with: every enrolled patient's
+                        # run fails at this step. Voice already blocks publish for
+                        # the same condition — this was the one channel that did
+                        # not. The email fallback stays a warning because mail from
+                        # the platform address does deliver.
+                        severity="error",
                         code=_READINESS_CODE,
                         node_id=node.id,
                         message=(

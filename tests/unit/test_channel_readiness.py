@@ -1,11 +1,15 @@
 """Unit tests for ChannelReadinessService (Plan 10).
 
-Readiness is warning-only and computed from existing creds. Covers SMS ready vs.
-not, email ready vs. not, voice (node retell_agent_id), and the null-location
-short-circuit (institution/template context → no issues).
+Readiness is computed from existing creds. A channel that cannot send at all is
+an error and blocks publishing (Item 13); the email platform-address fallback
+stays a warning, because mail from that address does deliver. Covers SMS ready
+vs. not, email ready vs. not, voice (node retell_agent_id), and the
+null-location short-circuit (institution/template context → no issues).
 """
 
 from __future__ import annotations
+
+from src.app.services.automation.validation_service import ValidationIssue
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -149,7 +153,9 @@ def test_sms_not_ready_without_from_number():
         s.twillio_api_secret = "tok_platform"
         issues = _check(_sms_def(), session)
     assert len(issues) == 1
-    assert issues[0].severity == "warning"
+    # Item 13: there is no sender to send with, so every enrolled patient's run
+    # would fail at this step. That blocks publishing rather than advising.
+    assert issues[0].severity == "error"
     assert issues[0].code == "channel_not_ready"
     assert issues[0].node_id == "s1"
 
@@ -292,3 +298,61 @@ def test_readiness_for_location_flags_missing_setup():
     assert report.email is False
     assert report.voice_configurable is False
     assert all(d["reason"] for d in report.details)
+
+
+# ---------------------------------------------------------------------------
+# Item 13 · a declared requirement that cannot be met blocks publishing
+# ---------------------------------------------------------------------------
+
+
+def test_unsendable_sms_blocks_publishing():
+    """A campaign that needs texts, on a clinic with no sender, must not publish.
+
+    Publishing is fail-closed on error severity, so this is the whole control:
+    filed as a warning it published happily and then failed silently for every
+    patient it enrolled.
+    """
+    from src.app.services.automation.validation_service import WorkflowValidationService
+
+    session = _make_session(location=_make_location(from_number=None))
+    with patch("src.app.services.messaging_credentials.settings") as s:
+        s.twillio_sid = None
+        s.twillio_api_secret = None
+        issues = _check(_sms_def(), session)
+    assert not WorkflowValidationService.is_publishable(issues)
+
+
+def test_the_failure_names_the_requirement_and_what_to_do():
+    session = _make_session(location=_make_location(from_number=None))
+    with patch("src.app.services.messaging_credentials.settings") as s:
+        s.twillio_sid = None
+        s.twillio_api_secret = None
+        issues = _check(_sms_def(), session)
+    message = issues[0].message.lower()
+    assert "sms" in message
+    assert "twilio" in message and "sender number" in message
+
+
+def test_a_ready_campaign_still_publishes():
+    from src.app.services.automation.validation_service import WorkflowValidationService
+
+    session = _make_session(location=_make_location())
+    with patch("src.app.services.messaging_credentials.settings") as s:
+        s.twillio_sid = "AC_platform"
+        s.twillio_api_secret = "tok_platform"
+        issues = _check(_sms_def(), session)
+    assert issues == []
+    assert WorkflowValidationService.is_publishable(issues)
+
+
+def test_advisory_warnings_still_do_not_block():
+    """The email platform-address fallback delivers, so it stays advice."""
+    from src.app.services.automation.validation_service import WorkflowValidationService
+
+    assert WorkflowValidationService.is_publishable(
+        [
+            ValidationIssue(
+                severity="warning", message="falls back to the platform address"
+            )
+        ]
+    )
