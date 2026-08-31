@@ -163,3 +163,30 @@ class TestNoLeakage:
         body = resp.text.lower()
         for leak in ("appt-9", "run-1", "inst-1", "loc-1", "c-1", "wf-1"):
             assert leak not in body
+
+
+def test_recorded_channel_satisfies_the_database_constraint():
+    """campaign_response_events has a CHECK constraint on channel.
+
+    The endpoint tests mock the session, so an invalid value sails through them
+    and fails only on a real insert — which is exactly how "link" got written
+    where the constraint permits "booking_link". This pins the value the route
+    uses against the constraint the table declares.
+    """
+    import re
+
+    from sqlalchemy import CheckConstraint
+
+    import src.app.api.routes.campaign_links as links
+    from src.app.models.campaign_response import CampaignResponseEvent
+
+    check = next(
+        c
+        for c in CampaignResponseEvent.__table_args__
+        if isinstance(c, CheckConstraint) and "channel IN" in str(c.sqltext)
+    )
+    allowed = set(re.findall(r"'([a-z_]+)'", str(check.sqltext)))
+    used = set(re.findall(r'channel="([a-z_]+)"', open(links.__file__).read()))
+
+    assert used, "expected the route to record a channel"
+    assert used <= allowed, f"{used - allowed} not permitted by the CHECK constraint"

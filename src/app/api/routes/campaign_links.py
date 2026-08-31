@@ -132,7 +132,7 @@ async def _confirm(session, run, institution, location) -> tuple[str, int]:
         logger.warning("campaign link confirm rejected: run=%s", run.id)
         return _TROUBLE_TEXT, 502
 
-    await _record_response(session, run, channel="link", intent="confirmed")
+    await _record_response(session, run, channel="booking_link", intent="confirmed")
     return _CONFIRMED_TEXT, 200
 
 
@@ -144,7 +144,7 @@ async def _hand_to_staff(session, run, action: str) -> tuple[str, int]:
     is honest: the patient is told a person will follow up, and one actually will.
     """
     event = await _record_response(
-        session, run, channel="link", intent=f"requested_{action}"
+        session, run, channel="booking_link", intent=f"requested_{action}"
     )
     session.add(
         CampaignStaffHandoff(
