@@ -106,3 +106,23 @@ def test_receipt_for_a_non_campaign_message_is_ignored():
     outcome, session = _apply(None, "delivered")
     assert outcome is None
     session.commit.assert_not_awaited()
+
+
+def test_a_failed_receipt_does_not_fail_the_twilio_callback():
+    """The SMS row and the usage event are committed before this runs.
+
+    Raising here would return 500 to Twilio, which retries the callback and
+    redoes work that already succeeded. A receipt we could not record is worth
+    a log line, not a failed webhook.
+    """
+    import inspect
+
+    import src.app.api.routes.twilio_webhooks as hooks
+
+    source = inspect.getsource(hooks.sms_status)
+    call = source.index("apply_sms_delivery_receipt")
+    before = source[:call]
+    # the call sits inside a try, and the handler swallows what it raises
+    assert before.rstrip().endswith("try:") or "try:" in before.split("if row.workflow_run_id")[-1]
+    assert "except Exception" in source[call:]
+    assert "logger.exception" in source[call:]

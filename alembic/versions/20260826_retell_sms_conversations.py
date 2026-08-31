@@ -58,7 +58,7 @@ def _enable_rls(table: str) -> None:
 def upgrade() -> None:
     op.execute(
         """
-        CREATE TABLE retell_sms_chat_profiles (
+        CREATE TABLE IF NOT EXISTS retell_sms_chat_profiles (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
             institution_id uuid NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
             location_id uuid NOT NULL REFERENCES institution_locations(id) ON DELETE CASCADE,
@@ -77,7 +77,7 @@ def upgrade() -> None:
     )
     op.execute(
         """
-        CREATE TABLE retell_sms_sessions (
+        CREATE TABLE IF NOT EXISTS retell_sms_sessions (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
             institution_id uuid NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
             location_id uuid NOT NULL REFERENCES institution_locations(id) ON DELETE CASCADE,
@@ -111,7 +111,7 @@ def upgrade() -> None:
     )
     op.execute(
         """
-        CREATE TABLE retell_sms_turns (
+        CREATE TABLE IF NOT EXISTS retell_sms_turns (
             id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
             institution_id uuid NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
             location_id uuid NOT NULL REFERENCES institution_locations(id) ON DELETE CASCADE,
@@ -133,31 +133,31 @@ def upgrade() -> None:
     )
 
     for statement in (
-        "CREATE UNIQUE INDEX uq_retell_sms_profiles_active_location_purpose "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_retell_sms_profiles_active_location_purpose "
         "ON retell_sms_chat_profiles (location_id, purpose) "
         "WHERE is_active = true AND purpose IS NOT NULL",
-        "CREATE UNIQUE INDEX uq_retell_sms_profiles_active_agent "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_retell_sms_profiles_active_agent "
         "ON retell_sms_chat_profiles (retell_agent_id) WHERE is_active = true",
-        "CREATE INDEX ix_retell_sms_profiles_institution_active "
+        "CREATE INDEX IF NOT EXISTS ix_retell_sms_profiles_institution_active "
         "ON retell_sms_chat_profiles (institution_id, is_active)",
-        "CREATE INDEX ix_retell_sms_profiles_location_active "
+        "CREATE INDEX IF NOT EXISTS ix_retell_sms_profiles_location_active "
         "ON retell_sms_chat_profiles (location_id, is_active)",
-        "CREATE UNIQUE INDEX uq_retell_sms_sessions_active_contact_location "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_retell_sms_sessions_active_contact_location "
         "ON retell_sms_sessions (institution_id, location_id, contact_id) "
         "WHERE status IN ('awaiting_user', 'generating')",
-        "CREATE UNIQUE INDEX uq_retell_sms_sessions_run_step "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_retell_sms_sessions_run_step "
         "ON retell_sms_sessions (workflow_run_id, step_id)",
-        "CREATE UNIQUE INDEX uq_retell_sms_sessions_chat_id "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_retell_sms_sessions_chat_id "
         "ON retell_sms_sessions (retell_chat_id) WHERE retell_chat_id IS NOT NULL",
-        "CREATE INDEX ix_retell_sms_sessions_thread "
+        "CREATE INDEX IF NOT EXISTS ix_retell_sms_sessions_thread "
         "ON retell_sms_sessions (conversation_thread_id)",
-        "CREATE INDEX ix_retell_sms_sessions_expiry "
+        "CREATE INDEX IF NOT EXISTS ix_retell_sms_sessions_expiry "
         "ON retell_sms_sessions (status, expires_at)",
-        "CREATE UNIQUE INDEX uq_retell_sms_turns_message_sid "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_retell_sms_turns_message_sid "
         "ON retell_sms_turns (message_sid) WHERE message_sid IS NOT NULL",
-        "CREATE UNIQUE INDEX uq_retell_sms_turns_inbound "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_retell_sms_turns_inbound "
         "ON retell_sms_turns (inbound_sms_message_id)",
-        "CREATE INDEX ix_retell_sms_turns_session_created "
+        "CREATE INDEX IF NOT EXISTS ix_retell_sms_turns_session_created "
         "ON retell_sms_turns (session_id, created_at)",
     ):
         op.execute(statement)

@@ -18,8 +18,8 @@ depends_on = None
 def upgrade() -> None:
     op.execute(
         "ALTER TABLE automation_workflow_step_executions "
-        "ADD COLUMN input_snapshot jsonb, "
-        "ADD COLUMN output_snapshot jsonb"
+        "ADD COLUMN IF NOT EXISTS input_snapshot jsonb, "
+        "ADD COLUMN IF NOT EXISTS output_snapshot jsonb"
     )
 
 

@@ -428,14 +428,24 @@ async def sms_status(request: Request) -> dict[str, str]:
         )
     # Feed the result back into the campaign that sent it. Without this a
     # message the carrier dropped still counts as a successful contact.
+    #
+    # Best effort, like the email side: the SMS row and the usage event are
+    # already committed above, so failing the webhook here would have Twilio
+    # retry a callback whose important work already succeeded. A receipt we
+    # could not record is worth a log line, not a 500.
     if row.workflow_run_id and row.institution_id:
-        await apply_sms_delivery_receipt(
-            institution_id=str(row.institution_id),
-            workflow_run_id=str(row.workflow_run_id),
-            message_sid=message_sid,
-            provider_status=provider_status,
-            provider_error=provider_error,
-        )
+        try:
+            await apply_sms_delivery_receipt(
+                institution_id=str(row.institution_id),
+                workflow_run_id=str(row.workflow_run_id),
+                message_sid=message_sid,
+                provider_status=provider_status,
+                provider_error=provider_error,
+            )
+        except Exception:  # noqa: BLE001 — never fail the callback for this
+            logger.exception(
+                "delivery receipt not recorded: run=%s", row.workflow_run_id
+            )
     return {"status": "updated"}
 
 

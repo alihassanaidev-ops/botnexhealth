@@ -22,4 +22,8 @@ def test_location_suppression_migration_replaces_institution_wide_index() -> Non
 
     assert "uq_sms_suppressions_active_institution_channel_phone" in source
     assert "uq_sms_suppressions_active_location_channel_phone" in source
-    assert '"institution_id", "location_id", "channel", "phone_hash"' in source
+    # Written as SQL rather than op.create_index so it carries IF NOT EXISTS:
+    # on a database built from scratch the baseline's create_all has already
+    # produced these indexes from the model layer.
+    assert "institution_id, location_id, channel, phone_hash" in source
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS" in source

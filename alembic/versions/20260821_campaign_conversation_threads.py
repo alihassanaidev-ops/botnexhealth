@@ -87,11 +87,24 @@ def upgrade() -> None:
         (institution_id, location_id, contact_id, channel, status)
         """
     )
+    # reply_key is dropped again by 20260824_remove_campaign_reply_keys. On a
+    # database built from scratch the baseline's create_all produces the final
+    # schema, which never had the column, so this index has nothing to build on.
     op.execute(
         """
-        CREATE INDEX IF NOT EXISTS ix_campaign_conversation_threads_reply_key
-        ON campaign_conversation_threads
-        (institution_id, location_id, channel, reply_key, status)
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'campaign_conversation_threads'
+                  AND column_name = 'reply_key'
+            ) THEN
+                CREATE INDEX IF NOT EXISTS ix_campaign_conversation_threads_reply_key
+                ON campaign_conversation_threads
+                (institution_id, location_id, channel, reply_key, status);
+            END IF;
+        END
+        $$
         """
     )
     op.execute(
