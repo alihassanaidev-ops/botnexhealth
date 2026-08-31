@@ -34,10 +34,15 @@ from src.app.services.automation.retell_outbound_client import (
     RetellTransientError,
 )
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
+from src.app.models.institution import Institution
 from src.app.services.circuit_breaker import (
     BreakerService,
     NoOpCircuitBreaker,
     ServiceBreaker,
+)
+from src.app.services.outbound_limits import (
+    NoOpOutboundLimiter,
+    OutboundLimiter,
 )
 from src.app.services.automation.voice_attempt_recorder import (
     claim_voice_attempt,
@@ -136,10 +141,25 @@ class VoiceNodeExecutor:
         session: AsyncSession,
         runtime: AutomationWorkflowRuntimeService,
         breaker: ServiceBreaker | None = None,
+        limits: OutboundLimiter | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime
         self.breaker: ServiceBreaker = breaker or NoOpCircuitBreaker()
+        self.limits: OutboundLimiter = limits or NoOpOutboundLimiter()
+
+    async def _call_ceiling(self, run) -> int | None:
+        """This clinic's simultaneous-call ceiling, or None for the default.
+
+        NULL on the institution means "use the platform default", not "no
+        limit" — an untuned clinic is still bounded.
+        """
+        institution = await self.session.get(Institution, run.institution_id)
+        return getattr(institution, "outbound_call_limit", None)
+
+    async def _release_slot(self, slot) -> None:
+        if slot is not None:
+            await self.limits.release_call_slot(slot)
 
     async def execute(
         self,
@@ -399,6 +419,31 @@ class VoiceNodeExecutor:
         )
         await self.session.commit()
 
+        # --- Concurrency ceiling (Item 18) ---
+        # After the claim rather than before it, so a refusal takes the same
+        # recovery path as a transient vendor error: release the claim so a
+        # later attempt can re-dial, then defer. Refusing before the claim would
+        # be simpler but would need a second, parallel unwind path.
+        ceiling = await self._call_ceiling(run)
+        limit_decision, call_slot = await self.limits.acquire_call_slot(
+            str(run.institution_id), ceiling=ceiling
+        )
+        if not limit_decision.allowed:
+            await mark_attempt_failed(
+                attempt, error_message=limit_decision.reason or "call_concurrency"
+            )
+            await self.session.commit()
+            due_at = datetime.now(tz=timezone.utc) + timedelta(
+                seconds=max(limit_decision.retry_after_seconds, 1)
+            )
+            logger.info(
+                "send_voice held at the concurrency ceiling: institution=%s "
+                "run=%s node=%s in_flight=%s due_at=%s",
+                run.institution_id, run.id, node.id,
+                limit_decision.in_flight, due_at,
+            )
+            return VoiceCooldownDeferred(step=step, due_at=due_at)
+
         # --- Place the call via the mockable client ---
         try:
             result = await RetellOutboundClient(api_key).create_phone_call(
@@ -409,6 +454,7 @@ class VoiceNodeExecutor:
                 metadata=metadata,
             )
         except RetellTransientError as exc:
+            await self._release_slot(call_slot)
             await self.breaker.record_failure(
                 BreakerService.RETELL, str(run.location_id or run.institution_id)
             )
@@ -436,6 +482,9 @@ class VoiceNodeExecutor:
             )
             raise  # propagate → Celery task retries with backoff
         except RetellAmbiguousError as exc:
+            # The slot is deliberately NOT released here. The call may have been
+            # placed, and handing back a slot for a live call is how a ceiling
+            # stops meaning anything. The lease expires on its own instead.
             # Counted against the breaker even though this call is never retried:
             # a timeout is the clearest signal Retell is unwell, and the breaker
             # is what stops the *next* run walking into the same wall.
@@ -464,6 +513,7 @@ class VoiceNodeExecutor:
             )
             return node.next_node_id
         except (RetellPermanentError, Exception) as exc:  # noqa: BLE001
+            await self._release_slot(call_slot)
             logger.error(
                 "send_voice permanent failure: institution=%s run=%s node=%s error=%s",
                 run.institution_id, run.id, node.id, exc,
@@ -486,6 +536,10 @@ class VoiceNodeExecutor:
         await self.breaker.record_success(
             BreakerService.RETELL, str(run.location_id or run.institution_id)
         )
+        if call_slot is not None and result.call_id:
+            await self.limits.rekey_call_slot(
+                str(run.institution_id), call_slot.token, result.call_id
+            )
         await mark_attempt_placed(
             attempt, retell_call_id=result.call_id, awaiting_outcome=node.wait_for_outcome
         )

@@ -77,7 +77,7 @@ def _make_location(retell_from_number="+15005550000", name="Bright Smiles Dental
 
 def _make_executor(
     contact=None, location=None, already_placed=False, attempt_number=1, profile=None,
-    claim_id=None, recent_attempt=None,
+    claim_id=None, recent_attempt=None, limits=None, institution=None,
 ):
     from src.app.services.automation.voice_node_executor import VoiceNodeExecutor
 
@@ -86,11 +86,14 @@ def _make_executor(
 
     async def _get(model, pk):
         from src.app.models.contact import Contact
+        from src.app.models.institution import Institution
         from src.app.models.institution_location import InstitutionLocation
         if model is Contact:
             return contact
         if model is InstitutionLocation:
             return location
+        if model is Institution:
+            return institution
         return None
 
     session.get = AsyncMock(side_effect=_get)
@@ -119,7 +122,7 @@ def _make_executor(
     runtime.complete_step = AsyncMock()
     runtime.mark_step_awaiting_outcome = AsyncMock()
 
-    return VoiceNodeExecutor(session, runtime), runtime, step
+    return VoiceNodeExecutor(session, runtime, limits=limits), runtime, step
 
 
 @contextmanager
@@ -685,3 +688,156 @@ def test_executor_transient_error_fails_run_when_attempts_exhausted():
     assert result == "node-2"
     runtime.fail_run.assert_called_once()
     assert "attempts exhausted" in _fail_reason(runtime)
+
+
+# ---------------------------------------------------------------------------
+# Call concurrency ceiling (Item 18)
+# ---------------------------------------------------------------------------
+
+
+class _StubLimits:
+    """Records what the executor did with its call slot."""
+
+    def __init__(self, *, allowed=True, retry_after_seconds=0, in_flight=None):
+        from src.app.services.outbound_limits import ConcurrencySlot, LimitDecision
+
+        self._decision = LimitDecision(
+            allowed,
+            retry_after_seconds=retry_after_seconds,
+            reason=None if allowed else "call_concurrency_limit_3",
+            in_flight=in_flight,
+        )
+        self._slot = ConcurrencySlot("inst-1", "tok-1") if allowed else None
+        self.acquired_with_ceiling = []
+        self.released = []
+        self.rekeyed = []
+
+    async def acquire_call_slot(self, institution_id, *, ceiling=None):
+        self.acquired_with_ceiling.append(ceiling)
+        return self._decision, self._slot
+
+    async def release_call_slot(self, slot) -> None:
+        self.released.append(slot.token)
+
+    async def release_call_slot_by_token(self, institution_id, token) -> None:
+        self.released.append(token)
+
+    async def rekey_call_slot(self, institution_id, old_token, new_token) -> bool:
+        self.rekeyed.append((old_token, new_token))
+        return True
+
+    async def check_send_rate(self, provider, scope_id):
+        from src.app.services.outbound_limits import LimitDecision
+
+        return LimitDecision(True)
+
+
+def test_executor_defers_when_the_clinic_is_at_its_call_ceiling():
+    """Held with a retry time, exactly as quiet-hours work is held."""
+    limits = _StubLimits(allowed=False, retry_after_seconds=90, in_flight=3)
+    executor, runtime, step = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert isinstance(result, VoiceCooldownDeferred)
+    # Never reached the vendor, and the run is deferred rather than failed.
+    call_mock.assert_not_called()
+    runtime.fail_run.assert_not_called()
+
+
+def test_deferring_at_the_ceiling_releases_the_claim_so_a_retry_can_dial():
+    """A held claim would block the re-dial the deferral exists to allow."""
+    limits = _StubLimits(allowed=False, retry_after_seconds=90)
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with patch(
+        "src.app.services.automation.voice_node_executor.mark_attempt_failed",
+        new=AsyncMock(),
+    ) as mark_failed, _patch_client(result=RetellCallResult(call_id="call_xyz")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    mark_failed.assert_awaited_once()
+
+
+def test_a_placed_call_relabels_its_slot_to_the_call_id():
+    """The outcome handler knows the call id and nothing else."""
+    limits = _StubLimits()
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.rekeyed == [("tok-1", "call_xyz")]
+    assert limits.released == []
+
+
+def test_a_transient_failure_hands_the_slot_straight_back():
+    """The call was definitely not placed, so the slot is genuinely free."""
+    limits = _StubLimits()
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(side_effect=RetellTransientError("retell_5xx: 503")):
+        try:
+            asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+        except RetellTransientError:
+            pass  # re-raised for the Celery retry once attempts remain
+
+    assert limits.released == ["tok-1"]
+
+
+def test_an_ambiguous_failure_keeps_the_slot_until_the_lease_lapses():
+    """The call may be live; handing back its slot would break the ceiling."""
+    limits = _StubLimits()
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(side_effect=RetellAmbiguousError("retell_network_error")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.released == []
+    assert limits.rekeyed == []
+
+
+def test_a_permanent_failure_hands_the_slot_back():
+    limits = _StubLimits()
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(side_effect=RetellPermanentError("retell_4xx: 400")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.released == ["tok-1"]
+
+
+def test_a_clinics_own_ceiling_is_used_when_set():
+    limits = _StubLimits()
+    institution = MagicMock()
+    institution.outbound_call_limit = 2
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(),
+        limits=limits, institution=institution,
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.acquired_with_ceiling == [2]
+
+
+def test_an_untuned_clinic_falls_back_to_the_platform_default():
+    """NULL means "use the default", not "no limit"."""
+    limits = _StubLimits()
+    institution = MagicMock()
+    institution.outbound_call_limit = None
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(),
+        limits=limits, institution=institution,
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.acquired_with_ceiling == [None]

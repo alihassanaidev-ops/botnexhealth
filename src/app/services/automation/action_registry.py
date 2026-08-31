@@ -21,6 +21,7 @@ from src.app.services.automation.runtime_service import AutomationWorkflowRuntim
 from src.app.services.automation.sms_node_executor import SmsNodeExecutor
 from src.app.services.automation.voice_node_executor import VoiceNodeExecutor
 from src.app.services.circuit_breaker import ServiceBreaker
+from src.app.services.outbound_limits import OutboundLimiter
 
 
 class ActionExecutor(Protocol):
@@ -29,6 +30,7 @@ class ActionExecutor(Protocol):
         session: AsyncSession,
         runtime: AutomationWorkflowRuntimeService,
         breaker: ServiceBreaker | None = None,
+        limits: OutboundLimiter | None = None,
     ) -> None: ...
 
     async def execute(self, run: AutomationWorkflowRun, node: object, context: dict) -> str: ...

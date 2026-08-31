@@ -58,6 +58,11 @@ from src.app.services.circuit_breaker import (
     ServiceBreaker,
     breaker_service_for_node,
 )
+from src.app.services.outbound_limits import (
+    NoOpOutboundLimiter,
+    OutboundLimiter,
+    send_provider_for_node,
+)
 from src.app.services.automation.compliance_gate import (
     ComplianceGate,
     GateResult,
@@ -136,6 +141,7 @@ class WorkflowStepDispatcher:
         revalidator: RunRevalidator | None = None,
         calendar_jitter_seconds: int = 0,
         breaker: ServiceBreaker | None = None,
+        limits: OutboundLimiter | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime
@@ -143,6 +149,7 @@ class WorkflowStepDispatcher:
         self.gate: ComplianceGate = gate or NoOpComplianceGate()
         self.revalidator: RunRevalidator = revalidator or NoOpRevalidator()
         self.breaker: ServiceBreaker = breaker or NoOpCircuitBreaker()
+        self.limits: OutboundLimiter = limits or NoOpOutboundLimiter()
         # 0 = deterministic (unit tests); build_dispatcher sets a production spread.
         self.calendar_jitter_seconds = calendar_jitter_seconds
 
@@ -533,6 +540,48 @@ class WorkflowStepDispatcher:
                             steps_advanced=steps_advanced,
                             patient_status_event_ids=patient_status_event_ids,
                         )
+                # Provider send rate. Held on a timer like everything else on
+                # this path, because a message deferred by ninety seconds is a
+                # message delivered, and one rejected by the provider is not.
+                send_provider = send_provider_for_node(node.type)
+                if send_provider is not None:
+                    rate_decision = await self.limits.check_send_rate(
+                        send_provider,
+                        # Provider credentials are per location, so that is the
+                        # boundary the provider actually meters us on.
+                        str(run.location_id or run.institution_id),
+                    )
+                    if not rate_decision.allowed:
+                        resume_at = now + timedelta(
+                            seconds=max(rate_decision.retry_after_seconds, 1)
+                        )
+                        step = await self.runtime.begin_step(
+                            run,
+                            step_id=node.id,
+                            step_type=node.type,
+                            scheduled_at=resume_at,
+                            scheduled_timezone=location_timezone,
+                        )
+                        timer = await self.scheduler.create_timer(
+                            institution_id=run.institution_id,
+                            location_id=run.location_id,
+                            workflow_run_id=run.id,
+                            step_execution_id=step.id,
+                            due_at=resume_at,
+                            timezone_name=location_timezone,
+                        )
+                        await self.runtime.wait_run(run, step)
+                        logger.info(
+                            "dispatch: send-rate->deferred run=%s node=%s "
+                            "resume_at=%s reason=%s",
+                            run.id, node.id, resume_at, rate_decision.reason,
+                        )
+                        return DispatchResult(
+                            status="waiting",
+                            timer_id=timer.id,
+                            steps_advanced=steps_advanced,
+                            patient_status_event_ids=patient_status_event_ids,
+                        )
                 # Channel dispatch via the action registry — new channels plug in
                 # by registering an executor (see action_registry). Any unregistered
                 # send type falls back to the defensive stub.
@@ -541,7 +590,10 @@ class WorkflowStepDispatcher:
                     current_node_id = await self._dispatch_send_stub(run, node)
                 else:
                     dispatch_result = await executor_cls(
-                        self.session, self.runtime, breaker=self.breaker
+                        self.session,
+                        self.runtime,
+                        breaker=self.breaker,
+                        limits=self.limits,
                     ).execute(run, node, context)
                     if isinstance(dispatch_result, VoiceParked):
                         # Voice node placed a call and is parking for its outcome
@@ -1790,6 +1842,7 @@ async def build_dispatcher(
     revalidator: RunRevalidator | None = None,
     calendar_jitter_seconds: int = _DEFAULT_CALENDAR_JITTER_SECONDS,
     breaker: ServiceBreaker | None = None,
+    limits: OutboundLimiter | None = None,
 ) -> tuple[WorkflowStepDispatcher, str]:
     """Construct a dispatcher wired with the real compliance gate + resolve the
     location's timezone.
@@ -1814,6 +1867,17 @@ async def build_dispatcher(
         from src.app.services.circuit_breaker import CircuitBreaker
 
         breaker = CircuitBreaker()
+    if limits is None:
+        from src.app.services.outbound_limits import OutboundLimits, SendProvider
+
+        limits = OutboundLimits(
+            call_concurrency=settings.outbound_call_concurrency_limit,
+            lease_seconds=settings.outbound_call_lease_seconds,
+            provider_per_minute={
+                SendProvider.TWILIO: settings.twilio_send_rate_per_minute,
+                SendProvider.EMAIL: settings.email_send_rate_per_minute,
+            },
+        )
 
     location_timezone = "UTC"
     if location_id:
@@ -1829,5 +1893,6 @@ async def build_dispatcher(
         revalidator=revalidator,
         calendar_jitter_seconds=calendar_jitter_seconds,
         breaker=breaker,
+        limits=limits,
     )
     return dispatcher, location_timezone

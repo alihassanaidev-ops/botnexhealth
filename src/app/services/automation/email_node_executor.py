@@ -95,6 +95,9 @@ class EmailNodeExecutor:
         session: AsyncSession,
         runtime: AutomationWorkflowRuntimeService,
         breaker: ServiceBreaker | None = None,
+        # Accepted for the executor contract. The provider send rate is checked
+        # in the dispatcher before dispatch, so nothing is enforced here.
+        limits: object | None = None,
     ) -> None:
         self.session = session
         self.runtime = runtime

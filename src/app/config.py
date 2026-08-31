@@ -170,6 +170,19 @@ class Settings(BaseSettings):
     #: fill the inbox.
     inbound_email_sender_hourly_limit: int = 60
 
+    # Outbound volume limits (Item 18)
+    #: Default ceiling on simultaneous outbound calls for one clinic. A clinic
+    #: may override it via ``Institution.outbound_call_limit``.
+    outbound_call_concurrency_limit: int = 20
+    #: How long a call slot is held before it lapses on its own. Sized past the
+    #: 30-minute voice parking timeout so a live call is never evicted from its
+    #: own slot, while a release lost to a crash still heals within the hour.
+    outbound_call_lease_seconds: int = 2400
+    #: Per-minute send ceilings per provider, per location. 0 disables a limit.
+    #: 60/minute is Twilio's default long-code throughput expressed per window.
+    twilio_send_rate_per_minute: int = 60
+    email_send_rate_per_minute: int = 300
+
     # Celery
     celery_broker_url: str | None = None
     redis_url: str | None = None

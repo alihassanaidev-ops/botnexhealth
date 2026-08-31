@@ -49,6 +49,7 @@ from src.app.services.automation.step_dispatcher import (
 from src.app.services.automation.llm_node_executor import execute_llm_node
 from src.app.services.automation.campaign_templates import TEMPLATES, instantiate_definition
 from src.app.services.circuit_breaker import BreakerDecision, BreakerState
+from src.app.services.outbound_limits import LimitDecision
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
 
@@ -1454,3 +1455,79 @@ def test_dispatcher_without_a_breaker_does_not_hold_anything() -> None:
     result = asyncio.run(dispatcher.advance(_make_run(), _sms_definition(), context={}))
 
     assert result.status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# advance() — provider send rate (Item 18)
+# ---------------------------------------------------------------------------
+
+
+class _StubLimiter:
+    """Limiter that answers however the test needs, and records what it saw."""
+
+    def __init__(self, rate_decision: LimitDecision | None = None) -> None:
+        self._rate = rate_decision or LimitDecision(True)
+        self.asked: list[tuple[str, str]] = []
+
+    async def acquire_call_slot(self, institution_id, *, ceiling=None):
+        return LimitDecision(True), None
+
+    async def release_call_slot(self, slot) -> None:
+        return None
+
+    async def release_call_slot_by_token(self, institution_id, token) -> None:
+        return None
+
+    async def rekey_call_slot(self, institution_id, old_token, new_token) -> bool:
+        return False
+
+    async def check_send_rate(self, provider, scope_id) -> LimitDecision:
+        self.asked.append((getattr(provider, "value", provider), scope_id))
+        return self._rate
+
+
+def test_send_rate_limit_holds_the_message_instead_of_dropping_it() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    limits = _StubLimiter(
+        LimitDecision(False, retry_after_seconds=20, reason="twilio_send_rate")
+    )
+    dispatcher = WorkflowStepDispatcher(session, rt, sched, limits=limits)
+
+    run = _make_run()
+    run.location_id = "loc-9"
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    result = asyncio.run(dispatcher.advance(run, _sms_definition(), context={}, now=now))
+
+    assert result.status == "waiting"
+    rt.fail_run.assert_not_awaited()
+    assert sched.create_timer.await_args.kwargs["due_at"] == now + timedelta(seconds=20)
+
+
+def test_send_rate_is_checked_per_provider_and_location() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    limits = _StubLimiter()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched, limits=limits)
+
+    run = _make_run()
+    run.location_id = "loc-9"
+    asyncio.run(dispatcher.advance(run, _sms_definition(), context={}))
+
+    assert limits.asked == [("twilio", "loc-9")]
+
+
+def test_within_the_send_rate_the_message_goes_out() -> None:
+    session = _make_session()
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(
+        session, rt, sched, limits=_StubLimiter(LimitDecision(True))
+    )
+
+    result = asyncio.run(dispatcher.advance(_make_run(), _sms_definition(), context={}))
+
+    assert result.status == "completed"
+    sched.create_timer.assert_not_awaited()
