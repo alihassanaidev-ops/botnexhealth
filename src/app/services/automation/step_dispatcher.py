@@ -29,6 +29,10 @@ from src.app.models.automation_workflow import (
 )
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.campaign_action_links import build_run_links
+from src.app.services.automation.campaign_action_links import (
+    BOOKING_LINK_CONFIG_KEY,
+    REGISTRATION_CONFIG_KEY,
+)
 from src.app.services.automation.definition_schema import (
     AppointmentRelativeDelay,
     CalendarDelay,
@@ -44,6 +48,8 @@ from src.app.services.automation.definition_schema import (
     SendSmsNode,
     SendVoiceNode,
     TimeWaitConfig,
+    BookingLinkNode,
+    PatientRegistrationNode,
     UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
     UpdatePatientStatusNode,
@@ -670,6 +676,56 @@ class WorkflowStepDispatcher:
                         steps_advanced=steps_advanced,
                         patient_status_event_ids=patient_status_event_ids,
                     )
+
+            elif isinstance(node, BookingLinkNode):
+                # The node does not send anything: the link still travels inside a
+                # later message that renders {{booking_link}}. What it does is
+                # record the rules that link must obey, so the public booking API
+                # enforces them instead of trusting the page.
+                step = await self.runtime.begin_step(
+                    run, step_id=node.id, step_type=node.type
+                )
+                config = {
+                    "actions": list(node.actions),
+                    "appointment_type_ids": list(node.appointment_type_ids),
+                    "window_days": node.window_days,
+                    "provider_id": node.provider_id,
+                    "node_id": node.id,
+                }
+                metadata = dict(run.trigger_metadata or {})
+                metadata[BOOKING_LINK_CONFIG_KEY] = config
+                run.trigger_metadata = metadata
+                context = {**context, BOOKING_LINK_CONFIG_KEY: config}
+                await self.runtime.complete_step(
+                    step,
+                    result_code="configured",
+                    result_metadata={
+                        "actions": config["actions"],
+                        # Count, not ids: the metadata is read in dashboards and a
+                        # type id list would grow unbounded in the step record.
+                        "restricted_types": len(node.appointment_type_ids),
+                        "window_days": node.window_days,
+                    },
+                )
+                current_node_id = node.next_node_id
+
+            elif isinstance(node, PatientRegistrationNode):
+                step = await self.runtime.begin_step(
+                    run, step_id=node.id, step_type=node.type
+                )
+                config = {
+                    "provider_id": node.provider_id,
+                    "node_id": node.id,
+                    "on_abandoned_node_id": node.on_abandoned_node_id,
+                }
+                metadata = dict(run.trigger_metadata or {})
+                metadata[REGISTRATION_CONFIG_KEY] = config
+                run.trigger_metadata = metadata
+                context = {**context, REGISTRATION_CONFIG_KEY: config}
+                await self.runtime.complete_step(
+                    step, result_code="configured", result_metadata={}
+                )
+                current_node_id = node.next_node_id
 
             elif isinstance(node, JsonMapperNode):
                 step = await self.runtime.begin_step(run, step_id=node.id, step_type="json_mapper")

@@ -857,6 +857,88 @@ class UpdateAppointmentNode(BaseModel):
         return self
 
 
+class BookingLinkNode(BaseModel):
+    """Configure the patient action link this run will offer.
+
+    The link itself is still delivered inside a message — wording keeps using
+    ``{{booking_link}}`` and friends. What this node adds is the *rules* that
+    link obeys, recorded on the run so the public booking API can enforce them
+    server-side rather than trusting the page or the patient.
+
+    That matters because the voice agent's equivalent restriction ("new patients
+    may only book these types") lives in the agent's Retell prompt, which is
+    guidance an LLM follows rather than a constraint the platform applies. A
+    booking link offering the full appointment-type list would let a patient pick
+    something the phone agent would never have offered them. Setting
+    ``appointment_type_ids`` closes that gap for the link channel: the API filters
+    the offered list and refuses a booking for a type outside it.
+
+    An empty ``appointment_type_ids`` means "no restriction" — every type the PMS
+    returns. It is a deliberate opt-in, so existing campaigns keep working.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["booking_link"] = "booking_link"
+    next_node_id: str
+
+    #: Which actions the issued links may perform. Narrowing this is how a
+    #: reminder campaign offers "confirm or reschedule" without also handing out
+    #: the ability to book something new.
+    actions: list[Literal["book", "confirm", "reschedule", "cancel"]] = Field(
+        default_factory=lambda: ["book"], min_length=1
+    )
+    #: Restrict the bookable types. Empty = every type the PMS offers.
+    appointment_type_ids: list[str] = Field(default_factory=list)
+    #: How far ahead the picker searches. Bounded so a link cannot be turned into
+    #: an unbounded scan of the clinic's calendar.
+    window_days: int = Field(default=7, ge=1, le=60)
+    #: Pin the booking to one provider. None lets the PMS choose.
+    provider_id: str | None = None
+
+    @model_validator(mode="after")
+    def _no_duplicate_actions(self) -> "BookingLinkNode":
+        if len(set(self.actions)) != len(self.actions):
+            raise ValueError("booking_link actions must be unique")
+        return self
+
+
+class PatientRegistrationNode(BaseModel):
+    """Turn a lead into a patient record in the practice software.
+
+    A campaign aimed at enquiries mostly targets contacts with no PMS record, and
+    every booking link for those falls through to a staff handoff — the intent is
+    captured but nothing self-books. This node offers the patient a short form
+    first, then calls the adapter's ``create_patient`` and writes the returned id
+    onto the contact, so the booking step that follows has something to book
+    against.
+
+    ``PatientCreateRequest`` demands seven fields. Four (both names, email,
+    phone) are already on the contact or the enquiry. Date of birth and gender
+    have to be asked — hence a form rather than a silent conversion. The seventh,
+    ``provider_id``, is a clinic decision rather than a patient one, so it is
+    configured here.
+
+    Creating real records in a clinic's practice software from an unauthenticated
+    web form is a deliberate act, which is why this is opt-in per campaign and
+    never implied by a booking link.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["patient_registration"] = "patient_registration"
+    next_node_id: str
+
+    #: The provider a self-registered patient is filed under.
+    provider_id: str = Field(min_length=1)
+    #: Where to go when the patient never completes the form. Falls through to
+    #: ``next_node_id`` when unset, so a campaign author cannot accidentally
+    #: strand a run by omitting it.
+    on_abandoned_node_id: str | None = None
+
+
 class JsonMapping(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -954,6 +1036,8 @@ WorkflowNode = Annotated[
         UpdatePatientStatusNode,
         UpdateGoTrackerAppointmentNode,
         UpdateAppointmentNode,
+        BookingLinkNode,
+        PatientRegistrationNode,
         JsonMapperNode,
         LlmNode,
         ConditionNode,

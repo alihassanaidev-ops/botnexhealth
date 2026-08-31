@@ -31,6 +31,9 @@ from pydantic import BaseModel, Field
 from src.app.database import get_system_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.automation_workflow import AutomationWorkflowRun
+from src.app.services.automation.campaign_action_links import (
+    BOOKING_LINK_CONFIG_KEY,
+)
 from src.app.models.campaign_response import CampaignResponseEvent, CampaignStaffHandoff
 from src.app.models.contact import Contact
 from src.app.models.institution import Institution
@@ -148,6 +151,55 @@ def _verify(action: str, token: str) -> tuple[str, str] | JSONResponse:
 
 #: What a completed action is recorded as, per action.
 COMPLETED_INTENT = {"book": "booked", "reschedule": "rescheduled", "cancel": "cancelled"}
+
+
+def _link_config(run: AutomationWorkflowRun) -> dict:
+    """The rules a ``booking_link`` node recorded for this run.
+
+    A run enrolled before the node existed, or a campaign that never used one,
+    has no entry — which reads as "no restriction" so existing campaigns keep
+    behaving exactly as they did.
+    """
+    metadata = run.trigger_metadata or {}
+    config = metadata.get(BOOKING_LINK_CONFIG_KEY)
+    return config if isinstance(config, dict) else {}
+
+
+def _allowed_type_ids(run: AutomationWorkflowRun) -> set[str]:
+    raw = _link_config(run).get("appointment_type_ids") or []
+    return {str(t) for t in raw if str(t)}
+
+
+def _type_is_allowed(run: AutomationWorkflowRun, appointment_type_id: str | None) -> bool:
+    """Whether this run may book that type.
+
+    Enforced on the server for the reason the restriction exists at all: the
+    voice agent's equivalent rule lives in its Retell prompt, so it is guidance
+    rather than a constraint. A link that only *displayed* a filtered list would
+    still book anything a crafted request asked for.
+    """
+    allowed = _allowed_type_ids(run)
+    if not allowed:
+        return True
+    return appointment_type_id is not None and str(appointment_type_id) in allowed
+
+
+def _window_days(run: AutomationWorkflowRun, default: int) -> int:
+    value = _link_config(run).get("window_days")
+    return value if isinstance(value, int) and value > 0 else default
+
+
+def _action_permitted(run: AutomationWorkflowRun, action: str) -> bool:
+    """Whether the node offered this action at all.
+
+    The token already binds one action, so this is a second, independent check:
+    a token issued for a run whose node only offers ``confirm`` must not book,
+    even though the signature is valid.
+    """
+    actions = _link_config(run).get("actions")
+    if not isinstance(actions, list) or not actions:
+        return True
+    return action in {str(a) for a in actions}
 
 
 async def _already_booked(session, run_id: str, action: str = "book") -> bool:
@@ -462,6 +514,7 @@ async def list_appointment_types(
             logger.exception("appointment types failed for run=%s", run_id)
             return _json({"error": "unavailable"}, 503)
 
+    allowed = _allowed_type_ids(run)
     return _json(
         {
             "appointment_types": [
@@ -471,6 +524,7 @@ async def list_appointment_types(
                     duration_minutes=getattr(t, "duration_minutes", None),
                 ).model_dump()
                 for t in types
+                if not allowed or str(t.source_id or t.id) in allowed
             ]
         }
     )
@@ -516,7 +570,10 @@ async def list_slots(
                 run,
                 appointment_type_id=appointment_type_id,
                 start_date=start_date,
-                days=days,
+                # An explicit ?days= still wins so the pre-booking re-check can
+                # narrow the search; the node's window is the default when the
+                # patient's page does not ask for one.
+                days=days or _window_days(run, DEFAULT_DAYS),
             )
         except Exception:
             logger.exception("slot search failed for run=%s", run_id)
@@ -550,6 +607,16 @@ async def book_slot(
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
+
+        if not _action_permitted(run, action):
+            # A valid signature for an action the campaign step never offered.
+            return _json({"error": "action_not_offered"}, 403)
+
+        if not _type_is_allowed(run, body.appointment_type_id):
+            # The offered list is filtered, but a filtered list is only a
+            # display. Refuse here so the restriction is a property of the
+            # system rather than of the page the patient happened to load.
+            return _json({"error": "appointment_type_not_offered"}, 403)
 
         if await _already_booked(session, run_id, action):
             # Reopening the link from the same message must not act twice.

@@ -59,6 +59,15 @@ PLACEHOLDER_ACTIONS: dict[str, Action] = {
 #: — and short enough that an old message does not stay actionable forever.
 DEFAULT_TTL_SECONDS = 14 * 24 * 60 * 60
 
+#: Where a ``booking_link`` node records the rules its links must obey, and where
+#: a ``patient_registration`` node records the provider a self-registered patient
+#: is filed under. Both live on ``AutomationWorkflowRun.trigger_metadata`` so the
+#: token stays a pure run reference: putting the configuration in the token would
+#: make every link invalid the moment a campaign author edited the step, and would
+#: hand the patient a payload they could read.
+BOOKING_LINK_CONFIG_KEY = "booking_link_config"
+REGISTRATION_CONFIG_KEY = "patient_registration_config"
+
 #: Send these on any response that serves or redirects one of these links.
 LINK_RESPONSE_HEADERS = {
     "Referrer-Policy": "no-referrer",

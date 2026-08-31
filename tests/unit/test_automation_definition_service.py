@@ -31,7 +31,22 @@ def test_emergency_halt_version_terminates_in_flight_runs() -> None:
     run_result.scalars.return_value.all.return_value = [run]
     timers_result = MagicMock()
     timers_result.scalars.return_value.all.return_value = []  # no timers to cancel
-    session.execute = AsyncMock(side_effect=[run_result, timers_result])
+
+    # cancel_run also closes any Retell SMS session and campaign conversation
+    # owned by the run, each of which queries. A fixed-length side_effect made
+    # this test depend on exactly how many lookups that cleanup does, so it
+    # broke the moment one was added. Default to an empty result instead: the
+    # assertions below are about the run being cancelled, not about call counts.
+    def _execute(*_args, **_kwargs):
+        if not _queued:
+            empty = MagicMock()
+            empty.scalars.return_value.all.return_value = []
+            empty.scalar_one_or_none.return_value = None
+            return empty
+        return _queued.pop(0)
+
+    _queued = [run_result, timers_result]
+    session.execute = AsyncMock(side_effect=_execute)
 
     svc = AutomationWorkflowDefinitionService(session)
     count = asyncio.run(
