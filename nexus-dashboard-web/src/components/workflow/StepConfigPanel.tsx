@@ -50,6 +50,7 @@ import {
 } from "@/lib/workflow/context-fields"
 import type { OutboundVoiceProfile, RetellSmsChatProfile } from "@/types"
 import type {
+    BookingLinkNode,
     ConditionNode,
     ConditionOp,
     ConditionRule,
@@ -57,6 +58,7 @@ import type {
     EmailRecipient,
     JsonMapperNode,
     LlmNode,
+    PatientRegistrationNode,
     RetellSmsConversationNode,
     SendEmailNode,
     SendSmsNode,
@@ -441,6 +443,12 @@ function NodeForm({
                 )}
                 {node.type === "update_gotracker_appointment" && (
                     <UpdateGoTrackerAppointmentFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
+                )}
+                {node.type === "booking_link" && (
+                    <BookingLinkFields node={node} onChange={onNodeChange} readOnly={readOnly} />
+                )}
+                {node.type === "patient_registration" && (
+                    <PatientRegistrationFields node={node} onChange={onNodeChange} readOnly={readOnly} />
                 )}
                 {node.type === "json_mapper" && (
                     <JsonMapperFields node={node} onChange={onNodeChange} readOnly={readOnly} />
@@ -1629,6 +1637,130 @@ function UpdatePatientStatusFields({
                     onChange={(e) => onChange({ ...node, note_template: e.target.value })}
                 />
             </Field>
+        </>
+    )
+}
+
+const LINK_ACTIONS = ["book", "confirm", "reschedule", "cancel"] as const
+
+function BookingLinkFields({
+    node,
+    onChange,
+    readOnly,
+}: {
+    node: BookingLinkNode
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    const update = (patch: Partial<BookingLinkNode>) => onChange({ ...node, ...patch })
+    const toggleAction = (action: (typeof LINK_ACTIONS)[number]) => {
+        const next = node.actions.includes(action)
+            ? node.actions.filter((a) => a !== action)
+            : [...node.actions, action]
+        // At least one, or the step issues a link that can do nothing.
+        if (next.length > 0) update({ actions: next })
+    }
+    return (
+        <>
+            <Field label="What the link can do">
+                <div className="flex flex-wrap gap-2">
+                    {LINK_ACTIONS.map((action) => (
+                        <Button
+                            key={action}
+                            type="button"
+                            size="sm"
+                            variant={node.actions.includes(action) ? "default" : "outline"}
+                            disabled={readOnly}
+                            aria-pressed={node.actions.includes(action)}
+                            onClick={() => toggleAction(action)}
+                        >
+                            {action}
+                        </Button>
+                    ))}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                    A token for anything not selected is refused, even if the wording
+                    somehow produced one.
+                </p>
+            </Field>
+
+            <Field label="Appointment types the patient may choose">
+                <Input
+                    value={node.appointment_type_ids.join(", ")}
+                    disabled={readOnly}
+                    placeholder="Leave empty for any type"
+                    onChange={(e) =>
+                        update({
+                            appointment_type_ids: e.target.value
+                                .split(",")
+                                .map((v) => v.trim())
+                                .filter(Boolean),
+                        })
+                    }
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                    Comma-separated PMS appointment type ids. This is the link's version
+                    of the restriction the voice agent follows for new patients — unlike
+                    the agent's, it is enforced by the server, so a booking naming a type
+                    outside the list is refused.
+                </p>
+            </Field>
+
+            <Field label="How far ahead to offer">
+                <Input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={node.window_days}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        update({ window_days: Number(e.target.value) || 7 })
+                    }
+                />
+            </Field>
+
+            <Field label="Provider (optional)">
+                <Input
+                    value={node.provider_id ?? ""}
+                    disabled={readOnly}
+                    placeholder="Any provider"
+                    onChange={(e) => update({ provider_id: e.target.value || null })}
+                />
+            </Field>
+        </>
+    )
+}
+
+function PatientRegistrationFields({
+    node,
+    onChange,
+    readOnly,
+}: {
+    node: PatientRegistrationNode
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    const update = (patch: Partial<PatientRegistrationNode>) =>
+        onChange({ ...node, ...patch })
+    return (
+        <>
+            <Field label="Provider new patients are filed under">
+                <Input
+                    value={node.provider_id}
+                    disabled={readOnly}
+                    placeholder="PMS provider id"
+                    onChange={(e) => update({ provider_id: e.target.value })}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                    Required. The practice software will not create a patient without
+                    one, and it is a clinic decision rather than something the patient
+                    can be asked for.
+                </p>
+            </Field>
+            <p className="text-xs text-muted-foreground">
+                The patient is asked only for date of birth and gender — everything else
+                comes from the contact this campaign enrolled.
+            </p>
         </>
     )
 }

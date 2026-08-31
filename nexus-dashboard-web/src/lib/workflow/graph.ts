@@ -148,6 +148,8 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
         case "update_patient_status":
         case "update_appointment":
         case "update_gotracker_appointment":
+        case "booking_link":
+        case "patient_registration":
         case "json_mapper":
         case "llm":
             return [{ targetId: node.next_node_id }]
@@ -198,6 +200,8 @@ function singleNext(node: WorkflowNode): string | undefined {
         node.type === "update_patient_status" ||
         node.type === "update_appointment" ||
         node.type === "update_gotracker_appointment" ||
+        node.type === "booking_link" ||
+        node.type === "patient_registration" ||
         node.type === "json_mapper" ||
         node.type === "llm"
     ) {
@@ -542,6 +546,28 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 patient_id: null,
                 reason: null,
             }
+        case "booking_link":
+            return {
+                type,
+                id,
+                next_node_id: "",
+                // Booking only, and unrestricted, so dropping the step in
+                // changes nothing until the author narrows it deliberately.
+                actions: ["book"],
+                appointment_type_ids: [],
+                window_days: 7,
+                provider_id: null,
+            }
+        case "patient_registration":
+            return {
+                type,
+                id,
+                next_node_id: "",
+                // Empty is invalid on the server: the author must choose which
+                // provider a self-registered patient is filed under.
+                provider_id: "",
+                on_abandoned_node_id: null,
+            }
         case "json_mapper":
             return {
                 type,
@@ -718,6 +744,8 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
                 case "update_patient_status":
                 case "update_appointment":
                 case "update_gotracker_appointment":
+                case "booking_link":
+                case "patient_registration":
                 case "json_mapper":
                 case "llm":
                     return { ...n, next_node_id: repoint(n.next_node_id) }
@@ -770,6 +798,8 @@ export function connectNodes(
         case "update_patient_status":
         case "update_appointment":
         case "update_gotracker_appointment":
+        case "booking_link":
+        case "patient_registration":
         case "json_mapper":
         case "llm":
             return updateNode(def, sourceId, { ...node, next_node_id: targetId })

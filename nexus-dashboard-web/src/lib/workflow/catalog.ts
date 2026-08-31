@@ -4,6 +4,7 @@
  * (this module imports React icon components; the logic modules do not).
  */
 import {
+    CalendarCheck,
     CalendarClock,
     ClipboardCheck,
     Clock,
@@ -19,6 +20,7 @@ import {
     PhoneIncoming,
     ClipboardList,
     Stethoscope,
+    UserPlus,
     Braces,
     Sparkles,
     type LucideIcon,
@@ -76,6 +78,20 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         icon: ClipboardList,
         group: "action",
         accent: "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
+    },
+    booking_link: {
+        label: "Booking Link",
+        description: "Set the rules the patient's booking link follows.",
+        icon: CalendarCheck,
+        group: "action",
+        accent: "bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300",
+    },
+    patient_registration: {
+        label: "Register Patient",
+        description: "Turn a lead into a patient record before booking.",
+        icon: UserPlus,
+        group: "action",
+        accent: "bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300",
     },
     update_gotracker_appointment: {
         label: "Update GoTracker Appointment",
@@ -180,7 +196,7 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
 /** Palette groups, in display order. */
 export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; types: NodeType[] }> = [
     { title: "Channels", group: "channel", types: ["send_sms", "retell_sms_conversation", "send_voice", "send_email"] },
-    { title: "Actions", group: "action", types: ["drip", "llm", "update_appointment", "update_gotracker_appointment"] },
+    { title: "Actions", group: "action", types: ["drip", "llm", "booking_link", "patient_registration", "update_appointment", "update_gotracker_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },
 ]

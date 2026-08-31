@@ -123,6 +123,8 @@ export type NodeType =
     | "update_patient_status"
     | "update_appointment"
     | "update_gotracker_appointment"
+    | "booking_link"
+    | "patient_registration"
     | "json_mapper"
     | "llm"
     | "condition"
@@ -249,6 +251,36 @@ export interface UpdateAppointmentNode {
     operatory_id?: string | null
     reason?: string | null
 }
+/**
+ * Configures the patient action link this run offers. Sends nothing — the link
+ * still travels inside a later message that renders {{booking_link}}. What this
+ * carries is the rules the link obeys, which the public booking API enforces
+ * server-side rather than trusting the page.
+ */
+export interface BookingLinkNode {
+    type: "booking_link"
+    id: string
+    next_node_id: string
+    actions: ("book" | "confirm" | "reschedule" | "cancel")[]
+    /** Empty means every type the practice software offers. */
+    appointment_type_ids: string[]
+    window_days: number
+    provider_id?: string | null
+}
+
+/**
+ * Offers a lead the short form that turns them into a patient record, so the
+ * booking step after it has something to book against.
+ */
+export interface PatientRegistrationNode {
+    type: "patient_registration"
+    id: string
+    next_node_id: string
+    /** Which provider a self-registered patient is filed under. */
+    provider_id: string
+    on_abandoned_node_id?: string | null
+}
+
 export interface UpdateGoTrackerAppointmentNode {
     type: "update_gotracker_appointment"
     id: string
@@ -321,6 +353,8 @@ export type WorkflowNode =
     | UpdatePatientStatusNode
     | UpdateAppointmentNode
     | UpdateGoTrackerAppointmentNode
+    | BookingLinkNode
+    | PatientRegistrationNode
     | JsonMapperNode
     | LlmNode
     | ConditionNode

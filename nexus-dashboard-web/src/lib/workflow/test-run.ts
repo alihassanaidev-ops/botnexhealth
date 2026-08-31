@@ -166,6 +166,31 @@ function describe(
                 },
                 next: node.next_node_id,
             }
+        case "booking_link":
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "booking_link",
+                    summary: "Configure the booking link",
+                    detail:
+                        node.appointment_type_ids.length > 0
+                            ? `${node.actions.join(", ")}, limited to ${node.appointment_type_ids.length} appointment type(s), ${node.window_days} days ahead`
+                            : `${node.actions.join(", ")}, any appointment type, ${node.window_days} days ahead`,
+                },
+                next: node.next_node_id,
+            }
+        case "patient_registration":
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "patient_registration",
+                    summary: "Offer patient registration",
+                    detail: node.provider_id
+                        ? "Creates a patient record before booking"
+                        : "No provider selected — publish will refuse this",
+                },
+                next: node.next_node_id,
+            }
         case "json_mapper":
             return {
                 step: {

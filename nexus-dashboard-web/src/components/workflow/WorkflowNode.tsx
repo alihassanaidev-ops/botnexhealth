@@ -55,6 +55,17 @@ function stepSummary(node: WfNode): string {
             return `PMS: ${node.operation}`
         case "update_gotracker_appointment":
             return node.status_id ? `GoTracker StatusId: ${node.status_id}` : "GoTracker writeback"
+        case "booking_link": {
+            const scope =
+                node.appointment_type_ids.length > 0
+                    ? `${node.appointment_type_ids.length} type(s)`
+                    : "any type"
+            return `${node.actions.join(", ")} · ${scope} · ${node.window_days}d`
+        }
+        case "patient_registration":
+            return node.provider_id
+                ? "Registers new patients"
+                : "No provider selected"
         case "json_mapper":
             return `${node.mappings.length} mapping(s)`
         case "llm":
