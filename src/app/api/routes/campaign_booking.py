@@ -57,6 +57,43 @@ SEARCH_DAYS = 21
 #: Actions that may pick a slot. Confirming needs no slot.
 BOOKABLE_ACTIONS = ("book", "reschedule")
 
+# A three-week search on a 15-minute grid returns thousands of slots — the
+# sandbox returns over two thousand. Sending all of them is a quarter-megabyte
+# payload and a page of a thousand buttons, which is the abandonment this flow
+# is meant to avoid. Offer a choice, not a calendar dump.
+#: Days with availability to offer at once.
+MAX_DAYS_OFFERED = 4
+#: Times per day, spread across that day rather than the first few in a row.
+MAX_TIMES_PER_DAY = 8
+
+
+def _spread(slots: list, limit: int) -> list:
+    """Take up to ``limit`` slots spread evenly across the day.
+
+    Taking the first N would offer 6:45, 7:00, 7:15 … — all before breakfast,
+    and a patient who cannot do mornings sees nothing they can use. Sampling
+    across the range shows the shape of the day instead.
+    """
+    if len(slots) <= limit:
+        return slots
+    step = (len(slots) - 1) / (limit - 1)
+    return [slots[round(i * step)] for i in range(limit)]
+
+
+def _offerable(slots: list) -> list:
+    """Reduce a full availability search to something a person can scan."""
+    by_day: dict[str, list] = {}
+    for slot in slots:
+        # The date portion of the ISO string is the clinic's local day, which is
+        # the day the patient will read on the page.
+        by_day.setdefault(str(slot.start)[:10], []).append(slot)
+
+    offered: list = []
+    for day in sorted(by_day)[:MAX_DAYS_OFFERED]:
+        ordered = sorted(by_day[day], key=lambda s: s.start)
+        offered.extend(_spread(ordered, MAX_TIMES_PER_DAY))
+    return offered
+
 
 class SlotOption(BaseModel):
     """One offerable slot. Carries nothing about the patient."""
@@ -185,7 +222,7 @@ async def list_slots(
 
         return _json(
             SlotsResponse(
-                slots=_as_options(slots),
+                slots=_as_options(_offerable(slots)),
                 clinic_name=getattr(location, "name", "") or "",
                 timezone=getattr(location, "timezone", None),
             ).model_dump()
@@ -247,7 +284,9 @@ async def book_slot(
             # Carry the current list back with the refusal. The page can re-offer
             # immediately instead of making the patient wait through a second
             # request, and load time is what loses them.
-            return _json({"error": "slot_taken", "slots": _as_options(slots)}, 409)
+            return _json(
+                {"error": "slot_taken", "slots": _as_options(_offerable(slots))}, 409
+            )
 
         try:
             adapter = await get_adapter_for_institution_location(institution, location)
@@ -287,7 +326,8 @@ async def book_slot(
 
             if taken:
                 return _json(
-                    {"error": "slot_taken", "slots": _as_options(fresh)}, 409
+                    {"error": "slot_taken", "slots": _as_options(_offerable(fresh))},
+                    409,
                 )
             return _json({"error": "could_not_book"}, 502)
 

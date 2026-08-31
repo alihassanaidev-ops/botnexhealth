@@ -284,3 +284,58 @@ class TestLosingTheSlotToSomeoneElse:
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 502
+
+
+class TestWhatIsActuallyOffered:
+    """A three-week search on a 15-minute grid returns thousands of slots.
+
+    The sandbox returns over two thousand — a quarter-megabyte payload and a
+    page of a thousand buttons, on a phone, which is the abandonment this whole
+    flow exists to avoid.
+    """
+
+    def test_a_huge_availability_is_reduced_to_something_scannable(self, client):
+        from src.app.api.routes.campaign_booking import (
+            MAX_DAYS_OFFERED,
+            MAX_TIMES_PER_DAY,
+        )
+
+        many = [
+            _slot(start=f"2026-09-{day:02d}T{hour:02d}:{minute:02d}:00Z")
+            for day in range(1, 15)
+            for hour in range(7, 18)
+            for minute in (0, 15, 30, 45)
+        ]
+        token = make_action_token("run-1", "book")
+        r = _call(
+            client, "GET", f"/api/campaigns/link/book/slots?token={token}",
+            _ctx(slots=many),
+        )
+        offered = r.json()["slots"]
+        assert len(offered) <= MAX_DAYS_OFFERED * MAX_TIMES_PER_DAY
+        assert len(offered) < len(many) / 10
+
+    def test_times_are_spread_across_the_day_not_bunched_at_the_start(self):
+        """Otherwise every option is before breakfast and a patient who cannot
+        do mornings sees nothing they can use."""
+        from src.app.api.routes.campaign_booking import _spread
+
+        day = [_slot(start=f"2026-09-01T{h:02d}:00:00Z") for h in range(8, 18)]
+        picked = _spread(day, 4)
+        assert len(picked) == 4
+        assert picked[0].start.endswith("08:00:00Z")
+        assert picked[-1].start.endswith("17:00:00Z"), "must reach the end of the day"
+
+    def test_booking_still_accepts_any_genuinely_free_slot(self, client):
+        """Trimming is presentation. A slot we did not render is still bookable."""
+        many = [
+            _slot(start=f"2026-09-01T{h:02d}:00:00Z") for h in range(7, 18)
+        ]
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(slots=many)
+        r = _call(
+            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-01T13:00:00Z"},
+        )
+        assert r.status_code == 200
+        assert r.json()["status"] == "booked"
