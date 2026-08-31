@@ -281,6 +281,13 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/institution/notification-recipients/{recipient_id}",
     ),
     INSTITUTION_USER: (
+        # Compliance settings: quiet-hours exceptions (Item 20). Same boundary
+        # as the campaign routes they govern — an institution user who can
+        # publish a campaign can set the window it sends in.
+        "GET /api/compliance/quiet-hours/exceptions",
+        "POST /api/compliance/quiet-hours/exceptions",
+        "PATCH /api/compliance/quiet-hours/exceptions/{exception_id}",
+        "DELETE /api/compliance/quiet-hours/exceptions/{exception_id}",
         "GET /api/automation/workflows/node-capabilities",
         "POST /api/automation/workflows",
         "POST /api/automation/workflows/draft",

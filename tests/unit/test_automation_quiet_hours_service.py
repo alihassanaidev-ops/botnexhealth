@@ -38,6 +38,10 @@ def _svc(location, hours_by_day: dict[int, object]) -> QuietHoursService:
         return hours_by_day.get(day_of_week)
 
     svc._hours_for_day = AsyncMock(side_effect=_hours_for_day)  # type: ignore[method-assign]
+    # These cases are about the weekly hours alone. Item 20 added an exception
+    # lookup ahead of them; stubbing it to "none in force" keeps each test on
+    # its own subject. Exception behaviour has its own suite.
+    svc._matching_exception = AsyncMock(return_value=None)  # type: ignore[method-assign]
     return svc
 
 

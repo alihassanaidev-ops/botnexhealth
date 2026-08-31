@@ -42,6 +42,16 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **2** · A conflict outcome for writes | GoTracker booking safety | `4adc67c` | Third terminal status — never re-queued however many attempts remain. Own webhook action. Surfaced per-location on `/api/admin/sync_status` as `conflicts` / `failed` / `oldest_unwritten`. An admin can still re-queue deliberately |
 | **4** · Report pending honestly | GoTracker booking safety | `0d096f2` + `af01334` | Platform half landed first, as the doc requires. Booking response and appointment reads carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`; PMS-origin rows read as `written`. Run-history visibility still rides with Item 11 |
 | **5** · Recover in-flight writes after Connector restart | GoTracker booking safety | `305ed2d` | Item 3's read-back applied to patient creation too. No local state, so **Decision I fell away instead of being answered** — the decision log's recommendation was to avoid a durable local record, and that is what shipped |
+| **8** · Mapping review before live bookings | GoTracker operations & health | `a9fda29` | Writes that reach a patient are refused until a named person has reviewed the mapping. Reads and agent sync are deliberately not gated — a half-onboarded clinic can still be looked at and talked to, it just cannot have appointments written into it |
+| **6** · Alert when a connection is unhealthy | GoTracker operations & health | `e178162` + `c1ed593` + `07afeb2` + `94d46e7` | Nine conditions evaluated every five minutes, collapsed into three CloudWatch alarms. Suppressed when the clinic is genuinely closed, so a practice with its lights off overnight does not page anyone |
+| **7** · Complete the connection health screen | GoTracker operations & health | `8665f7b` | Five missing fields plus a findings panel, all over data that was already being collected. The conflict count it needed arrived with Item 2 |
+| **10** · Operator runbooks for the GoTracker path | GoTracker operations & health | `724d982` | RB-1 to RB-5, each tied to an alarm from Item 6, plus a test that checks the runbooks against the source so they cannot quietly drift out of date |
+| **9** · Sign the messages the Connector sends | GoTracker operations & health | `00699ca` + `f88aa62` | HMAC over the request body, with a three-mode transition and enforcement **shipping off** — turning it on before the fleet has updated would drop every clinic still sending unsigned |
+| **17** · Stop calling a service that is failing | Reliability & throughput | `cf65b51c` | Redis-backed breaker per service per clinic; every transition decided in Lua so racing workers cannot disagree. Half-open admits one probe held by a `SET NX` token with its own TTL, so a worker dying mid-probe costs one cooldown rather than wedging the breaker shut. Refused work is held on a timer, reusing the quiet-hours path — no run fails because a supplier had an outage. Only the caller decides what counts as a failure: a 4xx is a bad request, not a sick service |
+| **18** · Limit how fast and how many messages and calls go out | Reliability & throughput | `30091b14` | A call slot is a **lease with an expiry**, not a counter — the doc's warning about a lost decrement is structurally impossible, since every acquire prunes what has lapsed. Slots are re-labelled to the provider's call id once placed, which is the only name the outcome handler has. Deliberately not released on the ambiguous timeout: the call may be live. Per-clinic ceiling (overridable on `Institution.outbound_call_limit`) plus per-provider send rates |
+| **20** · Quiet-hours exceptions | Reliability & throughput | *pending commit* | One table for date, patient and message-class exceptions; NULL means "applies regardless", most specific wins, weighted so a patient's own preference always outranks a clinic rule. An exception **replaces** the day's window rather than intersecting it, which is what lets a 7am reminder go out before the doors open. Save-time validation runs the real evaluator rather than re-deriving the rule, so the check cannot drift from what the engine does. Creates the compliance-settings endpoint Item 32's audit was reserved for |
+| **19** · Voicemail handling options | Reliability & throughput | *pending commit* | Two settings plus **two separate counters** — a counted-attempt allowance and a hard dial cap. The cap is what makes "voicemail does not consume an attempt" safe; without it that setting means unlimited. A claim later marked FAILED is neither a dial nor an attempt, so vendor 5xx errors cannot burn a patient's allowance without the phone ringing. Defaults preserve today's behaviour exactly |
+| **35** · Alert on campaign engine problems | Reliability & throughput | *pending commit* | Seven alarms on the existing channel, plus a `WorkflowUndeliverable` metric nothing published and a log filter on Item 17's cut-off line. Two thresholds are structural; five are sized for current volume with the derivation recorded, so they can be re-derived rather than re-guessed as the practice count grows. **`failed_steps` was cumulative and is now windowed to 24h** — counted for all time it only ever rises, so any threshold is crossed once and stays crossed |
 
 ---
 
@@ -98,19 +108,23 @@ is now fully unblocked, since the conflict count it was waiting on shipped with 
 
 ---
 
-# WS2 · GoTracker operations & health
+# WS2 · GoTracker operations & health — ✅ COMPLETE
 **5 items · ≈ 4.5 days · mostly Cloud Service / Ops UI**
 
-The GoTracker path is otherwise in good shape. This is the layer that lets an operator find out
-something is wrong before the clinic phones in.
+The GoTracker path was already in good shape; this is the layer that lets an operator find out
+something is wrong before the clinic phones in. It matters more since WS1 closed, because Item 2
+introduced a terminal `conflict` state that someone has to notice and act on.
 
-| # | Item | Size | Owner | Notes |
+Shipped as backend `20260831-94d46e7` on staging and production. Test counts at the close:
+**514 backend** (up from 386 when WS1 closed) and **157 agent**.
+
+| # | Item | Status | Commit | What shipped |
 |---|---|---|---|---|
-| **8** | Mapping review before a clinic can take live bookings | 2d | Ops UI + Cloud Service + **Platform checklist** | Must refuse by default. A location can currently take live bookings the moment credentials are saved |
-| **6** | Alert when a clinic's connection is unhealthy | 1d | Cloud Service + CDK | Six conditions. Data is already collected; nothing consumes it. Must not page overnight when a clinic is simply closed |
-| **9** | Sign the messages the Connector sends | 0.5d | Connector + Cloud Service | Auth exists, integrity does not. Needs a dual-accept transition window or clinics drop off |
-| **10** | Operator runbooks for the GoTracker path | 0.5d | Docs | Five runbooks, each tied to an alarm from Item 6 |
-| **7** | Complete the connection health screen | 0.5d | Ops UI | Five missing fields over data that already exists. Cheapest item in the backlog |
+| **8** | Mapping review before a clinic can take live bookings | ✅ | `a9fda29` | Writes that reach a patient are refused until a named person has reviewed the mapping. Reads and agent sync are deliberately not gated — a half-onboarded clinic can still be looked at and talked to, it just cannot have appointments written into it |
+| **6** | Alert when a clinic's connection is unhealthy | ✅ | `e178162` + `c1ed593` + `07afeb2` + `94d46e7` | Nine conditions every five minutes, collapsed into three CloudWatch alarms. Suppressed when the clinic is genuinely closed, so a practice with its lights off overnight does not page anyone |
+| **7** | Complete the connection health screen | ✅ | `8665f7b` | Five missing fields plus a findings panel, all over data that was already being collected. The conflict count it needed arrived with Item 2 |
+| **10** | Operator runbooks for the GoTracker path | ✅ | `724d982` | RB-1 to RB-5, each tied to an alarm from Item 6, plus a test that checks them against the source so they cannot quietly drift out of date |
+| **9** | Sign the messages the Connector sends | ✅ | `00699ca` + `f88aa62` | HMAC over the request body, three-mode transition, enforcement ships off |
 
 ---
 
@@ -167,18 +181,24 @@ explicit per-workflow declaration.**
 
 ---
 
-# WS6 · Reliability & throughput
+# WS6 · Reliability & throughput — ✅ COMPLETE
 **5 items · ≈ 5 days · Platform + shared state · TIER 3**
 
-Nothing here is user-visible. All of it decides how the system behaves on a bad day.
+Nothing here is user-visible. All of it decides how the system behaves on a bad day — and
+until this landed the engine had no self-protection at all: it could not tell that a dependency
+was sick, could not pace itself, and could not tell anyone it was in trouble.
+
+This was the only workstream in the backlog with no product decision, no cross-codebase
+dependency and no missing environment. It was taken as a block for that reason, not because it
+outranks Tier 2 — the contracted work is still more valuable, and still more blocked.
 
 | # | Item | Size | Notes |
 |---|---|---|---|
-| **17** | Stop calling a service that is failing | 1.5d | Circuit breaker per service per clinic. State must be shared across app instances. If the shared store is down, fail open |
-| **18** | Limit how fast and how many messages and calls go out | 1.5d | Per-clinic concurrent-call ceiling + per-provider send rates. **Decrement on timeout as well as on normal completion**, or a clinic silently stops being able to call |
-| **20** | Quiet-hours exceptions | 1d | Date, patient and message-class exceptions. Reject an exception that would leave no permitted window *at save time* |
-| **35** | Alert on campaign engine problems | 0.5d | Figures are published every minute; no alarm consumes any of them. Thresholds from staging observation, not guesses |
-| **19** | Voicemail handling options | 0.5d | Two settings per campaign. Cap total dials separately, or a voicemail-only number gets dialled forever |
+| **17** ✅ | Stop calling a service that is failing — **done, `cf65b51c`** | 1.5d | Per service per clinic, state in Redis, every transition decided in Lua. Fails open when the store is unreachable, reporting `UNAVAILABLE` rather than `CLOSED` so "healthy" and "unknown" stay apart. Held work is deferred on a timer, never failed |
+| **18** ✅ | Limit how fast and how many messages and calls go out — **done, `30091b14`** | 1.5d | Doc warned that a missed decrement makes the count only ever rise until the clinic silently cannot call. Solved by construction: a slot is a lease that expires, so a lost release corrects itself one lease later rather than never. Concurrency is per institution, send rate per location — credentials are per location, capacity is not |
+| **20** ✅ | Quiet-hours exceptions — **done, pending commit** | 1d | Date, patient and message-class exceptions, most specific winning. Rejected at save time by running the real evaluator, with the reason surfaced verbatim to the operator. Both load-bearing behaviours asserted, not assumed: held-until-morning, and no-window-means-blocked |
+| **19** ✅ | Voicemail handling options — **done, pending commit** | 0.5d | Both settings, in the campaign builder and in the calling step. The separate dial cap is the part that matters: without it, "voicemail does not consume an attempt" means a voicemail-only number is dialled for ever |
+| **35** ✅ | Alert on campaign engine problems — **done, pending commit** | 0.5d | Seven alarms on the existing email channel, over the figures that were already published and read by nobody. Also added the `WorkflowUndeliverable` metric, which did not exist, and windowed `failed_steps`, which was counted cumulatively so any threshold would be crossed once and stay crossed |
 
 ---
 

@@ -574,6 +574,39 @@ class SendVoiceNode(BaseModel):
     # is fire-and-forget (advances immediately). Plan 03 outcome-feedback loop.
     wait_for_outcome: bool = False
 
+    # --- Voicemail handling (Item 19) ---
+    # Whether the agent leaves a message when it reaches an answering machine.
+    # Off by default: leaving a message is a deliberate choice, and a campaign
+    # that starts leaving them without being asked to is a surprise nobody wants.
+    leave_voicemail: bool = False
+    # Whether reaching voicemail uses up one of the patient-contact attempts
+    # below. Clinics differ: some count it as contact made, others want the
+    # patient to still get their full quota of live attempts.
+    voicemail_consumes_attempt: bool = True
+    # How many *counted* attempts this node may make to reach the patient.
+    # Distinct from ``max_attempts``, which bounds Celery retries after a
+    # transient vendor error and has nothing to do with whether a human answered.
+    voice_attempt_allowance: int = Field(default=1, ge=1, le=10)
+    # Hard ceiling on dials regardless of outcome. This is what stops a number
+    # that is *always* voicemail being redialled for ever once voicemail no
+    # longer consumes an attempt — without it, "does not consume an attempt"
+    # means "unlimited".
+    max_dials: int = Field(default=5, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def dial_cap_must_exceed_the_allowance(self) -> "SendVoiceNode":
+        """A cap below the allowance would silently shorten the ladder.
+
+        Configuring three attempts and a cap of two does not mean three
+        attempts; it means two, decided somewhere the author was not looking.
+        """
+        if self.max_dials < self.voice_attempt_allowance:
+            raise ValueError(
+                "max_dials must be at least voice_attempt_allowance, otherwise "
+                "the dial cap silently shortens the attempt ladder"
+            )
+        return self
+
     @field_validator("phone_country_region", mode="before")
     @classmethod
     def normalize_phone_country_region(cls, value: str | None) -> str | None:

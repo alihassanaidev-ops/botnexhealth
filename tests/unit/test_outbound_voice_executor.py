@@ -841,3 +841,101 @@ def test_an_untuned_clinic_falls_back_to_the_platform_default():
         asyncio.run(executor.execute(_make_run(), _make_node(), {}))
 
     assert limits.acquired_with_ceiling == [None]
+
+
+# ---------------------------------------------------------------------------
+# Voicemail handling (Item 19)
+# ---------------------------------------------------------------------------
+
+
+def _count_patch(dials: int, counted: int):
+    """Patch the dial counter, which is the only thing these settings read."""
+    return patch(
+        "src.app.services.automation.voice_node_executor.count_dials_for_node",
+        new=AsyncMock(return_value=(dials, counted)),
+    )
+
+
+def test_leave_voicemail_off_tells_the_agent_not_to():
+    executor, _, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert call_mock.call_args.kwargs["dynamic_variables"]["leave_voicemail"] == "false"
+
+
+def test_leave_voicemail_on_tells_the_agent_to():
+    executor, _, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    node = _make_node()
+    node.leave_voicemail = True
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), node, {}))
+
+    assert call_mock.call_args.kwargs["dynamic_variables"]["leave_voicemail"] == "true"
+
+
+def test_the_call_is_placed_while_attempts_remain():
+    executor, _, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    node = _make_node()
+    node.voice_attempt_allowance = 3
+    node.max_dials = 5
+    with _count_patch(dials=1, counted=1), _patch_client(
+        result=RetellCallResult(call_id="call_xyz")
+    ) as call_mock:
+        asyncio.run(executor.execute(_make_run(), node, {}))
+
+    call_mock.assert_called_once()
+
+
+def test_the_allowance_stops_further_calls():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location()
+    )
+    node = _make_node()
+    node.voice_attempt_allowance = 2
+    node.max_dials = 5
+    with _count_patch(dials=2, counted=2), _patch_client(
+        result=RetellCallResult(call_id="call_xyz")
+    ) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), node, {}))
+
+    call_mock.assert_not_called()
+    assert result == "node-2"
+    assert runtime.complete_step.call_args.kwargs["result_code"] == "attempts_exhausted"
+
+
+def test_the_dial_cap_stops_a_number_that_is_always_voicemail():
+    """The guard that makes "voicemail does not consume an attempt" safe.
+
+    Voicemail has consumed no attempts, so the allowance would let this dial
+    for ever. The separate cap is what ends it.
+    """
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location()
+    )
+    node = _make_node()
+    node.voicemail_consumes_attempt = False
+    node.voice_attempt_allowance = 3
+    node.max_dials = 5
+    with _count_patch(dials=5, counted=0), _patch_client(
+        result=RetellCallResult(call_id="call_xyz")
+    ) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), node, {}))
+
+    call_mock.assert_not_called()
+    assert result == "node-2"
+    assert runtime.complete_step.call_args.kwargs["result_code"] == "dial_cap_reached"
+
+
+def test_reaching_the_cap_does_not_fail_the_run():
+    """Running out of attempts is a normal outcome, not an error."""
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location()
+    )
+    node = _make_node()
+    with _count_patch(dials=99, counted=99), _patch_client(
+        result=RetellCallResult(call_id="call_xyz")
+    ):
+        asyncio.run(executor.execute(_make_run(), node, {}))
+
+    runtime.fail_run.assert_not_called()

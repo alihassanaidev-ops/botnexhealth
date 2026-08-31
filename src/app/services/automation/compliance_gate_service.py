@@ -99,8 +99,18 @@ class ComplianceGateService:
         # 3. Quiet hours — defer to the next permitted send window (never drop)
         if run.location_id:
             quiet = QuietHoursService(self.session)
-            if await quiet.is_quiet_hours(run.location_id, now=now):
-                retry_at = await quiet.next_permitted_window(run.location_id, now=now)
+            # Patient and content class are passed so a quiet-hours exception
+            # (Item 20) can narrow or widen this send specifically: a patient
+            # who asked for evenings only, or a reminder for a 7am appointment
+            # that must be allowed out before the doors open.
+            audience = {
+                "contact_id": str(run.contact_id) if run.contact_id else None,
+                "content_class": content_class,
+            }
+            if await quiet.is_quiet_hours(run.location_id, now=now, **audience):
+                retry_at = await quiet.next_permitted_window(
+                    run.location_id, now=now, **audience
+                )
                 if retry_at is None:
                     logger.info(
                         "compliance gate: block no_permitted_window location=%s run=%s",

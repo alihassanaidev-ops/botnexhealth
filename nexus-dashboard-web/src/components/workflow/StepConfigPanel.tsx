@@ -1271,6 +1271,85 @@ function VoiceFields({
                     </Button>
                 </div>
             )}
+            <div className="space-y-3 rounded-md border border-border p-3">
+                <div className="space-y-1">
+                    <Label className="text-sm">Voicemail</Label>
+                    <p className="text-xs text-muted-foreground">
+                        Reaching an answering machine is not the same as nobody answering.
+                    </p>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor={`leave-voicemail-${node.id}`} className="text-sm font-normal">
+                        Leave a message
+                    </Label>
+                    <Switch
+                        id={`leave-voicemail-${node.id}`}
+                        checked={node.leave_voicemail ?? false}
+                        disabled={readOnly}
+                        onCheckedChange={(checked) => onChange({ ...node, leave_voicemail: checked })}
+                    />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                    <Label
+                        htmlFor={`voicemail-consumes-${node.id}`}
+                        className="text-sm font-normal"
+                    >
+                        Voicemail uses up an attempt
+                    </Label>
+                    <Switch
+                        id={`voicemail-consumes-${node.id}`}
+                        checked={node.voicemail_consumes_attempt ?? true}
+                        disabled={readOnly}
+                        onCheckedChange={(checked) =>
+                            onChange({ ...node, voicemail_consumes_attempt: checked })
+                        }
+                    />
+                </div>
+                <Field
+                    label="Attempts to reach the patient"
+                    hint="How many counted attempts this step makes. Separate from the retry limit below, which only covers vendor errors."
+                >
+                    <Input
+                        aria-label="Attempts to reach the patient"
+                        type="number"
+                        min={1}
+                        max={10}
+                        step={1}
+                        value={node.voice_attempt_allowance ?? 1}
+                        disabled={readOnly}
+                        onChange={(event) =>
+                            onChange({
+                                ...node,
+                                voice_attempt_allowance: toInt(event.target.value, 1),
+                            })
+                        }
+                    />
+                </Field>
+                <Field
+                    label="Maximum dials"
+                    hint="A hard stop whatever the outcome. With voicemail not using up an attempt, this is what prevents a number that always goes to voicemail being dialled indefinitely. Must be at least the number of attempts."
+                >
+                    <Input
+                        aria-label="Maximum dials"
+                        type="number"
+                        min={1}
+                        max={20}
+                        step={1}
+                        value={node.max_dials ?? 5}
+                        disabled={readOnly}
+                        onChange={(event) =>
+                            onChange({ ...node, max_dials: toInt(event.target.value, 5) })
+                        }
+                    />
+                </Field>
+                {(node.max_dials ?? 5) < (node.voice_attempt_allowance ?? 1) && (
+                    <p className="text-xs text-destructive">
+                        Maximum dials is below the number of attempts, so the dial cap would
+                        cut the ladder short. Raise it to at least{" "}
+                        {node.voice_attempt_allowance ?? 1}.
+                    </p>
+                )}
+            </div>
             <AttemptsField value={node.max_attempts ?? 1} onChange={(v) => onChange({ ...node, max_attempts: v })} readOnly={readOnly} />
         </>
     )

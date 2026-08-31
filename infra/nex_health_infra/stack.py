@@ -385,6 +385,21 @@ class NexHealthPlatformStack(Stack):
             default_value=0,
         )
 
+        # Circuit-breaker cut-off (Item 17). The breaker logs one line per
+        # outage transition rather than one per rejected call, so this counts
+        # outages, not traffic — see services/circuit_breaker.py.
+        breaker_open_filter = logs.MetricFilter(
+            self,
+            "CircuitBreakerOpenedFilter",
+            log_group=api_log_group,
+            filter_pattern=logs.FilterPattern.literal('"circuit breaker OPENED"'),
+            metric_namespace=f"{config.app_name}/{config.environment_name}",
+            metric_name="CircuitBreakerOpened",
+            metric_value="1",
+            default_value=0,
+        )
+        self._breaker_open_filter = breaker_open_filter
+
         api_task_definition = ecs.FargateTaskDefinition(
             self,
             "ApiTaskDefinition",
@@ -1579,6 +1594,199 @@ class NexHealthPlatformStack(Stack):
             alarm_description="ALB 5xx > 10 in 5 minutes (sustained)",
         )
         alb_5xx.add_alarm_action(action)
+
+        # ── Campaign engine alarms (Item 35) ─────────────────────────────
+        #
+        # publish_workflow_metrics runs every minute and nothing consumed any of
+        # it. If overdue work climbs or failures spike, patients are not being
+        # contacted and nobody finds out until a clinic phones in.
+        #
+        # THRESHOLDS. Two are structural — they follow from what the metric
+        # means and would be the same at any volume. The rest are estimates
+        # sized for the current deployment: a handful of clinics and two live
+        # campaigns. Each states the reasoning it was derived from, so when
+        # volume grows the number can be re-derived rather than re-guessed.
+        #
+        # All are set deliberately loose. An alarm that fires on a busy-but-fine
+        # afternoon gets muted, and a muted channel takes the structural alarms
+        # down with it. Missing the first hour of a real incident costs less
+        # than losing the channel.
+        #
+        # Every alarm is scoped to business-relevant sustain periods rather than
+        # single datapoints, because campaign volume legitimately falls to zero
+        # overnight and a low-volume alarm would page every night for nothing.
+        engine_ns = f"{self.config.app_name}/{self.config.app_env}"
+
+        def engine_metric(name: str, *, minutes: int = 5) -> cloudwatch.Metric:
+            return cloudwatch.Metric(
+                namespace=engine_ns,
+                metric_name=name,
+                period=Duration.minutes(minutes),
+                statistic="Maximum",
+            )
+
+        def engine_alarm(
+            construct_id: str,
+            *,
+            metric: cloudwatch.Metric,
+            threshold: float,
+            evaluation_periods: int,
+            datapoints_to_alarm: int,
+            description: str,
+        ) -> None:
+            alarm = cloudwatch.Alarm(
+                self,
+                construct_id,
+                metric=metric,
+                threshold=threshold,
+                evaluation_periods=evaluation_periods,
+                datapoints_to_alarm=datapoints_to_alarm,
+                comparison_operator=(
+                    cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD
+                ),
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+                alarm_description=description,
+            )
+            alarm.add_alarm_action(action)
+
+        # 5. Stuck work. STRUCTURAL, not a guess: a timer whose claim has
+        #    expired is by definition a fault — a worker took it and never came
+        #    back. Any sustained non-zero value is real. Fifteen minutes of it
+        #    rules out the moment a deploy rolls workers.
+        engine_alarm(
+            "WorkflowStaleTimersAlarm",
+            metric=engine_metric("WorkflowStaleTimers"),
+            threshold=0,
+            evaluation_periods=3,
+            datapoints_to_alarm=3,
+            description=(
+                "Campaign timers claimed by a worker that never released them, "
+                "sustained 15 minutes. Work is stuck: a worker died holding "
+                "claims, or claim expiry is not being honoured."
+            ),
+        )
+
+        # 6. Overdue work. Structural in kind — a timer past its due time is
+        #    late by definition — but the tolerance is a judgement. A healthy
+        #    engine clears due timers within a publish cycle or two, so a small
+        #    backlog is ordinary jitter. 50 sustained for a quarter of an hour
+        #    is not jitter at this volume: it means the workers have stopped
+        #    keeping up rather than briefly fallen behind.
+        engine_alarm(
+            "WorkflowDueTimerBacklogAlarm",
+            metric=engine_metric("WorkflowDueTimerBacklog"),
+            threshold=50,
+            evaluation_periods=3,
+            datapoints_to_alarm=3,
+            description=(
+                "More than 50 campaign timers overdue for 15 minutes. Patients "
+                "are not being contacted on schedule. Sized for a handful of "
+                "clinics; raise it as campaign volume grows."
+            ),
+        )
+
+        # 7. Failed runs, over a rolling 24 hours. A campaign legitimately
+        #    fails runs — unreachable patients, disconnected numbers — so this
+        #    alarms on a spike above that floor, not on failure as such. Item 14
+        #    also raised the baseline deliberately: sends that used to advance
+        #    silently past a provider rejection now fail the run, which is the
+        #    point. 50 a day sits above ordinary churn at this volume while
+        #    still catching a campaign misfiring for everyone.
+        engine_alarm(
+            "WorkflowFailedRunsAlarm",
+            metric=engine_metric("WorkflowFailedRuns"),
+            threshold=50,
+            evaluation_periods=2,
+            datapoints_to_alarm=2,
+            description=(
+                "More than 50 campaign runs failed in the last 24 hours. Above "
+                "the expected floor of unreachable patients - something is "
+                "failing for everyone, not for individuals."
+            ),
+        )
+
+        # 8. Failed steps, same rolling 24 hours. A run holds many steps, so
+        #    the floor is higher than for runs. This metric was cumulative until
+        #    Item 35 windowed it: counted for all time it only ever rises, so
+        #    any threshold is crossed once and then stays crossed, and an alarm
+        #    that can never return to OK reports nothing after its first day.
+        engine_alarm(
+            "WorkflowFailedStepsAlarm",
+            metric=engine_metric("WorkflowFailedSteps"),
+            threshold=100,
+            evaluation_periods=2,
+            datapoints_to_alarm=2,
+            description=(
+                "More than 100 campaign steps failed in the last 24 hours. A run "
+                "holds several steps, so this sits above the run alarm; both "
+                "firing together points at a provider rather than a campaign."
+            ),
+        )
+
+        # 9. Undeliverable items. An event nobody has replayed or discarded is
+        #    work the engine gave up on. A healthy system trends toward zero
+        #    because someone reviews them, but a few permanently-bad recipients
+        #    are ordinary, so this alarms on accumulation rather than existence:
+        #    ten unreviewed means nobody is reviewing.
+        engine_alarm(
+            "WorkflowUndeliverableAlarm",
+            metric=engine_metric("WorkflowUndeliverable"),
+            threshold=10,
+            evaluation_periods=3,
+            datapoints_to_alarm=3,
+            description=(
+                "More than 10 undeliverable events open and unreviewed for 15 "
+                "minutes. Work the engine gave up on that nobody is triaging."
+            ),
+        )
+
+        # 10. Queue depth. Depth alone says little — a deep queue that drains
+        #     is healthy, a shallow one that never moves is not — which is why
+        #     this alarms on depth *sustained*, not on depth. Fifteen minutes
+        #     above 500 means the queue is not draining, whatever its size.
+        engine_alarm(
+            "CeleryQueueDepthAlarm",
+            metric=cloudwatch.Metric(
+                namespace=engine_ns,
+                metric_name="CeleryQueueDepth",
+                period=Duration.minutes(5),
+                statistic="Maximum",
+            ),
+            threshold=500,
+            evaluation_periods=3,
+            datapoints_to_alarm=3,
+            description=(
+                "Celery queue above 500 for 15 minutes and not draining - the "
+                "workers are not keeping up with what campaigns are producing."
+            ),
+        )
+
+        # 11. Service cut-off (Item 17). STRUCTURAL: the breaker logs once per
+        #     outage, not once per rejected call, so any occurrence is a real
+        #     supplier outage for a real clinic and is worth knowing about
+        #     immediately. Held work recovers on its own, so this is
+        #     informational rather than urgent - but silence here while a
+        #     clinic's sends pile up is exactly what Item 17 set out to end.
+        breaker_alarm = cloudwatch.Alarm(
+            self,
+            "CircuitBreakerOpenedAlarm",
+            metric=self._breaker_open_filter.metric(
+                statistic="Sum", period=Duration.minutes(5)
+            ),
+            threshold=1,
+            evaluation_periods=1,
+            datapoints_to_alarm=1,
+            comparison_operator=(
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD
+            ),
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarm_description=(
+                "A service circuit breaker opened: an outside provider is "
+                "failing for a clinic and its work is being held. Recovery is "
+                "automatic; investigate if it does not close."
+            ),
+        )
+        breaker_alarm.add_alarm_action(action)
 
         CfnOutput(self, "AlarmTopicArn", value=topic.topic_arn)
 

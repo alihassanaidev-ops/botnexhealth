@@ -45,6 +45,7 @@ from src.app.services.outbound_limits import (
     OutboundLimiter,
 )
 from src.app.services.automation.voice_attempt_recorder import (
+    count_dials_for_node,
     claim_voice_attempt,
     mark_attempt_failed,
     mark_attempt_placed,
@@ -374,6 +375,41 @@ class VoiceNodeExecutor:
             )
             return node.next_node_id
 
+        # --- Attempt and dial ceilings (Item 19) ---
+        # Before the claim, so giving up here leaves nothing to unwind.
+        dials, counted = await count_dials_for_node(
+            self.session,
+            workflow_run_id=str(run.id),
+            step_id=node.id,
+            voicemail_consumes_attempt=node.voicemail_consumes_attempt,
+        )
+        if dials >= node.max_dials:
+            # The guard that makes "voicemail does not consume an attempt" safe:
+            # a number that is always voicemail stops here rather than being
+            # redialled for ever.
+            logger.info(
+                "send_voice dial cap reached: institution=%s run=%s node=%s "
+                "dials=%s cap=%s",
+                run.institution_id, run.id, node.id, dials, node.max_dials,
+            )
+            await self.runtime.complete_step(
+                step, result_code="dial_cap_reached", result_metadata=voice_metadata
+            )
+            return node.next_node_id
+        if counted >= node.voice_attempt_allowance:
+            logger.info(
+                "send_voice attempt allowance used: institution=%s run=%s node=%s "
+                "counted=%s allowance=%s",
+                run.institution_id, run.id, node.id,
+                counted, node.voice_attempt_allowance,
+            )
+            await self.runtime.complete_step(
+                step,
+                result_code="attempts_exhausted",
+                result_metadata=voice_metadata,
+            )
+            return node.next_node_id
+
         api_key = settings.retell_api_secret
         if not api_key:
             await self.runtime.fail_step(
@@ -398,6 +434,10 @@ class VoiceNodeExecutor:
             "user_number": to_number,
             "clinic_name": clinic_name or "",
             "compliance_disclosure": _ai_call_disclosure(clinic_name),
+            # Item 19. The agent script decides what to say; this tells it
+            # whether saying anything to a machine is wanted at all. A string
+            # because Retell's dynamic variables are substituted as text.
+            "leave_voicemail": "true" if node.leave_voicemail else "false",
         }
         metadata = {
             "workflow_run_id": str(run.id),

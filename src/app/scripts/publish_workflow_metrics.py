@@ -26,6 +26,7 @@ from src.app.database import (
     init_database,
     is_database_initialized,
 )
+from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
 from src.app.models.automation_workflow import (
     AutomationRunStatus,
     AutomationStepStatus,
@@ -101,17 +102,35 @@ async def collect_workflow_metrics() -> dict[str, int]:
             )
         ).scalar_one()
 
+        # Windowed like failed_runs. Counted cumulatively this rises for ever,
+        # so any alarm threshold on it is crossed once and then stays crossed —
+        # an alarm that can never return to OK tells you nothing after the first
+        # day. A rate is what "failures are up" actually means.
         failed_steps = (
             await session.execute(
                 select(func.count())
                 .select_from(AutomationWorkflowStepExecution)
                 .where(
                     AutomationWorkflowStepExecution.status == AutomationStepStatus.FAILED.value,
+                    AutomationWorkflowStepExecution.created_at >= now - _FAILED_RUN_WINDOW,
                 )
             )
         ).scalar_one()
 
+        # Item 35 alarms on this: an event that could not be delivered and
+        # that nobody has replayed or discarded is work the engine has silently
+        # given up on. It is counted here rather than in the queue publisher
+        # because it is engine state, not broker state.
+        undeliverable = (
+            await session.execute(
+                select(func.count())
+                .select_from(DeadLetterEvent)
+                .where(DeadLetterEvent.status == DeadLetterStatus.OPEN.value)
+            )
+        ).scalar_one()
+
     return {
+        "undeliverable": int(undeliverable or 0),
         "due_timer_backlog": int(due_timer_backlog or 0),
         "stale_timers": int(stale_timers or 0),
         "active_runs": int(active_runs or 0),
@@ -141,6 +160,7 @@ async def publish_workflow_metrics() -> dict[str, int]:
             ("WorkflowActiveRuns", "active_runs"),
             ("WorkflowFailedRuns", "failed_runs"),
             ("WorkflowFailedSteps", "failed_steps"),
+            ("WorkflowUndeliverable", "undeliverable"),
         )
     ]
 

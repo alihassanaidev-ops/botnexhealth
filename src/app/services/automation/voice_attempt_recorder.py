@@ -247,3 +247,38 @@ async def stamp_attempt_outcome(
         attempt.disconnection_reason = disconnection_reason
     await session.flush()
     return True
+
+
+async def count_dials_for_node(
+    session: AsyncSession,
+    *,
+    workflow_run_id: str,
+    step_id: str,
+    voicemail_consumes_attempt: bool = True,
+) -> tuple[int, int]:
+    """How many times this node has dialled, and how many of those counted.
+
+    Returns ``(dials, counted_attempts)`` for Item 19's two ceilings.
+
+    A dial is any attempt row that reached the provider — an INITIATING claim
+    that was later marked FAILED never placed a call, so it is neither a dial
+    nor an attempt. Counting those would let a run of vendor 5xx errors burn a
+    patient's whole allowance without the phone ever ringing.
+
+    ``counted_attempts`` excludes voicemail outcomes when the campaign says
+    voicemail does not consume an attempt. Every other outcome counts, including
+    ones still awaiting their result: an attempt in flight has been spent.
+    """
+    result = await session.execute(
+        select(WorkflowVoiceAttempt.dial_outcome).where(
+            WorkflowVoiceAttempt.workflow_run_id == workflow_run_id,
+            WorkflowVoiceAttempt.step_id == step_id,
+            WorkflowVoiceAttempt.status != VoiceAttemptStatus.FAILED.value,
+        )
+    )
+    outcomes = [row[0] for row in result.all()]
+    dials = len(outcomes)
+    if voicemail_consumes_attempt:
+        return dials, dials
+    counted = sum(1 for outcome in outcomes if outcome != "voicemail")
+    return dials, counted
