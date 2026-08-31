@@ -8,6 +8,7 @@
  */
 
 import { NoPmsTriageDetails } from "@/components/calls/shared"
+import { CallNotesSection } from "@/components/calls/CallNotes"
 import { useEffect, useRef, useState } from "react"
 import {
     ArrowLeft,
@@ -343,6 +344,11 @@ function DetailsContent({
                 </DetailField>
 
                 {isNoPms && <NoPmsTriageDetails detail={detail} />}
+
+                {/* Staff notes sit directly under the triage details for every
+                    tenant — NexHealth, GoTracker and no-PMS alike. Scoping is
+                    enforced server-side by the call's own institution/location. */}
+                <CallNotesSection callId={detail.id} />
 
                 {detail.booked_appointment_type_name && (
                     <DetailField label="Booked">

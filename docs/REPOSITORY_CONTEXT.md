@@ -153,6 +153,7 @@ contact in the institution. Visibility is granted per-contact via the
 | `/institution/contacts` (writes) | INSTITUTION_ADMIN, LOCATION_ADMIN |
 | `/institution/sms` | all 3 institution roles |
 | `/institution/*` portal (reads) | all 3 institution roles + `require_location_scope()` |
+| `/institution/calls/{id}/notes` | all 3 institution roles (see §3.5) |
 
 `institution_portal.py` is the mixed-tier file: same prefix, individual routes
 step up from "any portal user + location pin" to "institution_admin only"
@@ -165,6 +166,40 @@ both an `institution_id` and one `location_id` that must belong to that
 institution. Super admins can edit those assignments later from the same page;
 the API revalidates the location/institution relationship on both invite and
 edit.
+
+### 3.5 Call notes — staff free text on a call
+
+`call_notes` is the one place clinic staff type prose about a call
+(`src/app/models/call_note.py`, routes at the end of
+`src/app/api/routes/calls.py`). It renders as a message-style thread under the
+triage details in the call detail panel, for **every** tenant — NexHealth,
+GoTracker and no-PMS alike.
+
+Three properties are load-bearing:
+
+- **It inherits the call's scope, never widens it.** `institution_id` and
+  `location_id` are copied from the parent call at write time so the
+  `call_notes_rls` policy mirrors the `calls` policy without a join. Every
+  handler loads the note through `_get_scoped_call()` first, so a thread only
+  exists for someone who can already open the call: an INSTITUTION_ADMIN sees
+  every note in their institution, a LOCATION_ADMIN or STAFF sees notes on
+  their location's calls.
+- **The body is PHI.** Staff will type patient details into it, so
+  `body_encrypted` is AES-256-GCM at the application layer like
+  `Call.summary`. Unlike transcripts it is served *inline* rather than behind
+  an audited reveal — the people reading a note are the ones who wrote it. That
+  trade is why SUPER_ADMIN is refused outright (and the attempt audited), the
+  same fail-closed rule `_ensure_phi_reveal_allowed` applies to reveals. Note
+  bodies never reach a log or an audit `metadata` blob; only their length does.
+- **Authorship is asymmetric.** Only the author may edit a note — an admin can
+  remove one but never rewrite it under someone else's email. Delete is soft
+  (`deleted_at`), because a note may be the only record of what the clinic did
+  about a call. `can_edit` / `can_delete` come back resolved per-caller on the
+  API response; the client must not re-derive them.
+
+`author_email` is snapshotted on the row so a thread stays attributable if the
+user is later removed. `CALL_NOTE_CREATE` / `_UPDATE` / `_DELETE` audit actions
+cover every mutation, including the denials.
 
 ---
 

@@ -14,7 +14,7 @@ from datetime import date, datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, nullslast, or_, select
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +23,7 @@ from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call import Call
+from src.app.models.call_note import MAX_NOTE_LENGTH, CallNote
 from src.app.models.contact import Contact
 from src.app.models.custom_field import EntityType
 from src.app.models.institution import Institution
@@ -1044,3 +1045,356 @@ async def assign_workflow_status(
                 safe_error_summary(exc),
             )
         return _call_to_record(call)
+
+
+# ── Call notes ────────────────────────────────────────────────────────────────
+#
+# A note is free text a staff member typed about one call. It is treated as
+# PHI (encrypted at rest, see models.call_note) but served inline to whoever
+# can already open the call — the people reading it are the same people who
+# wrote it, so an audited reveal step would only be friction. Visibility is
+# therefore the call's own scope: institution admins see every note in their
+# institution, location admins and staff see notes on their location's calls.
+
+
+class CallNoteOut(BaseModel):
+    """One note in a call's thread."""
+
+    id: str
+    call_id: str
+    # Snapshotted at write time so a note stays attributable after the author's
+    # user row is removed. This is a staff login, not patient PHI.
+    author_email: str
+    author_user_id: str | None
+    body: str
+    created_at: str
+    #: Set only if the body was changed after posting; drives the UI marker.
+    edited_at: str | None = None
+    # Resolved per-caller so the client doesn't reimplement the role rules.
+    can_edit: bool = False
+    can_delete: bool = False
+
+
+class CallNotesResponse(BaseModel):
+    call_id: str
+    total: int
+    items: list[CallNoteOut]
+
+
+class CreateCallNoteRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=MAX_NOTE_LENGTH)
+
+
+class UpdateCallNoteRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=MAX_NOTE_LENGTH)
+
+
+#: Roles that may delete another user's note within their own scope.
+_NOTE_MODERATOR_ROLES = frozenset(
+    {UserRole.INSTITUTION_ADMIN.value, UserRole.LOCATION_ADMIN.value}
+)
+
+
+def _ensure_notes_allowed(current_user: User, *, action: AuditAction, call_id: str) -> None:
+    """Keep platform-level users out of clinic note threads.
+
+    Note bodies are staff-written PHI served inline, with no reveal step to
+    gate them. That makes them exactly the content ``_ensure_phi_reveal_allowed``
+    keeps a SUPER_ADMIN away from, so the same fail-closed rule applies here —
+    and the denial is audited, because a platform account probing a clinic's
+    notes is itself the security-relevant event.
+    """
+    if current_user.role != UserRole.SUPER_ADMIN.value:
+        return
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        action=action,
+        target_resource=f"call:{call_id}/notes",
+        outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
+        metadata={
+            "actor_role": current_user.role,
+            "reason": "super_admin_call_notes_blocked",
+        },
+        institution_id=current_user.institution_id,
+        user_id=str(current_user.id),
+        location_id=current_user.location_id,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Super-admin access to clinic notes requires a break-glass workflow",
+    )
+
+
+def _note_to_out(note: CallNote, current_user: User) -> CallNoteOut:
+    is_author = (
+        note.author_user_id is not None
+        and str(note.author_user_id) == str(current_user.id)
+    )
+    return CallNoteOut(
+        id=note.id,
+        call_id=note.call_id,
+        author_email=note.author_email,
+        author_user_id=note.author_user_id,
+        # Never None in practice — body_encrypted is NOT NULL — but decrypt_value
+        # is typed Optional, so fall back rather than serving a null into a
+        # required field.
+        body=note.body or "",
+        created_at=note.created_at.isoformat(),
+        edited_at=note.edited_at.isoformat() if note.edited_at else None,
+        can_edit=is_author,
+        can_delete=is_author or current_user.role in _NOTE_MODERATOR_ROLES,
+    )
+
+
+async def _get_scoped_note(session, call: Call, note_id: str) -> CallNote:
+    """Load a live note on this call, or 404."""
+    note = (
+        await session.execute(
+            select(CallNote).where(
+                CallNote.id == note_id,
+                CallNote.call_id == call.id,
+                CallNote.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if not note:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Note not found"
+        )
+    return note
+
+
+@router.get("/{call_id}/notes", response_model=CallNotesResponse)
+@limiter.limit(RATE_READ)
+async def list_call_notes(
+    request: Request,
+    call_id: str,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> CallNotesResponse:
+    """The full notes thread for a call, oldest first."""
+    _ensure_notes_allowed(
+        current_user, action=AuditAction.VIEW_CALL_DETAIL, call_id=call_id
+    )
+
+    async with get_db_session() as session:
+        call = await _get_scoped_call(session, call_id, current_user)
+
+        notes = (
+            (
+                await session.execute(
+                    select(CallNote)
+                    .where(
+                        CallNote.call_id == call.id,
+                        CallNote.deleted_at.is_(None),
+                    )
+                    .order_by(CallNote.created_at.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        items = [_note_to_out(n, current_user) for n in notes]
+        return CallNotesResponse(call_id=call.id, total=len(items), items=items)
+
+
+@router.post(
+    "/{call_id}/notes",
+    response_model=CallNoteOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit(RATE_WRITE)
+async def create_call_note(
+    request: Request,
+    call_id: str,
+    body: CreateCallNoteRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> CallNoteOut:
+    """Post a note to a call's thread.
+
+    Any active institution user who can open the call may post — staff triage
+    is the point of the feature, same as assigning a workflow status.
+    """
+    _ensure_notes_allowed(
+        current_user, action=AuditAction.CALL_NOTE_CREATE, call_id=call_id
+    )
+
+    text_body = body.body.strip()
+    if not text_body:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Note cannot be empty"
+        )
+
+    async with get_db_session() as session:
+        call = await _get_scoped_call(
+            session, call_id, current_user, audit_on_miss=AuditAction.CALL_NOTE_CREATE
+        )
+
+        note = CallNote(
+            call_id=call.id,
+            # Denormalized from the call so RLS scopes the note without a join.
+            institution_id=call.institution_id,
+            location_id=call.location_id,
+            author_user_id=str(current_user.id),
+            author_email=current_user.email,
+        )
+        note.body = text_body
+        session.add(note)
+        await session.commit()
+        await session.refresh(note)
+
+        logger.info(
+            "Call note created: call_hash=%s institution_hash=%s",
+            hash_for_logging(call_id),
+            hash_for_logging(current_user.institution_id),
+        )
+        log_audit_background(
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
+            action=AuditAction.CALL_NOTE_CREATE,
+            target_resource=f"call:{call.id}/notes/{note.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": current_user.institution_id,
+                "location_id": current_user.location_id,
+                # Length only — the body itself is PHI and never lands in a log.
+                "body_length": len(text_body),
+            },
+            institution_id=current_user.institution_id,
+        )
+        return _note_to_out(note, current_user)
+
+
+@router.patch("/{call_id}/notes/{note_id}", response_model=CallNoteOut)
+@limiter.limit(RATE_WRITE)
+async def update_call_note(
+    request: Request,
+    call_id: str,
+    note_id: str,
+    body: UpdateCallNoteRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> CallNoteOut:
+    """Edit a note. Only its author may change what it says."""
+    _ensure_notes_allowed(
+        current_user, action=AuditAction.CALL_NOTE_UPDATE, call_id=call_id
+    )
+
+    text_body = body.body.strip()
+    if not text_body:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Note cannot be empty"
+        )
+
+    async with get_db_session() as session:
+        call = await _get_scoped_call(
+            session, call_id, current_user, audit_on_miss=AuditAction.CALL_NOTE_UPDATE
+        )
+        note = await _get_scoped_note(session, call, note_id)
+
+        # Admins may remove someone else's note but never rewrite it — an
+        # edited note still carries the original author's email.
+        if str(note.author_user_id) != str(current_user.id):
+            log_audit_background(
+                actor=AuditActor.ADMIN,
+                user_id=str(current_user.id),
+                action=AuditAction.CALL_NOTE_UPDATE,
+                target_resource=f"call:{call.id}/notes/{note.id}",
+                outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
+                metadata={
+                    "actor_role": current_user.role,
+                    "reason": "not_note_author",
+                },
+                institution_id=current_user.institution_id,
+                location_id=current_user.location_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the author can edit a note",
+            )
+
+        note.body = text_body
+        note.edited_at = datetime.now(timezone.utc)
+        await session.commit()
+        await session.refresh(note)
+
+        log_audit_background(
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
+            action=AuditAction.CALL_NOTE_UPDATE,
+            target_resource=f"call:{call.id}/notes/{note.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": current_user.institution_id,
+                "location_id": current_user.location_id,
+                "body_length": len(text_body),
+            },
+            institution_id=current_user.institution_id,
+        )
+        return _note_to_out(note, current_user)
+
+
+@router.delete("/{call_id}/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit(RATE_WRITE)
+async def delete_call_note(
+    request: Request,
+    call_id: str,
+    note_id: str,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> None:
+    """Remove a note.
+
+    The author may remove their own; an INSTITUTION_ADMIN or LOCATION_ADMIN may
+    remove any note inside their scope. The delete is soft — the row is the
+    only record of what the clinic did about this call, so it stays for
+    HIPAA §164.312(b) review and simply stops being served.
+    """
+    _ensure_notes_allowed(
+        current_user, action=AuditAction.CALL_NOTE_DELETE, call_id=call_id
+    )
+
+    async with get_db_session() as session:
+        call = await _get_scoped_call(
+            session, call_id, current_user, audit_on_miss=AuditAction.CALL_NOTE_DELETE
+        )
+        note = await _get_scoped_note(session, call, note_id)
+
+        is_author = str(note.author_user_id) == str(current_user.id)
+        if not is_author and current_user.role not in _NOTE_MODERATOR_ROLES:
+            log_audit_background(
+                actor=AuditActor.ADMIN,
+                user_id=str(current_user.id),
+                action=AuditAction.CALL_NOTE_DELETE,
+                target_resource=f"call:{call.id}/notes/{note.id}",
+                outcome=AuditOutcome.FAILURE_UNAUTHORIZED,
+                metadata={
+                    "actor_role": current_user.role,
+                    "reason": "not_author_or_admin",
+                },
+                institution_id=current_user.institution_id,
+                location_id=current_user.location_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the author or an admin can delete a note",
+            )
+
+        note.deleted_at = datetime.now(timezone.utc)
+        note.deleted_by_user_id = str(current_user.id)
+        await session.commit()
+
+        log_audit_background(
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
+            action=AuditAction.CALL_NOTE_DELETE,
+            target_resource=f"call:{call.id}/notes/{note.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": current_user.institution_id,
+                "location_id": current_user.location_id,
+                "own_note": is_author,
+            },
+            institution_id=current_user.institution_id,
+        )

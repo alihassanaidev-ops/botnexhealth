@@ -7,6 +7,8 @@
 import api from "@/lib/api";
 import type {
     CallDetail,
+    CallNote,
+    CallNotesResponse,
     CallRecord,
     CallsListResponse,
     CustomFieldRevealResponse,
@@ -88,4 +90,36 @@ export async function resolveCallback(callId: string, note?: string): Promise<Ca
         note: note ?? null,
     });
     return data;
+}
+
+// ── Call notes ────────────────────────────────────────────────────────────────
+//
+// The thread is scoped by the call itself: the API only returns notes on calls
+// the caller can already open, so there is no institution/location parameter
+// to pass here.
+
+export async function listCallNotes(callId: string): Promise<CallNotesResponse> {
+    const { data } = await api.get<CallNotesResponse>(`/institution/calls/${callId}/notes`);
+    return data;
+}
+
+export async function createCallNote(callId: string, body: string): Promise<CallNote> {
+    const { data } = await api.post<CallNote>(`/institution/calls/${callId}/notes`, { body });
+    return data;
+}
+
+export async function updateCallNote(
+    callId: string,
+    noteId: string,
+    body: string,
+): Promise<CallNote> {
+    const { data } = await api.patch<CallNote>(
+        `/institution/calls/${callId}/notes/${noteId}`,
+        { body },
+    );
+    return data;
+}
+
+export async function deleteCallNote(callId: string, noteId: string): Promise<void> {
+    await api.delete(`/institution/calls/${callId}/notes/${noteId}`);
 }
