@@ -304,7 +304,6 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/location/audit-logs",
     ),
     INSTITUTION_OR_LOCATION_ADMIN: (
-        "DELETE /api/institution/setup/availabilities/{source_id}/override",
         "GET /api/automation/workflows/merge-fields",
         "GET /api/automation/workflows/llm-models",
         "GET /api/automation/workflows/{workflow_id}/launch-checklist",

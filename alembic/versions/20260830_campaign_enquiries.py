@@ -1,7 +1,7 @@
 """Add the inbound sales enquiry store.
 
 Revision ID: 20260830_campaign_enquiries
-Revises: 20260821_nh_credential_mode
+Revises: 20260830_sms_staff_templates
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "20260830_campaign_enquiries"
-down_revision = "20260821_nh_credential_mode"
+down_revision = "20260830_sms_staff_templates"
 branch_labels = None
 depends_on = None
 

@@ -33,19 +33,32 @@ def upgrade() -> None:
     op.add_column(
         _TABLE,
         sa.Column("location_id", postgresql.UUID(as_uuid=False), nullable=True),
+        if_not_exists=True,
     )
-    op.create_foreign_key(
-        "fk_ext_sms_recipient_location",
-        _TABLE,
-        "institution_locations",
-        ["location_id"],
-        ["id"],
-        ondelete="CASCADE",
+    # create_foreign_key has no IF NOT EXISTS. On a database built from scratch
+    # the baseline's create_all has already added this constraint from the model.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'fk_ext_sms_recipient_location'
+            ) THEN
+                ALTER TABLE external_sms_notification_recipients
+                ADD CONSTRAINT fk_ext_sms_recipient_location
+                FOREIGN KEY (location_id) REFERENCES institution_locations(id)
+                ON DELETE CASCADE;
+            END IF;
+        END
+        $$
+        """
     )
     op.create_index(
         "ix_external_sms_notification_recipients_location_id",
         _TABLE,
         ["location_id"],
+        if_not_exists=True,
     )
 
     # Replace the location-blind unique key with one index per scope.
@@ -56,6 +69,7 @@ def upgrade() -> None:
         ["institution_id", "location_id", "phone_number_hash", "notification_type"],
         unique=True,
         postgresql_where=sa.text("location_id IS NOT NULL"),
+        if_not_exists=True,
     )
     op.create_index(
         "ix_ext_sms_recipient_institution_phone_type_all_locs",
@@ -63,6 +77,7 @@ def upgrade() -> None:
         ["institution_id", "phone_number_hash", "notification_type"],
         unique=True,
         postgresql_where=sa.text("location_id IS NULL"),
+        if_not_exists=True,
     )
 
 
@@ -74,6 +89,7 @@ def downgrade() -> None:
         _TABLE,
         ["institution_id", "phone_number_hash", "notification_type"],
         unique=True,
+        if_not_exists=True,
     )
     op.drop_index("ix_external_sms_notification_recipients_location_id", table_name=_TABLE)
     op.drop_constraint("fk_ext_sms_recipient_location", _TABLE, type_="foreignkey")

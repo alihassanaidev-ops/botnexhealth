@@ -31,22 +31,26 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(["institution_id"], ["institutions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        if_not_exists=True,
     )
     op.create_index(
         "ix_external_sms_notification_recipients_institution_id",
         "external_sms_notification_recipients",
         ["institution_id"],
+        if_not_exists=True,
     )
     op.create_index(
         "ix_external_sms_notification_recipients_phone_number_hash",
         "external_sms_notification_recipients",
         ["phone_number_hash"],
+        if_not_exists=True,
     )
     op.create_index(
         "ix_ext_sms_recipient_institution_phone_type",
         "external_sms_notification_recipients",
         ["institution_id", "phone_number_hash", "notification_type"],
         unique=True,
+        if_not_exists=True,
     )
     op.execute("ALTER TABLE external_sms_notification_recipients ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE external_sms_notification_recipients FORCE ROW LEVEL SECURITY")
