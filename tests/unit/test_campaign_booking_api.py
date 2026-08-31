@@ -38,6 +38,7 @@ def _run():
     run.workflow_id = "wf-1"
     run.contact_id = "c-1"
     run.trigger_metadata = {}
+    run.trigger_ref_id = "appt-77"
     return run
 
 
@@ -95,6 +96,9 @@ def _ctx(*, run=None, contact_pms_id="pms-9", already_booked=False, slots=None,
     else:
         adapter.find_available_slots = AsyncMock(return_value=MagicMock(slots=default))
     adapter.book_appointment = AsyncMock(
+        return_value=MagicMock(success=book_success, write_status=write_status)
+    )
+    adapter.reschedule_appointment_v2 = AsyncMock(
         return_value=MagicMock(success=book_success, write_status=write_status)
     )
 
@@ -339,3 +343,59 @@ class TestWhatIsActuallyOffered:
         )
         assert r.status_code == 200
         assert r.json()["status"] == "booked"
+
+
+class TestRescheduleMovesRatherThanRebooks:
+    """Rescheduling patches the existing appointment. Booking a second one and
+    leaving the original standing would put the patient in two slots."""
+
+    def test_reschedule_does_not_create_a_second_appointment(self, client):
+        token = make_action_token("run-1", "reschedule")
+        ctx = _ctx()
+        r = _call(
+            client, "POST", f"/api/campaigns/link/reschedule/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        assert r.status_code == 200
+        _s, _c, adapter, _b = ctx
+        adapter.book_appointment.assert_not_awaited()
+        adapter.reschedule_appointment_v2.assert_awaited_once()
+
+    def test_it_moves_the_appointment_the_run_is_about(self, client):
+        token = make_action_token("run-1", "reschedule")
+        ctx = _ctx()
+        _call(
+            client, "POST", f"/api/campaigns/link/reschedule/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        _s, _c, adapter, _b = ctx
+        old_id, booking = adapter.reschedule_appointment_v2.await_args.args
+        assert old_id == "appt-77"
+        assert booking.slot_start == "2026-09-02T14:00:00Z"
+
+    def test_a_run_with_no_appointment_is_handed_to_staff(self, client):
+        """Nothing to move — do not silently book a new one instead."""
+        run = _run()
+        run.trigger_ref_id = None
+        token = make_action_token("run-1", "reschedule")
+        ctx = _ctx(run=run)
+        r = _call(
+            client, "POST", f"/api/campaigns/link/reschedule/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        assert r.status_code == 409
+        assert r.json()["error"] == "handoff"
+        _s, _c, adapter, _b = ctx
+        adapter.book_appointment.assert_not_awaited()
+
+    def test_booking_still_books(self, client):
+        """The book action must not be diverted into a reschedule."""
+        token = make_action_token("run-1", "book")
+        ctx = _ctx()
+        _call(
+            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        _s, _c, adapter, _b = ctx
+        adapter.book_appointment.assert_awaited_once()
+        adapter.reschedule_appointment_v2.assert_not_awaited()

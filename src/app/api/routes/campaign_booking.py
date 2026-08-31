@@ -146,11 +146,16 @@ def _verify(action: str, token: str) -> tuple[str, str] | JSONResponse:
     return run_id, token_action
 
 
-async def _already_booked(session, run_id: str) -> bool:
-    """Has this run already produced a booking?
+#: What a completed action is recorded as, per action.
+COMPLETED_INTENT = {"book": "booked", "reschedule": "rescheduled"}
+
+
+async def _already_booked(session, run_id: str, action: str = "book") -> bool:
+    """Has this run already completed this action?
 
     A patient who books, then reopens the link from the same message, must not
-    book a second appointment.
+    get a second appointment — and one who reschedules must not move the
+    appointment twice.
     """
     from sqlalchemy import select
 
@@ -158,7 +163,8 @@ async def _already_booked(session, run_id: str) -> bool:
         select(CampaignResponseEvent.id)
         .where(
             CampaignResponseEvent.workflow_run_id == run_id,
-            CampaignResponseEvent.normalized_intent == "booked",
+            CampaignResponseEvent.normalized_intent
+            == COMPLETED_INTENT.get(action, "booked"),
         )
         .limit(1)
     )
@@ -296,7 +302,7 @@ async def list_slots(
         if run is None:
             return _json({"error": "gone"}, 410)
 
-        if await _already_booked(session, run_id):
+        if await _already_booked(session, run_id, action):
             return _json(SlotsResponse(already_booked=True).model_dump())
 
         institution = await session.get(Institution, run.institution_id)
@@ -350,8 +356,8 @@ async def book_slot(
         if run is None:
             return _json({"error": "gone"}, 410)
 
-        if await _already_booked(session, run_id):
-            # Reopening the link from the same message must not book twice.
+        if await _already_booked(session, run_id, action):
+            # Reopening the link from the same message must not act twice.
             return _json({"status": "already_booked"})
 
         institution = await session.get(Institution, run.institution_id)
@@ -432,24 +438,40 @@ async def book_slot(
                 {"error": "slot_taken", "slots": _as_options(_offerable(slots))}, 409
             )
 
+        booking = BookingRequest(
+            patient_id=str(patient_id),
+            provider_id=chosen.provider_id,
+            slot_start=chosen.start,
+            slot_end=chosen.end,
+            operatory_id=getattr(chosen, "operatory_id", None),
+            # The slot's own type when the practice software supplies one,
+            # otherwise what the patient chose — never neither, or the
+            # appointment is booked at the wrong length.
+            appointment_type_id=(
+                getattr(chosen, "appointment_type_id", None)
+                or body.appointment_type_id
+            ),
+        )
+
         try:
             adapter = await get_adapter_for_institution_location(institution, location)
-            result = await adapter.book_appointment(
-                BookingRequest(
-                    patient_id=str(patient_id),
-                    provider_id=chosen.provider_id,
-                    slot_start=chosen.start,
-                    slot_end=chosen.end,
-                    operatory_id=getattr(chosen, "operatory_id", None),
-                    # The slot's own type when the practice software supplies
-                    # one, otherwise what the patient chose — never neither, or
-                    # the appointment is booked at the wrong length.
-                    appointment_type_id=(
-                        getattr(chosen, "appointment_type_id", None)
-                        or body.appointment_type_id
-                    ),
+            if action == "reschedule":
+                # Rescheduling moves the existing appointment; it does not book
+                # a second one. Going through book_appointment would leave the
+                # original standing and the patient holding two slots.
+                #
+                # reschedule_appointment_v2 patches the appointment directly
+                # where the practice software supports it, and falls back to
+                # book-then-cancel where it does not, so the adapter decides the
+                # strategy rather than this route guessing at it.
+                if not run.trigger_ref_id:
+                    logger.warning("reschedule with no appointment on run=%s", run_id)
+                    return _json({"error": "handoff"}, 409)
+                result = await adapter.reschedule_appointment_v2(
+                    str(run.trigger_ref_id), booking
                 )
-            )
+            else:
+                result = await adapter.book_appointment(booking)
         except Exception:
             logger.exception("booking failed for run=%s", run_id)
             return _json({"error": "unavailable"}, 503)
@@ -499,16 +521,20 @@ async def book_slot(
                 workflow_run_id=str(run.id),
                 contact_id=str(run.contact_id) if run.contact_id else None,
                 channel="booking_link",
-                normalized_intent="booked",
+                normalized_intent=COMPLETED_INTENT.get(action, "booked"),
                 source="campaign_booking_link",
-                source_event_id=f"link:{run.id}:booked",
+                source_event_id=f"link:{run.id}:{COMPLETED_INTENT.get(action, 'booked')}",
                 confidence="deterministic",
             )
         )
         log_audit_background(
-            action=AuditAction.BOOK_APPOINTMENT,
+            action=(
+                AuditAction.RESCHEDULE_APPOINTMENT
+                if action == "reschedule"
+                else AuditAction.BOOK_APPOINTMENT
+            ),
             actor=AuditActor.API_CLIENT,
-            target_resource=f"campaign_run:{run.id}:link:book",
+            target_resource=f"campaign_run:{run.id}:link:{action}",
             institution_id=str(run.institution_id),
             outcome=AuditOutcome.SUCCESS,
             metadata={
