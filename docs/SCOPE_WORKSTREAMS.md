@@ -41,6 +41,20 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 
 ---
 
+## Fixes found along the way
+
+Not scope items, but they blocked or silently defeated scope work.
+
+| Fix | Commit | Why it mattered |
+|---|---|---|
+| Migration chain replayable on a fresh database | `fa27614` | `alembic upgrade head` could not build a database from scratch, so **no new environment could be stood up and the entire RLS tier was unrunnable** — which is where Item 44's isolation coverage has to live. Four guards; a fresh build now matches dev exactly (87 tables, 559 indexes, 95 policies) and the RLS suite passes 11/11. Models and schema were verified to agree exactly — this was never drift |
+| Security middleware no longer downgrades `Referrer-Policy` | `527be8b` | It overwrote the link endpoints' `no-referrer` with `strict-origin-when-cross-origin`, which still sends the full URL — token included — same-origin. Item 12's Referer defence was **absent in the running app**; the endpoint tests mount a bare router and never saw the middleware |
+| `channel` value the response table permits | `dc74076` | The link endpoints wrote `"link"`, which the CHECK constraint rejects. Every confirm and handoff would have failed on insert; mocked sessions never touched the constraint |
+| Enquiry column types + duplicate index | `f358857` | `String(36)` ids against `uuid` targets, and a model declaring two indexes of one name |
+| Cross-channel suppression opt-out moved to the send node | `fca9d07` | On `ComplianceMetadata` it was dead code — `publish_version` strips that block, so the flag could never be switched on |
+
+---
+
 ## Three codebases, not one
 
 This is the first thing to get straight, because roughly a fifth of the backlog cannot be written on
@@ -99,13 +113,13 @@ Where the silent failures live. Everything here is in this repo.
 | # | Item | Size | Notes |
 |---|---|---|---|
 | **11** | A booking step inside campaigns | 3d | Hard blocker on Recall and Sales Qualification. Booking already works for the voice agent — it just isn't a campaign step. Needs booked / could-not-book / **pending** branches. Blocked on Decision B |
-| **12** ◐ | Generate the three link types — **tokens + endpoints done, `797063d` `e43378d`** | 3d | **Currently unsafe.** Six templates already use the placeholder; nothing generates the value. Needs signed, expiring, per-run links plus patient-facing pages |
+| **12** ◐ | Generate the three link types — **tokens + endpoints done, `797063d` `e43378d`** | 3d | Five templates use the placeholders (all switched off), and nothing generated a value. Signed run-scoped expiring tokens + three public endpoints now exist; confirm completes the write-back. **Remaining: a patient-facing slot picker**, so book and reschedule finish unattended instead of raising a staff handoff |
 | **14** ✅ | Retry text messages — **done, `7116457`** | 0.5d | Email already does this correctly — copy it. Must ship *with* the provider idempotency key or retries become duplicates |
-| **15** ◐ | Delivery results into campaigns — **done bar branching, `cc3f28a`** | 0.5d | Receipts arrive and feed billing, but never reach the campaign. Undelivered currently counts as contacted |
+| **15** ◐ | Delivery results into campaigns — **done bar branching, `cc3f28a`** | 0.5d | Terminal receipts now mark the step `sent:delivered` / `sent:undelivered`, so reporting tells arrival from acceptance. **Remaining: letting a campaign branch on a hard delivery failure** — by the time a receipt lands the run has usually advanced past the step, so it needs run-state work |
 | **16** ✅ | Cross-channel suppression — **done, `46a3a9f`** | 0.5d | Today this is a property of how two campaigns were drawn, not an engine guarantee |
 | **21** ✅ | Inbound enquiry store — **done, `080e3a0`** | 0.5d | Blocks Item 24 entirely. Needs RLS isolation + idempotent intake key + encryption at the same standard as patient contacts |
-| **13** ✅ | Enforce readiness at publish — **done, `417bf54`** | 0.5d | The real check exists; the publish path calls a placeholder that deliberately does nothing. Sequence *after* 11 and 12 |
-| **30** ✅ | Block unsupported campaigns — **done, `d3c444b`** | 0.5d | Flip warn → refuse, treat unknown as unavailable |
+| **13** ✅ | Enforce readiness at publish — **done, `417bf54`** | 0.5d | Doc was out of date: publish already ran the real check, fail-closed. The gap was SMS-not-provisioned being a *warning* while voice was an error |
+| **30** ✅ | Block unsupported campaigns — **done, `d3c444b`** | 0.5d | Doc said flip warn→refuse; instantiation already refused. The gap was requirements living on template metadata and never reaching the definition, so publish never re-checked |
 
 ---
 
