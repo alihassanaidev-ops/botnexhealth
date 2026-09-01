@@ -1024,6 +1024,12 @@ export function cloneNodes(
                     true_next_node_id: repoint(next.true_next_node_id),
                     false_next_node_id: repoint(next.false_next_node_id),
                 }
+            case "switch":
+                return {
+                    ...next,
+                    cases: next.cases.map((c) => ({ ...c, next_node_id: repoint(c.next_node_id) })),
+                    default_next_node_id: repoint(next.default_next_node_id),
+                }
             case "patient_registration":
                 return {
                     ...next,
@@ -1146,6 +1152,8 @@ function searchableText(node: WorkflowNode): string {
             return node.reason ?? ""
         case "booking_link":
             return node.actions.join(" ")
+        case "switch":
+            return `${node.subject ?? ""} ${node.cases.map((c) => c.label).join(" ")}`
         case "exit":
             return node.outcome ?? ""
         case "llm":
