@@ -131,11 +131,12 @@ class PmsLiveRevalidationService:
                 return "skipped_missing_appointment_context"
             return None
         try:
-            return await self._check_appointment(
-                run,
-                str(appointment_id),
-                require_occurred=require_occurred,
-            )
+            async with self._session.begin_nested():
+                return await self._check_appointment(
+                    run,
+                    str(appointment_id),
+                    require_occurred=require_occurred,
+                )
         except Exception as exc:  # noqa: BLE001 — fail-open on any error
             logger.warning(
                 "revalidate: lookup failed run=%s appt=%s: %s — proceeding with send",

@@ -52,6 +52,16 @@ def test_platform_projection_never_decrypts_tenant_free_text() -> None:
     assert route._response(row).resolution_note is None
 
 
+def test_response_does_not_treat_redacted_ids_as_real_workflow_ids() -> None:
+    row = _row()
+    row.redacted_payload = {"run_id": "[redacted]", "timer_id": "[redacted]"}
+
+    response = route._response(row)
+
+    assert response.originating_run_id is None
+    assert response.originating_timer_id is None
+
+
 @pytest.mark.asyncio
 async def test_resolution_lookup_takes_a_row_lock() -> None:
     session = AsyncMock()
@@ -67,6 +77,63 @@ async def test_resolution_lookup_takes_a_row_lock() -> None:
 
 
 @pytest.mark.asyncio
+async def test_capture_updates_existing_open_duplicate_instead_of_inserting() -> None:
+    existing = _row()
+    existing.last_error = "first failure"
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = existing
+    session.execute.return_value = result
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+
+    captured = await DeadLetterService(session).capture(
+        source="workflow_dispatch",
+        event_type="dispatch_workflow_timer",
+        error="current transaction is aborted",
+        payload={"timer_id": "timer-1", "run_id": "run-1"},
+        attempts=4,
+        institution_id="22222222-2222-2222-2222-222222222222",
+        location_id="33333333-3333-3333-3333-333333333333",
+    )
+
+    assert captured is existing
+    assert existing.last_error == "current transaction is aborted"
+    assert existing.attempts == 4
+    session.add.assert_not_called()
+    session.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mark_workflow_timer_succeeded_resolves_open_duplicate_alerts() -> None:
+    first = _row()
+    first.id = "11111111-1111-1111-1111-111111111111"
+    second = _row()
+    second.id = "11111111-1111-1111-1111-111111111112"
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [first, second]
+    session.execute.return_value = result
+    session.flush = AsyncMock()
+
+    resolved = await DeadLetterService(session).mark_workflow_timer_succeeded(
+        timer_id="timer-1",
+        run_id="run-1",
+        institution_id="22222222-2222-2222-2222-222222222222",
+        location_id="33333333-3333-3333-3333-333333333333",
+    )
+
+    assert resolved == 2
+    assert first.status == DeadLetterStatus.DISCARDED.value
+    assert second.status == DeadLetterStatus.DISCARDED.value
+    assert first.resolution_reason == "resolved_elsewhere"
+    assert second.resolution_reason == "resolved_elsewhere"
+    assert first.resolved_by_user_id is None
+    assert second.resolved_at is not None
+    session.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_two_replay_requests_enqueue_only_once(monkeypatch) -> None:
     row = _row()
     session = AsyncMock()
@@ -77,6 +144,9 @@ async def test_two_replay_requests_enqueue_only_once(monkeypatch) -> None:
 
         async def get_for_update(self, _event_id):
             return row
+
+        async def get_open_matching_for_update(self, event):
+            return [event]
 
         async def mark_replayed(self, event, *, user_id):
             event.status = DeadLetterStatus.REPLAYED.value
@@ -120,6 +190,9 @@ async def test_discard_records_note_without_copying_phi_to_audit(monkeypatch) ->
         async def get_for_update(self, _event_id):
             return row
 
+        async def get_open_matching_for_update(self, event):
+            return [event]
+
         async def mark_discarded(self, event, *, user_id, reason, note=None):
             event.status = DeadLetterStatus.DISCARDED.value
             event.resolved_by_user_id = user_id
@@ -152,6 +225,54 @@ async def test_discard_records_note_without_copying_phi_to_audit(monkeypatch) ->
     metadata = audit.await_args.kwargs["metadata"]
     assert metadata["note_recorded"] is True
     assert "Patient asked" not in str(metadata)
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_discard_marks_matching_open_duplicates(monkeypatch) -> None:
+    row = _row()
+    duplicate = _row()
+    duplicate.id = "11111111-1111-1111-1111-111111111112"
+    session = AsyncMock()
+
+    class FakeService:
+        def __init__(self, _session):
+            pass
+
+        async def get_for_update(self, _event_id):
+            return row
+
+        async def get_open_matching_for_update(self, _event):
+            return [row, duplicate]
+
+        async def mark_discarded(self, event, *, user_id, reason, note=None):
+            event.status = DeadLetterStatus.DISCARDED.value
+            event.resolved_by_user_id = user_id
+            event.resolution_reason = reason
+            event.resolution_note = note
+            event.resolved_at = datetime.now(timezone.utc)
+
+    @asynccontextmanager
+    async def fake_session():
+        yield session
+
+    audit = AsyncMock()
+    monkeypatch.setattr(route, "get_db_session", fake_session)
+    monkeypatch.setattr(route, "DeadLetterService", FakeService)
+    monkeypatch.setattr(route, "log_audit", audit)
+
+    await route._discard_dead_letter_event(
+        event_id=str(row.id),
+        current_user=_user(),
+        request=route.DiscardDeadLetterRequest(
+            reason=route.DismissalReason.DUPLICATE,
+        ),
+        include_resolution_note=True,
+    )
+
+    assert row.status == DeadLetterStatus.DISCARDED.value
+    assert duplicate.status == DeadLetterStatus.DISCARDED.value
+    assert audit.await_args.kwargs["metadata"]["resolved_event_count"] == 2
     session.commit.assert_awaited_once()
 
 

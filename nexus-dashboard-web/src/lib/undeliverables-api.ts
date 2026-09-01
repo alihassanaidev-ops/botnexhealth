@@ -26,6 +26,7 @@ export interface UndeliverableEvent {
     resolution_note: string | null
     replay_supported: boolean
     originating_run_id: string | null
+    originating_timer_id: string | null
 }
 
 export interface UndeliverableListResponse {

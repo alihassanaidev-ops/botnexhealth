@@ -177,7 +177,7 @@ contact in the institution. Visibility is granted per-contact via the
 | Route group | Allowed roles |
 |---|---|
 | `/admin/*` (institutions, users, groups, twilio, sms, platform dead-letter view) | **SUPER_ADMIN only** |
-| `/institution/undeliverables` | INSTITUTION_ADMIN, LOCATION_ADMIN (retry additionally requires `write:replay`) |
+| `/institution/undeliverables` (Automation issues page) | INSTITUTION_ADMIN, LOCATION_ADMIN (retry additionally requires `write:replay`) |
 | `/group/*` | **GROUP_ADMIN only** |
 | `/institution/setup`, `/institution/statuses` | INSTITUTION_ADMIN, LOCATION_ADMIN |
 | `/institution/email-templates`, `/custom-fields`, `/notification-recipients`, dashboard mutations | **INSTITUTION_ADMIN only** |
@@ -846,24 +846,34 @@ Twilio posts message state transitions such as `sent`, `delivered`, `failed`,
 and `undelivered` to that route, which verifies the Twilio signature and updates
 the existing `SmsHistoryLog` by `MessageSid`.
 
-### 6.3.1 Undeliverable operator queue
+### 6.3.1 Automation issue operator queue
 
 Permanently failed tasks and webhooks are captured in `dead_letter_events` with
 an encrypted replay payload and a redacted operator projection. Platform
 operators and clinic/location administrators reach the same dashboard page at
-`/undeliverables`; the page selects the global `/api/admin/dead-letter-events`
-surface for `SUPER_ADMIN` and the RLS-scoped `/api/institution/undeliverables`
-surface for tenant roles. Location administrators see only their location.
+`/undeliverables`, labelled **Automation issues** in the UI because this is a
+technical background-job queue, not a list of undelivered patient messages. The
+page selects the global `/api/admin/dead-letter-events` surface for
+`SUPER_ADMIN` and the RLS-scoped `/api/institution/undeliverables` surface for
+tenant roles. Location administrators see only their location.
 
 Rows expose whether replay is actually supported. Replay requires the named
 `write:replay` permission (institution or platform admin), is audited, and
 locks the event row through enqueue so concurrent clicks cannot enqueue twice.
-Dismissal is available to clinic operators but requires a bounded reason. Its
+Manual resolution is available to clinic operators but requires a bounded reason. Its
 optional note is free text, encrypted at rest, and never copied into logs or
 audit metadata; it is returned only through the tenant-scoped route, never the
 platform-admin projection. SMS task capture resolves `institution_id` from the sending
 location before insert; this is required for the tenant RLS policy to admit the
 row at all.
+
+Workflow timer failures are keyed by the timer/run payload fingerprint. Repeated
+captures for the same timer update the existing open row instead of creating a
+new alert; manual replay/resolution applies to matching open duplicates; and a
+later successful dispatch marks earlier open failures for that timer resolved
+automatically. Dispatch-time PMS revalidation runs inside a nested transaction
+so a failed lookup cannot poison the transaction used by the following
+compliance-gate queries.
 
 ### 6.4 DNC patients and channel opt-outs
 

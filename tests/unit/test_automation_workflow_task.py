@@ -1003,6 +1003,10 @@ async def test_dispatch_timer_happy_path_returns_dispatch_result() -> None:
             "src.app.tasks.automation_workflow.build_dispatcher",
             new=AsyncMock(return_value=(mock_dispatcher, "UTC")),
         ),
+        patch(
+            "src.app.tasks.automation_workflow.resolve_workflow_timer_dead_letters",
+            new=AsyncMock(),
+        ) as resolve_dlq,
     ):
         result = await _dispatch_timer_async(
             timer_id="t-1",
@@ -1016,6 +1020,12 @@ async def test_dispatch_timer_happy_path_returns_dispatch_result() -> None:
     assert result["steps_advanced"] == 1
     mock_dispatcher.scheduler.fire_timer.assert_awaited_once()
     mock_dispatcher.resume_after_timer.assert_awaited_once()
+    resolve_dlq.assert_awaited_once_with(
+        timer_id="t-1",
+        run_id="run-1",
+        institution_id="inst-1",
+        location_id=None,
+    )
 
 
 @pytest.mark.asyncio

@@ -77,7 +77,10 @@ from src.app.services.automation.scheduler_service import (
 )
 from src.app.services.automation.step_dispatcher import build_dispatcher
 from src.app.services.automation.voice_attempt_recorder import stamp_attempt_outcome
-from src.app.services.dead_letter import capture_dead_letter
+from src.app.services.dead_letter import (
+    capture_dead_letter,
+    resolve_workflow_timer_dead_letters,
+)
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -388,6 +391,12 @@ async def _dispatch_timer_async(
 
         await session.commit()
 
+    await resolve_workflow_timer_dead_letters(
+        timer_id=timer_id,
+        run_id=run_id,
+        institution_id=institution_id,
+        location_id=location_id,
+    )
     _enqueue_patient_status_triggers(
         institution_id=institution_id,
         status_event_ids=result.patient_status_event_ids,

@@ -56,6 +56,7 @@ class DeadLetterResponse(BaseModel):
     resolution_note: str | None
     replay_supported: bool
     originating_run_id: str | None
+    originating_timer_id: str | None
 
 
 class DeadLetterListResponse(BaseModel):
@@ -147,7 +148,7 @@ async def _discard_dead_letter_event(
         svc = DeadLetterService(session)
         row = await svc.get_for_update(event_id)
         if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Undeliverable event not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation issue not found")
         if row.status == DeadLetterStatus.DISCARDED.value:
             # A repeated request is a no-op. This also makes a browser retry
             # after a lost response converge on the state already written.
@@ -155,15 +156,19 @@ async def _discard_dead_letter_event(
         if row.status != DeadLetterStatus.OPEN.value:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Only an open undeliverable event can be dismissed",
+                detail="Only an open automation issue can be marked resolved",
             )
         note = request.note.strip() if request.note and request.note.strip() else None
-        await svc.mark_discarded(
-            row,
-            user_id=str(current_user.id),
-            reason=request.reason.value,
-            note=note,
-        )
+        matching_rows = await svc.get_open_matching_for_update(row)
+        if not matching_rows:
+            matching_rows = [row]
+        for matching_row in matching_rows:
+            await svc.mark_discarded(
+                matching_row,
+                user_id=str(current_user.id),
+                reason=request.reason.value,
+                note=note,
+            )
         await log_audit(
             actor=AuditActor.ADMIN,
             action=AuditAction.DEAD_LETTER_DISCARD,
@@ -174,6 +179,7 @@ async def _discard_dead_letter_event(
                 "event_type": row.event_type,
                 "reason": request.reason.value,
                 "note_recorded": note is not None,
+                "resolved_event_count": len(matching_rows),
             },
             institution_id=str(row.institution_id) if row.institution_id else None,
             user_id=str(current_user.id),
@@ -212,7 +218,7 @@ async def _replay_dead_letter_event(
         svc = DeadLetterService(session)
         row = await svc.get_for_update(event_id)
         if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Undeliverable event not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automation issue not found")
         if row.status == DeadLetterStatus.REPLAYED.value:
             # Idempotent response for a repeated click/request. The row lock
             # means a concurrent request gets here only after the first one has
@@ -221,7 +227,7 @@ async def _replay_dead_letter_event(
         if row.status != DeadLetterStatus.OPEN.value:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Only an open undeliverable event can be retried",
+                detail="Only an open automation issue can be retried",
             )
         if not _replay_supported(row):
             raise HTTPException(
@@ -229,14 +235,22 @@ async def _replay_dead_letter_event(
                 detail=f"Replay is not supported for {row.source}:{row.event_type}",
             )
 
+        matching_rows = await svc.get_open_matching_for_update(row)
+        if not matching_rows:
+            matching_rows = [row]
         await _replay(row)
-        await svc.mark_replayed(row, user_id=str(current_user.id))
+        for matching_row in matching_rows:
+            await svc.mark_replayed(matching_row, user_id=str(current_user.id))
         await log_audit(
             actor=AuditActor.ADMIN,
             action=AuditAction.DEAD_LETTER_REPLAY,
             target_resource=f"dead_letter:{row.id}",
             outcome=AuditOutcome.SUCCESS,
-            metadata={"source": row.source, "event_type": row.event_type},
+            metadata={
+                "source": row.source,
+                "event_type": row.event_type,
+                "resolved_event_count": len(matching_rows),
+            },
             institution_id=str(row.institution_id) if row.institution_id else None,
             user_id=str(current_user.id),
             location_id=str(row.location_id) if row.location_id else None,
@@ -303,7 +317,10 @@ def _response(
     include_resolution_note: bool = False,
 ) -> DeadLetterResponse:
     payload = row.redacted_payload or {}
-    originating_run_id = payload.get("run_id") or payload.get("workflow_run_id")
+    originating_run_id = _project_identifier(
+        payload.get("run_id") or payload.get("workflow_run_id")
+    )
+    originating_timer_id = _project_identifier(payload.get("timer_id"))
     return DeadLetterResponse(
         id=str(row.id),
         source=row.source,
@@ -324,10 +341,15 @@ def _response(
         # is returned only through the tenant-scoped route.
         resolution_note=row.resolution_note if include_resolution_note else None,
         replay_supported=_replay_supported(row),
-        originating_run_id=(
-            str(originating_run_id) if originating_run_id is not None else None
-        ),
+        originating_run_id=originating_run_id,
+        originating_timer_id=originating_timer_id,
     )
+
+
+def _project_identifier(value: Any) -> str | None:
+    if value is None or value == "[redacted]":
+        return None
+    return str(value)
 
 
 def _replay_supported(row: DeadLetterEvent) -> bool:

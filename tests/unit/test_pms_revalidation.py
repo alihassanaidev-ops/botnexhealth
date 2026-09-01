@@ -43,6 +43,14 @@ def _make_run(
     return run
 
 
+class _AsyncNullContext:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 def _make_session(*, location=True, institution=True, projection=None, pms_type="nexhealth"):
     session = AsyncMock()
     loc = MagicMock()
@@ -66,6 +74,7 @@ def _make_session(*, location=True, institution=True, projection=None, pms_type=
     proj_result = MagicMock()
     proj_result.scalar_one_or_none.return_value = projection
     session.execute = AsyncMock(return_value=proj_result)
+    session.begin_nested = MagicMock(return_value=_AsyncNullContext())
     return session
 
 
@@ -418,6 +427,23 @@ async def test_revalidate_failopen_on_lookup_error():
 
 
 @pytest.mark.asyncio
+async def test_revalidate_isolates_lookup_errors_in_nested_transaction():
+    run = _make_run()
+    session = _make_session()
+    session.execute = AsyncMock(
+        side_effect=RuntimeError(
+            "column institutions.nexhealth_credential_mode does not exist"
+        )
+    )
+    svc = PmsLiveRevalidationService(session)
+
+    result = await svc.revalidate(run)
+
+    assert result is None
+    session.begin_nested.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_revalidate_failopen_when_appointment_not_found():
     run = _make_run()
     session = _make_session()
@@ -536,5 +562,7 @@ async def test_revalidate_failopen_when_location_not_wired_to_nexhealth():
         return loc if name == "InstitutionLocation" else inst
 
     session.get = AsyncMock(side_effect=_get)
+    session.execute = AsyncMock(return_value=_result(None))
+    session.begin_nested = MagicMock(return_value=_AsyncNullContext())
     svc = PmsLiveRevalidationService(session)
     assert await svc.revalidate(run) is None

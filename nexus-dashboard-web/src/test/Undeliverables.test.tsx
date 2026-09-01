@@ -38,6 +38,14 @@ const event = {
     resolution_note: null,
     replay_supported: true,
     originating_run_id: "run-123",
+    originating_timer_id: "timer-123",
+}
+
+const duplicateEvent = {
+    ...event,
+    id: "event-2",
+    created_at: "2026-09-01T11:57:00Z",
+    updated_at: "2026-09-01T11:57:00Z",
 }
 
 beforeEach(() => {
@@ -49,13 +57,40 @@ beforeEach(() => {
     list.mockResolvedValue({ items: [event], total: 1, page: 1, size: 50, pages: 1 })
 })
 
-describe("Undeliverable work", () => {
-    it("shows the cause and originating campaign run", async () => {
+describe("Automation issues", () => {
+    it("labels the page as an automation operator queue", async () => {
         render(<Undeliverables />)
 
-        expect(await screen.findByText("Provider unavailable")).toBeInTheDocument()
+        expect(await screen.findByText("Automation issues")).toBeInTheDocument()
+        expect(screen.getByText("Background actions that could not complete automatically and may need attention.")).toBeInTheDocument()
+    })
+
+    it("shows a human cause and related workflow before technical details", async () => {
+        list.mockResolvedValue({
+            items: [{
+                ...event,
+                last_error: "current transaction is aborted, commands ignored until end of transaction block",
+            }],
+            total: 1,
+            page: 1,
+            size: 50,
+            pages: 1,
+        })
+        render(<Undeliverables />)
+
+        expect(await screen.findByText("A previous database operation failed during this background action. The query in Technical details was attempted after the transaction was already unusable.")).toBeInTheDocument()
+        expect(screen.getByText("Technical details")).toBeInTheDocument()
         expect(screen.getByText("run-123")).toBeInTheDocument()
         expect(screen.getByText("4 attempts")).toBeInTheDocument()
+    })
+
+    it("groups duplicate alerts for the same workflow timer", async () => {
+        list.mockResolvedValue({ items: [event, duplicateEvent], total: 2, page: 1, size: 50, pages: 1 })
+        render(<Undeliverables />)
+
+        expect(await screen.findByText("2 related failures")).toBeInTheDocument()
+        expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1)
+        expect(screen.getByText("1 issue (2 events)")).toBeInTheDocument()
     })
 
     it("disables the retry immediately so a double click queues once", async () => {
@@ -98,11 +133,11 @@ describe("Undeliverable work", () => {
         dismiss.mockResolvedValue({ ...event, status: "discarded" })
         render(<Undeliverables />)
 
-        fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }))
+        fireEvent.click(await screen.findByRole("button", { name: "Mark resolved" }))
         fireEvent.change(screen.getByLabelText("Note (optional)"), {
             target: { value: "Handled directly in the PMS" },
         })
-        fireEvent.click(screen.getByRole("button", { name: "Dismiss event" }))
+        fireEvent.click(screen.getByRole("button", { name: "Mark resolved" }))
 
         await waitFor(() => expect(dismiss).toHaveBeenCalledWith("institution", "event-1", {
             reason: "resolved_elsewhere",

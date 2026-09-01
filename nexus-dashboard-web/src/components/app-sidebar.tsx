@@ -94,7 +94,7 @@ const adminNav: NavItemDef[] = [
         icon: ShieldCheck,
     },
     {
-        title: "Undeliverables",
+        title: "Automation issues",
         url: "/undeliverables",
         icon: TriangleAlert,
     },
@@ -153,7 +153,7 @@ const institutionAdminNav: NavItemDef[] = [
         icon: CalendarOff,
     },
     {
-        title: "Undeliverables",
+        title: "Automation issues",
         url: "/undeliverables",
         icon: TriangleAlert,
     },
@@ -192,7 +192,7 @@ const locationAdminNav: NavItemDef[] = [
         icon: CalendarClock,
     },
     {
-        title: "Undeliverables",
+        title: "Automation issues",
         url: "/undeliverables",
         icon: TriangleAlert,
     },
